@@ -9,7 +9,7 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
-use midnight_wallet::{LocalWallet, WalletBuilder};
+use midnight_wallet::WalletBuilder;
 
 use midnight_provider::{MidnightProvider, NIGHT, Network, NodeBlockHash};
 use midnight_wallet::Seed;
@@ -35,7 +35,7 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
         .sync(&provider)
         .await
         .expect("sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     // A self-transfer is the cheapest transaction that reaches a block.
     let pending = provider

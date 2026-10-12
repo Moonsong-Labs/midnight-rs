@@ -199,7 +199,7 @@ async fn balance_completes_while_resync_replay_is_in_flight() {
         .sync(&provider)
         .await
         .expect("initial sync against the mock indexer");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     // Stall mode: the next resync's replay phase hangs on silent
     // subscriptions.
@@ -322,7 +322,7 @@ async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
         .sync(&provider)
         .await
         .expect("initial sync against the mock indexer");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     state.quiet_unshielded.store(true, Ordering::SeqCst);
 

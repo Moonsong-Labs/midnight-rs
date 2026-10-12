@@ -8,7 +8,7 @@
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
 use midnight_provider::{Builds, MidnightProvider};
-use midnight_wallet::{LedgerVersion, LocalWallet, WalletBuilder, WalletSeed};
+use midnight_wallet::{LedgerVersion, WalletBuilder, WalletSeed};
 
 const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -64,7 +64,7 @@ async fn sync_replays_events() {
         .sync(&provider)
         .await
         .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let cursors = provider
         .sync_cursors()
@@ -123,7 +123,7 @@ async fn provider_build_context_succeeds() {
         .sync(&provider)
         .await
         .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let builds = provider.builds().await.expect("the provider should build");
     macro_rules! funds_our_wallet {
@@ -174,7 +174,7 @@ async fn build_shielded_transfer_arbitrary_token_id() {
         .sync(&provider)
         .await
         .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let zero_token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
     let balance = provider
@@ -245,7 +245,7 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
         .sync(&provider)
         .await
         .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
     // Distinctive enough that a coin of this value is unambiguous, and far
@@ -258,7 +258,7 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
         .sync(&payee)
         .await
         .expect("payee sync should succeed");
-    let payee = payee.with_wallet(LocalWallet::new(wallet));
+    let payee = payee.with_wallet(wallet);
     let before: std::collections::HashSet<_> = payee
         .spendable_shielded_coins()
         .await
@@ -339,7 +339,7 @@ async fn shielded_transfer_conserves_value() {
         .sync(&provider)
         .await
         .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
     let recipient =
@@ -381,7 +381,7 @@ async fn shielded_transfer_spans_multiple_coins() {
         .sync(&provider)
         .await
         .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
     let balance = provider
@@ -466,7 +466,7 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
         .sync(&provider)
         .await
         .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let give_token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
     let receive_token =

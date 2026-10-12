@@ -24,7 +24,7 @@ use compact_bindgen::{
 };
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
-use midnight_wallet::{LocalWallet, Wallet, WalletBuilder};
+use midnight_wallet::{Wallet, WalletBuilder};
 
 #[tokio::test]
 async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
@@ -87,7 +87,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
             .sync(&provider)
             .await
             .expect("funder sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     // A mint-only contract has no user ledger fields: an empty array.
     let initial = ContractState::new(
@@ -158,7 +158,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         .sync(&recip_provider)
         .await
         .expect("recipient sync");
-    let recip_provider = recip_provider.with_wallet(LocalWallet::new(wallet));
+    let recip_provider = recip_provider.with_wallet(wallet);
 
     let holds = |coins: &[midnight_provider::SpendableShieldedCoin], nonce: [u8; 32], value| {
         coins

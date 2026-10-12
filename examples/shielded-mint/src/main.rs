@@ -15,7 +15,7 @@
 //! ```
 
 use anyhow::bail;
-use midnight_core::{LocalWallet, MidnightProvider, Seed, Wallet, WalletBuilder};
+use midnight_core::{MidnightProvider, Seed, Wallet, WalletBuilder};
 
 mod shielded_mint {
     midnight_core::contract!(
@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     println!("0. Syncing minter wallet...");
     let provider = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::from_seed(MINTER_SEED)?.sync(&provider).await?;
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
     let network = provider.network().await?;
     println!("   synced.\n");
 
@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     let wallet = WalletBuilder::new(recipient_seed)
         .sync(&recipient_provider)
         .await?;
-    let recipient_provider = recipient_provider.with_wallet(LocalWallet::new(wallet));
+    let recipient_provider = recipient_provider.with_wallet(wallet);
     let balance = recipient_provider.balance().await?;
 
     let minted = balance

@@ -125,6 +125,30 @@ pub trait WalletFacade: Send + Sync {
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError>;
 }
 
+/// A value that `MidnightProvider::with_wallet` attaches as its wallet.
+///
+/// A wallet that serves the builds of both ledger generations goes in as
+/// itself. `midnight-wallet` also implements it for its synced `Wallet`,
+/// which goes in behind the lock of a `LocalWallet`.
+pub trait IntoWalletFacade {
+    /// The wallet the provider holds.
+    type Facade: ledger_8::WalletBuilds + ledger_9::WalletBuilds + 'static;
+
+    /// Convert into the wallet the provider holds.
+    fn into_facade(self) -> Self::Facade;
+}
+
+impl<W> IntoWalletFacade for W
+where
+    W: ledger_8::WalletBuilds + ledger_9::WalletBuilds + 'static,
+{
+    type Facade = W;
+
+    fn into_facade(self) -> W {
+        self
+    }
+}
+
 /// A shared wallet is a wallet: every call forwards to the one inside.
 ///
 /// This lets a caller keep a handle on the wallet it attaches instead of

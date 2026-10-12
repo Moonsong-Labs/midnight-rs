@@ -6,7 +6,7 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_core::{LocalWallet, MidnightProvider, Wallet};
+use midnight_core::{MidnightProvider, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the
@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
     let provider = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::from_seed(DEV_WALLET_SEED)?.sync(&provider).await?;
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
     println!("   synced.\n");
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.

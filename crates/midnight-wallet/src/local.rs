@@ -9,7 +9,7 @@ use midnight_types::{
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
     WalletSeed,
 };
-use midnight_wallet_facade::WalletFacade;
+use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 use tokio::sync::RwLock;
 use tracing::warn;
 
@@ -40,6 +40,15 @@ impl LocalWallet {
 impl From<Wallet> for LocalWallet {
     fn from(wallet: Wallet) -> Self {
         Self::new(wallet)
+    }
+}
+
+/// A synced [`Wallet`] attaches to a provider as a `LocalWallet`.
+impl IntoWalletFacade for Wallet {
+    type Facade = LocalWallet;
+
+    fn into_facade(self) -> LocalWallet {
+        LocalWallet::new(self)
     }
 }
 

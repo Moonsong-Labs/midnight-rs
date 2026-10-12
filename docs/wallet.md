@@ -8,7 +8,7 @@ The SDK's wallet covers Midnight's three asset legs:
 
 `Wallet` itself is a pure state machine. `MidnightProvider` drives all network I/O: the sync, the resync, the transfer builds and the transaction contexts. Most callers never construct a `Wallet` directly. They start one with `Wallet::from_seed` or `Wallet::from_mnemonic`, and sync it from the provider. Then they attach it with `with_wallet` and operate through the provider.
 
-The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, wrap it: `provider.with_wallet(LocalWallet::new(wallet))`. Another implementation goes in the same way when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_provider::ledger_8::WalletBuilds` and `midnight_provider::ledger_9::WalletBuilds`).
+The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_provider::ledger_8::WalletBuilds` and `midnight_provider::ledger_9::WalletBuilds`).
 
 ## Seeds
 
@@ -116,7 +116,7 @@ Addresses are deterministic per `(seed, network)` and include the network suffix
 
 ```rust
 use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::Wallet;
 
 let provider = MidnightProvider::new(node_url, indexer_url);
 let wallet = Wallet::from_mnemonic(phrase)?
@@ -124,7 +124,7 @@ let wallet = Wallet::from_mnemonic(phrase)?
     .with_storage(storage_dir)        // optional; in-memory only without it
     .sync(&provider)
     .await?;
-let provider = provider.with_wallet(LocalWallet::new(wallet));
+let provider = provider.with_wallet(wallet);
 ```
 
 The wallet is built on its own and attached with `with_wallet`, so the provider never names an implementation. Anything that implements `WalletFacade` and the `WalletBuilds` of both generations goes in the same way. A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider)` runs three concurrent indexer subscriptions in the current task, and returns the `Wallet` once all three have caught up:
@@ -173,7 +173,7 @@ while let Some(progress) = rx.recv().await {
 }
 
 let wallet = handle.await?;
-let provider = provider.with_wallet(LocalWallet::new(wallet));
+let provider = provider.with_wallet(wallet);
 ```
 
 `.sync(&provider)` runs the sync in the current task. `.sync_with_progress(&provider)` does the network check and the pin work first, so it can refuse a sync as `.sync(&provider)` does. Then it spawns the sync in a background task, and gives you progress events and a `SyncHandle` that resolves to the synced `Wallet`.
@@ -377,7 +377,7 @@ Wallet::from_seed(hex)? | Wallet::from_mnemonic(phrase)? | WalletBuilder::new(se
   │ subscribe zswap + unshielded + dust  (parallel)
   │ persist (metadata + binary state + pending)
   ↓
-provider.with_wallet(LocalWallet::new(wallet))
+provider.with_wallet(wallet)
   ↓
   provider.balance()                     read-only
   provider.parameters() / .sync_cursors() / .unshielded_utxos()

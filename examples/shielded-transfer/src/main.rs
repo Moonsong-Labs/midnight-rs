@@ -10,7 +10,7 @@
 use std::env;
 
 use anyhow::bail;
-use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, WalletBuilder};
+use midnight_core::{MidnightProvider, Network, Seed, WalletBuilder};
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded with shielded test tokens at genesis on the
@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
         .with_network(&network)
         .sync(&provider)
         .await?;
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
     println!("Sync complete.\n");
 
     // No manual chain-readiness wait needed — every transfer / contract

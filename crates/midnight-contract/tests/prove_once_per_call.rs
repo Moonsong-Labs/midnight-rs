@@ -22,7 +22,7 @@ mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::Wallet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -138,7 +138,7 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         .sync(&provider)
         .await
         .expect("sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let authority = midnight_contract::SigningKey::sample(rand::thread_rng());
     let contract = counter::Contract::deploy(&provider)

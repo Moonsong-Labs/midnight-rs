@@ -21,7 +21,7 @@ use midnight_types::{
     ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
     TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
 };
-use midnight_wallet_facade::WalletFacade;
+use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -85,13 +85,13 @@ impl MidnightProvider {
     /// `midnight-wallet`:
     /// ```rust,no_run
     /// # use midnight_provider::MidnightProvider;
-    /// # use midnight_wallet::{LocalWallet, Wallet};
+    /// # use midnight_wallet::Wallet;
     /// # async fn f(phrase: &str) -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
     /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
     /// let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider).await?;
-    /// let provider = provider.with_wallet(LocalWallet::new(wallet));
+    /// let provider = provider.with_wallet(wallet);
     /// # Ok(())
     /// # }
     /// ```
@@ -196,23 +196,19 @@ impl MidnightProvider {
     /// Attach a wallet, and become the single entry point for its resync and
     /// transaction-context construction.
     ///
-    /// A synced `Wallet` this process owns goes in as
-    /// `LocalWallet::new(wallet)`. Anything else that implements
-    /// [`WalletFacade`], [`ledger_8::WalletBuilds`] and
-    /// [`ledger_9::WalletBuilds`] goes in as itself.
+    /// A synced `Wallet` from `midnight-wallet` goes in behind a `LocalWallet`.
+    /// Anything else that implements [`WalletFacade`],
+    /// [`ledger_8::WalletBuilds`] and [`ledger_9::WalletBuilds`] goes in as
+    /// itself. To keep a handle on the attached wallet, attach an
+    /// `Arc<LocalWallet>`, or an `Arc` of your own wallet.
     ///
     /// The provider runs no sync task of its own. Every read of the wallet,
     /// such as [`Self::balance`], returns the state of the last sync or
     /// resync and does not resync. [`Self::builds`], and so every build,
     /// resyncs first. For a fresh read, call [`Self::resync_wallet`] before
     /// it, for example on a timer in a UI.
-    pub fn with_wallet<W>(mut self, wallet: W) -> Self
-    where
-        W: midnight_wallet_facade::ledger_8::WalletBuilds
-            + midnight_wallet_facade::ledger_9::WalletBuilds
-            + 'static,
-    {
-        let wallet = Arc::new(wallet);
+    pub fn with_wallet(mut self, wallet: impl IntoWalletFacade) -> Self {
+        let wallet = Arc::new(wallet.into_facade());
         self.builds = Some(WalletBuildsOf {
             ledger_8: wallet.clone(),
             ledger_9: wallet.clone(),

@@ -41,7 +41,7 @@ pub use midnight_types::{
     Network, ShieldedCoinBalance, SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors,
     TrackedUtxo, TransferKind, TransferRequest, TransferResult, WalletBalance, WalletError,
 };
-pub use midnight_wallet_facade::WalletFacade;
+pub use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
 // Re-export the private-state types so callers configure
 // `MidnightProvider::with_private_state` without a separate dep.

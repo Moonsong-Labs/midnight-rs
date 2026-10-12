@@ -29,7 +29,7 @@ mod mint;
 
 use anyhow::{Context, ensure};
 use midnight_core::provider::{ShieldedCoinBalance, ShieldedTokenType, WalletBalance};
-use midnight_core::{LocalWallet, MidnightProvider, Seed, Wallet, WalletBuilder};
+use midnight_core::{MidnightProvider, Seed, Wallet, WalletBuilder};
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
@@ -87,10 +87,10 @@ async fn main() -> anyhow::Result<()> {
 
     let provider_a = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::from_seed(SEED_A)?.sync(&provider_a).await?;
-    let provider_a = provider_a.with_wallet(LocalWallet::new(wallet));
+    let provider_a = provider_a.with_wallet(wallet);
     let provider_b = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = WalletBuilder::new(&seed_b).sync(&provider_b).await?;
-    let provider_b = provider_b.with_wallet(LocalWallet::new(wallet));
+    let provider_b = provider_b.with_wallet(wallet);
 
     // Setup: two tokens to trade. X is A's genesis shielded token; Y is a fresh
     // token A mints to B (see `mint`). Not part of the swap.

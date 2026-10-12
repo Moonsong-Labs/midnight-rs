@@ -16,7 +16,7 @@ mod counter {
 }
 
 use midnight_provider::{DustlessBuilder, MidnightProvider, Network};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::Wallet;
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -41,7 +41,7 @@ async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
         .sync(&provider)
         .await
         .expect("sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())

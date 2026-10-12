@@ -34,7 +34,7 @@
 
 use anyhow::{Context, bail};
 use midnight_core::provider::DustlessBuilder;
-use midnight_core::{LocalWallet, MidnightProvider, Wallet};
+use midnight_core::{MidnightProvider, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter).
@@ -69,11 +69,11 @@ async fn main() -> anyhow::Result<()> {
     let provider_a = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::from_seed(SEED_A)?.sync(&provider_a).await?;
     let address_a = wallet.shielded_address();
-    let provider_a = provider_a.with_wallet(LocalWallet::new(wallet));
+    let provider_a = provider_a.with_wallet(wallet);
     let provider_b = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::from_seed(SEED_B)?.sync(&provider_b).await?;
     let address_b = wallet.shielded_address();
-    let provider_b = provider_b.with_wallet(LocalWallet::new(wallet));
+    let provider_b = provider_b.with_wallet(wallet);
     println!("   A and B synced.\n");
 
     // --- A deploys the counter (A is genesis-funded with Dust) ---

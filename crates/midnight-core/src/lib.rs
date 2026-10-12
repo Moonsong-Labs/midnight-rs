@@ -15,7 +15,7 @@
     not(all(feature = "provider", feature = "wallet", feature = "contract")),
     doc = "```ignore"
 )]
-//! use midnight_core::{LocalWallet, MidnightProvider, Wallet};
+//! use midnight_core::{MidnightProvider, Wallet};
 //!
 //! mod counter {
 //!     midnight_core::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
@@ -24,7 +24,7 @@
 //! async fn run(phrase: &str) -> anyhow::Result<()> {
 //!     let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088");
 //!     let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider).await?;
-//!     let provider = provider.with_wallet(LocalWallet::new(wallet));
+//!     let provider = provider.with_wallet(wallet);
 //!
 //!     let contract = counter::Contract::deploy(&provider)
 //!         .with_initial_state(counter::LedgerInitialState::default())

@@ -51,7 +51,7 @@ async fn synced_provider(node: &str, indexer: &str, seed: &WalletSeed) -> Midnig
         .sync(&provider)
         .await
         .expect("sync");
-    provider.with_wallet(LocalWallet::new(wallet))
+    provider.with_wallet(wallet)
 }
 
 fn night() -> ShieldedTokenType {

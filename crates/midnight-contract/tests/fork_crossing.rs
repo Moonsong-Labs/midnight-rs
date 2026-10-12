@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use midnight_provider::{
     Builds, LedgerVersion, MidnightProvider, NIGHT, Network, Nullifier, WalletSeed,
 };
-use midnight_wallet::{LocalWallet, WalletBuilder};
+use midnight_wallet::WalletBuilder;
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -57,7 +57,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .sync(&provider)
         .await
         .expect("sync on ledger 8");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(ZK_KEYS_DIR)

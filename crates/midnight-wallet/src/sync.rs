@@ -7,7 +7,7 @@
 //!
 //! ```rust,no_run
 //! # use midnight_provider::MidnightProvider;
-//! # use midnight_wallet::{LocalWallet, Wallet};
+//! # use midnight_wallet::{Wallet};
 //! # const NODE_URL: &str = "ws://localhost:9944";
 //! # const INDEXER_URL: &str = "http://localhost:8088";
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,7 +15,7 @@
 //! let wallet = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?
 //!     .sync(&provider)
 //!     .await?;
-//! let provider = provider.with_wallet(LocalWallet::new(wallet));
+//! let provider = provider.with_wallet(wallet);
 //! # Ok(())
 //! # }
 //! ```

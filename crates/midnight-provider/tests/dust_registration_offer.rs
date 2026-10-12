@@ -9,7 +9,7 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::Wallet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -73,7 +73,7 @@ async fn dev_provider(recorder: Arc<ProofRecorder>) -> Option<MidnightProvider> 
         .sync(&provider)
         .await
         .expect("sync");
-    Some(provider.with_wallet(LocalWallet::new(wallet)))
+    Some(provider.with_wallet(wallet))
 }
 
 /// Counts the wallet's tNIGHT UTXOs, and how many of them still await a

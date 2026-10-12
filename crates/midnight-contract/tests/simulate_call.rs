@@ -11,7 +11,7 @@ mod counter {
 
 use midnight_contract::NodeBlockHash;
 use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::Wallet;
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -39,7 +39,7 @@ async fn a_simulated_call_returns_the_value_and_the_next_ledger_with_no_wallet()
         .sync(&provider)
         .await
         .expect("sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     // The wallet reads finalized state, so this deploy stays invisible to
     // any other wallet on this seed until it finalizes. The next test in the

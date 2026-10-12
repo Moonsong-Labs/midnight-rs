@@ -27,7 +27,7 @@
 use compact_bindgen::AlignedValue;
 use midnight_contract::runtime::Value;
 use midnight_contract::{Contract, ShieldedInputs};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::Wallet;
 
 #[tokio::test]
 async fn call_circuit_that_spends_the_callers_shielded_coin() {
@@ -76,7 +76,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
             .sync(&provider)
             .await
             .expect("funder sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     // --- Gap 1: address a specific spendable coin (with its nonce) ---
     let coins = provider
@@ -210,7 +210,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
             .sync(&provider)
             .await
             .expect("funder sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let coins = provider
         .spendable_shielded_coins()

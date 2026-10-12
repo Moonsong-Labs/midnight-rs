@@ -18,7 +18,7 @@ mod call_context {
 use compact_bindgen::Bytes;
 use midnight_contract::DustlessBuilder;
 use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::Wallet;
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -52,7 +52,7 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
         .sync(&provider)
         .await
         .expect("sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let contract = call_context::Contract::deploy(&provider)
         .with_initial_state(call_context::LedgerInitialState::default())

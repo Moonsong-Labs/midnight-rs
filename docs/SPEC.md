@@ -41,7 +41,8 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap; SyncSource
   │     └── error.rs             WalletError
   │
-  ├── midnight-wallet-facade     the WalletFacade trait, and per generation the
+  ├── midnight-wallet-facade     the WalletFacade trait, IntoWalletFacade (what
+  │                              with_wallet takes), and per generation the
   │                              WalletBuilds trait and ReservedBuild, in
   │                              midnight-types's vocabulary; nothing else
   │
@@ -112,8 +113,8 @@ Wallet::from_mnemonic(phrase)?                      // midnight-wallet; or from_
     or .sync_with_progress(&provider).await         // streaming progress
 
 provider
-  .with_wallet(LocalWallet::new(wallet))            // or a WalletFacade that also implements
-                                                    // each generation's WalletBuilds
+  .with_wallet(wallet)                              // a synced Wallet, or a WalletFacade that also
+                                                    // implements each generation's WalletBuilds
   .with_proof_provider(provers)                     // optional, ProofProviders::local() by default
   .ledger_version().await          → the chain's generation, from the node's finalized block
   .resync_wallet().await                            // incremental refresh

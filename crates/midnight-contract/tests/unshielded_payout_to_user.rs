@@ -25,7 +25,7 @@ use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
 use midnight_provider::UnshieldedTokenType;
-use midnight_wallet::{LocalWallet, Wallet, WalletBuilder};
+use midnight_wallet::{Wallet, WalletBuilder};
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];
 const MINTED: u128 = 1_000;
@@ -73,7 +73,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
             .sync(&provider)
             .await
             .expect("sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let contract = Contract::deploy(provider)
         .with_initial_state(ContractState::new(
@@ -126,7 +126,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
         .sync(&recipient_provider)
         .await
         .expect("recipient sync");
-    let recipient_provider = recipient_provider.with_wallet(LocalWallet::new(wallet));
+    let recipient_provider = recipient_provider.with_wallet(wallet);
 
     let before = held(&recipient_provider, colour).await;
     eprintln!("recipient holds {before} before the payout");

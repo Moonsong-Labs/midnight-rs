@@ -6,9 +6,7 @@ use std::env;
 use anyhow::{Context, bail};
 use midnight_core::provider::SPECKS_PER_DUST;
 use midnight_core::wallet::NIGHT;
-use midnight_core::{
-    LocalWallet, MidnightProvider, Network, Seed, SyncProgress, Wallet, WalletBuilder,
-};
+use midnight_core::{MidnightProvider, Network, Seed, SyncProgress, Wallet, WalletBuilder};
 use tracing_subscriber::EnvFilter;
 
 // Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`
@@ -108,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let provider = provider.with_wallet(LocalWallet::new(handle.await?));
+    let provider = provider.with_wallet(handle.await?);
     println!("\nSync complete.\n");
 
     let balance = provider.balance().await?;

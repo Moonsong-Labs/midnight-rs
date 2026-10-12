@@ -13,7 +13,7 @@ use compact_bindgen::{
 };
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
-use midnight_wallet::{LocalWallet, Wallet, WalletBuilder};
+use midnight_wallet::{Wallet, WalletBuilder};
 
 #[tokio::test]
 async fn mint_to_external_recipient_discovered_by_sync() {
@@ -77,7 +77,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
             .sync(&provider)
             .await
             .expect("funder sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     // A mint-only contract has no user ledger fields: an empty array.
     let initial = ContractState::new(
@@ -154,7 +154,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         .sync(&recip_provider)
         .await
         .expect("recipient sync");
-    let recip_provider = recip_provider.with_wallet(LocalWallet::new(wallet));
+    let recip_provider = recip_provider.with_wallet(wallet);
 
     // The call above returns once the chain finalized the mint, which is
     // before the indexer has served its zswap event. A sync ends at the

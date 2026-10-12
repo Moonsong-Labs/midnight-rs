@@ -17,7 +17,7 @@ use midnight_contract::ContractMaintenanceVerifyingKey;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
-use midnight_wallet::{LocalWallet, Wallet, WalletBuilder};
+use midnight_wallet::{Wallet, WalletBuilder};
 
 use compact_codegen::ir;
 use compact_codegen::types::ContractInfo;
@@ -710,7 +710,7 @@ async fn deploy_funded_with_shielded_offer() {
         .sync(&provider)
         .await
         .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     // Build a 1-unit self-transfer of the dev devnet's default shielded
     // token id ([0; 32]). The dev wallet holds this at genesis.
@@ -994,7 +994,7 @@ async fn governance_deploy_then_apply_both_updates() {
             .sync(&provider)
             .await
             .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let keys_dir = counter_zk_dir();
     let vk_bytes = std::fs::read(format!("{keys_dir}/keys/increment.verifier"))

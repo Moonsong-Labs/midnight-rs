@@ -11,7 +11,7 @@
 
 use midnight_provider::{MidnightProvider, Network, WalletSeed};
 use midnight_wallet::NIGHT;
-use midnight_wallet::{LocalWallet, Wallet, WalletBuilder};
+use midnight_wallet::{Wallet, WalletBuilder};
 
 /// Genesis wallet: holds tNIGHT and dust, and is already registered.
 const FUNDER_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -51,7 +51,7 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
         .sync(&funder)
         .await
         .expect("sync the funder");
-    let funder = funder.with_wallet(LocalWallet::new(wallet));
+    let funder = funder.with_wallet(wallet);
 
     for _ in 0..2 {
         funder
@@ -69,7 +69,7 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
         .sync(&fresh)
         .await
         .expect("sync the fresh wallet");
-    let fresh = fresh.with_wallet(LocalWallet::new(wallet));
+    let fresh = fresh.with_wallet(wallet);
 
     // Finalized on chain is not yet visible through the indexer, which the
     // fresh wallet syncs from. Poll rather than assume, as below.

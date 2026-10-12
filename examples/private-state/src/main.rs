@@ -33,8 +33,7 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use midnight_core::{
-    FsPrivateStateProvider, LocalWallet, MidnightProvider, Network, PrivateStateProvider, Seed,
-    WalletBuilder,
+    FsPrivateStateProvider, MidnightProvider, Network, PrivateStateProvider, Seed, WalletBuilder,
 };
 
 mod secret_counter {
@@ -100,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
         .with_network(Network::Undeployed)
         .sync(&provider)
         .await?;
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
     println!("   synced.\n");
 
     // 1. Deploy the secret-counter contract.

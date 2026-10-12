@@ -104,7 +104,7 @@ The deploy fails with `WalletError::LedgerMismatch` when the offer's generation 
 
 ### A custom wallet
 
-`with_wallet` takes a wallet that implements `WalletFacade` and the `WalletBuilds` trait of each generation: `midnight_provider::ledger_8::WalletBuilds` and `midnight_provider::ledger_9::WalletBuilds`. The provider uses the `WalletBuilds` of the generation the wallet reports in `WalletFacade::ledger_version`. `LocalWallet` implements all three. `crates/midnight-provider/tests/substituting_the_wallet.rs` has a stub wallet that implements them.
+`with_wallet` takes a wallet that implements `WalletFacade` and the `WalletBuilds` trait of each generation: `midnight_provider::ledger_8::WalletBuilds` and `midnight_provider::ledger_9::WalletBuilds`. The provider uses the `WalletBuilds` of the generation the wallet reports in `WalletFacade::ledger_version`. `LocalWallet` implements all three, and a synced `Wallet` goes in behind a `LocalWallet`. `crates/midnight-provider/tests/substituting_the_wallet.rs` has a stub wallet that implements them.
 
 ### Proof backends
 

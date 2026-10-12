@@ -15,7 +15,7 @@ pub enum ProviderError {
     /// `MidnightProvider::with_wallet`.
     #[error(
         "provider has no wallet; sync one (`Wallet::from_seed(..)?.sync(&provider)`) \
-         and attach it with .with_wallet(...)"
+         and attach it with .with_wallet(wallet)"
     )]
     NoWallet,
 
