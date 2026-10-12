@@ -68,18 +68,14 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         .expect("circuit must take a ShieldedCoinInfo argument");
 
     // --- Funder wallet syncs and deploys the fixture ---
-    let funder_seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(
-        &provider,
-        funder_seed,
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("funder sync");
+    let wallet =
+        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
+            .unwrap()
+            .with_network(midnight_provider::Network::Undeployed)
+            .sync(&provider)
+            .await
+            .expect("funder sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // --- Gap 1: address a specific spendable coin (with its nonce) ---
@@ -206,18 +202,14 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
         .map(|a| a.name.name().to_string())
         .expect("circuit must take a ShieldedCoinInfo argument");
 
-    let funder_seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(
-        &provider,
-        funder_seed,
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("funder sync");
+    let wallet =
+        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
+            .unwrap()
+            .with_network(midnight_provider::Network::Undeployed)
+            .sync(&provider)
+            .await
+            .expect("funder sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     let coins = provider

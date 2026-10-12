@@ -44,16 +44,13 @@
 //!
 //! ```rust,no_run
 //! use midnight_provider::MidnightProvider;
-//! use midnight_wallet::{LocalWallet, Network, Wallet};
+//! use midnight_wallet::{LocalWallet, Wallet};
 //!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let seed = midnight_wallet::WalletSeed::try_from_hex_str(
-//! #     "0000000000000000000000000000000000000000000000000000000000000001",
-//! # ).unwrap();
+//! # async fn example(phrase: &str) -> Result<(), Box<dyn std::error::Error>> {
 //! // The wallet syncs on its own (zswap + dust + unshielded subscriptions)
 //! // and is then attached to the provider.
 //! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088");
-//! let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
+//! let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider).await?;
 //! let provider = provider.with_wallet(LocalWallet::new(wallet));
 //!
 //! let balance = provider.balance().await?;
@@ -91,7 +88,7 @@ pub use midnight_wallet_facade::WalletFacade;
 
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use local::LocalWallet;
-pub use sync::{SyncHandle, SyncProgress, WalletSyncBuilder};
+pub use sync::{SyncHandle, SyncProgress, WalletBuilder};
 pub use wallet::{ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, Wallet};
 
 #[cfg(test)]

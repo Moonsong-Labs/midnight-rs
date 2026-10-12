@@ -39,10 +39,11 @@ const INDEXER_URL: &str = "http://localhost:8088";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // The dev seed, funded at genesis on the local devnet.
-    let seed = Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000001")?;
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
-    let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
+    // The dev seed, funded at genesis on the local devnet.
+    let wallet = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?
+        .sync(&provider)
+        .await?;
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     let balance = provider.balance().await?;

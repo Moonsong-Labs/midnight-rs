@@ -17,7 +17,7 @@ use midnight_contract::ContractMaintenanceVerifyingKey;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::{LocalWallet, Wallet, WalletBuilder};
 
 use compact_codegen::ir;
 use compact_codegen::types::ContractInfo;
@@ -705,13 +705,11 @@ async fn deploy_funded_with_shielded_offer() {
     )
     .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(
-        &provider,
-        seed.clone(),
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("indexer sync should succeed");
+    let wallet = WalletBuilder::new(seed.clone())
+        .with_network(midnight_provider::Network::Undeployed)
+        .sync(&provider)
+        .await
+        .expect("indexer sync should succeed");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // Build a 1-unit self-transfer of the dev devnet's default shielded
@@ -988,14 +986,14 @@ async fn governance_deploy_then_apply_both_updates() {
         }
     };
 
-    let seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("indexer sync should succeed");
+    let wallet =
+        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
+            .unwrap()
+            .with_network(midnight_provider::Network::Undeployed)
+            .sync(&provider)
+            .await
+            .expect("indexer sync should succeed");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     let keys_dir = counter_zk_dir();

@@ -77,7 +77,7 @@ balance: ... SPECK, spendable UTXOs: ...
 
 ## What it covers
 
-- `Wallet::sync` + `MidnightProvider::with_wallet` — initial wallet sync against the indexer, then attach
+- `WalletBuilder::new(&seed).with_network(&network).sync(&provider)` + `MidnightProvider::with_wallet`: the first wallet sync against the indexer, then the attach step
 - `MidnightProvider::balance` — shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))
 - `MidnightProvider::transfer_shielded(token_type, amount, recipient)` — builds a proven zswap transfer
 - `MidnightProvider::submit` + `PendingTx::wait_best` + `wait_finalized` — submission lifecycle

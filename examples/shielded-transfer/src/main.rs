@@ -10,7 +10,7 @@
 use std::env;
 
 use anyhow::bail;
-use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, WalletBuilder};
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded with shielded test tokens at genesis on the
@@ -52,7 +52,10 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Syncing wallet from indexer (zswap + dust + unshielded in parallel)...");
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, seed.clone(), &network).await?;
+    let wallet = WalletBuilder::new(&seed)
+        .with_network(&network)
+        .sync(&provider)
+        .await?;
     let provider = provider.with_wallet(LocalWallet::new(wallet));
     println!("Sync complete.\n");
 

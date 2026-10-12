@@ -9,9 +9,9 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::{LocalWallet, WalletBuilder};
 
-use midnight_provider::{MidnightProvider, NIGHT, Network, NodeBlockHash, WalletSeed};
+use midnight_provider::{MidnightProvider, NIGHT, Network, NodeBlockHash};
 use midnight_wallet::Seed;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -30,7 +30,9 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
     let network = Network::Undeployed;
     let recipient = seed.unshielded_address(&network);
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, WalletSeed::from(seed), network)
+    let wallet = WalletBuilder::new(seed)
+        .with_network(network)
+        .sync(&provider)
         .await
         .expect("sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));

@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use midnight_provider::{
     Builds, LedgerVersion, MidnightProvider, NIGHT, Network, Nullifier, WalletSeed,
 };
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::{LocalWallet, WalletBuilder};
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -51,8 +51,10 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
 
     // Ledger 8: a stored wallet, and a contract it deploys and calls.
     let storage = tempfile::TempDir::new().unwrap();
-    let wallet = Wallet::sync(&provider, seed.clone(), network.clone())
+    let wallet = WalletBuilder::new(seed.clone())
+        .with_network(network.clone())
         .with_storage(storage.path())
+        .sync(&provider)
         .await
         .expect("sync on ledger 8");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
@@ -102,11 +104,15 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .dust
         .unregistered_night_utxos;
     assert!(unregistered > 0, "no NIGHT generates Dust after the fork");
-    let resumed = Wallet::sync(&provider, seed.clone(), network.clone())
+    let resumed = WalletBuilder::new(seed.clone())
+        .with_network(network.clone())
         .with_storage(stored[0].path())
+        .sync(&provider)
         .await
         .expect("resume a ledger 8 snapshot on ledger 9");
-    let fresh = Wallet::sync(&provider, seed.clone(), network.clone())
+    let fresh = WalletBuilder::new(seed.clone())
+        .with_network(network.clone())
+        .sync(&provider)
         .await
         .expect("sync from genesis across the fork");
     for (wallet, how) in [(&resumed, "resumed"), (&fresh, "synced from genesis")] {
@@ -156,11 +162,15 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     // The other ledger 8 snapshot resumes across the fork and what came
     // after it, and a sync from genesis crosses too. Both hold what the
     // attached wallet holds.
-    let resumed = Wallet::sync(&provider, seed.clone(), network.clone())
+    let resumed = WalletBuilder::new(seed.clone())
+        .with_network(network.clone())
         .with_storage(stored[1].path())
+        .sync(&provider)
         .await
         .expect("resume a ledger 8 snapshot on ledger 9");
-    let fresh = Wallet::sync(&provider, seed.clone(), network)
+    let fresh = WalletBuilder::new(seed.clone())
+        .with_network(network)
+        .sync(&provider)
         .await
         .expect("sync from genesis across the fork");
     for (wallet, how) in [(&resumed, "resumed"), (&fresh, "synced from genesis")] {
@@ -255,8 +265,10 @@ async fn wait_for_ledger_9(
         assert!(Instant::now() < deadline, "the node did not run ledger 9");
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
-    let mut probe = Wallet::sync(provider, seed.clone(), network.clone())
+    let mut probe = WalletBuilder::new(seed.clone())
+        .with_network(network.clone())
         .with_storage(snapshot)
+        .sync(provider)
         .await
         .expect("resume the probe snapshot");
     while probe.ledger_version() != LedgerVersion::V9 {

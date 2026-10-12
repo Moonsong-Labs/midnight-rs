@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use midnight_contract::ContractError;
 use midnight_helpers::{DefaultDB, StdRng};
-use midnight_provider::{MidnightProvider, Network, ProviderError, WalletError, WalletSeed};
+use midnight_provider::{MidnightProvider, Network, ProviderError, WalletError};
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -130,10 +130,12 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
     };
 
     let counter_proofs = Arc::new(ProofCounter::default());
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let provider =
         MidnightProvider::new(&node_url, &indexer_url).with_proof_provider(counter_proofs.clone());
-    let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
+        .with_network(Network::Undeployed)
+        .sync(&provider)
         .await
         .expect("sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));

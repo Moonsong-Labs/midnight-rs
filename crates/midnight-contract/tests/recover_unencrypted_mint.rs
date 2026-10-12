@@ -24,7 +24,7 @@ use compact_bindgen::{
 };
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::{LocalWallet, Wallet, WalletBuilder};
 
 #[tokio::test]
 async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
@@ -79,18 +79,14 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     .coin_public_key;
 
     // --- Funder wallet deploys the mint contract ---
-    let funder_seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(
-        &provider,
-        funder_seed,
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("funder sync");
+    let wallet =
+        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
+            .unwrap()
+            .with_network(midnight_provider::Network::Undeployed)
+            .sync(&provider)
+            .await
+            .expect("funder sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // A mint-only contract has no user ledger fields: an empty array.
@@ -157,13 +153,11 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
 
     // --- The recipient syncs and cannot see either coin ---
     let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(
-        &recip_provider,
-        recip_seed,
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("recipient sync");
+    let wallet = WalletBuilder::new(recip_seed)
+        .with_network(midnight_provider::Network::Undeployed)
+        .sync(&recip_provider)
+        .await
+        .expect("recipient sync");
     let recip_provider = recip_provider.with_wallet(LocalWallet::new(wallet));
 
     let holds = |coins: &[midnight_provider::SpendableShieldedCoin], nonce: [u8; 32], value| {

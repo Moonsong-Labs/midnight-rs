@@ -27,7 +27,7 @@ The wallet returns `WalletError::UnknownLedger` for data of a generation this bu
 Most of the API is the same on both generations:
 
 - the provider's transfers (`transfer_shielded`, `transfer_unshielded`, `shielded_swap`, `register_dust`), `balance`, `submit`, `merge_transactions` and `balance_transaction`
-- `Wallet::sync` and `LocalWallet`
+- the wallet sync (`Wallet::from_seed`, `Wallet::from_mnemonic`, `WalletBuilder`) and `LocalWallet`
 - the generated contract bindings (`Contract::deploy`, `circuits()`, `ledger()`), `Contract::call_with`, and contract maintenance
 
 Its vocabulary lives in `midnight-types`, one type for both generations: `ShieldedTokenType`, `UnshieldedTokenType`, `Nullifier`, `Nonce`, `CoinInfo`, `CoinPublicKey`, `EncryptionPublicKey`, `ShieldedRecipient`, `ContractAddress`, `DustNullifier`, `ChainParameters` and `LedgerVersion`. The provider, wallet and contract crates re-export it. A DApp that uses only this surface runs on either chain with no code for a generation.

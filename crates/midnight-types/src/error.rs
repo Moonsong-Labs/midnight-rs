@@ -12,9 +12,10 @@ pub enum WalletError {
     Sync(String),
 
     /// A streamed sync was cancelled because its progress receiver was
-    /// dropped before the sync completed. See `WalletSyncBuilder::stream` in
-    /// `midnight-wallet` for the cancellation contract: dropping the receiver
-    /// (or the `SyncHandle`) tears the sync down.
+    /// dropped before the sync completed. See
+    /// `WalletBuilder::sync_with_progress` in `midnight-wallet` for the
+    /// cancellation contract: dropping the receiver (or the `SyncHandle`)
+    /// tears the sync down.
     #[error("sync cancelled: progress receiver dropped before sync completed")]
     SyncCancelled,
 
@@ -166,9 +167,9 @@ pub enum WalletError {
     /// The node runs another network than the one the wallet syncs as.
     ///
     /// A sync checks the network before it reads the indexer, unless the
-    /// caller opts out with `WalletSyncBuilder::unpinned` in
-    /// `midnight-wallet`. To recover, sync as the network that the node runs,
-    /// or use a node of the wallet's network.
+    /// caller opts out with `WalletBuilder::unpinned` in `midnight-wallet`.
+    /// To recover, sync as the network that the node runs, or use a node of
+    /// the wallet's network.
     #[error("this wallet syncs as network {wallet}, but the node runs {chain}")]
     NetworkMismatch {
         /// The network the sync was asked to use.
@@ -176,4 +177,16 @@ pub enum WalletError {
         /// The network the node's runtime reports.
         chain: Network,
     },
+
+    /// The sync names no network, and the node reported none.
+    ///
+    /// The node could not answer, or it has no network id set. A wallet with
+    /// no network takes the network that the node runs. To recover, check the
+    /// node URL and that the node is up, or name the network with
+    /// `WalletBuilder::with_network` in `midnight-wallet`.
+    #[error(
+        "the node did not report its network: check the node URL and that the node is up, \
+         or name the network with `with_network`, for example `with_network(Network::Preprod)`"
+    )]
+    NetworkUnknown,
 }

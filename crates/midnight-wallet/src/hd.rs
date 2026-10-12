@@ -14,7 +14,7 @@
 //!      abandon abandon abandon abandon abandon abandon abandon diesel",
 //! ).unwrap();
 //!
-//! // The default `Wallet::sync` / `derive_*` paths use the standard per-asset
+//! // The default sync and `derive_*` paths use the standard per-asset
 //! // accounts (account 0, the role's default leaf). For an explicit key:
 //! let key: [u8; 32] = seed
 //!     .account(0)
@@ -174,7 +174,7 @@ impl Seed {
         self.0.as_bytes()
     }
 
-    /// Entry point for explicit HD key derivation. The default `Wallet::sync`
+    /// Entry point for explicit HD key derivation. The default wallet sync
     /// and `derive_*` paths already use the standard per-asset accounts;
     /// reach for this when you need a specific
     /// `m/44'/2400'/<account>'/<role>/<index>` key.

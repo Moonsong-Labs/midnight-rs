@@ -14,7 +14,7 @@ mod events {
 }
 
 use compact_bindgen::Bytes;
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_provider::{MidnightProvider, Network};
 use midnight_wallet::{LocalWallet, Wallet};
 
 const ZK_KEYS_DIR: &str = concat!(
@@ -47,9 +47,11 @@ async fn a_call_that_emits_an_event_applies_on_chain() {
         "{ZK_KEYS_DIR}/keys is missing; run `make compile-contracts CONTRACTS=events`"
     );
 
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
+        .with_network(Network::Undeployed)
+        .sync(&provider)
         .await
         .expect("sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));

@@ -26,7 +26,7 @@ use midnight_provider::{
     LedgerVersion, MidnightProvider, NIGHT, Network, ProviderError, ShieldedTokenType, SpentInputs,
     TransferKind, TransferRequest, WalletError, WalletFacade, WalletSeed,
 };
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::{LocalWallet, WalletBuilder};
 use tokio::sync::Notify;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -46,7 +46,9 @@ macro_rules! devnet_or_skip {
 
 async fn synced_provider(node: &str, indexer: &str, seed: &WalletSeed) -> MidnightProvider {
     let provider = MidnightProvider::new(node, indexer);
-    let wallet = Wallet::sync(&provider, seed.clone(), Network::Undeployed)
+    let wallet = WalletBuilder::new(seed.clone())
+        .with_network(Network::Undeployed)
+        .sync(&provider)
         .await
         .expect("sync");
     provider.with_wallet(LocalWallet::new(wallet))
@@ -199,7 +201,9 @@ async fn two_preparations_at_once_draw_different_inputs() {
     let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
 
     let source = MidnightProvider::new(&node, &indexer);
-    let wallet = Wallet::sync(&source, seed.clone(), Network::Undeployed)
+    let wallet = WalletBuilder::new(seed)
+        .with_network(Network::Undeployed)
+        .sync(&source)
         .await
         .expect("sync");
 

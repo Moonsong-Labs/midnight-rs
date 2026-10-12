@@ -47,7 +47,7 @@ midnight-core                    meta-crate; re-exports the public API
   │
   ├── midnight-wallet            the local implementation; depends on the two crates above
   │     ├── local.rs             LocalWallet: the facade over a locally-owned Wallet
-  │     ├── sync.rs              Wallet::sync(source, seed, network) → WalletSyncBuilder, pinned by default
+  │     ├── sync.rs              Wallet::from_seed / from_mnemonic → WalletBuilder → sync(source), pinned by default
   │     ├── wallet.rs            Wallet { seed, state of the chain's generation }, crossing forks
   │     ├── ledger_8 / ledger_9  the state, balance and pending reservations of one generation
   │     ├── hd.rs                Seed, mnemonic, BIP32 role keys
@@ -82,7 +82,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | The synced state itself. The provider drives its I/O and reaches it through `WalletFacade`. |
 | `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
-| `LocalWallet` / `WalletSyncBuilder` | wallet | The facade implemented over a locally-owned `Wallet`, and the builder (`Wallet::sync`) that syncs one from an indexer. |
+| `LocalWallet` / `WalletBuilder` | wallet | The facade implemented over a locally-owned `Wallet`, and the builder (`Wallet::from_seed`, `Wallet::from_mnemonic`) that syncs one from an indexer. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
@@ -104,11 +104,12 @@ Each of those three splits into plan → run → commit, so the replay runs with
 ```
 let provider = MidnightProvider::new(node_url, indexer_url)
 
-Wallet::sync(&provider, seed, Network::Preprod)     // midnight-wallet; the source is any SyncSource
+Wallet::from_mnemonic(phrase)?                      // midnight-wallet; or from_seed(hex), WalletBuilder::new(seed)
+      .with_network(Network::Preprod)               // optional: the node's network without it
       .with_storage(dir)                            // optional persistence
       .unpinned()                                   // optional: skip the network check and the chain-reset guard
-      .await                                        // one-shot sync → Wallet
-    or .stream()                                    // streaming progress
+      .sync(&provider).await                        // one-shot sync → Wallet; the source is any SyncSource
+    or .sync_with_progress(&provider).await         // streaming progress
 
 provider
   .with_wallet(LocalWallet::new(wallet))            // or a WalletFacade that also implements
@@ -137,7 +138,7 @@ provider
 
 The `network` argument accepts both `Network` enum variants and `&str` / `String` (via `impl Into<Network>`). See [`docs/wallet.md`](wallet.md) for the typed-vs-string ergonomics.
 
-`Wallet::sync` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (`IndexerError::is_retryable` distinguishes retryable from fatal; a per-connection dedupe keeps re-delivered events from being double-applied). The latest-block query that each sync and resync makes retries on the same bound. State is persisted under `{base}/{network}/{sha256(unshielded_address)}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup). `base` defaults to `~/.midnight/wallets`. `metadata.json` and `pending.json` also name the ledger generation whose types wrote them (`ledger_version`, ledger 8 when absent).
+`WalletBuilder::sync` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (`IndexerError::is_retryable` distinguishes retryable from fatal; a per-connection dedupe keeps re-delivered events from being double-applied). The latest-block query that each sync and resync makes retries on the same bound. State is persisted under `{base}/{network}/{sha256(unshielded_address)}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup). `base` defaults to `~/.midnight/wallets`. `metadata.json` and `pending.json` also name the ledger generation whose types wrote them (`ledger_version`, ledger 8 when absent).
 
 `PendingReservations` records spends that have been built but not yet confirmed on-chain. Every build reserves its dust spends, unshielded UTXOs and shielded nullifiers under the same hold of the wallet that selected them, before it proves, so a second build in this process cannot pick the same input: a `transfer_*` build through `prepare_transfer`, a deploy or maintenance update through `prepare_funded`, a sponsor's fee through `prepare_fees`, and a call's pinned coins through `spend_shielded`. Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm.
 

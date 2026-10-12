@@ -25,7 +25,7 @@ use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
 use midnight_provider::UnshieldedTokenType;
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::{LocalWallet, Wallet, WalletBuilder};
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];
 const MINTED: u128 = 1_000;
@@ -65,18 +65,14 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
             .unwrap_or_else(|| panic!("circuit {name}"))
     };
 
-    let seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(
-        &provider,
-        seed.clone(),
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("sync");
+    let wallet =
+        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
+            .unwrap()
+            .with_network(midnight_provider::Network::Undeployed)
+            .sync(&provider)
+            .await
+            .expect("sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     let contract = Contract::deploy(provider)
@@ -125,13 +121,11 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     let recipient =
         midnight_helpers::ledger_9::UnshieldedWallet::default(recipient_seed.clone()).user_address;
     let recipient_provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(
-        &recipient_provider,
-        recipient_seed,
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("recipient sync");
+    let wallet = WalletBuilder::new(recipient_seed)
+        .with_network(midnight_provider::Network::Undeployed)
+        .sync(&recipient_provider)
+        .await
+        .expect("recipient sync");
     let recipient_provider = recipient_provider.with_wallet(LocalWallet::new(wallet));
 
     let before = held(&recipient_provider, colour).await;

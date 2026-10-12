@@ -87,7 +87,7 @@ pub struct Wallet {
     /// wallet's own indexer rather than one a consumer supplies.
     ///
     /// It binds nothing across a restart. The snapshot records no indexer
-    /// identity, so a `Wallet::sync` from a source on another indexer, with
+    /// identity, so a sync from a source on another indexer, with
     /// `.with_storage(dir)`, resumes these cursors against that indexer and
     /// nothing notices.
     indexer_url: String,

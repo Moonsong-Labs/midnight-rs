@@ -3,7 +3,7 @@
 //!
 //! - `resync_wallet` must not hold the wallet lock across the replay I/O:
 //!   reads (`balance`) complete while a stalled resync replay is in flight.
-//! - `WalletSyncBuilder::stream` must not leak the spawned sync task:
+//! - `WalletBuilder::sync_with_progress` must not leak the spawned sync task:
 //!   dropping the progress receiver or the `SyncHandle` tears down the
 //!   indexer WebSocket subscriptions promptly.
 //!
@@ -24,7 +24,7 @@ use midnight_indexer_client::testutil::{
     ServerWs, next_json, read_http_request, send_next, subscriber_handshake, write_json_response,
 };
 use midnight_provider::MidnightProvider;
-use midnight_wallet::{LocalWallet, Network, Wallet, WalletError, WalletFacade, WalletSeed};
+use midnight_wallet::{LocalWallet, Network, WalletBuilder, WalletError, WalletFacade, WalletSeed};
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -193,8 +193,10 @@ async fn balance_completes_while_resync_replay_is_in_flight() {
 
     // Fast mode: attach a synced wallet in milliseconds.
     let provider = provider(&url);
-    let wallet = Wallet::sync(&provider, seed(), Network::Undeployed)
+    let wallet = WalletBuilder::new(seed())
+        .with_network(Network::Undeployed)
         .unpinned()
+        .sync(&provider)
         .await
         .expect("initial sync against the mock indexer");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
@@ -231,11 +233,12 @@ async fn dropping_receiver_cancels_streamed_sync_and_closes_subscriptions() {
     state.stall.store(true, Ordering::SeqCst);
 
     let provider = provider(&url);
-    let (rx, handle) = Wallet::sync(&provider, seed(), Network::Undeployed)
+    let (rx, handle) = WalletBuilder::new(seed())
+        .with_network(Network::Undeployed)
         .unpinned()
-        .stream()
+        .sync_with_progress(&provider)
         .await
-        .expect("stream");
+        .expect("streamed sync");
 
     // Initial sync runs zswap + unshielded first (dust starts after both
     // complete), so a stalled initial sync holds two subscriptions.
@@ -269,11 +272,12 @@ async fn dropping_sync_handle_aborts_sync_and_closes_subscriptions() {
     state.stall.store(true, Ordering::SeqCst);
 
     let provider = provider(&url);
-    let (mut rx, handle) = Wallet::sync(&provider, seed(), Network::Undeployed)
+    let (mut rx, handle) = WalletBuilder::new(seed())
+        .with_network(Network::Undeployed)
         .unpinned()
-        .stream()
+        .sync_with_progress(&provider)
         .await
-        .expect("stream");
+        .expect("streamed sync");
 
     wait_until("stalled sync subscriptions", || {
         state.stalled_subs.load(Ordering::SeqCst) >= 2
@@ -312,8 +316,10 @@ async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
 
     // Fast mode: attach a synced wallet in milliseconds.
     let provider = provider(&url);
-    let wallet = Wallet::sync(&provider, seed(), Network::Undeployed)
+    let wallet = WalletBuilder::new(seed())
+        .with_network(Network::Undeployed)
         .unpinned()
+        .sync(&provider)
         .await
         .expect("initial sync against the mock indexer");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
@@ -399,7 +405,9 @@ async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
     let (url, state) = spawn_mock().await;
     let chain = SwappableChain::new(&url);
 
-    let wallet = Wallet::sync(&chain, seed(), Network::Undeployed)
+    let wallet = WalletBuilder::new(seed())
+        .with_network(Network::Undeployed)
+        .sync(&chain)
         .await
         .expect("initial sync against the mock indexer");
     let wallet = LocalWallet::new(wallet);

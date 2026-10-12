@@ -34,7 +34,7 @@
 
 use anyhow::{Context, bail};
 use midnight_core::provider::DustlessBuilder;
-use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
+use midnight_core::{LocalWallet, MidnightProvider, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter).
@@ -62,19 +62,17 @@ const SHIELDED_TO_B: u128 = 3;
 async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Combine-and-Sponsor Example (B acts, A pays) ===\n");
 
-    let network = Network::Undeployed;
     let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
 
-    let seed_a = Seed::from_hex(SEED_A)?;
-    let seed_b = Seed::from_hex(SEED_B)?;
-
     println!("0. Syncing both wallets...");
     let provider_a = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider_a, seed_a.clone(), &network).await?;
+    let wallet = Wallet::from_seed(SEED_A)?.sync(&provider_a).await?;
+    let address_a = wallet.shielded_address();
     let provider_a = provider_a.with_wallet(LocalWallet::new(wallet));
     let provider_b = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider_b, seed_b.clone(), &network).await?;
+    let wallet = Wallet::from_seed(SEED_B)?.sync(&provider_b).await?;
+    let address_b = wallet.shielded_address();
     let provider_b = provider_b.with_wallet(LocalWallet::new(wallet));
     println!("   A and B synced.\n");
 
@@ -106,11 +104,7 @@ async fn main() -> anyhow::Result<()> {
         .context("wallet A has no shielded coins. Is this a fresh local devnet?")?;
     println!("2. A sends B a shielded coin...");
     provider_a
-        .transfer_shielded(
-            coin.token_type,
-            SHIELDED_TO_B,
-            &seed_b.shielded_address(&network),
-        )
+        .transfer_shielded(coin.token_type, SHIELDED_TO_B, &address_b)
         .await?
         .wait_finalized()
         .await?;
@@ -130,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("   B builds a Dustless shielded transfer to A...");
     let transfer_tx = provider_b
-        .transfer_shielded(coin.token_type, 1, &seed_a.shielded_address(&network))
+        .transfer_shielded(coin.token_type, 1, &address_a)
         .without_dust()
         .await?;
     println!(

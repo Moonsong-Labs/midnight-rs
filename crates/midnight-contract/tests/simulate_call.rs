@@ -10,7 +10,7 @@ mod counter {
 }
 
 use midnight_contract::NodeBlockHash;
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_provider::{MidnightProvider, Network};
 use midnight_wallet::{LocalWallet, Wallet};
 
 const ZK_KEYS_DIR: &str = concat!(
@@ -32,9 +32,11 @@ async fn a_simulated_call_returns_the_value_and_the_next_ledger_with_no_wallet()
         return;
     };
 
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
+        .with_network(Network::Undeployed)
+        .sync(&provider)
         .await
         .expect("sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));

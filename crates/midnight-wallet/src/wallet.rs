@@ -119,7 +119,8 @@ impl Wallet {
         crate::storage::snapshot_path(storage_dir, network.as_str(), &wallet_storage_id(address))
     }
 
-    /// The sync that [`Wallet::sync`] runs, for both `.await` and `.stream()`.
+    /// The sync that [`crate::WalletBuilder::sync`] and
+    /// [`crate::WalletBuilder::sync_with_progress`] run.
     ///
     /// Reads the generation the chain runs from its latest block, resumes
     /// from a snapshot under `storage_dir` when there is one, and replays the

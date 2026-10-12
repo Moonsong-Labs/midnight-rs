@@ -52,7 +52,7 @@ TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 
 ## What it covers
 
-- `Wallet::sync(&provider, ..).stream()`: streamed `SyncProgress` events, then `with_wallet` to attach. The sync checks a persisted snapshot's chain pin by default.
+- `WalletBuilder::new(&seed).with_network(&network).sync_with_progress(&provider)`: streamed `SyncProgress` events, then `with_wallet` to attach. The sync checks a persisted snapshot's chain pin by default.
 - `provider.balance()` — three asset legs (shielded coins, unshielded UTXOs, Dust)
 - `provider.parameters()` / `provider.sync_cursors()` — ledger parameters and sync counters
 - `provider.register_dust(None)`: registers one tNIGHT UTXO for Dust generation

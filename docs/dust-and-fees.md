@@ -238,9 +238,7 @@ The wallet sync has three independent phases:
 
 3. **Dust sync** (~30 min from genesis): replays `dustLedgerEvents` for dust UTXO tracking (two global Merkle trees). Required for every transaction other than a dust registration.
 
-All three phases run concurrently inside `Wallet::sync(...).await`
-(or `Wallet::sync(...).stream()` for streamed progress
-updates), which drives the wallet sync against the provider's indexer.
+All three phases run concurrently inside the sync step of the `WalletBuilder`, against the provider's indexer: `.sync(&provider)`, or `.sync_with_progress(&provider)` for progress events.
 
 A brand-new wallet can submit its dust registrations, one per tNIGHT UTXO that it holds, without a dust sync. Every other transaction needs the dust sync.
 

@@ -84,13 +84,13 @@ impl MidnightProvider {
     /// [`Self::with_wallet`]. With the local implementation from
     /// `midnight-wallet`:
     /// ```rust,no_run
-    /// # use midnight_provider::{MidnightProvider, Network, WalletSeed};
+    /// # use midnight_provider::MidnightProvider;
     /// # use midnight_wallet::{LocalWallet, Wallet};
-    /// # async fn f(seed: WalletSeed) -> anyhow::Result<()> {
+    /// # async fn f(phrase: &str) -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
     /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
-    /// let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
+    /// let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider).await?;
     /// let provider = provider.with_wallet(LocalWallet::new(wallet));
     /// # Ok(())
     /// # }
@@ -1226,9 +1226,10 @@ impl MidnightProvider {
     /// default) compares this network with the one it syncs as, and fails
     /// with
     /// [`WalletError::NetworkMismatch`](midnight_types::WalletError::NetworkMismatch)
-    /// when they differ. `WalletSyncBuilder::unpinned` in `midnight-wallet`
-    /// skips the check, and an error or an `Ok(None)` here does not fail the
-    /// sync.
+    /// when they differ. A sync with no network takes this one, and fails
+    /// when there is none. `WalletBuilder::unpinned` in `midnight-wallet`
+    /// skips the check. An error or an `Ok(None)` here does not fail a sync
+    /// that names its network.
     ///
     /// It needs no wallet and runs no resync. Returns `Ok(None)` when the
     /// runtime reports an empty id, which a node with no network id set does.
@@ -1498,7 +1499,7 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
         match self.ledger_network_id().await {
             Ok(network) => network,
             Err(e) => {
-                warn!(error = %e, "node network unknown; skipping the network check");
+                warn!(error = %e, "could not read the node's network");
                 None
             }
         }
