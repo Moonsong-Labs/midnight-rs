@@ -1,9 +1,10 @@
 //! Implementation-free vocabulary and toolkit for Midnight wallets.
 //!
-//! Everything here is a function of `midnight-helpers` and the indexer
-//! client's response types: the network and address model, the balance
-//! readings, the transfer requests and results, and [`WalletError`]. No
-//! wallet implementation lives here, and none is depended on, so a wallet, a
+//! Everything here is a function of `midnight-helpers`, the indexer client's
+//! response types, and the BIP-32 and BIP-39 seed derivation: the wallet
+//! [`Seed`] and its HD derivation, the network and address model, the balance
+//! readings, the transfer requests and results, and [`WalletError`]. No wallet
+//! implementation lives here, and none is depended on, so a wallet, a
 //! provider, and a contract builder can all share this vocabulary without
 //! sharing an implementation.
 //!
@@ -18,6 +19,7 @@
 pub mod address;
 pub mod balance;
 pub mod chain_pin;
+pub mod hd;
 pub mod ledger_8;
 #[expect(
     clippy::duplicate_mod,
@@ -43,10 +45,8 @@ pub use coin::{
     UnshieldedTokenType,
 };
 pub use error::WalletError;
+pub use hd::{Seed, SeedError};
 pub use ledger_version::{LedgerVersion, UnknownLedger};
-// The seed is the same in every generation. Ledger 9's definition serves as
-// the SDK's, and a generation module converts it (`convert::IntoLedger`).
-pub use midnight_helpers::ledger_9::{WalletSeed, WalletSeedError};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::Network;
 pub use parameters::{ChainParameters, DustParameters};

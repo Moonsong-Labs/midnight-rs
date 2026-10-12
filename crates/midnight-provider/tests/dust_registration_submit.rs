@@ -9,7 +9,7 @@
 //! Needs a devnet, and a genesis wallet with tNIGHT and dust to fund the
 //! fresh address this drives.
 
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_provider::{MidnightProvider, Network, Seed};
 use midnight_wallet::NIGHT;
 use midnight_wallet::{Wallet, WalletBuilder};
 
@@ -21,14 +21,14 @@ const SEND: u128 = 5_000_000_000_000;
 
 /// A seed no earlier run has used, because a registration is permanent and the
 /// devnet keeps its chain between runs.
-fn unused_seed() -> WalletSeed {
+fn unused_seed() -> Seed {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
     let mut bytes = [0u8; 32];
     bytes[16..].copy_from_slice(&nonce.to_be_bytes());
-    WalletSeed::from(bytes)
+    Seed::from_bytes(&bytes).expect("a 32-byte seed")
 }
 
 /// Two unregistered tNIGHT UTXOs is the case that fails when a registration
@@ -44,7 +44,7 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     };
 
     let seed = unused_seed();
-    let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
+    let address = seed.unshielded_address(Network::Undeployed);
 
     let funder = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::from_seed(FUNDER_SEED)

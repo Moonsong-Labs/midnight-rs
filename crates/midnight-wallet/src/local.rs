@@ -5,9 +5,8 @@
 use async_trait::async_trait;
 use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
+    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network, Seed,
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
-    WalletSeed,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 use tokio::sync::RwLock;
@@ -62,7 +61,7 @@ impl WalletFacade for LocalWallet {
         self.inner.read().await.ledger_version()
     }
 
-    async fn seed(&self) -> WalletSeed {
+    async fn seed(&self) -> Seed {
         self.inner.read().await.seed().clone()
     }
 

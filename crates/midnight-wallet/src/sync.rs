@@ -26,7 +26,7 @@
 use std::path::PathBuf;
 
 use midnight_types::chain_pin::{ChainCheck, ChainPin, SyncSource, current_pin, verify_pin};
-use midnight_types::{Network, WalletError, WalletSeed};
+use midnight_types::{Network, WalletError};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
@@ -197,7 +197,7 @@ impl std::future::Future for SyncHandle {
 #[derive(Debug)]
 #[must_use = "a wallet builder does nothing until it syncs"]
 pub struct WalletBuilder {
-    seed: WalletSeed,
+    seed: Seed,
     network: Option<Network>,
     storage_dir: Option<PathBuf>,
     pin: bool,
@@ -207,7 +207,7 @@ pub struct WalletBuilder {
 /// borrow is what lets [`WalletBuilder::sync_with_progress`] spawn.
 struct SyncPlan {
     indexer_url: String,
-    seed: WalletSeed,
+    seed: Seed,
     address: String,
     network: Network,
     storage_dir: Option<PathBuf>,
@@ -233,12 +233,12 @@ impl SyncPlan {
 }
 
 impl WalletBuilder {
-    /// Start a wallet from a [`Seed`] or an upstream `WalletSeed`.
+    /// Start a wallet from a [`Seed`].
     ///
     /// A `&Seed` also works, and leaves the `Seed` to the caller. For a seed
     /// written as hex or a mnemonic phrase, use [`Wallet::from_seed`] or
     /// [`Wallet::from_mnemonic`].
-    pub fn new(seed: impl Into<WalletSeed>) -> Self {
+    pub fn new(seed: impl Into<Seed>) -> Self {
         Self {
             seed: seed.into(),
             network: None,
@@ -394,7 +394,7 @@ impl WalletBuilder {
             Some(wallet) => wallet,
             None => source.network().await.ok_or(WalletError::NetworkUnknown)?,
         };
-        let address = midnight_types::address::derive_unshielded(&seed, network.clone());
+        let address = seed.unshielded_address(network.clone());
 
         let mut chain_pin = None;
         if pin {
@@ -453,8 +453,8 @@ mod tests {
     use super::*;
     use crate::storage::{StoredMetadata, read_metadata, save_snapshot, wallet_storage_id};
 
-    fn seed() -> WalletSeed {
-        WalletSeed::from([0x11; 32])
+    fn seed() -> Seed {
+        Seed::from_bytes(&[0x11; 32]).unwrap()
     }
 
     fn stored_pin() -> ChainPin {
@@ -467,7 +467,7 @@ mod tests {
     /// Store a snapshot of `seed()` under `base` that carries `stored_pin()`.
     /// `prepare` reads only the metadata, so the snapshot has no state files.
     fn store_pinned_snapshot(base: &Path) {
-        let address = midnight_types::address::derive_unshielded(&seed(), Network::Undeployed);
+        let address = seed().unshielded_address(Network::Undeployed);
         let metadata = StoredMetadata {
             generation: 0,
             ledger_version: LedgerVersion::V9,
@@ -671,7 +671,7 @@ mod tests {
             assert_eq!(plan.network, Network::Preprod, "pin {pin}");
             assert_eq!(
                 plan.address,
-                midnight_types::address::derive_unshielded(&seed(), Network::Preprod),
+                seed().unshielded_address(Network::Preprod),
                 "pin {pin}"
             );
             assert_eq!(plan.chain_pin.is_some(), pin, "pin {pin}");

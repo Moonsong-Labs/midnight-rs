@@ -2,9 +2,9 @@
 //!
 //! Spending a coin proves ownership, so it needs the spending keys and no
 //! public-material substitute exists. What can change is where those keys are
-//! read. The helpers' `InputInfo<WalletSeed>` carries a seed into the offer and
-//! resolves it during `build`, so the builder holds a secret for the lifetime of
-//! the transaction. Here the wallet performs the spend up front and the builder
+//! read. The helpers' `InputInfo` carries a seed into the offer and resolves it
+//! during `build`, so the builder holds a secret for the lifetime of the
+//! transaction. Here the wallet performs the spend up front and the builder
 //! receives a finished `Input`, which carries none.
 //!
 //! That is also the shape an external signer needs: "give me an `Input` for this
@@ -15,10 +15,11 @@ use std::sync::Arc;
 use super::helpers;
 use helpers::{
     BuildContext, DefaultDB, Input, Nullifier, ProofPreimage, Segment, ShieldedTokenType, StdRng,
-    TokenInfo, WalletSeed,
+    TokenInfo,
 };
 
-use crate::WalletError;
+use super::convert::IntoLedger;
+use crate::{Seed, WalletError};
 
 /// A shielded input the wallet already produced.
 ///
@@ -72,11 +73,11 @@ impl helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
 /// does inside `build`, so a coin cannot be spent twice within one offer.
 pub fn prepare_shielded_inputs(
     context: &Arc<BuildContext>,
-    seed: &WalletSeed,
+    seed: &Seed,
     nullifiers: &[Nullifier],
     rng: &mut StdRng,
 ) -> Result<Vec<PreparedInput>, WalletError> {
-    context.with_wallet_from_seed(seed.clone(), |wallet| {
+    context.with_wallet_from_seed(seed.into_ledger(), |wallet| {
         let mut prepared = Vec::with_capacity(nullifiers.len());
         for nullifier in nullifiers {
             let coin = wallet.shielded.state.coins.get(nullifier).ok_or_else(|| {

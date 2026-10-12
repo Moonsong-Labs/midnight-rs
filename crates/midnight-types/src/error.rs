@@ -1,12 +1,8 @@
-use crate::{LedgerVersion, Network, UnknownLedger, WalletSeedError};
+use crate::{LedgerVersion, Network, UnknownLedger};
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {
-    /// The provided seed could not be parsed.
-    #[error("invalid wallet seed: {0}")]
-    Seed(#[from] WalletSeedError),
-
     /// Sync with node failed.
     #[error("sync failed: {0}")]
     Sync(String),

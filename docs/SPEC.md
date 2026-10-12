@@ -28,7 +28,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     └── (deps) midnight-types, midnight-wallet-facade, subxt (node RPC)
   │
   ├── midnight-types       implementation-free vocabulary and toolkit; a function of
-  │     │                        midnight-helpers + the indexer client
+  │     │                        midnight-helpers + the indexer client + BIP-32/BIP-39
   │     ├── ledger_version.rs    LedgerVersion, read from the tag of chain data
   │     ├── coin.rs              token types, nullifiers, coins, keys: one type for both
   │     ├── transfer.rs          TransferRequest, SpentInputs, TransferResult
@@ -36,7 +36,8 @@ midnight-core                    meta-crate; re-exports the public API
   │     │                        and the conversions to and from that generation's types
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
   │     ├── sync.rs              TrackedUtxo, SyncCursors
-  │     ├── address.rs           derive_shielded / derive_unshielded
+  │     ├── hd.rs                Seed and its addresses, mnemonic, BIP32 role keys
+  │     ├── address.rs           parse_shielded_recipient
   │     ├── network.rs           Network: the bech32 HRP suffix, typed
   │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap; SyncSource
   │     └── error.rs             WalletError
@@ -51,7 +52,6 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── sync.rs              Wallet::from_seed / from_mnemonic → WalletBuilder → sync(source), pinned by default
   │     ├── wallet.rs            Wallet { seed, state of the chain's generation }, crossing forks
   │     ├── ledger_8 / ledger_9  the state, balance and pending reservations of one generation
-  │     ├── hd.rs                Seed, mnemonic, BIP32 role keys
   │     └── storage.rs           generation-based atomic persistence
   │
   ├── midnight-private-state     per-contract private state + maintenance signing keys,

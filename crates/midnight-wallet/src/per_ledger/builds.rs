@@ -61,7 +61,7 @@ impl WalletBuilds for LocalWallet {
         let mut guard = self.inner().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
         wallet.add_funding(&tx_info.context)?;
-        tx_info.set_funding_seeds(vec![wallet.seed().clone()]);
+        tx_info.set_funding_seeds(vec![wallet.seed().into_ledger()]);
         let prepared = prepare_no_validate(tx_info).await?;
         Ok(reserve(wallet, prepared))
     }
@@ -108,7 +108,7 @@ impl WalletBuilds for LocalWallet {
         let mut guard = self.inner().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
         wallet.add_funding(&tx_info.context)?;
-        tx_info.set_funding_seeds(vec![wallet.seed().clone()]);
+        tx_info.set_funding_seeds(vec![wallet.seed().into_ledger()]);
         let Some(prepared) = balance_external(tx_info, external)? else {
             return Ok(None);
         };

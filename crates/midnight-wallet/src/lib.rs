@@ -16,8 +16,8 @@
 //! its network I/O: resyncs, the indexer subscriptions and the ledger
 //! context. It holds the wallet as an `Arc<dyn WalletFacade>`.
 //!
-//! For callers that only need an address (no synced state), use the free
-//! helpers in [`address`].
+//! For callers that only need an address (no synced state), use
+//! [`Seed::unshielded_address`] and [`Seed::shielded_address`].
 //!
 //! # Indexer trust model
 //!
@@ -58,7 +58,6 @@
 //! # }
 //! ```
 
-pub mod hd;
 mod ledger_8;
 #[expect(
     clippy::duplicate_mod,
@@ -80,45 +79,13 @@ pub use midnight_types::{
     ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
     SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind,
     TransferRequest, TransferResult, UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
-    WalletError, WalletSeed, WalletSeedError, address, chain_pin, network, panic_message,
+    WalletError, address, chain_pin, network, panic_message,
 };
 // The API this crate implements, so attaching a wallet needs no dependency on
 // midnight-wallet-facade either.
 pub use midnight_wallet_facade::WalletFacade;
 
-pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use local::LocalWallet;
+pub use midnight_types::hd::{self, AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use sync::{SyncHandle, SyncProgress, WalletBuilder};
 pub use wallet::{ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, Wallet};
-
-#[cfg(test)]
-mod tests {
-    use super::WalletSeed;
-    use super::address::{derive_shielded, derive_unshielded};
-
-    fn seed() -> WalletSeed {
-        WalletSeed::from([1u8; 32])
-    }
-
-    #[test]
-    fn derive_unshielded_uses_network_suffix() {
-        let addr = derive_unshielded(&seed(), "undeployed");
-        assert!(addr.starts_with("mn_addr_undeployed"), "address was {addr}");
-    }
-
-    #[test]
-    fn derive_shielded_uses_network_suffix() {
-        let addr = derive_shielded(&seed(), "undeployed");
-        assert!(
-            addr.starts_with("mn_shield-addr_undeployed"),
-            "address was {addr}"
-        );
-    }
-
-    #[test]
-    fn derive_unshielded_differs_per_network() {
-        let a = derive_unshielded(&seed(), "undeployed");
-        let b = derive_unshielded(&seed(), "testnet");
-        assert_ne!(a, b);
-    }
-}

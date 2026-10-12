@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use futures_util::FutureExt;
 
-use super::convert::{IntoLedger, IntoSdk};
+use super::convert::{IntoLedger, IntoSdk, sdk_seed};
 use super::helpers;
 use helpers::{
     BuildContext, BuildUtxoOutput, BuildUtxoSpend, BuilderContext, CoinSelectionStrategy,
@@ -19,13 +19,13 @@ use helpers::{
     ProofProvider, Segment, ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng,
     StandardTransactionInfo, StdRng, Timestamp, TokenType, Transaction, TransactionSigningKey,
     UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo,
-    UtxoSpendInfo, WalletAddress, WalletSeed,
+    UtxoSpendInfo, WalletAddress,
 };
 
 use crate::network::Network;
 use crate::sync::TrackedUtxo;
 use crate::{
-    SpentInputs, SpentUtxoKey, TransferKind, TransferRequest, TransferResult, WalletError,
+    Seed, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest, TransferResult, WalletError,
     panic_message,
 };
 
@@ -42,7 +42,7 @@ type FinalizedTx = helpers::FinalizedTransaction<DefaultDB>;
 /// `speculative_spend` must be applied together.
 #[derive(Clone)]
 pub struct DustSpendBatch {
-    pub seed: WalletSeed,
+    pub seed: Seed,
     pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
     pub updated_state: Sp<DustLocalState<DefaultDB>, DefaultDB>,
 }
@@ -221,7 +221,7 @@ pub async fn prove_tx_no_validate(
 /// these five readings are the whole of the wallet a build depends on.
 pub trait BuildInputs: Send + Sync {
     /// The seed the build signs and derives with.
-    fn seed(&self) -> &WalletSeed;
+    fn seed(&self) -> &Seed;
 
     /// The network identifier a recipient address must match.
     fn network(&self) -> &str;
@@ -361,7 +361,8 @@ impl<'a> TransferBuilder<'a> {
         recipient: &str,
         pay_fees: bool,
     ) -> Result<PreparedTransfer, WalletError> {
-        let from_seed = self.state.seed().clone();
+        let seed = self.state.seed();
+        let from_seed = seed.into_ledger();
         let recipient_wallet = shielded_destination(recipient, self.state.network())?;
 
         // Select the coins here rather than leaving `nullifier: None` for the
@@ -415,7 +416,7 @@ impl<'a> TransferBuilder<'a> {
             StandardTransactionInfo::new_from_context(self.context, self.proof_provider, None);
         let prepared = super::inputs::prepare_shielded_inputs(
             &context,
-            &from_seed,
+            seed,
             &spent_shielded_inputs,
             &mut tx_info.rng.split(),
         )?;
@@ -471,13 +472,14 @@ impl<'a> TransferBuilder<'a> {
         receive_token: ShieldedTokenType,
         receive_amount: u128,
     ) -> Result<PreparedTransfer, WalletError> {
-        let seed = self.state.seed().clone();
+        let seed = self.state.seed();
+        let ledger_seed = seed.into_ledger();
 
         // Select give-side coins covering `give_amount`; `change` is the
         // remainder handed back to this wallet below.
         let (give_inputs, change) = InputInfo::coins_to_cover_value(
             self.context.clone(),
-            seed.clone(),
+            ledger_seed.clone(),
             give_amount,
             give_token,
             self.coin_selection,
@@ -502,7 +504,7 @@ impl<'a> TransferBuilder<'a> {
         // seed so the build's `watch_for` tracks the incoming coin.
         let mut outputs: Vec<Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>> =
             vec![Box::new(OutputInfo {
-                destination: seed.clone(),
+                destination: ledger_seed.clone(),
                 token_type: receive_token,
                 value: receive_amount,
             })];
@@ -510,7 +512,7 @@ impl<'a> TransferBuilder<'a> {
         // Output 2: the give-side change back to this wallet, only if any.
         if change > 0 {
             outputs.push(Box::new(OutputInfo {
-                destination: seed.clone(),
+                destination: ledger_seed,
                 token_type: give_token,
                 value: change,
             }));
@@ -523,7 +525,7 @@ impl<'a> TransferBuilder<'a> {
             StandardTransactionInfo::new_from_context(self.context, self.proof_provider, None);
         let prepared = super::inputs::prepare_shielded_inputs(
             &context,
-            &seed,
+            seed,
             &spent_shielded_inputs,
             &mut tx_info.rng.split(),
         )?;
@@ -566,7 +568,7 @@ impl<'a> TransferBuilder<'a> {
         recipient: &str,
         pay_fees: bool,
     ) -> Result<PreparedTransfer, WalletError> {
-        let from_seed = self.state.seed().clone();
+        let from_seed = self.state.seed().into_ledger();
         let recipient_wallet = parse_unshielded_recipient(recipient, self.state.network())?;
 
         let (spend_infos, change) = UtxoSpendInfo::utxos_to_cover_value(
@@ -678,7 +680,7 @@ impl<'a> TransferBuilder<'a> {
         self,
         utxo_ctime: Option<u64>,
     ) -> Result<PreparedTransfer, WalletError> {
-        let seed = self.state.seed().clone();
+        let seed = self.state.seed().into_ledger();
 
         let all_night: Vec<_> = self
             .state
@@ -1239,7 +1241,7 @@ fn gather_dust_spends(
             remaining = remaining.saturating_sub(spend.v_fee);
         }
         batches.push(DustSpendBatch {
-            seed: seed.clone(),
+            seed: sdk_seed(seed),
             spends: new_spends,
             updated_state,
         });
@@ -1263,7 +1265,7 @@ fn confirm_dust_spends(
         .lock()
         .map_err(|_| WalletError::Transfer("wallets lock poisoned".into()))?;
     for batch in batches {
-        if let Some(wallet) = wallets.get_mut(&batch.seed) {
+        if let Some(wallet) = wallets.get_mut(&(&batch.seed).into_ledger()) {
             wallet
                 .dust
                 .mark_spent(&batch.spends, batch.updated_state.clone());

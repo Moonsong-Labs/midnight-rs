@@ -30,7 +30,7 @@ let builder = Wallet::from_mnemonic(
 // 25th-word passphrase, matching @scure/bip39's mnemonicToSeed(phrase, passphrase).
 let builder = Wallet::from_mnemonic_with_passphrase(phrase, "extra-word")?;
 
-// A `Seed` (by value or by reference) or an upstream `WalletSeed` that you already hold.
+// A `Seed` that you already hold, by value or by reference.
 let builder = WalletBuilder::new(&seed);
 ```
 
@@ -59,7 +59,7 @@ let seed: Seed = env::var("MIDNIGHT_WALLET_SEED")?.parse()?;
 
 `Seed` implements the HD-wallet layout from Midnight's [Wallet Engine Specification — *HD wallet structure*](https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure): the path `m / 44' / 2400' / <account>' / <role> / <index>`, the role table with five indices (0 Unshielded External, 1 Unshielded Internal, 2 Dust, 3 Shielded, 4 Metadata), and BIP-39 mnemonic input. The enum variant for index 3 is `Role::Zswap`, matching the upstream Rust helpers' naming; the spec text calls the same slot "Shielded".
 
-`Seed` zeroizes its bytes on drop, and `Debug` / `Display` redact them. A `Seed` and a `&Seed` convert into the upstream `WalletSeed` type, so every SDK method that takes `impl Into<WalletSeed>` accepts either one.
+`Seed` zeroizes its bytes on drop, and `Debug` / `Display` redact them.
 
 ### Mnemonic utilities
 
@@ -105,8 +105,6 @@ A synced `Wallet` gives its own addresses on the network it synced as, so these 
 let unshielded = wallet.unshielded_address();
 let shielded   = wallet.shielded_address();
 ```
-
-The free `address::derive_unshielded(&WalletSeed, network)` / `derive_shielded(...)` helpers still exist for callers that hold a raw `WalletSeed` from upstream.
 
 Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `network` argument accepts both [`Network`] enum variants (`Network::Preprod`, `Network::Mainnet`, etc.) and free-form strings via `impl Into<Network>`, so `"preprod"` and `env::var("MIDNIGHT_NETWORK")` also work. Unknown names round-trip through `Network::Other(String)` — useful for custom devnets.
 

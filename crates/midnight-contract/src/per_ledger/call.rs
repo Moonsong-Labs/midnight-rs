@@ -828,10 +828,10 @@ impl helpers::BuildOutput<helpers::DefaultDB, helpers::BuildContext> for MintedC
 /// encryption key, so the wallet finds the change through normal sync.
 ///
 /// Addressing a coin needs only public material, so this holds the two public
-/// keys rather than the seed the helpers' `OutputInfo<WalletSeed>` takes. That
-/// keeps the type usable by a signer that never releases its seed, and it is
-/// why the change is discovered through its ciphertext rather than registered
-/// with `watch_for`, which would need the wallet behind the seed.
+/// keys rather than the seed the helpers' `OutputInfo` takes. That keeps the
+/// type usable by a signer that never releases its seed, and it is why the
+/// change is discovered through its ciphertext rather than registered with
+/// `watch_for`, which would need the wallet behind the seed.
 struct CallerChangeOutput {
     coin_public_key: helpers::CoinPublicKey,
     enc_public_key: helpers::EncryptionPublicKey,

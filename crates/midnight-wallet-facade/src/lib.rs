@@ -25,9 +25,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use midnight_types::chain_pin::ChainView;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
+    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network, Seed,
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
-    WalletSeed,
 };
 
 pub mod ledger_8;
@@ -60,7 +59,7 @@ pub trait WalletFacade: Send + Sync {
     /// A build needs it, which is why it is here. It is also the one thing an
     /// external signer will not hand over, so a facade over one cannot serve
     /// this.
-    async fn seed(&self) -> WalletSeed;
+    async fn seed(&self) -> Seed;
 
     /// The public keys a coin addressed to this wallet commits to.
     async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey);
@@ -170,7 +169,7 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).ledger_version().await
     }
 
-    async fn seed(&self) -> WalletSeed {
+    async fn seed(&self) -> Seed {
         (**self).seed().await
     }
 

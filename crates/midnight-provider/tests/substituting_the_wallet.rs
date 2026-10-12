@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use midnight_provider::{
     ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, MidnightProvider,
-    Network, Nullifier, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    TransferRequest, WalletBalance, WalletError, WalletFacade, WalletSeed,
+    Network, Nullifier, Seed, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
+    TransferRequest, WalletBalance, WalletError, WalletFacade,
 };
 use midnight_wallet::chain_pin::ChainView;
 
@@ -47,7 +47,7 @@ impl WalletFacade for StubWallet {
         true
     }
 
-    async fn seed(&self) -> WalletSeed {
+    async fn seed(&self) -> Seed {
         unimplemented!("this wallet holds no seed")
     }
 

@@ -10,12 +10,12 @@
 //! take `impl Into<Network>`. Both typed and string forms work:
 //!
 //! ```rust
-//! use midnight_types::{Network, WalletSeed, address};
-//! # let seed = WalletSeed::from([1u8; 32]);
+//! use midnight_types::{Network, Seed};
+//! # let seed = Seed::from_bytes(&[1u8; 32]).unwrap();
 //!
-//! address::derive_shielded(&seed, Network::Preprod);
-//! address::derive_shielded(&seed, "preprod");                  // From<&str>
-//! address::derive_shielded(&seed, String::from("preprod"));    // From<String>
+//! seed.shielded_address(Network::Preprod);
+//! seed.shielded_address("preprod");                  // From<&str>
+//! seed.shielded_address(String::from("preprod"));    // From<String>
 //! ```
 //!
 //! Unknown names round-trip through [`Network::Other`] so you can still target

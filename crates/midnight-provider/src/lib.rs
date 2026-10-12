@@ -26,13 +26,13 @@ pub use types::{Health, StateQuery, StateQueryResult, StorageKey, TransactionHas
 
 // Re-export the vocabulary that appears in MidnightProvider's public surface
 // so callers don't need separate deps for it. The implementation types
-// (`Wallet`, `LocalWallet`, `WalletBuilder`, the seed-phrase helpers) live in
-// midnight-wallet; this crate never names them.
+// (`Wallet`, `LocalWallet`, `WalletBuilder`) live in midnight-wallet; this
+// crate never names them.
 pub use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
     DustParameters, EncryptionPublicKey, HashOutput, LedgerVersion, NIGHT, Nonce, Nullifier,
-    SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, UnshieldedTokenType,
-    WalletSeed, WalletSeedError,
+    SPECKS_PER_DUST, STARS_PER_NIGHT, Seed, ShieldedRecipient, ShieldedTokenType,
+    UnshieldedTokenType,
 };
 
 // The wallet's API, so a caller attaching one (or implementing one) needs no

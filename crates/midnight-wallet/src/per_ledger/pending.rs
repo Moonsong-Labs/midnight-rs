@@ -371,7 +371,7 @@ impl PendingReservations {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use helpers::WalletSeed;
+    use crate::Seed;
     use helpers::mn_ledger::dust::DustCommitment;
     use helpers::{Duration, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
 
@@ -408,7 +408,7 @@ mod tests {
 
     fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
         DustSpendBatch {
-            seed: WalletSeed::from([0x00; 32]),
+            seed: Seed::from_bytes(&[0x00; 32]).unwrap(),
             spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
             updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
         }
@@ -538,7 +538,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
 
         // A seed whose hex is distinctive enough to find in the raw file.
-        let seed = WalletSeed::from([0xab; 32]);
+        let seed = Seed::from_bytes(&[0xab; 32]).unwrap();
         let mut p = PendingReservations::default();
         p.reserve(
             vec![DustSpendBatch {

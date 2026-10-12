@@ -122,8 +122,10 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
             .sync(&recipient_provider)
             .await
             .expect("recipient sync");
-    let recipient =
-        midnight_helpers::ledger_9::UnshieldedWallet::default(wallet.seed().clone()).user_address;
+    let recipient = midnight_helpers::ledger_9::UnshieldedWallet::default(
+        midnight_types::ledger_9::convert::IntoLedger::into_ledger(wallet.seed()),
+    )
+    .user_address;
     let recipient_provider = recipient_provider.with_wallet(wallet);
 
     let before = held(&recipient_provider, colour).await;
