@@ -17,7 +17,7 @@ use midnight_contract::ContractMaintenanceVerifyingKey;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
-use midnight_wallet::{Wallet, WalletBuilder};
+use midnight_wallet::Wallet;
 
 use compact_codegen::ir;
 use compact_codegen::types::ContractInfo;
@@ -700,22 +700,20 @@ async fn deploy_funded_with_shielded_offer() {
         ContractMaintenanceAuthority::default(),
     );
 
-    let seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = WalletBuilder::new(seed.clone())
-        .with_network(midnight_provider::Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("indexer sync should succeed");
+    let wallet =
+        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
+            .unwrap()
+            .with_network(midnight_provider::Network::Undeployed)
+            .sync(&provider)
+            .await
+            .expect("indexer sync should succeed");
+    let seed = wallet.seed().clone();
+    let recipient_addr = wallet.shielded_address();
     let provider = provider.with_wallet(wallet);
 
     // Build a 1-unit self-transfer of the dev devnet's default shielded
     // token id ([0; 32]). The dev wallet holds this at genesis.
-    let recipient_addr =
-        midnight_types::address::derive_shielded(&seed, midnight_provider::Network::Undeployed);
     let token_type = midnight_contract::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
     // The offer takes the types of the generation the wallet is on.
     macro_rules! offer_in {

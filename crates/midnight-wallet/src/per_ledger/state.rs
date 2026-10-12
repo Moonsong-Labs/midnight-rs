@@ -1965,7 +1965,7 @@ mod tests {
 
     /// Minimal offline wallet for unit tests: fresh state, no sync.
     fn test_wallet(storage_dir: Option<PathBuf>) -> Wallet {
-        let seed = WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap();
+        let seed = WalletSeed::from([0x22; 32]);
         let shielded = ShieldedWallet::<DefaultDB>::default(seed.clone());
         let secret_keys = shielded.secret_keys().clone();
         Wallet {
@@ -2011,7 +2011,7 @@ mod tests {
 
     fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
         DustSpendBatch {
-            seed: WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap(),
+            seed: WalletSeed::from([0x22; 32]),
             spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
             updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
         }
@@ -2954,9 +2954,7 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let shielded = ShieldedWallet::<DefaultDB>::default(
-                WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap(),
-            );
+            let shielded = ShieldedWallet::<DefaultDB>::default(WalletSeed::from([0x22; 32]));
             let started = std::time::Instant::now();
             let replay = replay_zswap_events(
                 &sub_client,
@@ -3002,10 +3000,7 @@ mod tests {
             let started = std::time::Instant::now();
             let replay = replay_dust_events(
                 &sub_client,
-                DustWallet::default(
-                    WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap(),
-                    Some(&INITIAL_PARAMETERS),
-                ),
+                DustWallet::default(WalletSeed::from([0x22; 32]), Some(&INITIAL_PARAMETERS)),
                 8,
                 true,
                 None::<fn(&DustWallet<DefaultDB>, i64)>,

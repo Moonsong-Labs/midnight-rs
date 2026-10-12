@@ -4,13 +4,10 @@
 //! instead of returning its `InvalidCoinKeyLen` variant, and it validates the
 //! HRP's prefix and credential segments but never its network segment.
 
-use midnight_wallet::{Network, parse_shielded_recipient};
+use midnight_wallet::{Network, Seed, parse_shielded_recipient};
 
-fn seed() -> midnight_wallet::WalletSeed {
-    midnight_wallet::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap()
+fn seed() -> Seed {
+    Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000001").unwrap()
 }
 
 #[test]
@@ -23,7 +20,7 @@ fn short_shielded_address_is_an_error_not_a_panic() {
 
 #[test]
 fn cross_network_shielded_address_is_rejected() {
-    let testnet = midnight_wallet::address::derive_shielded(&seed(), Network::Testnet);
+    let testnet = seed().shielded_address(Network::Testnet);
     let err = parse_shielded_recipient(&testnet, Network::Undeployed)
         .expect_err("a testnet address must not be accepted by an undeployed wallet");
     let msg = err.to_string();
@@ -36,7 +33,7 @@ fn cross_network_shielded_address_is_rejected() {
 #[test]
 fn matching_network_shielded_address_is_accepted() {
     for network in [Network::Undeployed, Network::Testnet, Network::Preprod] {
-        let addr = midnight_wallet::address::derive_shielded(&seed(), network.clone());
+        let addr = seed().shielded_address(network.clone());
         assert!(
             parse_shielded_recipient(&addr, network.clone()).is_ok(),
             "address derived for {network} should parse under {network}"
@@ -49,7 +46,7 @@ fn mainnet_has_no_hrp_network_suffix() {
     // Upstream's `network_suffix` returns an empty string for mainnet, so a
     // mainnet address is `mn_shield-addr1...` with no third HRP segment. The
     // check has to treat that absence as "mainnet" rather than "unknown".
-    let addr = midnight_wallet::address::derive_shielded(&seed(), Network::Mainnet);
+    let addr = seed().shielded_address(Network::Mainnet);
     assert!(
         !addr.starts_with("mn_shield-addr_"),
         "mainnet address should carry no network suffix, got: {addr}"
@@ -59,7 +56,7 @@ fn mainnet_has_no_hrp_network_suffix() {
         parse_shielded_recipient(&addr, Network::Testnet).is_err(),
         "a mainnet address must not be accepted by a testnet wallet"
     );
-    let testnet = midnight_wallet::address::derive_shielded(&seed(), Network::Testnet);
+    let testnet = seed().shielded_address(Network::Testnet);
     assert!(
         parse_shielded_recipient(&testnet, Network::Mainnet).is_err(),
         "a testnet address must not be accepted by a mainnet wallet"
@@ -72,7 +69,7 @@ fn mainnet_has_no_hrp_network_suffix() {
 #[test]
 fn custom_network_names_may_contain_underscores() {
     let network = Network::Other("custom_devnet".into());
-    let addr = midnight_wallet::address::derive_shielded(&seed(), network.clone());
+    let addr = seed().shielded_address(network.clone());
     assert!(
         parse_shielded_recipient(&addr, network).is_ok(),
         "an address derived for `custom_devnet` must parse under that network"

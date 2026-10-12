@@ -96,21 +96,19 @@ mod tests {
     use super::WalletSeed;
     use super::address::{derive_shielded, derive_unshielded};
 
-    const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-
-    fn dev_seed() -> WalletSeed {
-        WalletSeed::try_from_hex_str(DEV_SEED).unwrap()
+    fn seed() -> WalletSeed {
+        WalletSeed::from([1u8; 32])
     }
 
     #[test]
     fn derive_unshielded_uses_network_suffix() {
-        let addr = derive_unshielded(&dev_seed(), "undeployed");
+        let addr = derive_unshielded(&seed(), "undeployed");
         assert!(addr.starts_with("mn_addr_undeployed"), "address was {addr}");
     }
 
     #[test]
     fn derive_shielded_uses_network_suffix() {
-        let addr = derive_shielded(&dev_seed(), "undeployed");
+        let addr = derive_shielded(&seed(), "undeployed");
         assert!(
             addr.starts_with("mn_shield-addr_undeployed"),
             "address was {addr}"
@@ -119,8 +117,8 @@ mod tests {
 
     #[test]
     fn derive_unshielded_differs_per_network() {
-        let a = derive_unshielded(&dev_seed(), "undeployed");
-        let b = derive_unshielded(&dev_seed(), "testnet");
+        let a = derive_unshielded(&seed(), "undeployed");
+        let b = derive_unshielded(&seed(), "testnet");
         assert_ne!(a, b);
     }
 }

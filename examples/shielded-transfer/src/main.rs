@@ -10,7 +10,7 @@
 use std::env;
 
 use anyhow::bail;
-use midnight_core::{MidnightProvider, Network, Seed, WalletBuilder};
+use midnight_core::{MidnightProvider, Network, Wallet};
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded with shielded test tokens at genesis on the
@@ -41,23 +41,22 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "undeployed".into())
         .into();
 
-    let seed = Seed::from_hex(DEV_SEED)?;
-
     println!("=== Midnight Shielded Transfer ===\n");
     println!("Network:           {network}");
-    println!("Shielded address:  {}", seed.shielded_address(&network));
     println!("Node:              {node_url}");
     println!("Indexer:           {indexer_url}");
     println!();
 
     println!("Syncing wallet from indexer (zswap + dust + unshielded in parallel)...");
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = WalletBuilder::new(&seed)
+    let wallet = Wallet::from_seed(DEV_SEED)?
         .with_network(&network)
         .sync(&provider)
         .await?;
+    let address = wallet.shielded_address();
     let provider = provider.with_wallet(wallet);
-    println!("Sync complete.\n");
+    println!("Sync complete.");
+    println!("Shielded address:  {address}\n");
 
     // No manual chain-readiness wait needed — every transfer / contract
     // path goes through MidnightProvider::resync_wallet, which now waits
@@ -78,11 +77,10 @@ async fn main() -> anyhow::Result<()> {
     println!();
 
     println!("Building shielded self-transfer: 1 unit of token {coin} back to own address");
-    let recipient = seed.shielded_address(&network);
 
     println!("Building + submitting...");
     let pending = provider
-        .transfer_shielded(coin.token_type, 1, &recipient)
+        .transfer_shielded(coin.token_type, 1, &address)
         .await?;
     println!("Submitted: ext hash {}", pending.extrinsic_hash_hex());
     let (best, pending) = pending.wait_best().await?;

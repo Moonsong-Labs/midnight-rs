@@ -11,10 +11,7 @@
 //!
 //! ```rust
 //! use midnight_types::{Network, WalletSeed, address};
-//! # let seed = WalletSeed::try_from_hex_str(
-//! #     "0000000000000000000000000000000000000000000000000000000000000001",
-//! # )
-//! # .unwrap();
+//! # let seed = WalletSeed::from([1u8; 32]);
 //!
 //! address::derive_shielded(&seed, Network::Preprod);
 //! address::derive_shielded(&seed, "preprod");                  // From<&str>

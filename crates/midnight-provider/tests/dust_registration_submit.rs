@@ -26,7 +26,9 @@ fn unused_seed() -> WalletSeed {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    WalletSeed::try_from_hex_str(&format!("{nonce:064x}")).expect("seed from nonce")
+    let mut bytes = [0u8; 32];
+    bytes[16..].copy_from_slice(&nonce.to_be_bytes());
+    WalletSeed::from(bytes)
 }
 
 /// Two unregistered tNIGHT UTXOs is the case that fails when a registration

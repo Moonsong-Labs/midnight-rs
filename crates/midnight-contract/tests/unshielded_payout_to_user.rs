@@ -25,7 +25,7 @@ use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
 use midnight_provider::UnshieldedTokenType;
-use midnight_wallet::{Wallet, WalletBuilder};
+use midnight_wallet::Wallet;
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];
 const MINTED: u128 = 1_000;
@@ -114,18 +114,16 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
 
     // A different wallet from the one that deploys and pays the fees, so an
     // output wrongly owned by the caller would fail this.
-    let recipient_seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000002",
-    )
-    .unwrap();
-    let recipient =
-        midnight_helpers::ledger_9::UnshieldedWallet::default(recipient_seed.clone()).user_address;
     let recipient_provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = WalletBuilder::new(recipient_seed)
-        .with_network(midnight_provider::Network::Undeployed)
-        .sync(&recipient_provider)
-        .await
-        .expect("recipient sync");
+    let wallet =
+        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000002")
+            .unwrap()
+            .with_network(midnight_provider::Network::Undeployed)
+            .sync(&recipient_provider)
+            .await
+            .expect("recipient sync");
+    let recipient =
+        midnight_helpers::ledger_9::UnshieldedWallet::default(wallet.seed().clone()).user_address;
     let recipient_provider = recipient_provider.with_wallet(wallet);
 
     let before = held(&recipient_provider, colour).await;

@@ -564,26 +564,4 @@ mod tests {
         assert_eq!(words.len(), 24);
         assert_eq!(mnemonic::join(&words), phrase);
     }
-
-    #[test]
-    fn address_derivation_matches_walletseed_path() {
-        // The same underlying seed bytes — once via Seed, once via the raw
-        // upstream WalletSeed — must produce identical bech32 addresses.
-        // This is the contract that lets callers swap construction styles
-        // without changing their on-chain identity.
-        use crate::Network;
-        use crate::address::{derive_shielded, derive_unshielded};
-
-        let seed = Seed::from_hex(TEST_SEED_HEX).unwrap();
-        let ws = WalletSeed::try_from_hex_str(TEST_SEED_HEX).unwrap();
-
-        assert_eq!(
-            seed.unshielded_address(Network::Preprod),
-            derive_unshielded(&ws, Network::Preprod),
-        );
-        assert_eq!(
-            seed.shielded_address(Network::Preprod),
-            derive_shielded(&ws, Network::Preprod),
-        );
-    }
 }

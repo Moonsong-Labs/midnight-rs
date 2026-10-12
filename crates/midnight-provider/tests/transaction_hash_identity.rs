@@ -9,10 +9,9 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
-use midnight_wallet::WalletBuilder;
+use midnight_wallet::Wallet;
 
 use midnight_provider::{MidnightProvider, NIGHT, Network, NodeBlockHash};
-use midnight_wallet::Seed;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -26,15 +25,14 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
         return;
     };
 
-    let seed = Seed::from_hex(DEV_WALLET_SEED).expect("dev seed");
-    let network = Network::Undeployed;
-    let recipient = seed.unshielded_address(&network);
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = WalletBuilder::new(seed)
-        .with_network(network)
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
+        .expect("dev seed")
+        .with_network(Network::Undeployed)
         .sync(&provider)
         .await
         .expect("sync");
+    let recipient = wallet.unshielded_address();
     let provider = provider.with_wallet(wallet);
 
     // A self-transfer is the cheapest transaction that reaches a block.

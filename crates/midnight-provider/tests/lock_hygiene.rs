@@ -24,7 +24,7 @@ use midnight_indexer_client::testutil::{
     ServerWs, next_json, read_http_request, send_next, subscriber_handshake, write_json_response,
 };
 use midnight_provider::MidnightProvider;
-use midnight_wallet::{LocalWallet, Network, WalletBuilder, WalletError, WalletFacade, WalletSeed};
+use midnight_wallet::{LocalWallet, Network, Wallet, WalletBuilder, WalletError, WalletFacade};
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -156,8 +156,8 @@ fn block_response() -> String {
 // Test helpers
 // ---------------------------------------------------------------------------
 
-fn seed() -> WalletSeed {
-    WalletSeed::try_from_hex_str(&"11".repeat(32)).unwrap()
+fn builder() -> WalletBuilder {
+    Wallet::from_seed(&"11".repeat(32)).unwrap()
 }
 
 fn provider(url: &str) -> MidnightProvider {
@@ -193,7 +193,7 @@ async fn balance_completes_while_resync_replay_is_in_flight() {
 
     // Fast mode: attach a synced wallet in milliseconds.
     let provider = provider(&url);
-    let wallet = WalletBuilder::new(seed())
+    let wallet = builder()
         .with_network(Network::Undeployed)
         .unpinned()
         .sync(&provider)
@@ -233,7 +233,7 @@ async fn dropping_receiver_cancels_streamed_sync_and_closes_subscriptions() {
     state.stall.store(true, Ordering::SeqCst);
 
     let provider = provider(&url);
-    let (rx, handle) = WalletBuilder::new(seed())
+    let (rx, handle) = builder()
         .with_network(Network::Undeployed)
         .unpinned()
         .sync_with_progress(&provider)
@@ -272,7 +272,7 @@ async fn dropping_sync_handle_aborts_sync_and_closes_subscriptions() {
     state.stall.store(true, Ordering::SeqCst);
 
     let provider = provider(&url);
-    let (mut rx, handle) = WalletBuilder::new(seed())
+    let (mut rx, handle) = builder()
         .with_network(Network::Undeployed)
         .unpinned()
         .sync_with_progress(&provider)
@@ -316,7 +316,7 @@ async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
 
     // Fast mode: attach a synced wallet in milliseconds.
     let provider = provider(&url);
-    let wallet = WalletBuilder::new(seed())
+    let wallet = builder()
         .with_network(Network::Undeployed)
         .unpinned()
         .sync(&provider)
@@ -405,7 +405,7 @@ async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
     let (url, state) = spawn_mock().await;
     let chain = SwappableChain::new(&url);
 
-    let wallet = WalletBuilder::new(seed())
+    let wallet = builder()
         .with_network(Network::Undeployed)
         .sync(&chain)
         .await

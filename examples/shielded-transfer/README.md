@@ -40,12 +40,12 @@ Output (approximately):
 === Midnight Shielded Transfer ===
 
 Network:           undeployed
-Shielded address:  mn_shield-addr_undeployed1...
 Node:              ws://127.0.0.1:9944
 Indexer:           http://127.0.0.1:8088
 
 Syncing wallet from indexer (zswap + dust + unshielded in parallel)...
 Sync complete.
+Shielded address:  mn_shield-addr_undeployed1...
 
 --- Pre-transfer shielded balance ---
   ...00000000: 50000000000000
@@ -77,7 +77,8 @@ balance: ... SPECK, spendable UTXOs: ...
 
 ## What it covers
 
-- `WalletBuilder::new(&seed).with_network(&network).sync(&provider)` + `MidnightProvider::with_wallet`: the first wallet sync against the indexer, then the attach step
+- `Wallet::from_seed(DEV_SEED)?.with_network(&network).sync(&provider)` + `MidnightProvider::with_wallet`: the first wallet sync against the indexer, then the attach step
+- `Wallet::shielded_address`: the synced wallet's own address, which receives the self-transfer
 - `MidnightProvider::balance` — shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))
 - `MidnightProvider::transfer_shielded(token_type, amount, recipient)` — builds a proven zswap transfer
 - `MidnightProvider::submit` + `PendingTx::wait_best` + `wait_finalized` — submission lifecycle

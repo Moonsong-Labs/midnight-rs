@@ -13,10 +13,8 @@ mod counter {
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use midnight_provider::{
-    Builds, LedgerVersion, MidnightProvider, NIGHT, Network, Nullifier, WalletSeed,
-};
-use midnight_wallet::WalletBuilder;
+use midnight_provider::{Builds, LedgerVersion, MidnightProvider, NIGHT, Network, Nullifier};
+use midnight_wallet::Wallet;
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -40,7 +38,6 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         eprintln!("skipping: MIDNIGHT_FORK_UPGRADE_CMD not set");
         return;
     };
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let network = Network::Undeployed;
     let provider = MidnightProvider::new(&node_url, &indexer_url);
     assert_eq!(
@@ -51,12 +48,15 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
 
     // Ledger 8: a stored wallet, and a contract it deploys and calls.
     let storage = tempfile::TempDir::new().unwrap();
-    let wallet = WalletBuilder::new(seed.clone())
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
         .with_network(network.clone())
         .with_storage(storage.path())
         .sync(&provider)
         .await
         .expect("sync on ledger 8");
+    let own_unshielded = wallet.unshielded_address();
+    let own_shielded = wallet.shielded_address();
     let provider = provider.with_wallet(wallet);
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
@@ -81,7 +81,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .status()
         .expect("run the upgrade command");
     assert!(status.success(), "the upgrade command failed");
-    wait_for_ledger_9(&provider, &seed, &network, stored[2].path()).await;
+    wait_for_ledger_9(&provider, &network, stored[2].path()).await;
 
     // A shielded rescan meets ledger 9 events first. It crosses the attached
     // wallet, then replays the shielded stream across the fork.
@@ -104,13 +104,15 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .dust
         .unregistered_night_utxos;
     assert!(unregistered > 0, "no NIGHT generates Dust after the fork");
-    let resumed = WalletBuilder::new(seed.clone())
+    let resumed = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
         .with_network(network.clone())
         .with_storage(stored[0].path())
         .sync(&provider)
         .await
         .expect("resume a ledger 8 snapshot on ledger 9");
-    let fresh = WalletBuilder::new(seed.clone())
+    let fresh = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
         .with_network(network.clone())
         .sync(&provider)
         .await
@@ -134,7 +136,6 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .expect("call a ledger 8 contract on ledger 9");
     let round = contract.ledger().await.unwrap().round().unwrap();
     assert_eq!(round, 2, "the contract keeps its ledger 8 state");
-    let own_unshielded = midnight_wallet::address::derive_unshielded(&seed, network.clone());
     provider
         .transfer_unshielded(NIGHT, 1_000_000, &own_unshielded)
         .await
@@ -147,7 +148,6 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .first()
         .expect("a shielded coin from before the fork")
         .token_type;
-    let own_shielded = midnight_wallet::address::derive_shielded(&seed, network.clone());
     provider
         .transfer_shielded(token_type, 1, &own_shielded)
         .await
@@ -162,13 +162,15 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     // The other ledger 8 snapshot resumes across the fork and what came
     // after it, and a sync from genesis crosses too. Both hold what the
     // attached wallet holds.
-    let resumed = WalletBuilder::new(seed.clone())
+    let resumed = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
         .with_network(network.clone())
         .with_storage(stored[1].path())
         .sync(&provider)
         .await
         .expect("resume a ledger 8 snapshot on ledger 9");
-    let fresh = WalletBuilder::new(seed.clone())
+    let fresh = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
         .with_network(network)
         .sync(&provider)
         .await
@@ -254,18 +256,14 @@ fn generating(utxos: &[midnight_provider::TrackedUtxo]) -> Vec<(Option<String>, 
 /// The node can report the fork before the indexer serves a ledger 9 block. A
 /// probe wallet resumes the ledger 8 `snapshot` and resyncs until it crosses,
 /// so the attached wallet is still on ledger 8 for the rescan to cross.
-async fn wait_for_ledger_9(
-    provider: &MidnightProvider,
-    seed: &WalletSeed,
-    network: &Network,
-    snapshot: &Path,
-) {
+async fn wait_for_ledger_9(provider: &MidnightProvider, network: &Network, snapshot: &Path) {
     let deadline = Instant::now() + Duration::from_secs(300);
     while provider.ledger_version().await.expect("the chain's ledger") != LedgerVersion::V9 {
         assert!(Instant::now() < deadline, "the node did not run ledger 9");
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
-    let mut probe = WalletBuilder::new(seed.clone())
+    let mut probe = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
         .with_network(network.clone())
         .with_storage(snapshot)
         .sync(provider)

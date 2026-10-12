@@ -1271,7 +1271,7 @@ mod tests {
     use super::*;
 
     fn seed() -> WalletSeed {
-        WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap()
+        WalletSeed::from([0x22; 32])
     }
 
     fn coin(nonce: u8) -> CoinInfo {

@@ -24,9 +24,9 @@ use std::time::Duration;
 use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{
     LedgerVersion, MidnightProvider, NIGHT, Network, ProviderError, ShieldedTokenType, SpentInputs,
-    TransferKind, TransferRequest, WalletError, WalletFacade, WalletSeed,
+    TransferKind, TransferRequest, WalletError, WalletFacade,
 };
-use midnight_wallet::{LocalWallet, WalletBuilder};
+use midnight_wallet::{LocalWallet, Wallet};
 use tokio::sync::Notify;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -44,14 +44,16 @@ macro_rules! devnet_or_skip {
     }};
 }
 
-async fn synced_provider(node: &str, indexer: &str, seed: &WalletSeed) -> MidnightProvider {
+async fn synced_provider(node: &str, indexer: &str) -> (MidnightProvider, String) {
     let provider = MidnightProvider::new(node, indexer);
-    let wallet = WalletBuilder::new(seed.clone())
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
+        .expect("dev seed")
         .with_network(Network::Undeployed)
         .sync(&provider)
         .await
         .expect("sync");
-    provider.with_wallet(wallet)
+    let shielded_address = wallet.shielded_address();
+    (provider.with_wallet(wallet), shielded_address)
 }
 
 fn night() -> ShieldedTokenType {
@@ -134,16 +136,10 @@ test_provers!(ledger_9);
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_wallet_is_readable_while_a_build_proves() {
     let (node, indexer) = devnet_or_skip!();
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).expect("dev seed");
-
     let prover = Arc::new(ParkedProver::default());
-    let provider = Arc::new(
-        synced_provider(&node, &indexer, &seed)
-            .await
-            .with_proof_provider(prover.clone()),
-    );
+    let (provider, recipient) = synced_provider(&node, &indexer).await;
+    let provider = Arc::new(provider.with_proof_provider(prover.clone()));
 
-    let recipient = midnight_wallet::address::derive_shielded(&seed, Network::Undeployed);
     let building = {
         let provider = provider.clone();
         tokio::spawn(async move {
@@ -197,15 +193,14 @@ async fn the_wallet_is_readable_while_a_build_proves() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_preparations_at_once_draw_different_inputs() {
     let (node, indexer) = devnet_or_skip!();
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).expect("dev seed");
-    let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
-
     let source = MidnightProvider::new(&node, &indexer);
-    let wallet = WalletBuilder::new(seed)
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
+        .expect("dev seed")
         .with_network(Network::Undeployed)
         .sync(&source)
         .await
         .expect("sync");
+    let address = wallet.unshielded_address();
 
     // Each preparation spends one tNIGHT UTXO and draws Dust for its fee, so
     // the wallet needs two of each for the two to be able to differ at all.
@@ -302,8 +297,7 @@ async fn two_preparations_at_once_draw_different_inputs() {
 #[tokio::test]
 async fn a_failed_proof_hands_the_reserved_coins_back() {
     let (node, indexer) = devnet_or_skip!();
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).expect("dev seed");
-    let provider = synced_provider(&node, &indexer, &seed).await;
+    let (provider, recipient) = synced_provider(&node, &indexer).await;
 
     let spendable_before = provider
         .spendable_shielded_coins()
@@ -318,7 +312,6 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
         return;
     }
 
-    let recipient = midnight_wallet::address::derive_shielded(&seed, Network::Undeployed);
     let broken = provider.with_proof_provider(Arc::new(BrokenProver));
 
     let outcome = broken

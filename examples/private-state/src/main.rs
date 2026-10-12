@@ -32,9 +32,7 @@
 use std::sync::Arc;
 
 use anyhow::bail;
-use midnight_core::{
-    FsPrivateStateProvider, MidnightProvider, Network, PrivateStateProvider, Seed, WalletBuilder,
-};
+use midnight_core::{FsPrivateStateProvider, MidnightProvider, PrivateStateProvider, Wallet};
 
 mod secret_counter {
     midnight_core::contract!(
@@ -81,8 +79,11 @@ async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Private State Example ===\n");
 
     println!("0. Syncing wallet and attaching the private-state store...");
-    let seed = Seed::from_hex(DEV_WALLET_SEED)?;
-    let address = seed.unshielded_address(Network::Undeployed);
+    let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
+    let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
+    let provider = MidnightProvider::new(&node_url, &indexer_url);
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)?.sync(&provider).await?;
+    let address = wallet.unshielded_address();
 
     // A durable private-state store for this one wallet. A real app would use
     // `FsPrivateStateProvider::with_default_dir(&address)`
@@ -91,15 +92,7 @@ async fn main() -> anyhow::Result<()> {
     let _ = std::fs::remove_dir_all(&dir);
     let store: Arc<dyn PrivateStateProvider> =
         Arc::new(FsPrivateStateProvider::for_wallet(&dir, &address));
-
-    let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
-    let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
-    let provider = MidnightProvider::new(&node_url, &indexer_url).with_private_state(store);
-    let wallet = WalletBuilder::new(seed)
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await?;
-    let provider = provider.with_wallet(wallet);
+    let provider = provider.with_wallet(wallet).with_private_state(store);
     println!("   synced.\n");
 
     // 1. Deploy the secret-counter contract.

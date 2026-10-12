@@ -454,7 +454,7 @@ mod tests {
     use crate::storage::{StoredMetadata, read_metadata, save_snapshot, wallet_storage_id};
 
     fn seed() -> WalletSeed {
-        WalletSeed::try_from_hex_str(&"11".repeat(32)).unwrap()
+        WalletSeed::from([0x11; 32])
     }
 
     fn stored_pin() -> ChainPin {

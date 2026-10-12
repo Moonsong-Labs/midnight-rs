@@ -408,7 +408,7 @@ mod tests {
 
     fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
         DustSpendBatch {
-            seed: WalletSeed::try_from_hex_str(&"00".repeat(32)).unwrap(),
+            seed: WalletSeed::from([0x00; 32]),
             spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
             updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
         }
@@ -538,7 +538,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
 
         // A seed whose hex is distinctive enough to find in the raw file.
-        let seed = WalletSeed::try_from_hex_str(&"ab".repeat(32)).unwrap();
+        let seed = WalletSeed::from([0xab; 32]);
         let mut p = PendingReservations::default();
         p.reserve(
             vec![DustSpendBatch {
