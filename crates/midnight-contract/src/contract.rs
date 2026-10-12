@@ -310,20 +310,27 @@ impl<P> DeployBuilder<'_, P> {
         self
     }
 
-    /// Attach a hand-built shielded (zswap) offer to ride alongside the deploy
-    /// in the same transaction segment.
+    /// Attach a shielded offer that the deploy transaction carries.
     ///
-    /// The SDK does not derive shielded inputs/outputs from a contract's
-    /// initial state — if your deployment needs to spend or produce shielded
-    /// coins (e.g. seeding a contract with a shielded balance), construct the
-    /// offer with the `OfferInfo`, `InputInfo` and `OutputInfo` of the chain's
-    /// ledger generation ([`crate::ledger_8`] or [`crate::ledger_9`]) and pass
-    /// it here. The generation's `TransferBuilder::prepare_shielded` source is
-    /// the canonical worked example. The deploy fails if the offer's generation
-    /// is not the one the wallet's state is in.
+    /// The deploy spends the offer's coins from the attached wallet and pays
+    /// each of its outputs. What the coins of a token hold beyond what the
+    /// outputs pay of it goes back to the wallet as one change output. The
+    /// inputs and outputs ride in the guaranteed Zswap offer of the deploy
+    /// transaction.
     ///
-    /// Coins in `InputInfo::origin` must come from the provider's wallet seed
-    /// (the same seed that pays the dust fee).
+    /// Get the coins from [`MidnightProvider::spendable_shielded_coins`]. The
+    /// deploy reserves them, so no other build of this wallet spends them,
+    /// and the wallet gets them back when the build fails. Each output pays
+    /// the keys of a user, so the offer cannot fund a contract's shielded
+    /// balance.
+    ///
+    /// With an offer, the deploy proves with no fee, and the wallet then pays
+    /// the Dust fee in an intent of its own.
+    ///
+    /// The deploy fails with [`ContractError::ShieldedOfferShortfall`] when
+    /// the outputs pay more of a token than the coins hold. When another
+    /// build holds one of the coins, it fails with the reserved-coin error
+    /// that [`ContractError::Provider`] describes.
     pub fn with_shielded_offer(mut self, offer: crate::ShieldedOffer) -> Self {
         self.shielded_offer = Some(offer);
         self

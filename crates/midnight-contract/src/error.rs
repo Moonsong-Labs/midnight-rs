@@ -22,8 +22,9 @@ pub enum ContractError {
     ///
     /// Match the inner [`ProviderError`] to find the cause. When the proof of a
     /// deploy, a call or a maintenance update fails, the error is
-    /// `ProviderError::Wallet(WalletError::Proving(_))`. When a call names a
-    /// shielded coin that another build holds, the error is
+    /// `ProviderError::Wallet(WalletError::Proving(_))`. When a call or the
+    /// shielded offer of a deploy names a shielded coin that another build
+    /// holds, the error is
     /// `ProviderError::Wallet(WalletError::InputsReserved { .. })`. See
     /// [`WalletError`](midnight_provider::WalletError) for the other wallet
     /// failures.
@@ -44,6 +45,25 @@ pub enum ContractError {
 
     #[error("transaction construction failed: {0}")]
     Construction(String),
+
+    /// A deploy's shielded offer pays more of a token than its coins hold.
+    ///
+    /// The deploy stops before it proves anything, and the wallet gets the
+    /// offer's coins back. Add coins of `token_type` to the offer, or pay
+    /// less of it.
+    #[error(
+        "the shielded offer pays {paid} of token {} but its coins hold {held}",
+        hex::encode(token_type.0.0)
+    )]
+    ShieldedOfferShortfall {
+        /// The token that the coins do not cover.
+        token_type: midnight_types::ShieldedTokenType,
+        /// The value of the token that the offer's coins hold, zero when no
+        /// coin holds it.
+        held: u128,
+        /// The value of the token that the offer's outputs pay.
+        paid: u128,
+    },
 
     #[error("serialization failed: {0}")]
     Serialization(String),

@@ -28,11 +28,42 @@ Most of the API is the same on both generations:
 
 - the provider's transfers (`transfer_shielded`, `transfer_unshielded`, `shielded_swap`, `register_dust`), `balance`, `submit`, `merge_transactions` and `balance_transaction`
 - the wallet sync (the `WalletBuilder` that `Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase` and `WalletBuilder::new` start) and `LocalWallet`
-- the generated contract bindings (`Contract::deploy`, `circuits()`, `ledger()`), `Contract::call_with`, and contract maintenance
+- the generated contract bindings (`Contract::deploy`, `circuits()`, `ledger()`), `Contract::call_with`, a deploy's `ShieldedOffer`, and contract maintenance
 
 Its vocabulary lives in `midnight-types`, one type for both generations: `ShieldedTokenType`, `UnshieldedTokenType`, `Nullifier`, `Nonce`, `CoinInfo`, `CoinPublicKey`, `EncryptionPublicKey`, `ShieldedRecipient`, `ContractAddress`, `DustNullifier`, `ChainParameters` and `LedgerVersion`. The provider, wallet and contract crates re-export it. A DApp that uses only this surface runs on either chain with no code for a generation.
 
 The Compact side (the interpreter, the typed state and the generated bindings) reads ledger 9's types on both chains. The two generations share the Impact ops and the state encoding, and `midnight_typed_state::decode_contract_state` converts the state a ledger 8 chain serves.
+
+### A shielded offer on a deploy
+
+A deploy can carry a shielded offer. A `ShieldedOffer` holds coins from `spendable_shielded_coins` and the `ShieldedPayment`s to make from them. The offer has no ledger generation of its own, so the same code deploys on either chain:
+
+```rust
+use midnight_core::Contract;
+use midnight_core::contract::{ShieldedOffer, ShieldedPayment, parse_shielded_recipient};
+
+let coin = provider
+    .spendable_shielded_coins()
+    .await?
+    .into_iter()
+    .find(|coin| coin.token_type == token_type && coin.value >= 10)
+    .ok_or("no coin of the token holds 10")?;
+let offer = ShieldedOffer {
+    coins: vec![coin],
+    outputs: vec![ShieldedPayment {
+        recipient: parse_shielded_recipient(address, "undeployed")?,
+        token_type,
+        value: 10,
+    }],
+};
+let contract = Contract::deploy(&provider)
+    .with_initial_state(state)
+    .with_zk_config("compiled")
+    .with_shielded_offer(offer)
+    .await?;
+```
+
+`DeployBuilder::with_shielded_offer` says how the deploy spends the coins, returns the change and pays the fee.
 
 ## What is per generation
 
@@ -56,51 +87,6 @@ match provider.builds().await? {
 ```
 
 Each `Builds` has `build_context`, `execution_context`, `add_funding`, `build_funded`, `prepare_shielded_inputs`, `balance_transaction` and `proof_provider`. Their types come from `midnight_helpers::ledger_8` or `midnight_helpers::ledger_9`. The contract crate builds its calls, deploys and maintenance updates on them.
-
-### A hand-built shielded offer
-
-A deploy can carry a shielded offer that the caller builds. `ShieldedOffer::Ledger8` and `ShieldedOffer::Ledger9` take the types in `midnight_contract::ledger_8` and `midnight_contract::ledger_9`, and a match on `builds()` picks the generation:
-
-```rust
-use midnight_contract::{Contract, ShieldedOffer};
-use midnight_provider::{Builds, Network};
-
-macro_rules! offer_in {
-    ($ledger:ident) => {{
-        use midnight_contract::$ledger as l;
-        use l::IntoLedger;
-        let token_type = token_type.into_ledger();
-        let input = l::InputInfo {
-            origin: (&seed).into_ledger(),
-            token_type,
-            value: 1,
-            nullifier: None,
-        };
-        let output: l::OutputInfo<l::ShieldedWallet<l::DefaultDB>> = l::OutputInfo {
-            destination: l::shielded_destination(&recipient, Network::Undeployed)?,
-            token_type,
-            value: 1,
-        };
-        l::OfferInfo {
-            inputs: vec![Box::new(input)],
-            outputs: vec![Box::new(output)],
-            transients: vec![],
-        }
-    }};
-}
-
-let offer = match provider.builds().await? {
-    Builds::Ledger8(_) => ShieldedOffer::Ledger8(offer_in!(ledger_8)),
-    Builds::Ledger9(_) => ShieldedOffer::Ledger9(offer_in!(ledger_9)),
-};
-let contract = Contract::deploy(&provider)
-    .with_initial_state(state)
-    .with_zk_config("compiled")
-    .with_shielded_offer(offer)
-    .await?;
-```
-
-The deploy fails with `WalletError::LedgerMismatch` when the offer's generation is not the wallet's.
 
 ### A custom wallet
 
@@ -180,7 +166,7 @@ A snapshot of a later generation than the chain runs belongs to a chain that was
 
 ### Errors
 
-- `WalletError::LedgerMismatch { expected, found }`: data of one generation met a wallet, or a value, of another. A shielded offer, a prepared maintenance update or a transaction to balance of the other generation returns it. So does a build between a fork and the wallet's next resync.
+- `WalletError::LedgerMismatch { expected, found }`: data of one generation met a wallet, or a value, of another. A prepared maintenance update or a transaction to balance of the other generation returns it. So does a build between a fork and the wallet's next resync.
 - `WalletError::LedgerRegression`: the snapshot is of a later generation than the chain. See above.
 - `WalletError::UnknownLedger`: data of a generation this build does not link.
 

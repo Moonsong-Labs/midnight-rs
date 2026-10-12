@@ -3,12 +3,12 @@ pub mod call;
 mod contract;
 pub mod deploy;
 mod error;
-pub mod ledger_8;
+mod ledger_8;
 #[expect(
     clippy::duplicate_mod,
     reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
 )]
-pub mod ledger_9;
+mod ledger_9;
 // The Compact IR interpreter now lives in the `compact-interpreter` crate;
 // aliased here so `midnight_contract::interpreter::*` paths keep resolving.
 pub use compact_interpreter as interpreter;
@@ -72,20 +72,17 @@ pub use midnight_provider::{
 // offer `.without_dust()` producing a sponsorable transaction.
 pub use midnight_provider::{DustlessBuilder, DustlessTransaction};
 
-// A hand-built shielded offer attached to a deploy (see
-// `DeployBuilder::with_shielded_offer`), built with the chain's generation's
-// `OfferInfo`, `InputInfo` and `OutputInfo` from `ledger_8` or `ledger_9`.
-// `parse_shielded_recipient` decodes a `mn_shield-addr_*` string into the keys
-// it carries.
-pub use midnight_types::ShieldedTokenType;
+// A shielded offer attached to a deploy (see
+// `DeployBuilder::with_shielded_offer`). `parse_shielded_recipient` decodes a
+// `mn_shield-addr_*` string into the keys a payment pays.
 pub use midnight_types::address::parse_shielded_recipient;
-pub use offer::ShieldedOffer;
+pub use midnight_types::{ShieldedRecipient, ShieldedTokenType};
+pub use offer::{ShieldedOffer, ShieldedPayment};
 // Recipient key types for `Circuits::with_coin_encryption_keys` / `Contract::call_with`: a
 // `coin_public_key -> encryption_public_key` mapping that lets the SDK attach
 // the discovery ciphertext to circuit-created shielded outputs.
 pub use midnight_types::{CoinPublicKey, EncryptionPublicKey};
-// The coin type callers pass to `Circuits::with_shielded_inputs` /
-// `ShieldedInputs::coins` (enumerated via `MidnightProvider::spendable_shielded_coins`).
+// The shielded coin a caller spends, from `MidnightProvider::spendable_shielded_coins`.
 pub use midnight_types::SpendableShieldedCoin;
 
 /// Trait for types that can be deserialized from hex-encoded contract state.

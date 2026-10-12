@@ -3,6 +3,8 @@
 //! A [`Seed`](crate::hd::Seed) derives its own addresses and keys. This module
 //! reads them back from an address string that someone else shared.
 
+use midnight_helpers::ledger_9::{DefaultDB, ShieldedWallet};
+
 use crate::ledger_9::convert::IntoSdk;
 use crate::{Network, ShieldedRecipient, WalletError};
 
@@ -16,7 +18,16 @@ pub fn parse_shielded_recipient(
     s: &str,
     network: impl Into<Network>,
 ) -> Result<ShieldedRecipient, WalletError> {
-    Ok((&crate::ledger_9::shielded_destination(s, network)?).into_sdk())
+    let wallet = crate::ledger_9::shielded_destination(s, network)?;
+    Ok(shielded_recipient(&wallet))
+}
+
+/// The two public keys of a shielded wallet.
+pub(crate) fn shielded_recipient(wallet: &ShieldedWallet<DefaultDB>) -> ShieldedRecipient {
+    ShieldedRecipient {
+        coin_public_key: wallet.coin_public_key.into_sdk(),
+        enc_public_key: wallet.enc_public_key.into_sdk(),
+    }
 }
 
 #[cfg(test)]

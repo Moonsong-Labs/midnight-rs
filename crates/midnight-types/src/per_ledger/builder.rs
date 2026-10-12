@@ -1452,14 +1452,15 @@ fn parse_unshielded_recipient(
         .map_err(|e| WalletError::InvalidAddress(format!("not an unshielded address: {e:?}")))
 }
 
-/// Decode a `mn_shield-addr_*` bech32 string into a typed recipient suitable
-/// for use as `OutputInfo::destination` when hand-building a shielded
-/// [`OfferInfo`].
+/// Decode a `mn_shield-addr_*` bech32 string into the shielded wallet whose
+/// keys it carries.
 ///
-/// `network` is the network the address must belong to — normally the one the
-/// spending wallet is synced to. An address for any other network is rejected
-/// with [`WalletError::AddressNetworkMismatch`].
-pub fn shielded_destination(
+/// `network` is the network that the address must belong to, usually the
+/// network of the wallet that spends. The function returns
+/// [`WalletError::AddressNetworkMismatch`] for an address of any other
+/// network, and [`WalletError::InvalidAddress`] for a string that is not a
+/// shielded address.
+pub(crate) fn shielded_destination(
     s: &str,
     network: impl Into<Network>,
 ) -> Result<ShieldedWallet<DefaultDB>, WalletError> {

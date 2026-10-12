@@ -658,13 +658,12 @@ fn bboard_pure_public_key_matches_the_oracle() {
 // Deploy: funded, with a shielded offer
 // ---------------------------------------------------------------------------
 
-/// Deploy with a hand-built shielded offer attached.
+/// Deploy with a shielded offer attached.
 ///
-/// A caller-supplied `OfferInfo` must reach `set_guaranteed_offer` in place of
-/// an empty offer. The guaranteed Zswap offer of the proven transaction then
-/// carries the one input and the one output attached here. The offer
-/// self-transfers 1 unit of shielded token id `[0; 32]` from the dev wallet
-/// back to its own shielded address. It is structurally valid but unrelated to
+/// The offer's coin and payment must reach the guaranteed Zswap offer of the
+/// proven transaction, with a change output when the coin holds more than the
+/// payment. The offer pays 1 unit of shielded token id `[0; 32]` from one of
+/// the dev wallet's coins back to the wallet's own keys. It is unrelated to
 /// the contract being deployed (no effects-check interaction). The initial
 /// state is bboard-shaped, and the deploy path does not interpret it. The test
 /// stops at build, because its assertion reads the guaranteed offer from the
@@ -708,48 +707,28 @@ async fn deploy_funded_with_shielded_offer() {
             .sync(&provider)
             .await
             .expect("indexer sync should succeed");
-    let seed = wallet.seed().clone();
-    let recipient_addr = wallet.shielded_address();
+    let recipient = wallet.seed().shielded_recipient();
     let provider = provider.with_wallet(wallet);
 
-    // Build a 1-unit self-transfer of the dev devnet's default shielded
-    // token id ([0; 32]). The dev wallet holds this at genesis.
-    let token_type = midnight_contract::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
-    // The offer takes the types of the generation the wallet is on.
-    macro_rules! offer_in {
-        ($ledger:ident) => {{
-            use midnight_helpers::$ledger as l;
-            use midnight_types::$ledger::convert::IntoLedger;
-            let token_type = token_type.into_ledger();
-            let input = l::InputInfo {
-                origin: (&seed).into_ledger(),
-                token_type,
-                value: 1,
-                nullifier: None,
-            };
-            let output: l::OutputInfo<l::ShieldedWallet<l::DefaultDB>> = l::OutputInfo {
-                destination: midnight_types::$ledger::shielded_destination(
-                    &recipient_addr,
-                    midnight_provider::Network::Undeployed,
-                )
-                .unwrap(),
-                token_type,
-                value: 1,
-            };
-            l::OfferInfo {
-                inputs: vec![Box::new(input)],
-                outputs: vec![Box::new(output)],
-                transients: vec![],
-            }
-        }};
-    }
-    let offer = match provider.builds().await.unwrap() {
-        midnight_provider::Builds::Ledger8(_) => {
-            midnight_contract::ShieldedOffer::Ledger8(offer_in!(ledger_8))
-        }
-        midnight_provider::Builds::Ledger9(_) => {
-            midnight_contract::ShieldedOffer::Ledger9(offer_in!(ledger_9))
-        }
+    // The dev wallet holds the dev devnet's default shielded token id
+    // ([0; 32]) from genesis.
+    let token_type = midnight_contract::ShieldedTokenType(midnight_types::HashOutput([0u8; 32]));
+    let coin = provider
+        .spendable_shielded_coins()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|coin| coin.token_type == token_type)
+        .expect("the dev wallet must hold a coin of the default shielded token");
+    let payment = midnight_contract::ShieldedPayment {
+        recipient,
+        token_type,
+        value: 1,
+    };
+    let expected_outputs = if coin.value > payment.value { 2 } else { 1 };
+    let offer = midnight_contract::ShieldedOffer {
+        coins: vec![coin],
+        outputs: vec![payment],
     };
 
     let result = midnight_contract::deploy::deploy_funded(&state, &provider, Some(offer))
@@ -781,11 +760,11 @@ async fn deploy_funded_with_shielded_offer() {
         };
     assert_eq!(
         inputs, 1,
-        "the guaranteed offer must carry the attached input"
+        "the guaranteed offer must carry the attached coin"
     );
     assert_eq!(
-        outputs, 1,
-        "the guaranteed offer must carry the attached output"
+        outputs, expected_outputs,
+        "the guaranteed offer must carry the payment, and the change when the coin holds more"
     );
     eprintln!(
         "deploy_funded with shielded offer: addr={} bytes={} ✓",

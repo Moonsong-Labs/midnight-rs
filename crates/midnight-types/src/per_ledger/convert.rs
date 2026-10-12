@@ -5,13 +5,12 @@
 //! then gets its own traits, not a second impl of the same `From`.
 
 use super::helpers;
-use helpers::{DefaultDB, Deserializable, Serializable};
+use helpers::{Deserializable, Serializable};
 
 use crate::hd::{Seed, SeedBytes};
 use crate::{
     ChainParameters, CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustParameters,
-    EncryptionPublicKey, Nonce, Nullifier, ShieldedRecipient, ShieldedTokenType,
-    UnshieldedTokenType,
+    EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, UnshieldedTokenType,
 };
 
 /// An SDK value that has a counterpart in this generation.
@@ -152,16 +151,6 @@ impl IntoSdk for &helpers::LedgerParameters {
                 dust_grace_period: self.dust.dust_grace_period,
             },
             global_ttl: self.global_ttl,
-        }
-    }
-}
-
-impl IntoSdk for &helpers::ShieldedWallet<DefaultDB> {
-    type Sdk = ShieldedRecipient;
-    fn into_sdk(self) -> Self::Sdk {
-        ShieldedRecipient {
-            coin_public_key: self.coin_public_key.into_sdk(),
-            enc_public_key: self.enc_public_key.into_sdk(),
         }
     }
 }

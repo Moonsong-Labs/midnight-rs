@@ -38,7 +38,7 @@ use midnight_helpers::ledger_9::{DefaultDB, IntoWalletAddress, ShieldedWallet, U
 use rand::RngCore;
 use zeroize::Zeroize;
 
-use crate::ledger_9::convert::{IntoLedger, IntoSdk};
+use crate::ledger_9::convert::IntoLedger;
 use crate::{Network, ShieldedRecipient};
 
 /// The `role` level of an HD path: the asset family a key belongs to.
@@ -241,7 +241,7 @@ impl Seed {
     /// your own address. To recover these keys from someone else's shared
     /// address string, use [`crate::address::parse_shielded_recipient`] instead.
     pub fn shielded_recipient(&self) -> ShieldedRecipient {
-        (&ShieldedWallet::<DefaultDB>::default(self.into_ledger())).into_sdk()
+        crate::address::shielded_recipient(&ShieldedWallet::default(self.into_ledger()))
     }
 }
 
@@ -596,7 +596,11 @@ mod tests {
 
         assert_eq!(seed.unshielded_address(Network::Undeployed), unshielded8);
         assert_eq!(seed.shielded_address(Network::Undeployed), address8);
-        assert_eq!(seed.shielded_recipient(), (&shielded8).into_sdk());
+        let recipient8 = ShieldedRecipient {
+            coin_public_key: shielded8.coin_public_key.into_sdk(),
+            enc_public_key: shielded8.enc_public_key.into_sdk(),
+        };
+        assert_eq!(seed.shielded_recipient(), recipient8);
     }
 
     #[test]
