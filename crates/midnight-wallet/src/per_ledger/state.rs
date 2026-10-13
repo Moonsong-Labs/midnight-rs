@@ -11,7 +11,7 @@ use helpers::{
     BlockContext, DefaultDB, DustNullifier, DustWallet, Event, HashOutput, IntoWalletAddress,
     LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, Recipient, SecretKeys,
     ShieldedWallet, Sp, Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet,
-    WalletSeed, WalletState as ZswapLocalState,
+    WalletState as ZswapLocalState,
 };
 use midnight_indexer_client::SubscriptionClient;
 use midnight_types::{SyncCursors, TrackedUtxo};
@@ -27,7 +27,7 @@ use crate::replay::{
     replay_unshielded_events, resume_id, send_progress,
 };
 use crate::storage::wallet_storage_id;
-use crate::{SpentUtxoKey, SyncProgress, WalletError};
+use crate::{Seed, SpentUtxoKey, SyncProgress, WalletError};
 
 /// A Midnight wallet: identity (seed, addresses) and synced ledger state.
 ///
@@ -39,7 +39,7 @@ use crate::{SpentUtxoKey, SyncProgress, WalletError};
 /// The state of the SDK's `Wallet` on this generation. Transaction building
 /// uses it directly (no full-chain replay).
 pub struct Wallet {
-    seed: WalletSeed,
+    seed: Seed,
     secret_keys: SecretKeys,
     network_id: String,
     unshielded_address: String,
@@ -87,7 +87,7 @@ pub struct Wallet {
     /// wallet's own indexer rather than one a consumer supplies.
     ///
     /// It binds nothing across a restart. The snapshot records no indexer
-    /// identity, so a `Wallet::sync` from a source on another indexer, with
+    /// identity, so a sync from a source on another indexer, with
     /// `.with_storage(dir)`, resumes these cursors against that indexer and
     /// nothing notices.
     indexer_url: String,
@@ -401,7 +401,7 @@ pub struct ShieldedRescanPlan {
 
 impl ShieldedRescanPlan {
     /// A rescan for `seed`'s wallet that claims `coins` on the way.
-    pub(crate) fn new(seed: &WalletSeed, coins: &[crate::CoinInfo]) -> Self {
+    pub(crate) fn new(seed: &Seed, coins: &[crate::CoinInfo]) -> Self {
         let secret_keys = zswap_keys(seed);
         let coin_public_key = secret_keys.coin_public_key();
         let initial_state = coins.iter().fold(empty_zswap_state(seed), |state, coin| {
@@ -450,7 +450,7 @@ pub struct ShieldedRescanCommit {
 /// Who a sync is for, and where it keeps what it learns.
 pub(crate) struct SyncIdentity<'a> {
     pub indexer_url: &'a str,
-    pub seed: WalletSeed,
+    pub seed: Seed,
     pub address: &'a str,
     pub network_id: &'a str,
     pub storage_dir: Option<&'a Path>,
@@ -489,15 +489,15 @@ pub(crate) enum DustStart {
 }
 
 /// The shielded keys `seed` derives in this generation.
-pub(crate) fn zswap_keys(seed: &WalletSeed) -> SecretKeys {
-    ShieldedWallet::<DefaultDB>::default(seed.clone())
+pub(crate) fn zswap_keys(seed: &Seed) -> SecretKeys {
+    ShieldedWallet::<DefaultDB>::default(seed.into_ledger())
         .secret_keys()
         .clone()
 }
 
 /// The shielded state of a wallet that has applied no event.
-pub(crate) fn empty_zswap_state(seed: &WalletSeed) -> ZswapLocalState<DefaultDB> {
-    ShieldedWallet::<DefaultDB>::default(seed.clone()).state
+pub(crate) fn empty_zswap_state(seed: &Seed) -> ZswapLocalState<DefaultDB> {
+    ShieldedWallet::<DefaultDB>::default(seed.into_ledger()).state
 }
 
 impl Wallet {
@@ -571,7 +571,7 @@ impl Wallet {
         let (dust_wallet, start_dust_id) = match dust {
             DustStart::Resume { wallet, next_id } => (*wallet, next_id),
             DustStart::Fresh { next_id } => (
-                DustWallet::default(seed.clone(), Some(&parameters)),
+                DustWallet::default((&seed).into_ledger(), Some(&parameters)),
                 next_id,
             ),
         };
@@ -864,11 +864,12 @@ impl Wallet {
         // set into the one already there: the second pass skips what a pending
         // build reserved, but cannot withdraw what the first pass inserted, so
         // a spent input stays selectable.
+        let seed = (&self.seed).into_ledger();
         if ctx
             .wallets
             .lock()
             .map_err(|_| WalletError::Sync("wallets lock poisoned".into()))?
-            .contains_key(&self.seed)
+            .contains_key(&seed)
         {
             return Err(WalletError::Transfer(
                 "this wallet already funds the context; build a fresh one".into(),
@@ -896,7 +897,7 @@ impl Wallet {
             self.block_context.clone();
 
         // Populate UTXO state so the transaction builder can find our UTXOs.
-        let unshielded = UnshieldedWallet::default(self.seed.clone());
+        let unshielded = UnshieldedWallet::default(seed.clone());
         let owner = unshielded.user_address;
         let utxo_ctime = self
             .block_context
@@ -941,15 +942,10 @@ impl Wallet {
             *guard = Sp::new(ledger_state);
         }
 
-        // Insert wallet with our synced state. Pending dust reservations are
-        // re-applied via `mark_spent` so the fee selector skips them; they
-        // live only on this LedgerContext clone — `self.dust_wallet` itself
-        // retains only events confirmed by the indexer. Each pending entry
-        // carries its post-spend `DustLocalState`; applying them in
-        // chronological order leaves the clone's `dust_local_state` at the
-        // most recent post-pending value.
+        // The pending reservations go on clones only, so `self.dust_wallet`
+        // keeps only the events that the indexer confirmed.
         {
-            let mut shielded = ShieldedWallet::<DefaultDB>::default(self.seed.clone());
+            let mut shielded = ShieldedWallet::<DefaultDB>::default(seed.clone());
             shielded.state = self.zswap_state.clone();
 
             // Drop coins a recent still-pending build already spent so the
@@ -962,22 +958,20 @@ impl Wallet {
             }
 
             // Add pending-spend nullifiers to the dust wallet's `spent_utxos`
-            // set so speculative_spend skips them — but DO NOT overwrite
+            // set so speculative_spend skips them, but do not overwrite
             // `dust_local_state` with the prior tx's post-spend tree.
             //
-            // The new `DustWallet::mark_spent(spends, updated_state)` API in
-            // ledger-helpers 8.1.0-rc.1 took the previous single-arg form
-            // `mark_spent(spends)` and bolted on a state overwrite. If we apply
-            // the speculative `updated_state`, the dust commitment tree the
-            // proof witnesses against is the wallet's projected post-spend
-            // tree, which has no corresponding entry in the chain's
-            // `root_history` until the prior tx has been processed at the
-            // chain-block level — and even then it only matches if no other
-            // dust events landed in the same block. Re-passing the current
-            // state makes the overwrite a no-op while still adding the
-            // nullifiers, keeping the witnessed root aligned with the chain's
-            // `root_history.get(ctime)` lookup at the proof's declared
-            // timestamp.
+            // `DustWallet::mark_spent(spends, updated_state)` also overwrites
+            // `dust_local_state`. If we apply the speculative `updated_state`,
+            // the dust commitment tree the proof witnesses against is the
+            // wallet's projected post-spend tree, which has no corresponding
+            // entry in the chain's `root_history` until the prior tx has been
+            // processed at the chain-block level, and even then it only
+            // matches if no other dust events landed in the same block.
+            // Re-passing the current state makes the overwrite a no-op while
+            // still adding the nullifiers, keeping the witnessed root aligned
+            // with the chain's `root_history.get(ctime)` lookup at the proof's
+            // declared timestamp.
             let mut dust = self.dust_wallet.clone();
             match dust.dust_local_state.clone() {
                 Some(state) => {
@@ -1007,16 +1001,16 @@ impl Wallet {
             }
 
             let wallet = ContextWallet {
-                root_seed: Some(self.seed.clone()),
+                root_seed: Some(seed.clone()),
                 shielded,
-                unshielded: helpers::UnshieldedWallet::default(self.seed.clone()),
+                unshielded: helpers::UnshieldedWallet::default(seed.clone()),
                 dust,
             };
 
             ctx.wallets
                 .lock()
                 .map_err(|_| WalletError::Sync("wallets lock poisoned".into()))?
-                .insert(self.seed.clone(), wallet);
+                .insert(seed, wallet);
         }
 
         Ok(())
@@ -1061,7 +1055,7 @@ impl Wallet {
         }
     }
 
-    pub fn seed(&self) -> &WalletSeed {
+    pub fn seed(&self) -> &Seed {
         &self.seed
     }
 
@@ -1085,7 +1079,7 @@ impl Wallet {
 
     /// See [`crate::Wallet::shielded_address`].
     pub fn shielded_address(&self) -> String {
-        ShieldedWallet::<DefaultDB>::default(self.seed.clone())
+        ShieldedWallet::<DefaultDB>::default((&self.seed).into_ledger())
             .address(&self.network_id)
             .to_bech32()
     }
@@ -1963,10 +1957,14 @@ mod tests {
         assert_eq!(event_spend_nullifier(&other), None);
     }
 
+    fn test_seed() -> Seed {
+        Seed::from_bytes(&[0x22; 32]).unwrap()
+    }
+
     /// Minimal offline wallet for unit tests: fresh state, no sync.
     fn test_wallet(storage_dir: Option<PathBuf>) -> Wallet {
-        let seed = WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap();
-        let shielded = ShieldedWallet::<DefaultDB>::default(seed.clone());
+        let seed = test_seed();
+        let shielded = ShieldedWallet::<DefaultDB>::default((&seed).into_ledger());
         let secret_keys = shielded.secret_keys().clone();
         Wallet {
             seed: seed.clone(),
@@ -1975,7 +1973,7 @@ mod tests {
             unshielded_address: "mn_addr_undeployed1test".into(),
             zswap_state: shielded.state.clone(),
             zswap_event_id: 0,
-            dust_wallet: DustWallet::default(seed, Some(&INITIAL_PARAMETERS)),
+            dust_wallet: DustWallet::default((&seed).into_ledger(), Some(&INITIAL_PARAMETERS)),
             dust_event_id: 0,
             unshielded_utxos: Vec::new(),
             last_block_height: 0,
@@ -2011,7 +2009,7 @@ mod tests {
 
     fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
         DustSpendBatch {
-            seed: WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap(),
+            seed: test_seed(),
             spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
             updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
         }
@@ -2132,7 +2130,7 @@ mod tests {
         let ctx = wallet.build_context_inner().expect("build context");
         let wallets = ctx.wallets.lock().expect("wallets lock");
         let ctx_wallet = wallets
-            .get(wallet.seed())
+            .get(&wallet.seed().into_ledger())
             .expect("funding wallet in context");
         assert_eq!(
             ctx_wallet.shielded.state.coins.iter().count(),
@@ -2185,7 +2183,7 @@ mod tests {
             ctx.wallets
                 .lock()
                 .expect("wallets lock")
-                .contains_key(wallet.seed()),
+                .contains_key(&wallet.seed().into_ledger()),
             "funding must insert this wallet"
         );
         assert_eq!(
@@ -2954,9 +2952,7 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let shielded = ShieldedWallet::<DefaultDB>::default(
-                WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap(),
-            );
+            let shielded = ShieldedWallet::<DefaultDB>::default((&test_seed()).into_ledger());
             let started = std::time::Instant::now();
             let replay = replay_zswap_events(
                 &sub_client,
@@ -3002,10 +2998,7 @@ mod tests {
             let started = std::time::Instant::now();
             let replay = replay_dust_events(
                 &sub_client,
-                DustWallet::default(
-                    WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap(),
-                    Some(&INITIAL_PARAMETERS),
-                ),
+                DustWallet::default((&test_seed()).into_ledger(), Some(&INITIAL_PARAMETERS)),
                 8,
                 true,
                 None::<fn(&DustWallet<DefaultDB>, i64)>,

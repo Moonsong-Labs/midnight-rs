@@ -9,12 +9,12 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::Wallet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use midnight_helpers::{DefaultDB, StdRng};
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_provider::{MidnightProvider, Network};
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -66,12 +66,14 @@ async fn dev_provider(recorder: Arc<ProofRecorder>) -> Option<MidnightProvider> 
         eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
         return None;
     };
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let provider = MidnightProvider::new(&node_url, &indexer_url).with_proof_provider(recorder);
-    let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
+        .with_network(Network::Undeployed)
+        .sync(&provider)
         .await
         .expect("sync");
-    Some(provider.with_wallet(LocalWallet::new(wallet)))
+    Some(provider.with_wallet(wallet))
 }
 
 /// Counts the wallet's tNIGHT UTXOs, and how many of them still await a

@@ -11,11 +11,11 @@
 //! ```bash
 //! make dev-up   # from the repo root: starts the devnet and waits for a block
 //! cargo run -p example-shielded-mint
-//! docker compose -f devnet/docker-compose.yml down
+//! make dev-down   # from the repo root
 //! ```
 
 use anyhow::bail;
-use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
+use midnight_core::{MidnightProvider, Seed, Wallet, WalletBuilder};
 
 mod shielded_mint {
     midnight_core::contract!(
@@ -42,16 +42,15 @@ const RECIPIENT_SEED: &str = "00000000000000000000000000000000000000000000000000
 async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Shielded Mint Example ===\n");
 
-    let network = Network::Undeployed;
     let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
 
     // 0. Sync the minter wallet (deploys + pays fees).
     println!("0. Syncing minter wallet...");
-    let minter_seed = Seed::from_hex(MINTER_SEED)?;
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, minter_seed, Network::Undeployed).await?;
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let wallet = Wallet::from_seed(MINTER_SEED)?.sync(&provider).await?;
+    let provider = provider.with_wallet(wallet);
+    let network = provider.network().await?;
     println!("   synced.\n");
 
     // 1. The recipient's coin public key (coin ownership) and encryption public
@@ -102,8 +101,10 @@ async fn main() -> anyhow::Result<()> {
     // 4. The recipient syncs from scratch and finds the coin — no watchFor.
     println!("4. Recipient syncing to discover the coin...");
     let recipient_provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&recipient_provider, recipient_seed, Network::Undeployed).await?;
-    let recipient_provider = recipient_provider.with_wallet(LocalWallet::new(wallet));
+    let wallet = WalletBuilder::new(recipient_seed)
+        .sync(&recipient_provider)
+        .await?;
+    let recipient_provider = recipient_provider.with_wallet(wallet);
     let balance = recipient_provider.balance().await?;
 
     let minted = balance

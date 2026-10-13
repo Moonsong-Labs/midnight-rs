@@ -1,8 +1,7 @@
-use midnight_types::balance::{
-    DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, UnshieldedUtxoInfo,
-    WalletBalance,
+use midnight_types::{
+    DustBalance, HashOutput, ShieldedBalance, ShieldedCoinBalance, ShieldedTokenType,
+    SpendableShieldedCoin, UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
 };
-use midnight_types::{HashOutput, ShieldedTokenType, UnshieldedTokenType};
 
 use super::helpers;
 use super::state::Wallet;

@@ -3,10 +3,10 @@
 //! ```bash
 //! make dev-up   # from the repo root: starts the devnet and waits for a block
 //! cargo run -p example-counter
-//! docker compose -f devnet/docker-compose.yml down
+//! make dev-down   # from the repo root
 //! ```
 
-use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
+use midnight_core::{MidnightProvider, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the
@@ -34,12 +34,11 @@ async fn main() -> anyhow::Result<()> {
     // The wallet syncs itself (zswap + dust + unshielded) against the
     // indexer, then goes to the provider as a `WalletFacade`.
     println!("0. Syncing wallet state from indexer...");
-    let seed = Seed::from_hex(DEV_WALLET_SEED)?;
     let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)?.sync(&provider).await?;
+    let provider = provider.with_wallet(wallet);
     println!("   synced.\n");
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.

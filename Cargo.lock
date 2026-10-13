@@ -3383,7 +3383,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "compact-bindgen",
- "futures-util",
  "hex",
  "midnight-helpers",
  "midnight-indexer-client",
@@ -3578,12 +3577,16 @@ name = "midnight-types"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bip32",
+ "bip39",
  "futures-util",
  "hex",
  "midnight-helpers",
  "midnight-indexer-client",
+ "rand 0.8.6",
  "serde",
  "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]
@@ -3591,26 +3594,19 @@ name = "midnight-wallet"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "bip32",
- "bip39",
- "futures-util",
  "hex",
- "midnight-contract",
  "midnight-helpers",
  "midnight-indexer-client",
  "midnight-provider",
  "midnight-serialize",
  "midnight-types",
  "midnight-wallet-facade",
- "rand 0.8.6",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
- "zeroize",
 ]
 
 [[package]]

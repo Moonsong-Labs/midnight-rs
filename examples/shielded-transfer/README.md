@@ -1,14 +1,8 @@
 # Shielded Transfer Example
 
-Self-transfer of 1 unit of a shielded token, end to end: sync wallet → build
-→ submit → wait for finalization → resync and print post-balance.
+Self-transfer of 1 unit of a shielded token, end to end: sync wallet → build → submit → wait for finalization → resync and print post-balance.
 
-**Local devnet only.** The public preprod faucet only funds *unshielded*
-addresses (NIGHT), and the SDK has no `unshielded → shielded` conversion
-helper today. The local dev preset of `midnightntwrk/midnight-node` mints
-several shielded test tokens to the hardcoded dev seed at genesis, so the
-example can spend one of them without any external funding step. For the full
-token model see [`docs/tokens.md`](../../docs/tokens.md).
+**Local devnet only.** The public preprod faucet only funds *unshielded* addresses (NIGHT), and the SDK has no `unshielded → shielded` conversion helper. The local dev preset of `midnightntwrk/midnight-node` mints several shielded test tokens to the hardcoded dev seed at genesis. The example spends one of them, so it needs no external funding step. For the full token model see [`docs/tokens.md`](../../docs/tokens.md).
 
 ## Setup
 
@@ -40,22 +34,24 @@ Output (approximately):
 === Midnight Shielded Transfer ===
 
 Network:           undeployed
-Shielded address:  mn_shield-addr_undeployed1...
 Node:              ws://127.0.0.1:9944
 Indexer:           http://127.0.0.1:8088
 
 Syncing wallet from indexer (zswap + dust + unshielded in parallel)...
 Sync complete.
+Shielded address:  mn_shield-addr_undeployed1...
 
 --- Pre-transfer shielded balance ---
-  ...00000000: 50000000000000
-  ...00000000: 50000000000000
-  ...
+  00000000…: 50000000000000
+  00000000…: 50000000000000
+  00000000…: 50000000000000
+  00000000…: 50000000000000
+  00000000…: 50000000000000
+  00000000…: 50000000000000
+  00000000…: 50000000000000
 
-Building shielded self-transfer: 1 unit of token ...00000000 back to own address
-Built: tx_bytes=13430
-
-Submitting...
+Building shielded self-transfer: 1 unit of token ... back to own address
+Building + submitting...
 Submitted: ext hash ...
 Best:      ...
 Finalized: ...
@@ -63,11 +59,14 @@ Finalized: ...
 Resyncing...
 
 --- Post-transfer shielded balance ---
-  ...00000000: 50000000000000
-  ...00000000: 50000000000000
-  ...
-  ...00000000: 49999999999999     # change from the spent input
-  ...00000000: 1                  # the 1-unit self-transfer output
+  00000000…: 50000000000000
+  00000000…: 50000000000000
+  00000000…: 50000000000000
+  00000000…: 50000000000000
+  00000000…: 49999999999999     # change from the spent input
+  00000000…: 50000000000000
+  00000000…: 1                  # the 1-unit self-transfer output
+  00000000…: 50000000000000
 
 --- Dust (paid the fee) ---
 balance: ... SPECK, spendable UTXOs: ...
@@ -77,11 +76,11 @@ balance: ... SPECK, spendable UTXOs: ...
 
 ## What it covers
 
-- `Wallet::sync` + `MidnightProvider::with_wallet` — initial wallet sync against the indexer, then attach
-- `MidnightProvider::balance` — shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))
-- `MidnightProvider::transfer_shielded(token_type, amount, recipient)` — builds a proven zswap transfer
-- `MidnightProvider::submit` + `PendingTx::wait_best` + `wait_finalized` — submission lifecycle
-- `MidnightProvider::resync_wallet` — incremental refresh to observe the new state
+- `Wallet::from_seed(DEV_SEED)?.with_network(&network).sync(&provider)` + `MidnightProvider::with_wallet`: the first wallet sync against the indexer, then the attach step
+- `Wallet::shielded_address`: the synced wallet's own address, which receives the self-transfer
+- `MidnightProvider::balance`: shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))
+- `MidnightProvider::transfer_shielded(token_type, amount, recipient)`: builds a proven zswap transfer and submits it
+- `PendingTx::wait_best` + `wait_finalized`: the submission lifecycle
+- `MidnightProvider::resync_wallet`: incremental refresh to observe the new state
 
-For the wallet API reference (sync, balances, transfers, Dust, persistence),
-see [`docs/wallet.md`](../../docs/wallet.md).
+For the wallet API reference (sync, balances, transfers, Dust, persistence), see [`docs/wallet.md`](../../docs/wallet.md).

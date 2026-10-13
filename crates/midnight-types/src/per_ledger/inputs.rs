@@ -2,23 +2,26 @@
 //!
 //! Spending a coin proves ownership, so it needs the spending keys and no
 //! public-material substitute exists. What can change is where those keys are
-//! read. The helpers' `InputInfo<WalletSeed>` carries a seed into the offer and
-//! resolves it during `build`, so the builder holds a secret for the lifetime of
-//! the transaction. Here the wallet performs the spend up front and the builder
+//! read. The helpers' `InputInfo` carries a seed into the offer and resolves it
+//! during `build`, so the builder holds a secret for the lifetime of the
+//! transaction. Here the wallet performs the spend up front and the builder
 //! receives a finished `Input`, which carries none.
 //!
 //! That is also the shape an external signer needs: "give me an `Input` for this
 //! coin" is one step it can implement without releasing anything.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::helpers;
 use helpers::{
     BuildContext, DefaultDB, Input, Nullifier, ProofPreimage, Segment, ShieldedTokenType, StdRng,
-    TokenInfo, WalletSeed,
+    TokenInfo,
 };
 
+use super::convert::IntoLedger;
 use crate::WalletError;
+use crate::hd::Seed;
 
 /// A shielded input the wallet already produced.
 ///
@@ -69,14 +72,33 @@ impl helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
 /// wallet, never from the caller, so the figure the offer sums is the one the
 /// spend proof commits to and the two cannot drift apart. The wallet's Zswap
 /// state is rolled forward as it goes, the same bookkeeping the helpers' input
-/// does inside `build`, so a coin cannot be spent twice within one offer.
+/// does inside `build`.
+///
+/// A spend leaves the coin in the wallet's Zswap state, so a second spend of
+/// it succeeds. The function refuses a coin that `nullifiers` names twice,
+/// before it spends anything.
+///
+/// # Errors
+///
+/// [`WalletError::DuplicateInput`] when `nullifiers` names a coin twice, and
+/// [`WalletError::Transfer`] when the wallet cannot spend a coin.
+///
+/// # Panics
+///
+/// Panics when `context` holds no wallet for `seed`.
 pub fn prepare_shielded_inputs(
     context: &Arc<BuildContext>,
-    seed: &WalletSeed,
+    seed: &Seed,
     nullifiers: &[Nullifier],
     rng: &mut StdRng,
 ) -> Result<Vec<PreparedInput>, WalletError> {
-    context.with_wallet_from_seed(seed.clone(), |wallet| {
+    let mut named = HashSet::with_capacity(nullifiers.len());
+    if let Some(repeated) = nullifiers.iter().find(|n| !named.insert(*n)) {
+        return Err(WalletError::DuplicateInput {
+            input: format!("shielded coin {repeated:?}"),
+        });
+    }
+    context.with_wallet_from_seed(seed.into_ledger(), |wallet| {
         let mut prepared = Vec::with_capacity(nullifiers.len());
         for nullifier in nullifiers {
             let coin = wallet.shielded.state.coins.get(nullifier).ok_or_else(|| {
@@ -110,4 +132,37 @@ pub fn prepare_shielded_inputs(
         }
         Ok(prepared)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use helpers::{HashOutput, SeedableRng};
+
+    /// A spend leaves the coin spendable in the wallet's state, so a coin
+    /// named twice would be spent twice and its value counted twice. The
+    /// wallet here holds no coin, so a check that ran only after the first
+    /// spend would return the "not spendable" error instead.
+    #[test]
+    fn a_coin_named_twice_is_refused_before_any_spend() {
+        let seed = Seed::from_bytes(&[1; 32]).unwrap();
+        let context = Arc::new(BuildContext::new_from_wallet_seeds(
+            "undeployed",
+            &[seed.into_ledger()],
+        ));
+        let coin = Nullifier(HashOutput([7; 32]));
+        let other = Nullifier(HashOutput([8; 32]));
+
+        let err = prepare_shielded_inputs(
+            &context,
+            &seed,
+            &[coin, other, coin],
+            &mut StdRng::seed_from_u64(0),
+        )
+        .err();
+        assert!(
+            matches!(err, Some(WalletError::DuplicateInput { .. })),
+            "got {err:?}"
+        );
+    }
 }

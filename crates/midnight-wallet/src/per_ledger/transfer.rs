@@ -1,11 +1,12 @@
 use midnight_types::TrackedUtxo;
+use midnight_types::hd::Seed;
 
-use super::helpers::{DefaultDB, DustWallet, LedgerParameters, WalletSeed};
+use super::helpers::LedgerParameters;
 use super::state::Wallet;
 use super::types::BuildInputs;
 
 impl BuildInputs for Wallet {
-    fn seed(&self) -> &WalletSeed {
+    fn seed(&self) -> &Seed {
         Wallet::seed(self)
     }
 
@@ -15,10 +16,6 @@ impl BuildInputs for Wallet {
 
     fn parameters(&self) -> &LedgerParameters {
         Wallet::parameters(self)
-    }
-
-    fn dust_wallet(&self) -> &DustWallet<DefaultDB> {
-        Wallet::dust_wallet(self)
     }
 
     fn unshielded_utxos(&self) -> &[TrackedUtxo] {

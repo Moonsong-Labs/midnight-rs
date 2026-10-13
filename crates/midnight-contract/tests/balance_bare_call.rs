@@ -15,8 +15,8 @@ mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
-use midnight_provider::{DustlessBuilder, MidnightProvider, Network, WalletSeed};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_provider::{DustlessBuilder, MidnightProvider, Network};
+use midnight_wallet::Wallet;
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -34,12 +34,14 @@ async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
         return;
     };
 
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
+        .with_network(Network::Undeployed)
+        .sync(&provider)
         .await
         .expect("sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())

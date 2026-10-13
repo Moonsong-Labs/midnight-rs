@@ -1,11 +1,11 @@
 //! HD wallet primitives: seeds, mnemonics, and BIP-32 derivation.
 //!
-//! Implements the HD-wallet layout from Midnight's [Wallet Engine Specification — *HD wallet structure*](https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure): a mix of BIP-32, BIP-44, and CIP-1852 with the path `m / purpose' / coin_type' / account' / role / index`, `purpose = 44`, `coin_type = 2400`, and five role indices (0 Unshielded External chain, 1 Unshielded Internal chain, 2 Dust, 3 Shielded, 4 Metadata).
+//! Implements the HD-wallet layout from Midnight's [Wallet Engine Specification, *HD wallet structure*](https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure): a mix of BIP-32, BIP-44, and CIP-1852 with the path `m / purpose' / coin_type' / account' / role / index`, `purpose = 44`, `coin_type = 2400`, and five role indices (0 Unshielded External chain, 1 Unshielded Internal chain, 2 Dust, 3 Shielded, 4 Metadata).
 //!
 //! # Quick start
 //!
 //! ```no_run
-//! use midnight_wallet::hd::{Seed, Role};
+//! use midnight_types::hd::{Role, Seed};
 //!
 //! // Empty passphrase.
 //! let seed = Seed::from_mnemonic(
@@ -14,7 +14,7 @@
 //!      abandon abandon abandon abandon abandon abandon abandon diesel",
 //! ).unwrap();
 //!
-//! // The default `Wallet::sync` / `derive_*` paths use the standard per-asset
+//! // The default sync and the address methods use the standard per-asset
 //! // accounts (account 0, the role's default leaf). For an explicit key:
 //! let key: [u8; 32] = seed
 //!     .account(0)
@@ -29,38 +29,38 @@
 //! checks one, and [`mnemonic::words`] / [`mnemonic::join`] convert between
 //! the wire-form phrase string and a `Vec<String>` for UIs that want to render
 //! one word per slot.
-//!
-//! # Compatibility with upstream `WalletSeed`
-//!
-//! `Seed` is a thin wrapper around upstream's `WalletSeed` enum. It implements
-//! `From<Seed> for WalletSeed`, and re-exports the upstream `Role` enum.
-//! Both are the same in every ledger generation, and ledger 9's definitions
-//! serve. SDK methods that take `impl Into<WalletSeed>` accept both types, so
-//! callers can migrate at their own pace.
 
 use std::fmt;
 use std::str::FromStr;
 
-use crate::{ShieldedRecipient, WalletSeed};
-use bip32::{DerivationPath as Bip32DerivationPath, XPrv};
+use bip32::{ChildNumber, DerivationPath as Bip32DerivationPath, XPrv};
+use midnight_helpers::ledger_9::{DefaultDB, IntoWalletAddress, ShieldedWallet, UnshieldedWallet};
 use rand::RngCore;
 use zeroize::Zeroize;
 
-// Re-export the upstream `Role` enum so callers don't have to dig into
-// `midnight_helpers::*`. The numeric indices match the [Wallet Engine
-// Specification's role table][spec]; the names differ from the spec text
-// but the indices are the contract:
-//
-//   index | spec name                 | enum variant
-//   ------|---------------------------|---------------------------
-//     0   | Unshielded External chain | Role::UnshieldedExternal
-//     1   | Unshielded Internal chain | Role::UnshieldedInternal
-//     2   | Dust                      | Role::Dust
-//     3   | Shielded                  | Role::Zswap
-//     4   | Metadata                  | Role::Ecdsa (upstream derives its ECDSA key here)
-//
-// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
-pub use midnight_helpers::ledger_9::Role;
+use crate::ledger_9::convert::IntoLedger;
+use crate::{Network, ShieldedRecipient};
+
+/// The `role` level of an HD path: the asset family a key belongs to.
+///
+/// The index of each role is the contract of the [Wallet Engine
+/// Specification's role table][spec]. The variant names follow the upstream
+/// ledger helpers, and some differ from the names in the spec text.
+///
+/// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// Index 0, the spec's "Unshielded External chain".
+    UnshieldedExternal,
+    /// Index 1, the spec's "Unshielded Internal chain".
+    UnshieldedInternal,
+    /// Index 2, the spec's "Dust".
+    Dust,
+    /// Index 3, the spec's "Shielded".
+    Zswap,
+    /// Index 4, the spec's "Metadata", where upstream derives its ECDSA key.
+    Ecdsa,
+}
 
 /// BIP-44 `purpose` level. Constant per the BIP-44 spec; the [Wallet Engine
 /// Specification][spec] pins this at `44` (`0x8000002c` once hardened).
@@ -83,53 +83,73 @@ const COIN_TYPE: u32 = 2400;
 /// Errors surfaced when constructing or deriving from a [`Seed`].
 #[derive(Debug, thiserror::Error)]
 pub enum SeedError {
-    /// The input was not valid hex.
+    /// [`Seed::from_hex`] got a string that is not hex. The value is the
+    /// decoder's message.
     #[error("invalid hex: {0}")]
-    InvalidHex(hex::FromHexError),
+    InvalidHex(String),
 
-    /// The input had a byte length other than 16, 32, or 64.
+    /// The seed bytes have a length other than 16, 32 or 64. The value is
+    /// that length.
     #[error("expected 16, 32, or 64 bytes; got {0}")]
     InvalidLength(usize),
 
-    /// The input was not a valid BIP-39 mnemonic.
+    /// The phrase is not a valid BIP-39 mnemonic in the English word list.
+    /// The value is the parser's message.
     #[error("invalid mnemonic: {0}")]
-    InvalidMnemonic(bip39::Error),
+    InvalidMnemonic(String),
 
-    /// The input string did not parse as hex, lazy hex, or a mnemonic.
-    #[error("could not parse seed input as hex, lazy hex, or mnemonic")]
+    /// [`Seed::from_str`] found neither hex of 16, 32 or 64 bytes nor a valid
+    /// mnemonic.
+    #[error("could not parse seed input as hex or a mnemonic")]
     Unrecognized,
 
-    /// The supplied BIP-32 derivation path was syntactically invalid.
-    #[error("invalid derivation path: {0}")]
-    InvalidPath(bip32::Error),
+    /// [`RoleKey::derive_at`] got an account or an index of 2^31 or above.
+    /// The value is the first such number. BIP-32 keeps those child numbers
+    /// for hardened children.
+    #[error("account or index {0} is 2^31 or above, which BIP-32 keeps for hardened children")]
+    IndexOutOfRange(u32),
 
-    /// BIP-32 derivation hit a non-derivable child key (cryptographically
-    /// improbable but not impossible). Increment the index and retry.
+    /// The BIP-32 derivation gave an invalid key at one level of the path.
+    /// BIP-32 puts the chance below 1 in 2^127 at each level, and tells the
+    /// caller to go on with the next index.
     #[error("derived key out of range at child index")]
     KeyOutOfBounds,
 }
 
 // ---------------------------------------------------------------------------
-// Seed — newtype wrapper around upstream WalletSeed
+// Seed
 // ---------------------------------------------------------------------------
 
 /// A wallet seed. Holds the root entropy for BIP-32 HD derivation.
 ///
-/// The actual bytes can be 16, 32, or 64 wide (mirroring upstream's
-/// `WalletSeed::{Short, Medium, Long}` variants). `as_bytes` exposes them
-/// regardless of variant; everything downstream feeds the slice to BIP-32 so
-/// the width is transparent.
+/// The bytes can be 16, 32, or 64 wide. `as_bytes` exposes them regardless
+/// of width. BIP-32 reads the slice, so the width changes nothing downstream.
+///
+/// Every ledger generation derives the same keys and addresses from a seed,
+/// so the address methods derive through ledger 9.
 ///
 /// `Drop` zeroizes the seed bytes. `Debug` and `Display` redact them.
 #[derive(Clone, PartialEq, Eq)]
-pub struct Seed(WalletSeed);
+pub struct Seed(pub(crate) SeedBytes);
+
+/// The entropy of a [`Seed`], in one of the three widths it accepts.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum SeedBytes {
+    Short([u8; 16]),
+    Medium([u8; 32]),
+    Long([u8; 64]),
+}
 
 impl Seed {
     /// Construct from a BIP-39 mnemonic phrase with an empty passphrase.
     ///
     /// Runs the BIP-39 standard derivation (`Mnemonic::to_seed("")`,
-    /// PBKDF2-HMAC-SHA512 with 2048 rounds) and produces a 64-byte
-    /// [`WalletSeed::Long`].
+    /// PBKDF2-HMAC-SHA512 with 2048 rounds) and produces a 64-byte seed.
+    ///
+    /// # Errors
+    ///
+    /// [`SeedError::InvalidMnemonic`] when `phrase` is not a valid BIP-39
+    /// mnemonic.
     pub fn from_mnemonic(phrase: &str) -> Result<Self, SeedError> {
         Self::from_mnemonic_with_passphrase(phrase, "")
     }
@@ -138,26 +158,48 @@ impl Seed {
     /// "25th word"). The passphrase is mixed into the seed via the standard
     /// PBKDF2-HMAC-SHA512 round defined by BIP-39; different passphrases on
     /// the same phrase produce entirely different seeds.
+    ///
+    /// # Errors
+    ///
+    /// [`SeedError::InvalidMnemonic`] when `phrase` is not a valid BIP-39
+    /// mnemonic.
     pub fn from_mnemonic_with_passphrase(
         phrase: &str,
         passphrase: &str,
     ) -> Result<Self, SeedError> {
-        let mnemonic = bip39::Mnemonic::parse(phrase).map_err(SeedError::InvalidMnemonic)?;
-        Ok(Self(WalletSeed::Long(mnemonic.to_seed(passphrase))))
+        let mnemonic = bip39::Mnemonic::parse(phrase)
+            .map_err(|e| SeedError::InvalidMnemonic(e.to_string()))?;
+        Ok(Self(SeedBytes::Long(mnemonic.to_seed(passphrase))))
     }
 
     /// Construct from a hex string. The hex must decode to exactly 16, 32, or
-    /// 64 bytes (`Short`, `Medium`, or `Long`).
+    /// 64 bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`SeedError::InvalidHex`] when `hex_str` is not hex, and
+    /// [`SeedError::InvalidLength`] when it decodes to another length.
     pub fn from_hex(hex_str: &str) -> Result<Self, SeedError> {
-        let bytes = hex::decode(hex_str).map_err(SeedError::InvalidHex)?;
+        let bytes = hex::decode(hex_str).map_err(|e| SeedError::InvalidHex(e.to_string()))?;
         Self::from_bytes(&bytes)
     }
 
     /// Construct from raw entropy bytes. Length must be 16, 32, or 64.
+    ///
+    /// # Errors
+    ///
+    /// [`SeedError::InvalidLength`] when `bytes` has another length.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SeedError> {
-        WalletSeed::try_from(bytes)
-            .map(Self)
-            .map_err(|_| SeedError::InvalidLength(bytes.len()))
+        let inner = if let Ok(short) = bytes.try_into() {
+            SeedBytes::Short(short)
+        } else if let Ok(medium) = bytes.try_into() {
+            SeedBytes::Medium(medium)
+        } else if let Ok(long) = bytes.try_into() {
+            SeedBytes::Long(long)
+        } else {
+            return Err(SeedError::InvalidLength(bytes.len()));
+        };
+        Ok(Self(inner))
     }
 
     /// Generate a fresh 32-byte seed from a cryptographically secure RNG.
@@ -166,16 +208,20 @@ impl Seed {
     pub fn generate() -> Self {
         let mut bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut bytes);
-        Self(WalletSeed::Medium(bytes))
+        Self(SeedBytes::Medium(bytes))
     }
 
     /// The seed's raw bytes (16, 32, or 64).
     pub fn as_bytes(&self) -> &[u8] {
-        self.0.as_bytes()
+        match &self.0 {
+            SeedBytes::Short(bytes) => bytes,
+            SeedBytes::Medium(bytes) => bytes,
+            SeedBytes::Long(bytes) => bytes,
+        }
     }
 
-    /// Entry point for explicit HD key derivation. The default `Wallet::sync`
-    /// and `derive_*` paths already use the standard per-asset accounts;
+    /// Entry point for explicit HD key derivation. The default wallet sync
+    /// and the address methods already use the standard per-asset accounts;
     /// reach for this when you need a specific
     /// `m/44'/2400'/<account>'/<role>/<index>` key.
     pub fn account(&self, account: u32) -> AccountKey<'_> {
@@ -185,18 +231,24 @@ impl Seed {
         }
     }
 
-    /// Derive the unshielded receiving address for this seed on `network`.
-    /// Convenience wrapper over [`crate::address::derive_unshielded`].
-    pub fn unshielded_address(&self, network: impl Into<crate::Network>) -> String {
-        let ws: WalletSeed = self.into();
-        crate::address::derive_unshielded(&ws, network)
+    /// The unshielded receiving address of this seed on `network`, e.g.
+    /// `mn_addr_undeployed1...`.
+    ///
+    /// `network` accepts both [`Network`] and `&str` / `String` (via `Into`).
+    pub fn unshielded_address(&self, network: impl Into<Network>) -> String {
+        UnshieldedWallet::default(self.into_ledger())
+            .address(network.into().as_str())
+            .to_bech32()
     }
 
-    /// Derive the shielded receiving address for this seed on `network`.
-    /// Convenience wrapper over [`crate::address::derive_shielded`].
-    pub fn shielded_address(&self, network: impl Into<crate::Network>) -> String {
-        let ws: WalletSeed = self.into();
-        crate::address::derive_shielded(&ws, network)
+    /// The shielded receiving address of this seed on `network`, e.g.
+    /// `mn_shield-addr_undeployed1...`.
+    ///
+    /// `network` accepts both [`Network`] and `&str` / `String` (via `Into`).
+    pub fn shielded_address(&self, network: impl Into<Network>) -> String {
+        ShieldedWallet::<DefaultDB>::default(self.into_ledger())
+            .address(network.into().as_str())
+            .to_bech32()
     }
 
     /// Derive the shielded keys of this seed: its `coin_public_key` (coin
@@ -206,37 +258,24 @@ impl Seed {
     /// string for sharing; this returns the typed keys so you can use them
     /// directly, e.g. to build a coin encryption mapping for a coin you mint to
     /// your own address. To recover these keys from someone else's shared
-    /// address string, use [`crate::parse_shielded_recipient`] instead.
+    /// address string, use [`crate::address::parse_shielded_recipient`] instead.
     pub fn shielded_recipient(&self) -> ShieldedRecipient {
-        let ws: WalletSeed = self.into();
-        crate::address::shielded_recipient(&ws)
+        crate::address::shielded_recipient(&ShieldedWallet::default(self.into_ledger()))
     }
 }
 
-impl From<Seed> for WalletSeed {
-    fn from(seed: Seed) -> Self {
-        // Take ownership of the inner WalletSeed without running our Drop
-        // (which would zeroize it). The caller is now responsible for the
-        // bytes.
-        let inner = seed.0.clone();
-        // Prevent our Drop from running so the caller gets a usable seed.
-        std::mem::forget(seed);
-        inner
-    }
-}
-
-impl From<&Seed> for WalletSeed {
+/// Clones the seed, so an API that takes `impl Into<Seed>` also takes a
+/// `&Seed` and leaves the original with the caller.
+impl From<&Seed> for Seed {
     fn from(seed: &Seed) -> Self {
-        seed.0.clone()
+        seed.clone()
     }
 }
 
 impl FromStr for Seed {
     type Err = SeedError;
 
-    /// Tries hex, then mnemonic, in that order. The match upstream's
-    /// `WalletSeed::FromStr` does on the raw seed type — same input strings
-    /// produce equivalent seeds via either constructor.
+    /// Tries hex, then a mnemonic, in that order.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
         if let Ok(seed) = Self::from_hex(s) {
@@ -262,14 +301,13 @@ impl fmt::Display for Seed {
 }
 
 impl Drop for Seed {
-    /// Zeroize the seed bytes on drop. `WalletSeed` itself doesn't implement
-    /// `Zeroize`, so we reach into each variant's array and clear it
-    /// in-place. The enum tag stays as-is; only the entropy is wiped.
+    /// Zeroize the seed bytes on drop. This clears the entropy and keeps the
+    /// width.
     fn drop(&mut self) {
         match &mut self.0 {
-            WalletSeed::Short(bytes) => bytes.zeroize(),
-            WalletSeed::Medium(bytes) => bytes.zeroize(),
-            WalletSeed::Long(bytes) => bytes.zeroize(),
+            SeedBytes::Short(bytes) => bytes.zeroize(),
+            SeedBytes::Medium(bytes) => bytes.zeroize(),
+            SeedBytes::Long(bytes) => bytes.zeroize(),
         }
     }
 }
@@ -280,6 +318,7 @@ impl Drop for Seed {
 
 /// Step 2 of the `seed.account(n).role(r).derive_at(i)` builder. Constructed
 /// via [`Seed::account`].
+#[derive(Debug)]
 pub struct AccountKey<'a> {
     seed: &'a Seed,
     account: u32,
@@ -297,6 +336,7 @@ impl<'a> AccountKey<'a> {
 }
 
 /// Step 3 of the builder. Resolved by calling [`Self::derive_at`].
+#[derive(Debug)]
 pub struct RoleKey<'a> {
     seed: &'a Seed,
     account: u32,
@@ -309,22 +349,34 @@ impl<'a> RoleKey<'a> {
     /// 32-byte result is the raw private-key material the chain's signing /
     /// encryption schemes consume; it is **not** an address.
     ///
+    /// # Errors
+    ///
+    /// [`SeedError::IndexOutOfRange`] when the account or `index` is 2^31 or
+    /// above, and [`SeedError::KeyOutOfBounds`] when BIP-32 gives an invalid
+    /// key on the path.
+    ///
     /// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
     pub fn derive_at(self, index: u32) -> Result<[u8; 32], SeedError> {
+        for n in [self.account, index] {
+            if n >= ChildNumber::HARDENED_FLAG {
+                return Err(SeedError::IndexOutOfRange(n));
+            }
+        }
         let role_index = role_index(self.role);
         let path = format!(
             "m/{PURPOSE}'/{COIN_TYPE}'/{}'/{}/{}",
             self.account, role_index, index
         );
-        let path = Bip32DerivationPath::from_str(&path).map_err(SeedError::InvalidPath)?;
+        let path = Bip32DerivationPath::from_str(&path)
+            .expect("every child number of the path is below 2^31, so the path parses");
         let xprv = XPrv::derive_from_path(self.seed.as_bytes(), &path)
             .map_err(|_| SeedError::KeyOutOfBounds)?;
         Ok(xprv.private_key().to_bytes().into())
     }
 }
 
-/// Map upstream's `Role` to the numeric child index pinned by the
-/// [Wallet Engine Specification's role table][spec]. Same indices upstream's
+/// Map a [`Role`] to the numeric child index pinned by the [Wallet Engine
+/// Specification's role table][spec]. Same indices upstream's
 /// `DerivationPath::default_for_role` builds into its
 /// `m/44'/2400'/0'/<index>/0` strings.
 ///
@@ -345,9 +397,10 @@ fn role_index(role: Role) -> u32 {
 
 /// Mnemonic phrase generation, validation, and word-list conversion.
 ///
-/// [`mnemonic::generate`] defaults to 256 bits of entropy (24 words),
-/// [`mnemonic::validate`] runs the BIP-39 checksum, and [`mnemonic::words`] /
-/// [`mnemonic::join`] split / re-join the phrase on whitespace.
+/// [`mnemonic::generate`] makes a phrase of the [`mnemonic::Strength`] you
+/// choose, [`mnemonic::validate`] runs the BIP-39 checksum, and
+/// [`mnemonic::words`] / [`mnemonic::join`] split / re-join the phrase on
+/// whitespace.
 pub mod mnemonic {
     /// Mnemonic phrase length, by entropy width. 24 words (256 bits) is the
     /// standard BIP-39 strong choice.
@@ -361,38 +414,26 @@ pub mod mnemonic {
         Words18,
         /// 224 bits → 21 words.
         Words21,
-        /// 256 bits → 24 words. Default.
+        /// 256 bits → 24 words.
         Words24,
     }
 
     impl Strength {
-        fn bits(self) -> usize {
+        fn word_count(self) -> usize {
             match self {
-                Strength::Words12 => 128,
-                Strength::Words15 => 160,
-                Strength::Words18 => 192,
-                Strength::Words21 => 224,
-                Strength::Words24 => 256,
+                Strength::Words12 => 12,
+                Strength::Words15 => 15,
+                Strength::Words18 => 18,
+                Strength::Words21 => 21,
+                Strength::Words24 => 24,
             }
         }
     }
 
     /// Generate a fresh mnemonic phrase. `Strength::Words24` (256 bits of
-    /// entropy) is the default for new wallets.
+    /// entropy) is the usual choice for a new wallet.
     pub fn generate(strength: Strength) -> Vec<String> {
-        // `bip39::Mnemonic::generate` takes a word count, not an entropy
-        // width, but the mapping is exact (32 bits per 3 words after the
-        // ceil-divide BIP-39 spec). We forward the bit count and let it
-        // pick the right word count internally.
-        let word_count = match strength {
-            Strength::Words12 => 12,
-            Strength::Words15 => 15,
-            Strength::Words18 => 18,
-            Strength::Words21 => 21,
-            Strength::Words24 => 24,
-        };
-        let _ = strength.bits(); // documented bit width matches word_count
-        let mnemonic = bip39::Mnemonic::generate(word_count)
+        let mnemonic = bip39::Mnemonic::generate(strength.word_count())
             .expect("bip39 generate accepts 12/15/18/21/24 word counts");
         mnemonic.words().map(str::to_string).collect()
     }
@@ -404,7 +445,7 @@ pub mod mnemonic {
     }
 
     /// Split a whitespace-separated phrase into individual words. Doesn't
-    /// validate the phrase — that's [`validate`]'s job.
+    /// validate the phrase: that's [`validate`]'s job.
     pub fn words(phrase: &str) -> Vec<&str> {
         phrase.split_whitespace().collect()
     }
@@ -426,10 +467,14 @@ mod tests {
     /// The canonical 24-word "abandon … diesel" mnemonic from the BIP-39 test
     /// vectors, also pinned by upstream `midnight-node-ledger-helpers`'s own
     /// test. The expected 64-byte hex below comes verbatim from that test
-    /// (`ledger/helpers/src/versions/common/types.rs` —
+    /// (`ledger/helpers/src/versions/common/types.rs`,
     /// `should_decode_wallet_seeds_in_different_formats`).
     const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon diesel";
     const TEST_SEED_HEX: &str = "a51c86de32d0791f7cffc3bdff1abd9bb54987f0ed5effc30c936dddbb9afd9d530c8db445e4f2d3ea42a321b260e022aadf05987c9a67ec7b6b6ca1d0593ec9";
+
+    fn seed() -> Seed {
+        Seed::from_bytes(&[1u8; 32]).unwrap()
+    }
 
     #[test]
     fn from_mnemonic_matches_upstream_test_vector() {
@@ -464,6 +509,21 @@ mod tests {
     }
 
     #[test]
+    fn derive_at_refuses_a_hardened_account_or_index() {
+        let seed = seed();
+        let zswap = |account| seed.account(account).role(Role::Zswap);
+        assert!(matches!(
+            zswap(0).derive_at(1 << 31),
+            Err(SeedError::IndexOutOfRange(n)) if n == 1 << 31,
+        ));
+        assert!(zswap(0).derive_at((1 << 31) - 1).is_ok());
+        assert!(matches!(
+            zswap(1 << 31).derive_at(0),
+            Err(SeedError::IndexOutOfRange(n)) if n == 1 << 31,
+        ));
+    }
+
+    #[test]
     fn from_str_tries_hex_then_mnemonic() {
         // hex
         let s1: Seed = TEST_SEED_HEX.parse().unwrap();
@@ -491,20 +551,19 @@ mod tests {
         assert!(!disp.contains("a51c"), "Display must not leak: {disp}");
     }
 
-    #[test]
-    fn into_wallet_seed_round_trips() {
-        let seed = Seed::from_hex(TEST_SEED_HEX).unwrap();
-        let bytes_before = seed.as_bytes().to_vec();
-        let ws: WalletSeed = seed.into();
-        assert_eq!(ws.as_bytes(), bytes_before.as_slice());
-    }
-
     // Upstream writes its role paths independently of `role_index`, and its
     // wallets derive their keys from those paths.
     #[test]
     fn derive_at_matches_upstream_derivation_paths() {
-        use midnight_helpers::ledger_9::{DerivationPath, DeriveSeed, UnshieldedWallet};
+        use midnight_helpers::ledger_9::{self, DerivationPath, DeriveSeed, UnshieldedWallet};
 
+        let upstream_role = |role| match role {
+            Role::UnshieldedExternal => ledger_9::Role::UnshieldedExternal,
+            Role::UnshieldedInternal => ledger_9::Role::UnshieldedInternal,
+            Role::Dust => ledger_9::Role::Dust,
+            Role::Zswap => ledger_9::Role::Zswap,
+            Role::Ecdsa => ledger_9::Role::Ecdsa,
+        };
         let seed = Seed::from_mnemonic(TEST_MNEMONIC).unwrap();
         let path = |p: &str| DerivationPath::new(p.to_string()).unwrap();
         let roles = [
@@ -516,7 +575,10 @@ mod tests {
         ];
         let rows = roles
             .into_iter()
-            .map(|role| (0, role.clone(), 0, DerivationPath::default_for_role(role)))
+            .map(|role| {
+                let upstream_path = DerivationPath::default_for_role(upstream_role(role));
+                (0, role, 0, upstream_path)
+            })
             .chain([
                 (1, Role::Zswap, 0, path("m/44'/2400'/1'/3/0")),
                 (0, Role::Zswap, 1, path("m/44'/2400'/0'/3/1")),
@@ -524,7 +586,7 @@ mod tests {
 
         for (account, role, index, upstream_path) in rows {
             let expected = <UnshieldedWallet as DeriveSeed>::derive_seed(
-                WalletSeed::from(&seed),
+                crate::ledger_9::convert::IntoLedger::into_ledger(&seed),
                 &upstream_path,
             );
             assert_eq!(
@@ -534,6 +596,54 @@ mod tests {
                 upstream_path.path
             );
         }
+    }
+
+    /// The address methods derive through ledger 9 alone. If ledger 8 derived
+    /// other keys from the same seed, a wallet on a ledger 8 chain would
+    /// receive at addresses its owner never sees.
+    #[test]
+    fn both_generations_derive_the_same_addresses_and_keys() {
+        use crate::ledger_8::convert::IntoSdk as _;
+        use midnight_helpers::ledger_8;
+        use midnight_helpers::ledger_8::IntoWalletAddress as _;
+
+        let seed = seed();
+        let seed8 = crate::ledger_8::convert::IntoLedger::into_ledger(&seed);
+        let unshielded8 = ledger_8::UnshieldedWallet::default(seed8.clone())
+            .address(Network::Undeployed.as_str())
+            .to_bech32();
+        let shielded8 = ledger_8::ShieldedWallet::<ledger_8::DefaultDB>::default(seed8);
+        let address8 = shielded8.address(Network::Undeployed.as_str()).to_bech32();
+
+        assert_eq!(seed.unshielded_address(Network::Undeployed), unshielded8);
+        assert_eq!(seed.shielded_address(Network::Undeployed), address8);
+        let recipient8 = ShieldedRecipient {
+            coin_public_key: shielded8.coin_public_key.into_sdk(),
+            enc_public_key: shielded8.enc_public_key.into_sdk(),
+        };
+        assert_eq!(seed.shielded_recipient(), recipient8);
+    }
+
+    #[test]
+    fn unshielded_address_uses_network_suffix() {
+        let addr = seed().unshielded_address("undeployed");
+        assert!(addr.starts_with("mn_addr_undeployed"), "address was {addr}");
+    }
+
+    #[test]
+    fn shielded_address_uses_network_suffix() {
+        let addr = seed().shielded_address("undeployed");
+        assert!(
+            addr.starts_with("mn_shield-addr_undeployed"),
+            "address was {addr}"
+        );
+    }
+
+    #[test]
+    fn unshielded_address_differs_per_network() {
+        let a = seed().unshielded_address("undeployed");
+        let b = seed().unshielded_address("testnet");
+        assert_ne!(a, b);
     }
 
     #[test]
@@ -563,27 +673,5 @@ mod tests {
             .collect();
         assert_eq!(words.len(), 24);
         assert_eq!(mnemonic::join(&words), phrase);
-    }
-
-    #[test]
-    fn address_derivation_matches_walletseed_path() {
-        // The same underlying seed bytes — once via Seed, once via the raw
-        // upstream WalletSeed — must produce identical bech32 addresses.
-        // This is the contract that lets callers swap construction styles
-        // without changing their on-chain identity.
-        use crate::Network;
-        use crate::address::{derive_shielded, derive_unshielded};
-
-        let seed = Seed::from_hex(TEST_SEED_HEX).unwrap();
-        let ws = WalletSeed::try_from_hex_str(TEST_SEED_HEX).unwrap();
-
-        assert_eq!(
-            seed.unshielded_address(Network::Preprod),
-            derive_unshielded(&ws, Network::Preprod),
-        );
-        assert_eq!(
-            seed.shielded_address(Network::Preprod),
-            derive_shielded(&ws, Network::Preprod),
-        );
     }
 }

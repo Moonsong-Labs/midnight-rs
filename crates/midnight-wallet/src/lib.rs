@@ -12,12 +12,13 @@
 //! return owned values and a mutation is one call, so a consumer never holds
 //! a lock.
 //!
-//! Once a wallet is attached, `midnight_provider::MidnightProvider` drives
-//! its network I/O: resyncs, the indexer subscriptions and the ledger
-//! context. It holds the wallet as an `Arc<dyn WalletFacade>`.
+//! Once a wallet is attached, `midnight_provider::MidnightProvider` starts
+//! its resyncs and rescans and builds its transactions. The wallet runs each
+//! replay against the indexer that it synced from. The provider holds the
+//! wallet as an `Arc<dyn WalletFacade>`.
 //!
-//! For callers that only need an address (no synced state), use the free
-//! helpers in [`address`].
+//! For callers that only need an address (no synced state), use
+//! [`Seed::unshielded_address`] and [`Seed::shielded_address`].
 //!
 //! # Indexer trust model
 //!
@@ -44,34 +45,30 @@
 //!
 //! ```rust,no_run
 //! use midnight_provider::MidnightProvider;
-//! use midnight_wallet::{LocalWallet, Network, Wallet};
+//! use midnight_wallet::Wallet;
 //!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let seed = midnight_wallet::WalletSeed::try_from_hex_str(
-//! #     "0000000000000000000000000000000000000000000000000000000000000001",
-//! # ).unwrap();
+//! # async fn example(phrase: &str) -> Result<(), Box<dyn std::error::Error>> {
 //! // The wallet syncs on its own (zswap + dust + unshielded subscriptions)
 //! // and is then attached to the provider.
 //! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088");
-//! let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
-//! let provider = provider.with_wallet(LocalWallet::new(wallet));
+//! let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider).await?;
+//! let provider = provider.with_wallet(wallet);
 //!
 //! let balance = provider.balance().await?;
 //! # Ok(())
 //! # }
 //! ```
 
-pub mod hd;
 mod ledger_8;
 #[expect(
     clippy::duplicate_mod,
     reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
 )]
 mod ledger_9;
-pub mod local;
+mod local;
 mod replay;
 mod storage;
-pub mod sync;
+mod sync;
 mod wallet;
 
 // The vocabulary this crate's own signatures name, so a consumer of the
@@ -83,47 +80,13 @@ pub use midnight_types::{
     ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
     SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind,
     TransferRequest, TransferResult, UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
-    WalletError, WalletSeed, WalletSeedError, address, chain_pin, network, panic_message,
+    WalletError, chain_pin, panic_message,
 };
 // The API this crate implements, so attaching a wallet needs no dependency on
 // midnight-wallet-facade either.
 pub use midnight_wallet_facade::WalletFacade;
 
-pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use local::LocalWallet;
-pub use sync::{SyncHandle, SyncProgress, WalletSyncBuilder};
+pub use midnight_types::hd::{self, AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
+pub use sync::{SyncHandle, SyncProgress, WalletBuilder};
 pub use wallet::{ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, Wallet};
-
-#[cfg(test)]
-mod tests {
-    use super::WalletSeed;
-    use super::address::{derive_shielded, derive_unshielded};
-
-    const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-
-    fn dev_seed() -> WalletSeed {
-        WalletSeed::try_from_hex_str(DEV_SEED).unwrap()
-    }
-
-    #[test]
-    fn derive_unshielded_uses_network_suffix() {
-        let addr = derive_unshielded(&dev_seed(), "undeployed");
-        assert!(addr.starts_with("mn_addr_undeployed"), "address was {addr}");
-    }
-
-    #[test]
-    fn derive_shielded_uses_network_suffix() {
-        let addr = derive_shielded(&dev_seed(), "undeployed");
-        assert!(
-            addr.starts_with("mn_shield-addr_undeployed"),
-            "address was {addr}"
-        );
-    }
-
-    #[test]
-    fn derive_unshielded_differs_per_network() {
-        let a = derive_unshielded(&dev_seed(), "undeployed");
-        let b = derive_unshielded(&dev_seed(), "testnet");
-        assert_ne!(a, b);
-    }
-}

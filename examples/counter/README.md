@@ -22,9 +22,7 @@ export circuit increment_by(amount: Uint<16>): Uint<16> {
 }
 ```
 
-The `disclose(...)` calls emit communication commitments that become the
-circuit's typed return value — surfaced back to the caller by the generated
-bindings.
+Each circuit wraps its return value in `disclose(...)`, so the value can leave the circuit. The generated bindings give it back to the caller as a typed value.
 
 ## Run
 
@@ -54,10 +52,11 @@ Output:
    ext hash:  ...
    best:      ...
    finalized: ...
-   address:   0200...
+   address:   ...
    round = 0
 2. Calling increment on-chain...
    returned = 1
+   tx = ...
    round = 1
 3. Calling increment_by(5) on-chain...
    returned = 5
@@ -76,7 +75,7 @@ For the simple case where you don't need to observe both states, `.await?` the b
 Stop the devnet (from the repo root):
 
 ```bash
-docker compose -f devnet/docker-compose.yml down
+make dev-down
 ```
 
 ## Recompile the contract

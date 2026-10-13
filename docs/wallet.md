@@ -2,28 +2,61 @@
 
 The SDK's wallet covers Midnight's three asset legs:
 
-- **Shielded coins** — Zswap-based privacy coins
-- **Unshielded UTXOs** — public UTXO-model balances (NIGHT lives here)
-- **Dust** — fee-token, generated continuously from NIGHT holdings
+- **Shielded coins**: Zswap-based privacy coins
+- **Unshielded UTXOs**: public UTXO-model balances (NIGHT lives here)
+- **Dust**: fee-token, generated continuously from NIGHT holdings
 
-`Wallet` itself is a pure state machine. All network I/O — sync, resync, transfer building, transaction context construction — is driven by `MidnightProvider`. Most callers never construct a `Wallet` directly; they build one with `Wallet::sync`, attach it with `with_wallet`, and then operate through the provider.
+`Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` or `Wallet::from_mnemonic` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts.
 
-The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, wrap it: `provider.with_wallet(LocalWallet::new(wallet))`. Another implementation goes in the same way when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_provider::ledger_8::WalletBuilds` and `midnight_provider::ledger_9::WalletBuilds`).
+The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`).
+
+```rust
+use std::sync::Arc;
+use midnight_core::WalletFacade;
+use midnight_core::wallet::LocalWallet;
+
+let wallet = Arc::new(LocalWallet::new(wallet));
+let provider = provider.with_wallet(Arc::clone(&wallet));
+let balance = wallet.balance().await;
+```
+
+The handle is for reads. Run resyncs, rescans, coin watches, forgets and builds through the provider. It serializes resyncs, rescans, coin watches and forgets on the mutex of `resync_wallet`.
 
 ## Seeds
 
-`Seed` is the SDK's wallet-seed type. Construct it from a BIP-39 mnemonic (12/15/18/21/24 words), hex bytes, or raw bytes. The same on-chain identity comes out either way — `Seed::from_mnemonic("abandon … diesel")` and `Seed::from_hex("a51c86de…")` of the matching bytes produce byte-identical keys.
+A wallet starts from its seed. Each constructor below returns a `WalletBuilder`, and the [sync](#sync) of the builder gives the `Wallet`:
 
 ```rust
-use midnight_wallet::{Seed, Role, mnemonic};
+use midnight_core::{Wallet, WalletBuilder};
 
-let seed = Seed::from_mnemonic(
+// A hex seed of 16, 32 or 64 bytes.
+let builder = Wallet::from_seed("13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f")?;
+
+// A BIP-39 mnemonic of 12, 15, 18, 21 or 24 words, with an empty passphrase.
+let builder = Wallet::from_mnemonic(
     "abandon abandon abandon abandon abandon abandon abandon abandon \
      abandon abandon abandon abandon abandon abandon abandon abandon \
      abandon abandon abandon abandon abandon abandon abandon diesel",
 )?;
 
 // 25th-word passphrase, matching @scure/bip39's mnemonicToSeed(phrase, passphrase).
+let builder = Wallet::from_mnemonic_with_passphrase(phrase, "extra-word")?;
+
+// A `Seed` that you already hold, by value or by reference.
+let builder = WalletBuilder::new(&seed);
+```
+
+The hex form and the mnemonic form give the same on-chain identity. `Wallet::from_mnemonic("abandon … diesel")` and `Wallet::from_seed("a51c86de…")` of the matching bytes produce byte-identical keys. For an input that is not a seed, a constructor returns `SeedError::InvalidHex`, `SeedError::InvalidLength` or `SeedError::InvalidMnemonic`.
+
+### The `Seed` type
+
+`Seed` is the SDK's wallet-seed type. Hold one when you need the seed for more than a sync. It derives addresses before a sync, derives HD keys, and makes a new seed. To keep the `Seed` after the sync, pass `&seed` to `WalletBuilder::new`.
+
+```rust
+use midnight_core::Seed;
+use midnight_core::wallet::{Role, mnemonic};
+
+let seed = Seed::from_mnemonic(phrase)?;
 let seed = Seed::from_mnemonic_with_passphrase(phrase, "extra-word")?;
 
 // Raw entropy (16, 32, or 64 bytes).
@@ -33,13 +66,21 @@ let seed = Seed::from_bytes(&entropy)?;
 // Fresh random 32-byte seed.
 let seed = Seed::generate();
 
-// FromStr tries hex, then mnemonic — drop in either.
+// FromStr tries hex, then mnemonic, so either form parses.
 let seed: Seed = env::var("MIDNIGHT_WALLET_SEED")?.parse()?;
 ```
 
-`Seed` implements the HD-wallet layout from Midnight's [Wallet Engine Specification — *HD wallet structure*](https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure): the path `m / 44' / 2400' / <account>' / <role> / <index>`, the role table with five indices (0 Unshielded External, 1 Unshielded Internal, 2 Dust, 3 Shielded, 4 Metadata), and BIP-39 mnemonic input. The enum variant for index 3 is `Role::Zswap`, matching the upstream Rust helpers' naming; the spec text calls the same slot "Shielded".
+`Seed` implements the HD-wallet layout from Midnight's [Wallet Engine Specification, *HD wallet structure*](https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure): the path `m / 44' / 2400' / <account>' / <role> / <index>`, the role table with five indices, and BIP-39 mnemonic input. The SDK's `Role` enum names the five roles:
 
-`Seed` zeroizes its bytes on drop, and `Debug` / `Display` redact them. Conversion into the upstream `WalletSeed` type happens implicitly — every SDK method that takes `impl Into<WalletSeed>` accepts `Seed` directly.
+| Index | `Role` variant | Spec name |
+|---|---|---|
+| 0 | `Role::UnshieldedExternal` | Unshielded External chain |
+| 1 | `Role::UnshieldedInternal` | Unshielded Internal chain |
+| 2 | `Role::Dust` | Dust |
+| 3 | `Role::Zswap` | Shielded |
+| 4 | `Role::Ecdsa` | Metadata |
+
+`Seed` zeroizes its bytes on drop, and `Debug` / `Display` redact them.
 
 ### Mnemonic utilities
 
@@ -51,7 +92,7 @@ assert!(mnemonic::validate(&phrase));
 
 ### Explicit HD derivation
 
-The default `Wallet::sync`, address-derivation, and transfer paths already use the standard per-asset accounts (account 0, the role's default leaf). For an explicit `(account, role, index)` key:
+The default sync, address-derivation, and transfer paths already use the standard per-asset accounts (account 0, the role's default leaf). For an explicit `(account, role, index)` key:
 
 ```rust
 let key: [u8; 32] = seed
@@ -67,7 +108,7 @@ Returns the 32-byte private-key material the chain's signing / encryption scheme
 If all you need is an address (e.g. to print a faucet target), no sync is required:
 
 ```rust
-use midnight_wallet::{Network, Seed};
+use midnight_core::{Network, Seed};
 
 let seed = Seed::from_hex(
     "13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f",
@@ -79,26 +120,32 @@ let shielded   = seed.shielded_address(Network::Preprod);
 // mn_shield-addr_preprod1...
 ```
 
-The free `address::derive_unshielded(&WalletSeed, network)` / `derive_shielded(...)` helpers still exist for callers that hold a raw `WalletSeed` from upstream.
-
-Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `network` argument accepts both [`Network`] enum variants (`Network::Preprod`, `Network::Mainnet`, etc.) and free-form strings via `impl Into<Network>`, so `"preprod"` and `env::var("MIDNIGHT_NETWORK")` also work. Unknown names round-trip through `Network::Other(String)` — useful for custom devnets.
+Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `Seed` address methods take the network as `impl Into<Network>`. They accept a `Network` variant (`Network::Preprod`, `Network::Mainnet` and the others) or a name, such as `"preprod"` or the `String` from `env::var("MIDNIGHT_NETWORK")?`. Unknown names round-trip through `Network::Other(String)`, for example for a custom devnet.
 
 `Network::Mainnet` produces bech32 HRPs without a `_<name>` suffix (`mn_addr1...`, `mn_shield-addr1...`), matching the upstream convention; all other variants get the suffix.
+
+A synced `Wallet` gives its own addresses on the network it synced as, so these methods take no network:
+
+```rust
+let unshielded = wallet.unshielded_address();
+let shielded   = wallet.shielded_address();
+```
 
 ## Sync
 
 ```rust
-use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_core::{MidnightProvider, Network, Wallet};
 
 let provider = MidnightProvider::new(node_url, indexer_url);
-let wallet = Wallet::sync(&provider, seed, Network::Preprod)
+let wallet = Wallet::from_mnemonic(phrase)?
+    .with_network(Network::Preprod)   // optional; the node's network without it
     .with_storage(storage_dir)        // optional; in-memory only without it
+    .sync(&provider)
     .await?;
-let provider = provider.with_wallet(LocalWallet::new(wallet));
+let provider = provider.with_wallet(wallet);
 ```
 
-The wallet is built on its own and attached with `with_wallet`, so the provider never names an implementation. Anything that implements `WalletFacade` and the `WalletBuilds` of both generations goes in the same way. `Wallet::sync` returns a `WalletSyncBuilder` that defers the work. The builder runs three concurrent indexer subscriptions and returns once all three have caught up:
+A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider)` runs three concurrent indexer subscriptions in the current task, and returns the `Wallet` once all three have caught up:
 
 | Subscription | What it fills |
 |---|---|
@@ -110,24 +157,26 @@ Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress
 
 The provider is the sync's source: the sync replays the provider's indexer, and the provider's node reports its network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the indexer URL and the node's network to the two-question `ChainView`.
 
-Before the replay, the builder asks the node which network it runs. A node that runs a network other than the one the sync names fails the sync with `WalletError::NetworkMismatch`, before the sync reads the indexer. A node that cannot answer, or that reports no network, does not fail the sync.
+Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. The sync then fails with `WalletError::NetworkUnknown` when the node cannot answer, reports no network, or reports a name that fails `Network::is_valid_name`. A valid name has 1 to 68 characters, each a lowercase ASCII letter, a digit, `-` or `_`. Such a name is safe in an address prefix and in the storage path.
 
-The pin is the chain-reset guard, and every sync takes one by default. A snapshot's cursors are counts, so a snapshot from a replaced chain resumes cleanly and reports the dead chain's balance. To catch this, the builder checks a stored snapshot's pin against the chain before it replays. A replaced chain fails the sync with `WalletError::ChainMismatch`. The builder also gives the synced wallet a fresh pin, which every later resync checks again.
+`.with_network(..)` names the network, as a `Network` or as a name such as `"preprod"`. A node that runs another network then fails the sync with `WalletError::NetworkMismatch`, before the sync reads the indexer. A node that cannot answer, or that reports no network, does not fail a sync with a named network. Name the network when your program reads it from its configuration. The sync then refuses a node URL of another network.
 
-A node that cannot answer does not fail the sync: the sync continues without a fresh pin and keeps a stored snapshot's pin. When the node is down, each question waits for the provider's connect timeout first.
+The pin is the chain-reset guard, and every sync takes one by default. A snapshot's cursors are counts, so a snapshot from a replaced chain resumes cleanly and reports the dead chain's balance. To catch this, the sync checks a stored snapshot's pin against the chain before it replays. A replaced chain fails the sync with `WalletError::ChainMismatch`. The sync also gives the wallet a fresh pin, which every later resync checks again.
 
-`.unpinned()` is the opt-out: the sync then asks the node nothing, so it skips the network check and the pin. It still keeps a stored snapshot's pin, and every later resync checks that pin.
+A node that cannot answer for the pin does not fail the sync. The sync continues without a fresh pin, and keeps a stored snapshot's pin. When the node is down, each question waits for the provider's connect timeout first.
+
+`.unpinned()` is the opt-out: it skips the network check and the pin. With a named network, the sync then asks the node nothing. With no network named, the sync still asks the node for its network, and nothing else. The sync still keeps a stored snapshot's pin, and every later resync checks that pin.
 
 Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. Only a non-retryable error or exhausting the retry bound fails the sync (`IndexerError::is_retryable` decides which errors are retryable).
 
-For long syncs where you want UI updates, switch the builder's terminal step from `.await` to `.stream()`:
+For a long sync with UI updates, end the builder with `.sync_with_progress(&provider)` in place of `.sync(&provider)`:
 
 ```rust
-use midnight_wallet::SyncProgress;
+use midnight_core::SyncProgress;
 
-let (mut rx, handle) = Wallet::sync(&provider, seed, Network::Preprod)
+let (mut rx, handle) = Wallet::from_mnemonic(phrase)?
     .with_storage(storage_dir)
-    .stream()
+    .sync_with_progress(&provider)
     .await?;
 
 while let Some(progress) = rx.recv().await {
@@ -142,12 +191,12 @@ while let Some(progress) = rx.recv().await {
 }
 
 let wallet = handle.await?;
-let provider = provider.with_wallet(LocalWallet::new(wallet));
+let provider = provider.with_wallet(wallet);
 ```
 
-`.await` runs the sync in the current task; `.stream()` spawns it in a background task and gives you progress events plus a [`SyncHandle`] that resolves to the synced `Wallet`.
+`.sync(&provider)` runs the sync in the current task. `.sync_with_progress(&provider)` does the network check and the pin work first, so it can refuse a sync as `.sync(&provider)` does. Then it spawns the sync in a background task, and gives you progress events and a `SyncHandle` that resolves to the synced `Wallet`.
 
-The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally; if you want a sync without progress events, use the plain `.await` path.
+The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally. For a sync without progress events, use `.sync(&provider)`.
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. For a fresh read, call `resync_wallet()` before it, for example on a timer in a UI. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
 
@@ -169,16 +218,18 @@ What sync does enforce is the shape of the data: event ids must not go backwards
 
 ### Persistence
 
-When `storage_dir` is `Some`, sync writes to:
+With `.with_storage(dir)`, the sync writes to:
 
 ```
-{storage_dir}/{network}/{sha256(unshielded_address)}/
+{dir}/{network}/{sha256(unshielded_address)}/
   ├── metadata.json     event cursors, last block, last tx id, generation pointers,
   │                     and the ledger generation that wrote the state files
   ├── zswap-N.bin       tagged-serialized ZswapLocalState
   ├── dust_wallet-N.bin tagged-serialized DustWallet
   └── pending.json      in-flight spend reservations (see below)
 ```
+
+`{network}` is the network that `.with_network(..)` names or, without `.with_network(..)`, the node's network.
 
 Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the old generation is cleaned up. A crash mid-write leaves the previous generation intact.
 
@@ -198,7 +249,7 @@ balance.dust.spendable_utxos;    // usize
 balance.dust.balance_speck;      // u128  (1 DUST = 10^15 SPECK)
 ```
 
-`token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_provider::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT — see [`tokens.md`](tokens.md) for the two-ledger model.
+`token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_core::wallet::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT. See [`tokens.md`](tokens.md) for the two-ledger model.
 
 For the rest of what the wallet holds:
 
@@ -230,10 +281,10 @@ See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation r
 
 ## Transfers
 
-Two flavors, same shape — each method returns a builder; `.await?` builds and submits in one step:
+Two flavors, same shape. Each method returns a builder, and `.await?` builds and submits in one step:
 
 ```rust
-use midnight_wallet::NIGHT;
+use midnight_core::wallet::NIGHT;
 
 let pending = provider
     .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
@@ -295,7 +346,7 @@ A shielded coin reaches its owner through the discovery ciphertext on its output
 Hand the rebuilt coin to `watch_for_coin` and the wallet claims it from the chain's own output, decrypting nothing:
 
 ```rust
-use midnight_provider::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
+use midnight_core::provider::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
 
 provider
     .watch_for_coin(CoinInfo {
@@ -315,11 +366,11 @@ Every coin the wallet already holds is re-registered before that replay, so a re
 
 That full replay costs more than a resync, so register every coin you know about in one `watch_for_coins([...])` call, and treat this as a recovery step rather than a routine one. Registrations are persisted with the rest of the wallet state, so one made for a coin that has not landed yet survives a restart, and a resync that lands in the middle of one carries it rather than dropping it.
 
-To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. A coin the replay did not claim is still listed by `wallet.watched_coins()` (ordered by nonce, then token type, then value): either it is not on chain yet, or the rebuilt `CoinInfo` is not the coin the on-chain output commits to. A wrong one never matches anything, so drop it with `provider.forget_coin(coin)`, or it rides along on every later replay. Forgetting drops the registration only; a coin the wallet already claimed stays spendable.
+To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. If the coin does not appear there, it is not on chain yet, or its rebuilt `CoinInfo` is wrong. A wrong registration never matches an output, and every later replay carries it. Drop it with `provider.forget_coin(coin)`. Forgetting drops the registration only, and a coin that the wallet already claimed stays spendable.
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). Both provider methods serialize against resyncs internally.
+Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). Both provider methods serialize against resyncs internally. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
 
 ## Pending reservations
 
@@ -330,19 +381,23 @@ In-flight spends that have been built but not yet confirmed on-chain are tracked
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
-You don't normally interact with this directly — `transfer_*` and `register_dust` reserve and the sync loop clears.
+You don't normally interact with this directly: `transfer_*` and `register_dust` reserve, and the sync loop clears.
 
 ## Lifecycle summary
 
 ```
 MidnightProvider::new(node_url, indexer_url)
   ↓
-Wallet::sync(&provider, seed, network)[.with_storage(dir)][.unpinned()]
+Wallet::from_seed(hex)? | Wallet::from_mnemonic(phrase)? | WalletBuilder::new(seed)
+  [.with_network(network)][.with_storage(dir)][.unpinned()]
+  ↓
+.sync(&provider).await  or  .sync_with_progress(&provider).await → (progress, handle)
+  │ take the node's network when no network is named
   │ check the node's network and the stored pin, and take the pin this sync carries (not when unpinned)
   │ subscribe zswap + unshielded + dust  (parallel)
   │ persist (metadata + binary state + pending)
   ↓
-provider.with_wallet(LocalWallet::new(wallet))
+provider.with_wallet(wallet)
   ↓
   provider.balance()                     read-only
   provider.parameters() / .sync_cursors() / .unshielded_utxos()
@@ -361,4 +416,4 @@ provider.with_wallet(LocalWallet::new(wallet))
 
 ## Examples
 
-- [`examples/wallet-sync`](../examples/wallet-sync) — end-to-end sync, balance display, optional dust registration, optional unshielded self-transfer. Runs against preprod (with faucet funding) or a local devnet.
+- [`examples/wallet-sync`](../examples/wallet-sync): end-to-end sync, balance display, optional dust registration, optional unshielded self-transfer. Runs against preprod (with faucet funding) or a local devnet.

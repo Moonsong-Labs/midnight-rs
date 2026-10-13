@@ -5,12 +5,12 @@
 //! then gets its own traits, not a second impl of the same `From`.
 
 use super::helpers;
-use helpers::{DefaultDB, Deserializable, Serializable};
+use helpers::{Deserializable, Serializable};
 
+use crate::hd::{Seed, SeedBytes};
 use crate::{
     ChainParameters, CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustParameters,
-    EncryptionPublicKey, Nonce, Nullifier, ShieldedRecipient, ShieldedTokenType,
-    UnshieldedTokenType, WalletSeed,
+    EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, UnshieldedTokenType,
 };
 
 /// An SDK value that has a counterpart in this generation.
@@ -118,12 +118,27 @@ impl IntoSdk for helpers::DustNullifier {
     }
 }
 
-impl IntoLedger for &WalletSeed {
+impl IntoLedger for &Seed {
     type Ledger = helpers::WalletSeed;
     fn into_ledger(self) -> Self::Ledger {
-        helpers::WalletSeed::try_from(self.as_bytes())
-            .expect("every generation takes the seed lengths the SDK's seed holds")
+        match &self.0 {
+            SeedBytes::Short(bytes) => helpers::WalletSeed::Short(*bytes),
+            SeedBytes::Medium(bytes) => helpers::WalletSeed::Medium(*bytes),
+            SeedBytes::Long(bytes) => helpers::WalletSeed::Long(*bytes),
+        }
     }
+}
+
+/// The SDK seed that holds the bytes of `seed`.
+///
+/// A crate-private function, not an `IntoSdk` impl: the `IntoLedger` impl for
+/// `&Seed` is the only public item that names the upstream seed.
+pub(crate) fn sdk_seed(seed: &helpers::WalletSeed) -> Seed {
+    Seed(match seed {
+        helpers::WalletSeed::Short(bytes) => SeedBytes::Short(*bytes),
+        helpers::WalletSeed::Medium(bytes) => SeedBytes::Medium(*bytes),
+        helpers::WalletSeed::Long(bytes) => SeedBytes::Long(*bytes),
+    })
 }
 
 impl IntoSdk for &helpers::LedgerParameters {
@@ -136,16 +151,6 @@ impl IntoSdk for &helpers::LedgerParameters {
                 dust_grace_period: self.dust.dust_grace_period,
             },
             global_ttl: self.global_ttl,
-        }
-    }
-}
-
-impl IntoSdk for &helpers::ShieldedWallet<DefaultDB> {
-    type Sdk = ShieldedRecipient;
-    fn into_sdk(self) -> Self::Sdk {
-        ShieldedRecipient {
-            coin_public_key: self.coin_public_key.into_sdk(),
-            enc_public_key: self.enc_public_key.into_sdk(),
         }
     }
 }

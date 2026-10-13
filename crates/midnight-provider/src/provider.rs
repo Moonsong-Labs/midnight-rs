@@ -21,7 +21,7 @@ use midnight_types::{
     ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
     TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
 };
-use midnight_wallet_facade::WalletFacade;
+use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -84,14 +84,14 @@ impl MidnightProvider {
     /// [`Self::with_wallet`]. With the local implementation from
     /// `midnight-wallet`:
     /// ```rust,no_run
-    /// # use midnight_provider::{MidnightProvider, Network, WalletSeed};
-    /// # use midnight_wallet::{LocalWallet, Wallet};
-    /// # async fn f(seed: WalletSeed) -> anyhow::Result<()> {
+    /// # use midnight_provider::MidnightProvider;
+    /// # use midnight_wallet::Wallet;
+    /// # async fn f(phrase: &str) -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
     /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
-    /// let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
-    /// let provider = provider.with_wallet(LocalWallet::new(wallet));
+    /// let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider).await?;
+    /// let provider = provider.with_wallet(wallet);
     /// # Ok(())
     /// # }
     /// ```
@@ -196,23 +196,36 @@ impl MidnightProvider {
     /// Attach a wallet, and become the single entry point for its resync and
     /// transaction-context construction.
     ///
-    /// A synced `Wallet` this process owns goes in as
-    /// `LocalWallet::new(wallet)`. Anything else that implements
-    /// [`WalletFacade`], [`ledger_8::WalletBuilds`] and
-    /// [`ledger_9::WalletBuilds`] goes in as itself.
+    /// A synced `Wallet` from `midnight-wallet` goes in behind a `LocalWallet`.
+    /// Anything else that implements [`WalletFacade`],
+    /// [`ledger_8::WalletBuilds`] and [`ledger_9::WalletBuilds`] goes in as
+    /// itself. To keep a handle on the attached wallet, attach an
+    /// `Arc<LocalWallet>`, or an `Arc` of your own wallet:
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use midnight_provider::MidnightProvider;
+    /// use midnight_wallet::{LocalWallet, Wallet, WalletFacade};
+    ///
+    /// # async fn example(provider: MidnightProvider, phrase: &str) -> Result<(), Box<dyn std::error::Error>> {
+    /// let wallet = Arc::new(LocalWallet::new(Wallet::from_mnemonic(phrase)?.sync(&provider).await?));
+    /// let provider = provider.with_wallet(Arc::clone(&wallet));
+    /// let balance = wallet.balance().await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The handle is for reads. Run resyncs, rescans, coin watches, forgets
+    /// and builds through the provider. It serializes resyncs, rescans, coin
+    /// watches and forgets on the mutex of [`Self::resync_wallet`].
     ///
     /// The provider runs no sync task of its own. Every read of the wallet,
     /// such as [`Self::balance`], returns the state of the last sync or
     /// resync and does not resync. [`Self::builds`], and so every build,
     /// resyncs first. For a fresh read, call [`Self::resync_wallet`] before
     /// it, for example on a timer in a UI.
-    pub fn with_wallet<W>(mut self, wallet: W) -> Self
-    where
-        W: midnight_wallet_facade::ledger_8::WalletBuilds
-            + midnight_wallet_facade::ledger_9::WalletBuilds
-            + 'static,
-    {
-        let wallet = Arc::new(wallet);
+    pub fn with_wallet(mut self, wallet: impl IntoWalletFacade) -> Self {
+        let wallet = Arc::new(wallet.into_facade());
         self.builds = Some(WalletBuildsOf {
             ledger_8: wallet.clone(),
             ledger_9: wallet.clone(),
@@ -423,10 +436,9 @@ impl MidnightProvider {
     /// about in one call rather than calling this per coin, and treat it as a
     /// recovery step, not a routine one. Coins already recovered keep their
     /// place: each replay re-registers what the wallet holds. To check the
-    /// outcome, look for the coin in
-    /// [`Self::spendable_shielded_coins`]; a coin the replay did not claim is
-    /// still listed by `Wallet::watched_coins`, and `Wallet::forget_coin`
-    /// drops it if the rebuilt coin was wrong.
+    /// outcome, look for the coin in [`Self::spendable_shielded_coins`]. If
+    /// the rebuilt coin was wrong, drop the registration with
+    /// [`Self::forget_coin`].
     ///
     /// The registration is recorded (and persisted) before the replay starts,
     /// so a replay that fails leaves it in place: retry with
@@ -462,9 +474,8 @@ impl MidnightProvider {
     /// turned out to be wrong.
     ///
     /// A registration whose rebuilt `CoinInfo` matches no on-chain output
-    /// stays in `Wallet::watched_coins` and rides along on every later
-    /// replay; this is how a caller removes one. A coin the wallet already
-    /// claimed is untouched, and no replay runs.
+    /// rides along on every later replay. This removes one. A coin the wallet
+    /// already claimed is untouched, and no replay runs.
     pub async fn forget_coin(&self, coin: CoinInfo) -> Result<(), ProviderError> {
         self.forget_coins([coin]).await
     }
@@ -805,10 +816,10 @@ impl MidnightProvider {
         let ledger = transaction_ledger_version(tx_bytes)?;
         match self.builds().await? {
             Builds::Ledger8(builds) if ledger == LedgerVersion::V8 => {
-                Box::pin(builds.balance_transaction(tx_bytes)).await
+                builds.balance_transaction(tx_bytes).await
             }
             Builds::Ledger9(builds) if ledger == LedgerVersion::V9 => {
-                Box::pin(builds.balance_transaction(tx_bytes)).await
+                builds.balance_transaction(tx_bytes).await
             }
             builds => Err(midnight_types::WalletError::LedgerMismatch {
                 expected: builds.ledger_version(),
@@ -1226,14 +1237,16 @@ impl MidnightProvider {
     /// default) compares this network with the one it syncs as, and fails
     /// with
     /// [`WalletError::NetworkMismatch`](midnight_types::WalletError::NetworkMismatch)
-    /// when they differ. `WalletSyncBuilder::unpinned` in `midnight-wallet`
-    /// skips the check, and an error or an `Ok(None)` here does not fail the
-    /// sync.
+    /// when they differ. A sync with no network takes this one. It fails when
+    /// there is none, or when the name fails [`Network::is_valid_name`]. An
+    /// error or an `Ok(None)` here does not fail a sync that names its
+    /// network.
     ///
     /// It needs no wallet and runs no resync. Returns `Ok(None)` when the
     /// runtime reports an empty id, which a node with no network id set does.
-    /// Errors when the node cannot be reached, or when its metadata describes
-    /// no such API or another return type.
+    /// Any other id comes back as the node reports it. Errors when the node
+    /// cannot be reached, or when its metadata describes no such API or
+    /// another return type.
     pub async fn ledger_network_id(&self) -> Result<Option<Network>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
@@ -1427,10 +1440,12 @@ fn transaction_ledger_version(tx_bytes: &[u8]) -> Result<LedgerVersion, Provider
 ///
 /// The reservation is recorded before proving, so anything that ends a build
 /// early has to hand the inputs back or they stay unusable until their TTL
-/// elapses. An error path can await the release itself; a caller that drops
-/// the build future (a `timeout`, a `select!`, an aborted task) gives it no
-/// chance to, and `Drop` cannot await, so that case hands the release to the
-/// runtime. Call [`Self::keep`] on any path that deals with the inputs itself.
+/// elapses. Run the rest of the build through [`Self::keep_on_ok`], which
+/// keeps the reservation when the build succeeds and awaits the release when
+/// it fails. A caller can drop the build future (a `timeout`, a `select!`, an
+/// aborted task) before the release runs. `Drop` cannot await, so under a
+/// Tokio runtime it hands the release to the runtime. With no runtime, the
+/// inputs wait for their TTL.
 pub struct HeldInputs {
     wallet: Option<Arc<dyn WalletFacade>>,
     spent: SpentInputs,
@@ -1441,15 +1456,66 @@ impl HeldInputs {
         Self { wallet, spent }
     }
 
-    /// What the build reserved.
-    pub(crate) fn spent(&self) -> &SpentInputs {
-        &self.spent
+    /// Run `work` and keep the inputs reserved only if it succeeds.
+    ///
+    /// `work` is the rest of the build. On `Ok` the build can reach the chain,
+    /// so the reservation stands. On `Err` the release completes before the
+    /// error returns, so a caller that observes the error also observes the
+    /// inputs back.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of `work`, after the inputs go back to the wallet.
+    ///
+    /// # Cancellation
+    ///
+    /// Under a Tokio runtime, dropping the returned future while `work` runs
+    /// releases the inputs in the background, as dropping `self` does. A
+    /// release that has started runs to its end, even when the returned
+    /// future is dropped during it.
+    ///
+    /// With no Tokio runtime, a drop releases nothing, and the release on
+    /// `Err` runs inline. Inputs that a drop leaves reserved stay unusable
+    /// until their TTL elapses.
+    pub fn keep_on_ok<T, E>(
+        mut self,
+        work: impl Future<Output = Result<T, E>>,
+    ) -> impl Future<Output = Result<T, E>> {
+        // Boxed before the returned future exists: an `async fn` stores its
+        // arguments, so a caller's future would carry the whole build inline.
+        let work = Box::pin(work);
+        async move {
+            let result = work.await;
+            // Disarm `Drop` on both paths: `Ok` keeps the reservation, and
+            // `Err` releases it here.
+            let wallet = self.wallet.take();
+            let spent = std::mem::take(&mut self.spent);
+            if result.is_err()
+                && !spent.is_empty()
+                && let Some(wallet) = wallet
+            {
+                // Spawned so that dropping this future cannot cut the release
+                // short, and awaited so the caller observes the inputs back.
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => {
+                        let _ = handle
+                            .spawn(async move { wallet.release(&spent).await })
+                            .await;
+                    }
+                    Err(_) => wallet.release(&spent).await,
+                }
+            }
+            result
+        }
     }
+}
 
-    /// Stop this from releasing anything, because the build reached the
-    /// chain and the reservation must stand.
-    pub fn keep(&mut self) {
-        self.wallet = None;
+impl std::fmt::Debug for HeldInputs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeldInputs")
+            .field("spent", &self.spent)
+            .field("armed", &self.wallet.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -1462,9 +1528,8 @@ impl Drop for HeldInputs {
         if spent.is_empty() {
             return;
         }
-        // No runtime means the process is going down, which frees the
-        // in-memory reservation anyway; the persisted one is rebuilt on the
-        // next sync.
+        // With no runtime, nothing can run the release, so the inputs wait
+        // for their TTL.
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move { wallet.release(&spent).await });
         }
@@ -1498,7 +1563,7 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
         match self.ledger_network_id().await {
             Ok(network) => network,
             Err(e) => {
-                warn!(error = %e, "node network unknown; skipping the network check");
+                warn!(error = %e, "could not read the node's network");
                 None
             }
         }

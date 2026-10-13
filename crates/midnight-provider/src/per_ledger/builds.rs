@@ -1,9 +1,10 @@
 //! The attached wallet's builds on this generation, with this generation's
 //! prover.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use midnight_types::{SpendableShieldedCoin, TransferRequest, TransferResult};
+use midnight_types::{SpendableShieldedCoin, TransferRequest, TransferResult, WalletError};
 
 use super::facade::{ReservedBuild, WalletBuilds};
 use super::helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
@@ -111,10 +112,18 @@ impl<'a> Builds<'a> {
     /// The wallet performs the spends, so what comes back carries no key
     /// material and the builder never sees a seed. `context` must be the one
     /// the caller is building against: the spends roll its wallet state
-    /// forward, which is what stops a coin being spent twice in one offer.
+    /// forward.
     ///
     /// Each coin is named by a nullifier the wallet already knows, so this
     /// selects nothing; the caller decides what to spend.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Wallet`] with [`WalletError::DuplicateInput`] when
+    /// `coins` names a coin twice. The provider checks this before it asks
+    /// the wallet, so a custom wallet that breaks the
+    /// [`WalletBuilds::spend_shielded`] contract cannot spend a coin twice.
+    /// Any other error comes from the wallet's spend.
     pub async fn prepare_shielded_inputs(
         &self,
         context: &Arc<BuildContext>,
@@ -122,6 +131,13 @@ impl<'a> Builds<'a> {
         rng: &mut StdRng,
     ) -> Result<(Vec<PreparedInput>, HeldInputs), ProviderError> {
         let nullifiers: Vec<_> = coins.iter().map(|c| c.nullifier).collect();
+        let mut named = HashSet::with_capacity(nullifiers.len());
+        if let Some(repeated) = nullifiers.iter().find(|n| !named.insert(**n)) {
+            return Err(WalletError::DuplicateInput {
+                input: format!("shielded coin {repeated:?}"),
+            }
+            .into());
+        }
         let (prepared, spent) = self.wallet.spend_shielded(context, nullifiers, rng).await?;
         Ok((prepared, HeldInputs::of(spent, self.provider.facade())))
     }
@@ -129,6 +145,12 @@ impl<'a> Builds<'a> {
     /// Pay the fees for an external party's proven, fee-less transaction from
     /// the attached wallet. See [`MidnightProvider::balance_transaction`].
     pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+        // Boxed so a caller's future stays small. See the frame-size note on
+        // `MidnightProvider::resync_wallet`.
+        Box::pin(self.balance_transaction_inner(tx_bytes)).await
+    }
+
+    async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
         let external: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &tx_bytes[..])
             .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))?;
 
@@ -187,21 +209,8 @@ impl<'a> Builds<'a> {
         reserved: ReservedBuild,
     ) -> Result<TransferResult, ProviderError> {
         let prepared = reserved.into_prepared();
-        let mut held = HeldInputs::of(prepared.spent_inputs(), self.provider.facade());
-
-        match prepared.prove().await {
-            Ok(result) => {
-                held.keep();
-                Ok(result)
-            }
-            Err(err) => {
-                // Release here rather than leaving it to `held`, so a caller
-                // that observes the error also observes the inputs back.
-                held.keep();
-                self.wallet.release(held.spent()).await;
-                Err(err.into())
-            }
-        }
+        let held = HeldInputs::of(prepared.spent_inputs(), self.provider.facade());
+        held.keep_on_ok(prepared.prove()).await.map_err(Into::into)
     }
 }
 

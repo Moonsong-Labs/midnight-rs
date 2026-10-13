@@ -13,7 +13,7 @@ use compact_bindgen::{
 };
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::{Seed, Wallet, WalletBuilder};
 
 #[tokio::test]
 async fn mint_to_external_recipient_discovered_by_sync() {
@@ -51,37 +51,23 @@ async fn mint_to_external_recipient_discovered_by_sync() {
 
     // --- Recipient (cpk, epk) from a second seed (derived, never synced for
     //     the mint itself) ---
-    let recip_seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000002",
-    )
-    .unwrap();
-    let recip_addr = midnight_types::address::derive_shielded(
-        &recip_seed,
-        midnight_provider::Network::Undeployed,
-    );
-    let recip = midnight_types::address::parse_shielded_recipient(
-        &recip_addr,
-        midnight_provider::Network::Undeployed,
-    )
-    .expect("parse recipient address");
+    let recip_seed =
+        Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000002").unwrap();
+    let recip = recip_seed.shielded_recipient();
     let cpk = recip.coin_public_key;
     let epk = recip.enc_public_key;
     let cpk_bytes = cpk.0.0;
 
     // --- Funder wallet deploys the mint contract ---
-    let funder_seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(
-        &provider,
-        funder_seed,
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("funder sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let wallet =
+        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
+            .unwrap()
+            .with_network(midnight_provider::Network::Undeployed)
+            .sync(&provider)
+            .await
+            .expect("funder sync");
+    let provider = provider.with_wallet(wallet);
 
     // A mint-only contract has no user ledger fields: an empty array.
     let initial = ContractState::new(
@@ -153,14 +139,12 @@ async fn mint_to_external_recipient_discovered_by_sync() {
 
     // --- Recipient syncs normally and must discover the minted coin ---
     let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(
-        &recip_provider,
-        recip_seed,
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("recipient sync");
-    let recip_provider = recip_provider.with_wallet(LocalWallet::new(wallet));
+    let wallet = WalletBuilder::new(&recip_seed)
+        .with_network(midnight_provider::Network::Undeployed)
+        .sync(&recip_provider)
+        .await
+        .expect("recipient sync");
+    let recip_provider = recip_provider.with_wallet(wallet);
 
     // The call above returns once the chain finalized the mint, which is
     // before the indexer has served its zswap event. A sync ends at the

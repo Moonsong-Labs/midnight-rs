@@ -32,18 +32,19 @@ The Quick start runs against a local devnet (node and indexer) in Docker. Run `m
 
 ```rust
 use midnight_core::provider::{NIGHT, STARS_PER_NIGHT};
-use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
+use midnight_core::{MidnightProvider, Network, Seed, Wallet};
 
 const NODE_URL: &str = "ws://localhost:9944";
 const INDEXER_URL: &str = "http://localhost:8088";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // The dev seed, funded at genesis on the local devnet.
-    let seed = Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000001")?;
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
-    let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    // The dev seed, funded at genesis on the local devnet.
+    let wallet = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?
+        .sync(&provider)
+        .await?;
+    let provider = provider.with_wallet(wallet);
 
     let balance = provider.balance().await?;
     for utxo in &balance.unshielded {

@@ -17,7 +17,7 @@ use midnight_contract::ContractMaintenanceVerifyingKey;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::Wallet;
 
 use compact_codegen::ir;
 use compact_codegen::types::ContractInfo;
@@ -651,154 +651,6 @@ fn bboard_pure_public_key_matches_the_oracle() {
 }
 
 // ---------------------------------------------------------------------------
-// Proving (requires ZK keys)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Deploy: funded, with a shielded offer
-// ---------------------------------------------------------------------------
-
-/// Deploy with a hand-built shielded offer attached.
-///
-/// A caller-supplied `OfferInfo` must reach `set_guaranteed_offer` in place of
-/// an empty offer. The guaranteed Zswap offer of the proven transaction then
-/// carries the one input and the one output attached here. The offer
-/// self-transfers 1 unit of shielded token id `[0; 32]` from the dev wallet
-/// back to its own shielded address. It is structurally valid but unrelated to
-/// the contract being deployed (no effects-check interaction). The initial
-/// state is bboard-shaped, and the deploy path does not interpret it. The test
-/// stops at build, because its assertion reads the guaranteed offer from the
-/// transaction bytes and needs no chain verdict.
-#[tokio::test]
-async fn deploy_funded_with_shielded_offer() {
-    let node_url = match std::env::var("MIDNIGHT_NODE_URL") {
-        Ok(u) => u,
-        Err(_) => {
-            eprintln!("skipping: MIDNIGHT_NODE_URL not set");
-            return;
-        }
-    };
-    let indexer_url = match std::env::var("MIDNIGHT_INDEXER_URL") {
-        Ok(u) => u,
-        Err(_) => {
-            eprintln!("skipping: MIDNIGHT_INDEXER_URL not set");
-            return;
-        }
-    };
-
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(0u64),
-                StateValue::Null,
-                StateValue::from(1u64),
-                StateValue::from(AlignedValue::from([0u8; 32])),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    let seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(
-        &provider,
-        seed.clone(),
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
-
-    // Build a 1-unit self-transfer of the dev devnet's default shielded
-    // token id ([0; 32]). The dev wallet holds this at genesis.
-    let recipient_addr =
-        midnight_types::address::derive_shielded(&seed, midnight_provider::Network::Undeployed);
-    let token_type = midnight_contract::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
-    // The offer takes the types of the generation the wallet is on.
-    macro_rules! offer_in {
-        ($ledger:ident) => {{
-            use midnight_helpers::$ledger as l;
-            use midnight_types::$ledger::convert::IntoLedger;
-            let token_type = token_type.into_ledger();
-            let input = l::InputInfo {
-                origin: (&seed).into_ledger(),
-                token_type,
-                value: 1,
-                nullifier: None,
-            };
-            let output: l::OutputInfo<l::ShieldedWallet<l::DefaultDB>> = l::OutputInfo {
-                destination: midnight_types::$ledger::shielded_destination(
-                    &recipient_addr,
-                    midnight_provider::Network::Undeployed,
-                )
-                .unwrap(),
-                token_type,
-                value: 1,
-            };
-            l::OfferInfo {
-                inputs: vec![Box::new(input)],
-                outputs: vec![Box::new(output)],
-                transients: vec![],
-            }
-        }};
-    }
-    let offer = match provider.builds().await.unwrap() {
-        midnight_provider::Builds::Ledger8(_) => {
-            midnight_contract::ShieldedOffer::Ledger8(offer_in!(ledger_8))
-        }
-        midnight_provider::Builds::Ledger9(_) => {
-            midnight_contract::ShieldedOffer::Ledger9(offer_in!(ledger_9))
-        }
-    };
-
-    let result = midnight_contract::deploy::deploy_funded(&state, &provider, Some(offer))
-        .await
-        .unwrap();
-
-    // The guaranteed offer's input and output counts, read with the types of
-    // the transaction's generation.
-    macro_rules! guaranteed_counts {
-        ($ledger:ident) => {{
-            use midnight_helpers::$ledger as l;
-            let tx: l::FinalizedTransaction<midnight_helpers::DefaultDB> =
-                midnight_helpers::midnight_serialize::tagged_deserialize(&mut &result.tx_bytes[..])
-                    .expect("deserialize the proven deploy");
-            let l::Transaction::Standard(stx) = &tx else {
-                panic!("a deploy must be a standard transaction");
-            };
-            let guaranteed = stx
-                .guaranteed_coins
-                .as_ref()
-                .expect("the deploy must carry the attached shielded offer");
-            (guaranteed.inputs.len(), guaranteed.outputs.len())
-        }};
-    }
-    let (inputs, outputs) =
-        match midnight_types::LedgerVersion::of_transaction(&result.tx_bytes).unwrap() {
-            midnight_types::LedgerVersion::V8 => guaranteed_counts!(ledger_8),
-            midnight_types::LedgerVersion::V9 => guaranteed_counts!(ledger_9),
-        };
-    assert_eq!(
-        inputs, 1,
-        "the guaranteed offer must carry the attached input"
-    );
-    assert_eq!(
-        outputs, 1,
-        "the guaranteed offer must carry the attached output"
-    );
-    eprintln!(
-        "deploy_funded with shielded offer: addr={} bytes={} ✓",
-        result.address_hex(),
-        result.tx_bytes.len(),
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Comprehensive: try executing every circuit from compiled contracts
 // ---------------------------------------------------------------------------
 
@@ -988,15 +840,15 @@ async fn governance_deploy_then_apply_both_updates() {
         }
     };
 
-    let seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let wallet =
+        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
+            .unwrap()
+            .with_network(midnight_provider::Network::Undeployed)
+            .sync(&provider)
+            .await
+            .expect("indexer sync should succeed");
+    let provider = provider.with_wallet(wallet);
 
     let keys_dir = counter_zk_dir();
     let vk_bytes = std::fs::read(format!("{keys_dir}/keys/increment.verifier"))

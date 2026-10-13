@@ -1,10 +1,8 @@
 # Wallet Sync Example
 
-Connects to any Midnight network, syncs the wallet's three legs (zswap shielded coins,
-unshielded UTXOs, Dust) with progress reporting, prints addresses + balances + Dust
-parameters, and optionally registers Dust or submits an unshielded self-transfer.
+The example connects to any Midnight network. It syncs the wallet's three legs (zswap shielded coins, unshielded UTXOs, Dust) with progress reporting. It prints the addresses, the balances and the Dust parameters. As an option, it registers Dust or submits an unshielded self-transfer.
 
-Uses a hard-coded seed so addresses stay stable across runs — do **not** reuse it.
+The example uses a hard-coded seed, so its addresses stay the same across runs. Do **not** reuse it.
 
 ## Setup
 
@@ -16,7 +14,7 @@ export MIDNIGHT_NODE_URL="wss://rpc.preprod.midnight.network"
 export MIDNIGHT_INDEXER_URL="https://indexer.preprod.midnight.network"
 export MIDNIGHT_NETWORK="preprod"   # defaults to preprod if unset
 
-# OR — local devnet: `docker compose -f devnet/docker-compose.yml up -d` from the repo root.
+# OR a local devnet: run `make dev-up` from the repo root.
 # Override the seed to point at the dev preset's prefunded wallet (`0000…0001`)
 # so the balance + dust output is non-empty.
 export MIDNIGHT_NODE_URL="ws://127.0.0.1:9944"
@@ -27,7 +25,7 @@ export MIDNIGHT_WALLET_SEED="000000000000000000000000000000000000000000000000000
 
 The example's default seed targets preprod. Set `MIDNIGHT_WALLET_SEED` to any format `Seed`'s `FromStr` accepts:
 
-- 32- or 64-byte hex (e.g. the devnet prefunded seed above)
+- 16-, 32- or 64-byte hex (e.g. the devnet prefunded seed above)
 - A BIP-39 mnemonic phrase (12/15/18/21/24 words), derived via the standard `Mnemonic::to_seed("")`. For a 25th-word passphrase, switch the example to call `Seed::from_mnemonic_with_passphrase(...)` directly.
 
 For preprod, fund the example's unshielded address via [the preprod faucet](https://faucet.preprod.midnight.network/):
@@ -46,18 +44,18 @@ cargo run --release -p example-wallet-sync
 REGISTER_DUST=1 cargo run --release -p example-wallet-sync
 
 # + unshielded self-transfer of N STAR (atomic NIGHT units).
-# Requires Dust sync to have finished — fees come from real Dust UTXOs.
+# Requires a finished Dust sync: the fees come from real Dust UTXOs.
 TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 ```
 
 ## What it covers
 
-- `Wallet::sync(&provider, ..).stream()`: streamed `SyncProgress` events, then `with_wallet` to attach. The sync checks a persisted snapshot's chain pin by default.
-- `provider.balance()` — three asset legs (shielded coins, unshielded UTXOs, Dust)
-- `provider.parameters()` / `provider.sync_cursors()` — ledger parameters and sync counters
+- `WalletBuilder::new(&seed).with_network(&network).sync_with_progress(&provider)`: streamed `SyncProgress` events, then `with_wallet` to attach. The sync checks a persisted snapshot's chain pin by default.
+- `provider.balance()`: the three asset legs (shielded coins, unshielded UTXOs, Dust)
+- `provider.parameters()` / `provider.sync_cursors()`: the ledger parameters and the sync counters
 - `provider.register_dust(None)`: registers one tNIGHT UTXO for Dust generation
-- `provider.transfer_unshielded(NIGHT, amount, recipient)` — self-transfer
-- `provider.submit(tx_bytes)` + `PendingTx::wait_best` — submission lifecycle
+- `provider.transfer_unshielded(NIGHT, amount, &recipient)`: an unshielded self-transfer
+- `PendingTx::extrinsic_hash_hex` and `PendingTx::wait_best`: the submission lifecycle
 
 For the API reference, see [`docs/wallet.md`](../../docs/wallet.md).
 

@@ -1,4 +1,4 @@
-//! Wallet sync example — connect to any Midnight network, display balances, and
+//! Wallet sync example: connect to any Midnight network, display balances, and
 //! optionally register Dust or submit a self-transfer. See README.md for usage.
 
 use std::env;
@@ -6,12 +6,12 @@ use std::env;
 use anyhow::{Context, bail};
 use midnight_core::provider::SPECKS_PER_DUST;
 use midnight_core::wallet::NIGHT;
-use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, SyncProgress, Wallet};
+use midnight_core::{MidnightProvider, Network, Seed, SyncProgress, Wallet, WalletBuilder};
 use tracing_subscriber::EnvFilter;
 
 // Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`
-// to point at a different wallet — e.g. the local dev devnet's prefunded seed
-// (`0000…0001`) to see non-empty balances and dust generation.
+// to point at a different wallet. For example, use the local dev devnet's
+// prefunded seed (`0000…0001`) to see non-empty balances and dust generation.
 //
 // `MIDNIGHT_WALLET_SEED` is parsed through `Seed`'s `FromStr` impl, which
 // accepts a 16/32/64-byte hex string or a BIP-39 mnemonic phrase (12/15/18/21/24
@@ -45,8 +45,6 @@ async fn main() -> anyhow::Result<()> {
         .into();
 
     let seed_input = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
-    // `Seed::FromStr` tries hex first, then BIP-39 mnemonic — drop in whichever
-    // format you have. For mnemonic + passphrase use `Seed::from_mnemonic_with_passphrase`.
     let seed: Seed = seed_input.parse()?;
 
     println!("=== Midnight Wallet Sync ===\n");
@@ -64,11 +62,11 @@ async fn main() -> anyhow::Result<()> {
     println!("Syncing wallet state from indexer (zswap + unshielded + dust in parallel)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let mut sync = Wallet::sync(&provider, seed.clone(), &network);
+    let mut builder = WalletBuilder::new(&seed).with_network(&network);
     if let Some(dir) = storage_dir.as_ref() {
-        sync = sync.with_storage(dir);
+        builder = builder.with_storage(dir);
     }
-    let (mut rx, handle) = sync.stream().await?;
+    let (mut rx, handle) = builder.sync_with_progress(&provider).await?;
 
     while let Some(progress) = rx.recv().await {
         match progress {
@@ -106,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let provider = provider.with_wallet(LocalWallet::new(handle.await?));
+    let provider = provider.with_wallet(handle.await?);
     println!("\nSync complete.\n");
 
     let balance = provider.balance().await?;

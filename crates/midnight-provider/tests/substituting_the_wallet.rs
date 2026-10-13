@@ -4,7 +4,7 @@
 //! whatever implements that trait. This file implements one that is not a
 //! `Wallet` and attaches it.
 //!
-//! The test is mostly its own compilation. Narrowing `with_wallet` back to a
+//! The file is mostly its own compilation. Narrowing `with_wallet` back to a
 //! concrete type, or adding a trait method only `Wallet` can satisfy (one
 //! handing out a `&Wallet`, or a lock guard), breaks this file and nothing
 //! else.
@@ -14,9 +14,10 @@
 use std::sync::Arc;
 
 use midnight_provider::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, MidnightProvider,
-    Network, Nullifier, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    TransferRequest, WalletBalance, WalletError, WalletFacade, WalletSeed,
+    Builds, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, HashOutput,
+    LedgerVersion, MidnightProvider, Network, Nullifier, ProviderError, Seed, ShieldedTokenType,
+    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest, WalletBalance,
+    WalletError, WalletFacade,
 };
 use midnight_wallet::chain_pin::ChainView;
 
@@ -47,7 +48,7 @@ impl WalletFacade for StubWallet {
         true
     }
 
-    async fn seed(&self) -> WalletSeed {
+    async fn seed(&self) -> Seed {
         unimplemented!("this wallet holds no seed")
     }
 
@@ -173,5 +174,42 @@ async fn the_provider_reads_whatever_wallet_it_was_given() {
             .expect("attached")
             .zswap_event_id,
         56
+    );
+}
+
+/// A wallet the SDK did not write may skip the duplicate check that
+/// `WalletBuilds::spend_shielded` asks for. A second spend of one coin then
+/// counts its value twice. The stub's `spend_shielded` panics, so a provider
+/// that leaves the check to the wallet fails here.
+#[tokio::test]
+async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
+    use midnight_helpers::ledger_9::{BuildContext, SeedableRng};
+
+    let provider = MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet);
+    let Builds::Ledger9(builds) = provider.builds().await.expect("the stub resyncs") else {
+        panic!("the stub's state is on ledger 9");
+    };
+    let coin = SpendableShieldedCoin {
+        token_type: ShieldedTokenType(HashOutput([0; 32])),
+        value: 1,
+        nonce: [0; 32],
+        nullifier: Nullifier(HashOutput([7; 32])),
+    };
+    let context = Arc::new(BuildContext::new_from_wallet_seeds("undeployed", &[]));
+
+    let result = builds
+        .prepare_shielded_inputs(
+            &context,
+            &[coin.clone(), coin],
+            &mut midnight_helpers::StdRng::seed_from_u64(0),
+        )
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(ProviderError::Wallet(WalletError::DuplicateInput { .. }))
+        ),
+        "got {:?}",
+        result.err()
     );
 }

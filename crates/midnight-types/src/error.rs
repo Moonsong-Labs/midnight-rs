@@ -1,20 +1,17 @@
-use crate::{LedgerVersion, Network, UnknownLedger, WalletSeedError};
+use crate::{LedgerVersion, Network, UnknownLedger};
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {
-    /// The provided seed could not be parsed.
-    #[error("invalid wallet seed: {0}")]
-    Seed(#[from] WalletSeedError),
-
     /// Sync with node failed.
     #[error("sync failed: {0}")]
     Sync(String),
 
     /// A streamed sync was cancelled because its progress receiver was
-    /// dropped before the sync completed. See `WalletSyncBuilder::stream` in
-    /// `midnight-wallet` for the cancellation contract: dropping the receiver
-    /// (or the `SyncHandle`) tears the sync down.
+    /// dropped before the sync completed. See
+    /// `WalletBuilder::sync_with_progress` in `midnight-wallet` for the
+    /// cancellation contract: dropping the receiver (or the `SyncHandle`)
+    /// tears the sync down.
     #[error("sync cancelled: progress receiver dropped before sync completed")]
     SyncCancelled,
 
@@ -98,6 +95,16 @@ pub enum WalletError {
         held: String,
     },
 
+    /// A build named the same input more than once.
+    ///
+    /// The build stops before it spends or proves anything. Name each input
+    /// once.
+    #[error("{input} is named more than once in one build")]
+    DuplicateInput {
+        /// The first input the build named again.
+        input: String,
+    },
+
     /// ZK proving failed.
     ///
     /// The ledger's `ProofProvider::prove` returns a bare transaction with no
@@ -165,10 +172,11 @@ pub enum WalletError {
 
     /// The node runs another network than the one the wallet syncs as.
     ///
-    /// A sync checks the network before it reads the indexer, unless the
-    /// caller opts out with `WalletSyncBuilder::unpinned` in
-    /// `midnight-wallet`. To recover, sync as the network that the node runs,
-    /// or use a node of the wallet's network.
+    /// A sync that names its network with `WalletBuilder::with_network` in
+    /// `midnight-wallet` checks it before it reads the indexer, unless the
+    /// caller opts out with `WalletBuilder::unpinned`. To recover, name the
+    /// network that the node runs. Or leave the network out, so that the sync
+    /// takes the node's network. Or use a node of the named network.
     #[error("this wallet syncs as network {wallet}, but the node runs {chain}")]
     NetworkMismatch {
         /// The network the sync was asked to use.
@@ -176,4 +184,17 @@ pub enum WalletError {
         /// The network the node's runtime reports.
         chain: Network,
     },
+
+    /// The sync names no network, and the node reported no valid one.
+    ///
+    /// The node could not answer, it has no network id set, or its id fails
+    /// [`Network::is_valid_name`]. A wallet with no network takes the network
+    /// that the node runs. To recover, check the node URL and that the node is
+    /// up, or name the network with `WalletBuilder::with_network` in
+    /// `midnight-wallet`.
+    #[error(
+        "the node did not report a valid network: check the node URL and that the node is up, \
+         or name the network with `with_network`, for example `with_network(Network::Preprod)`"
+    )]
+    NetworkUnknown,
 }

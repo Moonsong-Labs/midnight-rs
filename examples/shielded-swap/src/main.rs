@@ -29,7 +29,7 @@ mod mint;
 
 use anyhow::{Context, ensure};
 use midnight_core::provider::{ShieldedCoinBalance, ShieldedTokenType, WalletBalance};
-use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
+use midnight_core::{MidnightProvider, Seed, Wallet, WalletBuilder};
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
@@ -80,19 +80,17 @@ fn shielded_total(coins: &[ShieldedCoinBalance], token: ShieldedTokenType) -> u1
 async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Shielded Swap Example (A and B trade two tokens) ===\n");
 
-    let network = Network::Undeployed;
     let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
 
-    let seed_a = Seed::from_hex(SEED_A)?;
     let seed_b = Seed::from_hex(SEED_B)?;
 
     let provider_a = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider_a, seed_a.clone(), &network).await?;
-    let provider_a = provider_a.with_wallet(LocalWallet::new(wallet));
+    let wallet = Wallet::from_seed(SEED_A)?.sync(&provider_a).await?;
+    let provider_a = provider_a.with_wallet(wallet);
     let provider_b = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider_b, seed_b.clone(), &network).await?;
-    let provider_b = provider_b.with_wallet(LocalWallet::new(wallet));
+    let wallet = WalletBuilder::new(&seed_b).sync(&provider_b).await?;
+    let provider_b = provider_b.with_wallet(wallet);
 
     // Setup: two tokens to trade. X is A's genesis shielded token; Y is a fresh
     // token A mints to B (see `mint`). Not part of the swap.

@@ -11,10 +11,10 @@ pub mod convert;
 #[path = "per_ledger/inputs.rs"]
 mod inputs;
 
+pub(crate) use builder::shielded_destination;
 pub use builder::{
     BuildInputs, BuiltTransaction, DustSpendBatch, PreparedTransfer, TransferBuilder,
     balance_external, build_no_validate, prepare_no_validate, prove_tx_no_validate,
-    shielded_destination,
 };
 pub use inputs::{PreparedInput, prepare_shielded_inputs};
 

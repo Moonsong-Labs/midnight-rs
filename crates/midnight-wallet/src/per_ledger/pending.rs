@@ -45,17 +45,15 @@ use crate::{SpentUtxoKey, WalletError};
 
 /// One pending batch of dust spends from a single `speculative_spend` call.
 ///
-/// The new helpers `mark_spent(spends, updated_state)` API requires the
-/// `(spends, updated_state)` pair from one `speculative_spend` to be passed
-/// together, so we preserve that grouping here. Applying the batch to a
-/// `DustWallet` clone at build time re-inserts the nullifiers into
-/// `spent_utxos` and rolls `dust_local_state` forward.
+/// A later build applies the `spends` of each batch to a `DustWallet` clone
+/// with the clone's current state, so its coin selection skips the reserved
+/// nullifiers. That replay does not apply `updated_state`.
 #[derive(Clone)]
 pub(crate) struct PendingDustBatch {
     /// The spends as built. Tagged-serializable so they can be persisted.
     pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
-    /// `DustLocalState` after these spends were applied to the wallet's
-    /// state at reservation time. Replayed via `mark_spent` at build time.
+    /// The `DustLocalState` that `speculative_spend` returned with `spends`.
+    /// `pending.json` stores it with the batch.
     pub updated_state: Sp<DustLocalState<DefaultDB>, DefaultDB>,
     /// `chain_tblock` at reservation time, for TTL eviction.
     pub reserved_at: Timestamp,
@@ -111,10 +109,8 @@ impl PendingReservations {
             }));
     }
 
-    /// View the pending dust batches; the caller (e.g.
-    /// `build_context_inner`) feeds each batch into
-    /// `DustWallet::mark_spent` in chronological order so the resulting
-    /// `dust_local_state` reflects all reservations.
+    /// View the pending dust batches. A build marks their spends as spent on
+    /// its `DustWallet` clone, so its coin selection skips them.
     pub(crate) fn dust_batches(&self) -> impl Iterator<Item = &PendingDustBatch> {
         self.dust.iter()
     }
@@ -371,7 +367,7 @@ impl PendingReservations {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use helpers::WalletSeed;
+    use crate::Seed;
     use helpers::mn_ledger::dust::DustCommitment;
     use helpers::{Duration, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
 
@@ -408,7 +404,7 @@ mod tests {
 
     fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
         DustSpendBatch {
-            seed: WalletSeed::try_from_hex_str(&"00".repeat(32)).unwrap(),
+            seed: Seed::from_bytes(&[0x00; 32]).unwrap(),
             spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
             updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
         }
@@ -538,7 +534,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
 
         // A seed whose hex is distinctive enough to find in the raw file.
-        let seed = WalletSeed::try_from_hex_str(&"ab".repeat(32)).unwrap();
+        let seed = Seed::from_bytes(&[0xab; 32]).unwrap();
         let mut p = PendingReservations::default();
         p.reserve(
             vec![DustSpendBatch {

@@ -23,7 +23,6 @@ midnight-helpers = { workspace = true }
 serde = { workspace = true }
 subxt = { workspace = true }
 async-trait = { workspace = true }
-futures-util = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
@@ -34,7 +33,7 @@ reqwest = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
-# The devnet tests sync a real wallet with `Wallet::sync`; the library
+# The devnet tests sync a real wallet with `midnight-wallet`; the library
 # itself never names the implementation.
 midnight-wallet = { workspace = true }
 # The devnet integration tests (tests/node_e2e.rs, tests/lazy_query.rs) drive

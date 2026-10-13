@@ -17,8 +17,8 @@ mod call_context {
 
 use compact_bindgen::Bytes;
 use midnight_contract::DustlessBuilder;
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_provider::{MidnightProvider, Network};
+use midnight_wallet::Wallet;
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -45,12 +45,14 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
         "{ZK_KEYS_DIR}/keys is missing; run `make compile-contracts CONTRACTS=call-context`"
     );
 
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
+        .unwrap()
+        .with_network(Network::Undeployed)
+        .sync(&provider)
         .await
         .expect("sync");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(wallet);
 
     let contract = call_context::Contract::deploy(&provider)
         .with_initial_state(call_context::LedgerInitialState::default())

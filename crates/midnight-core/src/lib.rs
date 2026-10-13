@@ -15,16 +15,16 @@
     not(all(feature = "provider", feature = "wallet", feature = "contract")),
     doc = "```ignore"
 )]
-//! use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
+//! use midnight_core::{MidnightProvider, Wallet};
 //!
 //! mod counter {
 //!     midnight_core::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 //! }
 //!
-//! async fn run(seed: Seed) -> anyhow::Result<()> {
+//! async fn run(phrase: &str) -> anyhow::Result<()> {
 //!     let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088");
-//!     let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
-//!     let provider = provider.with_wallet(LocalWallet::new(wallet));
+//!     let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider).await?;
+//!     let provider = provider.with_wallet(wallet);
 //!
 //!     let contract = counter::Contract::deploy(&provider)
 //!         .with_initial_state(counter::LedgerInitialState::default())
@@ -79,7 +79,7 @@ pub use midnight_provider::{
 // Re-export the wallet types a caller names to sync one and attach it, so
 // the common path needs no `midnight_core::wallet::` prefix.
 #[cfg(feature = "wallet")]
-pub use midnight_wallet::{LocalWallet, Network, Seed, SyncProgress, Wallet, WalletFacade};
+pub use midnight_wallet::{Network, Seed, SyncProgress, Wallet, WalletBuilder, WalletFacade};
 
 // Re-export contract types (gated behind "contract" feature).
 #[cfg(feature = "contract")]

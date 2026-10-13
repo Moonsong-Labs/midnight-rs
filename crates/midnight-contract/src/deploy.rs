@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use midnight_provider::{Builds, MidnightProvider, NodeBlockHash, TxInBlock};
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::{ContractAddress, LedgerVersion, WalletError};
+use midnight_types::ContractAddress;
 
 use crate::ShieldedOffer;
 use crate::address::format_address;
@@ -39,27 +39,25 @@ impl DeployResult {
 /// Builds the deploy for the ledger generation the wallet's state is in,
 /// runs the helpers' fee-balancing / proving pipeline, and returns a
 /// [`DeployResult`] containing the contract address and proven TX bytes. A
-/// `shielded_offer` must be built for that same generation.
+/// `shielded_offer` rides in the same transaction, as
+/// [`DeployBuilder::with_shielded_offer`](crate::DeployBuilder::with_shielded_offer)
+/// describes.
+///
+/// # Errors
+///
+/// Returns [`ContractError::ShieldedOfferShortfall`] when the offer's outputs
+/// pay more of a token than its coins hold, and [`ContractError::Provider`]
+/// when the wallet cannot spend a coin of the offer, the fee balancing fails,
+/// or proving fails.
 pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     provider: &midnight_provider::MidnightProvider,
     shielded_offer: Option<ShieldedOffer>,
 ) -> Result<DeployResult, ContractError> {
-    let mismatch = |expected, found| {
-        ContractError::from(midnight_provider::ProviderError::from(
-            WalletError::LedgerMismatch { expected, found },
-        ))
-    };
+    let offer = shielded_offer.as_ref();
     // Each arm is boxed so this frame holds one generation's future, not both.
     match provider.builds().await? {
         Builds::Ledger8(builds) => {
-            let offer = match shielded_offer {
-                None => None,
-                Some(ShieldedOffer::Ledger8(offer)) => Some(offer),
-                Some(ShieldedOffer::Ledger9(_)) => {
-                    return Err(mismatch(LedgerVersion::V8, LedgerVersion::V9));
-                }
-            };
             Box::pin(crate::ledger_8::deploy::deploy_funded(
                 &builds,
                 initial_state,
@@ -68,13 +66,6 @@ pub async fn deploy_funded(
             .await
         }
         Builds::Ledger9(builds) => {
-            let offer = match shielded_offer {
-                None => None,
-                Some(ShieldedOffer::Ledger9(offer)) => Some(offer),
-                Some(ShieldedOffer::Ledger8(_)) => {
-                    return Err(mismatch(LedgerVersion::V9, LedgerVersion::V8));
-                }
-            };
             Box::pin(crate::ledger_9::deploy::deploy_funded(
                 &builds,
                 initial_state,

@@ -228,19 +228,13 @@ Dust accrues over time, so wait until the balance covers a fee before the first 
 
 The wallet sync has three independent phases:
 
-1. **Unshielded sync** (~seconds): discovers tNIGHT UTXOs via the
-   `unshieldedTransactions` subscription. Required for balance display and
-   all transaction types.
+1. **Unshielded sync** (~seconds): discovers tNIGHT UTXOs via the `unshieldedTransactions` subscription. Required for balance display and all transaction types.
 
-2. **Zswap sync** (~seconds): replays `zswapLedgerEvents` for shielded coin
-   tracking (Merkle tree). Required for shielded balance and shielded
-   transfers.
+2. **Zswap sync** (~seconds): replays `zswapLedgerEvents` for shielded coin tracking (Merkle tree). Required for shielded balance and shielded transfers.
 
 3. **Dust sync** (~30 min from genesis): replays `dustLedgerEvents` for dust UTXO tracking (two global Merkle trees). Required for every transaction other than a dust registration.
 
-All three phases run concurrently inside `Wallet::sync(...).await`
-(or `Wallet::sync(...).stream()` for streamed progress
-updates), which drives the wallet sync against the provider's indexer.
+All three phases run concurrently inside the sync step of the `WalletBuilder`, against the provider's indexer: `.sync(&provider)`, or `.sync_with_progress(&provider)` for progress events.
 
 A brand-new wallet can submit its dust registrations, one per tNIGHT UTXO that it holds, without a dust sync. Every other transaction needs the dust sync.
 

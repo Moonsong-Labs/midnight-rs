@@ -1,8 +1,8 @@
-//! Shielded transfer example — single-wallet self-transfer of 1 unit of the
+//! Shielded transfer example: a single-wallet self-transfer of 1 unit of the
 //! default shielded token id against a local devnet. See README.md for setup.
 //!
 //! Why local-only: the public preprod faucet only funds *unshielded* addresses,
-//! and the SDK has no `unshielded → shielded` "shield" operation today. The
+//! and the SDK has no `unshielded → shielded` "shield" operation. The
 //! local dev preset of the midnight-node image mints several shielded test
 //! tokens to the hardcoded dev seed at genesis, which is what this example
 //! spends. See `docs/tokens.md` for the asset model.
@@ -10,7 +10,7 @@
 use std::env;
 
 use anyhow::bail;
-use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
+use midnight_core::{MidnightProvider, Network, Wallet};
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded with shielded test tokens at genesis on the
@@ -41,25 +41,22 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "undeployed".into())
         .into();
 
-    let seed = Seed::from_hex(DEV_SEED)?;
-
     println!("=== Midnight Shielded Transfer ===\n");
     println!("Network:           {network}");
-    println!("Shielded address:  {}", seed.shielded_address(&network));
     println!("Node:              {node_url}");
     println!("Indexer:           {indexer_url}");
     println!();
 
     println!("Syncing wallet from indexer (zswap + dust + unshielded in parallel)...");
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::sync(&provider, seed.clone(), &network).await?;
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
-    println!("Sync complete.\n");
-
-    // No manual chain-readiness wait needed — every transfer / contract
-    // path goes through MidnightProvider::resync_wallet, which now waits
-    // internally for the chain to advance past the dev-devnet's hardcoded
-    // genesis block (a no-op on any chain with block height ≥ 1).
+    let wallet = Wallet::from_seed(DEV_SEED)?
+        .with_network(&network)
+        .sync(&provider)
+        .await?;
+    let address = wallet.shielded_address();
+    let provider = provider.with_wallet(wallet);
+    println!("Sync complete.");
+    println!("Shielded address:  {address}\n");
 
     // Pick the first shielded coin in the wallet. The local dev preset funds
     // the dev seed with several shielded test tokens; on a fresh devnet the
@@ -74,12 +71,14 @@ async fn main() -> anyhow::Result<()> {
     }
     println!();
 
-    println!("Building shielded self-transfer: 1 unit of token {coin} back to own address");
-    let recipient = seed.shielded_address(&network);
+    println!(
+        "Building shielded self-transfer: 1 unit of token {} back to own address",
+        coin.token_type_hex()
+    );
 
     println!("Building + submitting...");
     let pending = provider
-        .transfer_shielded(coin.token_type, 1, &recipient)
+        .transfer_shielded(coin.token_type, 1, &address)
         .await?;
     println!("Submitted: ext hash {}", pending.extrinsic_hash_hex());
     let (best, pending) = pending.wait_best().await?;
