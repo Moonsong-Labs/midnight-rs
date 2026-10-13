@@ -1,0 +1,6 @@
+[advisories]
+# ruzstd is reachable only through subxt's `light-client` feature
+# (subxt-lightclient -> smoldot-light -> smoldot -> ruzstd), which no
+# workspace member enables, so the crate is never compiled. Every smoldot
+# release requires ruzstd ^0.8, and the fix is in 0.9.1.
+ignore = ["RUSTSEC-2026-0344"]
