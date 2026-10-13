@@ -3,12 +3,14 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::{CoinPublicKey, EncryptionPublicKey};
 
+use super::call::prove_without_fee;
 use super::helpers;
 use super::provider::Builds;
 use super::shielded::{KeyedOutput, change_due};
+use super::types::PreparedInput;
 use super::types::convert::{IntoLedger, IntoSdk};
 use helpers::{
     BuildContext, BuildContractAction, BuildInput, BuildOutput, ContractDeploy, DefaultDB,
@@ -106,10 +108,30 @@ async fn offer_transaction(
     // The spends need the funding view in the context. Reserving before it
     // would hide these coins from it.
     builds.add_funding(context).await?;
-    let (prepared, mut held) = builds
+    let (prepared, held) = builds
         .prepare_shielded_inputs(context, &offer.coins, &mut tx_info.rng.split())
         .await?;
+    held.keep_on_ok(pay_offer(
+        builds,
+        tx_info,
+        offer,
+        prepared,
+        (change_cpk, change_epk),
+    ))
+    .await
+}
 
+/// Pay `offer` from the reserved `prepared` coins, then prove the deploy and
+/// pay its fee.
+///
+/// Any surplus goes back to the wallet as change.
+async fn pay_offer(
+    builds: &Builds<'_>,
+    mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+    offer: &ShieldedOffer,
+    prepared: Vec<PreparedInput>,
+    (change_cpk, change_epk): (CoinPublicKey, EncryptionPublicKey),
+) -> Result<Vec<u8>, ContractError> {
     let held_value = value_by_token(
         prepared
             .iter()
@@ -149,17 +171,6 @@ async fn offer_transaction(
         transients: vec![],
     });
 
-    let built = super::types::build_no_validate(tx_info)
-        .await
-        .map_err(ProviderError::Wallet)?;
-    let mut bytes = Vec::new();
-    helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
-    // Dropped before the next await, and the fee step boxed, to keep this
-    // future small enough for a debug build's stack, as in `call_transaction`.
-    drop(built);
-    let bytes = Box::pin(builds.balance_transaction(&bytes)).await?;
-
-    held.keep();
-    Ok(bytes)
+    let bytes = prove_without_fee(tx_info).await?;
+    Ok(builds.balance_transaction(&bytes).await?)
 }

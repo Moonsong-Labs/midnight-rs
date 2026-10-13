@@ -23,6 +23,7 @@ use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use super::shielded::{KeyedOutput, change_due};
+use super::types::PreparedInput;
 use crate::call::ShieldedInputs;
 use crate::error::ContractError;
 use crate::runtime;
@@ -425,9 +426,67 @@ pub(crate) async fn call_transaction(
     // coin's own token and value, which route the input and size the change.
     // Runs after the funding view is in the context: reserving before it
     // would hide these coins from it.
-    let (prepared, mut pinned) = builds
+    let (prepared, pinned) = builds
         .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
         .await?;
+    let circuit_offers = CircuitOffers {
+        guaranteed_outputs,
+        fallible_outputs,
+        guaranteed_transients,
+        fallible_transients,
+        output_segments,
+        circuit_output_value,
+        minted_value,
+    };
+    pinned
+        .keep_on_ok(attach_and_prove(
+            builds,
+            tx_info,
+            circuit_offers,
+            prepared,
+            (change_cpk, change_epk),
+            pay_fees,
+        ))
+        .await
+}
+
+/// The circuit's side of a call's Zswap offers, before the caller's coins join
+/// them.
+///
+/// `output_segments` routes those coins, and the two value maps size their
+/// change.
+struct CircuitOffers {
+    guaranteed_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuildContext>>>,
+    fallible_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuildContext>>>,
+    guaranteed_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>>,
+    fallible_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>>,
+    output_segments: Vec<(ShieldedTokenType, bool)>,
+    circuit_output_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
+    minted_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
+}
+
+/// Attach the reserved `prepared` coins to the circuit's offers, then prove the
+/// call.
+///
+/// Any surplus goes back to the wallet as change. When `pay_fees`, the call
+/// also pays its own fee.
+async fn attach_and_prove(
+    builds: &Builds<'_>,
+    mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+    circuit_offers: CircuitOffers,
+    prepared: Vec<PreparedInput>,
+    (change_cpk, change_epk): (helpers::CoinPublicKey, helpers::EncryptionPublicKey),
+    pay_fees: bool,
+) -> Result<Vec<u8>, ContractError> {
+    let CircuitOffers {
+        mut guaranteed_outputs,
+        mut fallible_outputs,
+        guaranteed_transients,
+        fallible_transients,
+        output_segments,
+        circuit_output_value,
+        minted_value,
+    } = circuit_offers;
     let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB, BuildContext>>> = Vec::new();
     let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB, BuildContext>>> = Vec::new();
     let mut attached_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
@@ -501,37 +560,33 @@ pub(crate) async fn call_transaction(
     // untouched. A deploy with no shielded offer and a maintenance update are
     // unaffected: they mock-prove while balancing, which a user circuit cannot
     // do (upstream `MockProver::check` rejects non-builtin circuits).
-
-    let built = super::types::build_no_validate(tx_info)
-        .await
-        .map_err(ProviderError::Wallet)?;
-
-    let mut bytes = Vec::new();
-    helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
-    // Drop the built transaction before the next await. Holding it across one
-    // makes it part of this function's async state machine, and it is large
-    // enough that the resulting frame overflows the stack on debug builds.
-    // There are no Dust batches to carry over: with no funding seeds the build
-    // above draws no Dust, and `balance_transaction` reserves whatever it draws.
-    drop(built);
+    let mut bytes = prove_without_fee(tx_info).await?;
 
     // Fund the already-proven transaction the same way a sponsor funds someone
     // else's: the fee intent rides its own segment, so nothing here re-proves
     // the circuit.
-    //
-    // Boxed so the balancing future is heap-allocated rather than inlined into
-    // this one. Awaiting it directly reserves room for it in this function's
-    // async state machine whether or not the branch runs, and this frame is
-    // already close enough to the limit that it overflows the stack on debug
-    // builds.
     if pay_fees {
-        bytes = Box::pin(builds.balance_transaction(&bytes)).await?;
+        bytes = builds.balance_transaction(&bytes).await?;
     }
+    Ok(bytes)
+}
 
-    // The transaction is built, so the pinned coins stay reserved.
-    pinned.keep();
-
+/// Build and prove `tx_info` with no fee, and serialize the result.
+///
+/// `tx_info` must carry no funding seed. The build then draws no Dust, so it
+/// leaves nothing to reserve. `Builds::balance_transaction` reserves the Dust
+/// that it draws for the fee. The
+/// built transaction is large, and it lives only after this function's last
+/// await, so it never sits in a caller's future.
+pub(super) async fn prove_without_fee(
+    tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+) -> Result<Vec<u8>, ContractError> {
+    let built = super::types::build_no_validate(tx_info)
+        .await
+        .map_err(ProviderError::Wallet)?;
+    let mut bytes = Vec::new();
+    helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
+        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
     Ok(bytes)
 }
 

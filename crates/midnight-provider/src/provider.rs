@@ -816,10 +816,10 @@ impl MidnightProvider {
         let ledger = transaction_ledger_version(tx_bytes)?;
         match self.builds().await? {
             Builds::Ledger8(builds) if ledger == LedgerVersion::V8 => {
-                Box::pin(builds.balance_transaction(tx_bytes)).await
+                builds.balance_transaction(tx_bytes).await
             }
             Builds::Ledger9(builds) if ledger == LedgerVersion::V9 => {
-                Box::pin(builds.balance_transaction(tx_bytes)).await
+                builds.balance_transaction(tx_bytes).await
             }
             builds => Err(midnight_types::WalletError::LedgerMismatch {
                 expected: builds.ledger_version(),
@@ -1438,10 +1438,11 @@ fn transaction_ledger_version(tx_bytes: &[u8]) -> Result<LedgerVersion, Provider
 ///
 /// The reservation is recorded before proving, so anything that ends a build
 /// early has to hand the inputs back or they stay unusable until their TTL
-/// elapses. An error path can await the release itself; a caller that drops
-/// the build future (a `timeout`, a `select!`, an aborted task) gives it no
-/// chance to, and `Drop` cannot await, so that case hands the release to the
-/// runtime. Call [`Self::keep`] on any path that deals with the inputs itself.
+/// elapses. Run the rest of the build through [`Self::keep_on_ok`], which
+/// keeps the reservation when the build succeeds and awaits the release when
+/// it fails. A caller can drop the build future (a `timeout`, a `select!`, an
+/// aborted task) before the release runs. `Drop` cannot await, so in that case
+/// it hands the release to the runtime.
 pub struct HeldInputs {
     wallet: Option<Arc<dyn WalletFacade>>,
     spent: SpentInputs,
@@ -1452,15 +1453,52 @@ impl HeldInputs {
         Self { wallet, spent }
     }
 
-    /// What the build reserved.
-    pub(crate) fn spent(&self) -> &SpentInputs {
-        &self.spent
-    }
-
-    /// Stop this from releasing anything, because the build reached the
-    /// chain and the reservation must stand.
-    pub fn keep(&mut self) {
-        self.wallet = None;
+    /// Run `work` and keep the inputs reserved only if it succeeds.
+    ///
+    /// `work` is the rest of the build. On `Ok` the build can reach the chain,
+    /// so the reservation stands. On `Err` the release completes before the
+    /// error returns, so a caller that observes the error also observes the
+    /// inputs back.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of `work`, after the inputs go back to the wallet.
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping the returned future while `work` runs releases the inputs in
+    /// the background, as dropping `self` does. A release that has started
+    /// runs to its end, even when the returned future is dropped during it.
+    pub fn keep_on_ok<T, E>(
+        mut self,
+        work: impl Future<Output = Result<T, E>>,
+    ) -> impl Future<Output = Result<T, E>> {
+        // Boxed before the returned future exists: an `async fn` stores its
+        // arguments, so a caller's future would carry the whole build inline.
+        let work = Box::pin(work);
+        async move {
+            let result = work.await;
+            // Disarm `Drop` on both paths: `Ok` keeps the reservation, and
+            // `Err` releases it here.
+            let wallet = self.wallet.take();
+            let spent = std::mem::take(&mut self.spent);
+            if result.is_err()
+                && !spent.is_empty()
+                && let Some(wallet) = wallet
+            {
+                // Spawned so that dropping this future cannot cut the release
+                // short, and awaited so the caller observes the inputs back.
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => {
+                        let _ = handle
+                            .spawn(async move { wallet.release(&spent).await })
+                            .await;
+                    }
+                    Err(_) => wallet.release(&spent).await,
+                }
+            }
+            result
+        }
     }
 }
 

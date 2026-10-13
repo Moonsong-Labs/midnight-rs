@@ -129,6 +129,12 @@ impl<'a> Builds<'a> {
     /// Pay the fees for an external party's proven, fee-less transaction from
     /// the attached wallet. See [`MidnightProvider::balance_transaction`].
     pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+        // Boxed so a caller's future stays small. See the frame-size note on
+        // `MidnightProvider::resync_wallet`.
+        Box::pin(self.balance_transaction_inner(tx_bytes)).await
+    }
+
+    async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
         let external: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &tx_bytes[..])
             .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))?;
 
@@ -187,21 +193,8 @@ impl<'a> Builds<'a> {
         reserved: ReservedBuild,
     ) -> Result<TransferResult, ProviderError> {
         let prepared = reserved.into_prepared();
-        let mut held = HeldInputs::of(prepared.spent_inputs(), self.provider.facade());
-
-        match prepared.prove().await {
-            Ok(result) => {
-                held.keep();
-                Ok(result)
-            }
-            Err(err) => {
-                // Release here rather than leaving it to `held`, so a caller
-                // that observes the error also observes the inputs back.
-                held.keep();
-                self.wallet.release(held.spent()).await;
-                Err(err.into())
-            }
-        }
+        let held = HeldInputs::of(prepared.spent_inputs(), self.provider.facade());
+        held.keep_on_ok(prepared.prove()).await.map_err(Into::into)
     }
 }
 
