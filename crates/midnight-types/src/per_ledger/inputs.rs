@@ -10,6 +10,7 @@
 //! That is also the shape an external signer needs: "give me an `Input` for this
 //! coin" is one step it can implement without releasing anything.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::helpers;
@@ -71,13 +72,32 @@ impl helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
 /// wallet, never from the caller, so the figure the offer sums is the one the
 /// spend proof commits to and the two cannot drift apart. The wallet's Zswap
 /// state is rolled forward as it goes, the same bookkeeping the helpers' input
-/// does inside `build`, so a coin cannot be spent twice within one offer.
+/// does inside `build`.
+///
+/// A spend leaves the coin in the wallet's Zswap state, so a second spend of
+/// it succeeds. The function refuses a coin that `nullifiers` names twice,
+/// before it spends anything.
+///
+/// # Errors
+///
+/// [`WalletError::DuplicateInput`] when `nullifiers` names a coin twice, and
+/// [`WalletError::Transfer`] when the wallet cannot spend a coin.
+///
+/// # Panics
+///
+/// Panics when `context` holds no wallet for `seed`.
 pub fn prepare_shielded_inputs(
     context: &Arc<BuildContext>,
     seed: &Seed,
     nullifiers: &[Nullifier],
     rng: &mut StdRng,
 ) -> Result<Vec<PreparedInput>, WalletError> {
+    let mut named = HashSet::with_capacity(nullifiers.len());
+    if let Some(repeated) = nullifiers.iter().find(|n| !named.insert(*n)) {
+        return Err(WalletError::DuplicateInput {
+            input: format!("shielded coin {repeated:?}"),
+        });
+    }
     context.with_wallet_from_seed(seed.into_ledger(), |wallet| {
         let mut prepared = Vec::with_capacity(nullifiers.len());
         for nullifier in nullifiers {
@@ -112,4 +132,37 @@ pub fn prepare_shielded_inputs(
         }
         Ok(prepared)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use helpers::{HashOutput, SeedableRng};
+
+    /// A spend leaves the coin spendable in the wallet's state, so a coin
+    /// named twice would be spent twice and its value counted twice. The
+    /// wallet here holds no coin, so a check that ran only after the first
+    /// spend would return the "not spendable" error instead.
+    #[test]
+    fn a_coin_named_twice_is_refused_before_any_spend() {
+        let seed = Seed::from_bytes(&[1; 32]).unwrap();
+        let context = Arc::new(BuildContext::new_from_wallet_seeds(
+            "undeployed",
+            &[seed.into_ledger()],
+        ));
+        let coin = Nullifier(HashOutput([7; 32]));
+        let other = Nullifier(HashOutput([8; 32]));
+
+        let err = prepare_shielded_inputs(
+            &context,
+            &seed,
+            &[coin, other, coin],
+            &mut StdRng::seed_from_u64(0),
+        )
+        .err();
+        assert!(
+            matches!(err, Some(WalletError::DuplicateInput { .. })),
+            "got {err:?}"
+        );
+    }
 }

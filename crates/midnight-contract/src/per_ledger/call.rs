@@ -22,9 +22,10 @@ use midnight_base_crypto::time::Timestamp;
 use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
-use super::shielded::{KeyedOutput, change_due};
+use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
 use crate::call::ShieldedInputs;
+use crate::change::change_due;
 use crate::error::ContractError;
 use crate::runtime;
 

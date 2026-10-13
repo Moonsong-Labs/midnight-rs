@@ -303,6 +303,7 @@ test-e2e:
 	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test deploy_shielded_offer -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test e2e_contracts -- --show-output --test-threads=1
 
 # Restarts the node container, so it disrupts every other test talking to it.

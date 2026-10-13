@@ -329,8 +329,8 @@ impl<P> DeployBuilder<'_, P> {
     ///
     /// The deploy fails with [`ContractError::ShieldedOfferShortfall`] when
     /// the outputs pay more of a token than the coins hold. When another
-    /// build holds one of the coins, it fails with the reserved-coin error
-    /// that [`ContractError::Provider`] describes.
+    /// build holds one of the coins, or the offer names a coin twice, it fails
+    /// with the wallet error that [`ContractError::Provider`] describes.
     pub fn with_shielded_offer(mut self, offer: crate::ShieldedOffer) -> Self {
         self.shielded_offer = Some(offer);
         self

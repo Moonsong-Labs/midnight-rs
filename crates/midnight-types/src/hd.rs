@@ -145,6 +145,11 @@ impl Seed {
     ///
     /// Runs the BIP-39 standard derivation (`Mnemonic::to_seed("")`,
     /// PBKDF2-HMAC-SHA512 with 2048 rounds) and produces a 64-byte seed.
+    ///
+    /// # Errors
+    ///
+    /// [`SeedError::InvalidMnemonic`] when `phrase` is not a valid BIP-39
+    /// mnemonic.
     pub fn from_mnemonic(phrase: &str) -> Result<Self, SeedError> {
         Self::from_mnemonic_with_passphrase(phrase, "")
     }
@@ -153,6 +158,11 @@ impl Seed {
     /// "25th word"). The passphrase is mixed into the seed via the standard
     /// PBKDF2-HMAC-SHA512 round defined by BIP-39; different passphrases on
     /// the same phrase produce entirely different seeds.
+    ///
+    /// # Errors
+    ///
+    /// [`SeedError::InvalidMnemonic`] when `phrase` is not a valid BIP-39
+    /// mnemonic.
     pub fn from_mnemonic_with_passphrase(
         phrase: &str,
         passphrase: &str,
@@ -164,12 +174,21 @@ impl Seed {
 
     /// Construct from a hex string. The hex must decode to exactly 16, 32, or
     /// 64 bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`SeedError::InvalidHex`] when `hex_str` is not hex, and
+    /// [`SeedError::InvalidLength`] when it decodes to another length.
     pub fn from_hex(hex_str: &str) -> Result<Self, SeedError> {
         let bytes = hex::decode(hex_str).map_err(|e| SeedError::InvalidHex(e.to_string()))?;
         Self::from_bytes(&bytes)
     }
 
     /// Construct from raw entropy bytes. Length must be 16, 32, or 64.
+    ///
+    /// # Errors
+    ///
+    /// [`SeedError::InvalidLength`] when `bytes` has another length.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SeedError> {
         let inner = if let Ok(short) = bytes.try_into() {
             SeedBytes::Short(short)
@@ -299,6 +318,7 @@ impl Drop for Seed {
 
 /// Step 2 of the `seed.account(n).role(r).derive_at(i)` builder. Constructed
 /// via [`Seed::account`].
+#[derive(Debug)]
 pub struct AccountKey<'a> {
     seed: &'a Seed,
     account: u32,
@@ -316,6 +336,7 @@ impl<'a> AccountKey<'a> {
 }
 
 /// Step 3 of the builder. Resolved by calling [`Self::derive_at`].
+#[derive(Debug)]
 pub struct RoleKey<'a> {
     seed: &'a Seed,
     account: u32,

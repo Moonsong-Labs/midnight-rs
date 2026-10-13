@@ -1,5 +1,6 @@
 mod address;
 pub mod call;
+mod change;
 mod contract;
 pub mod deploy;
 mod error;

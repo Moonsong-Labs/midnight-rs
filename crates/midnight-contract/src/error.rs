@@ -25,7 +25,9 @@ pub enum ContractError {
     /// `ProviderError::Wallet(WalletError::Proving(_))`. When a call or the
     /// shielded offer of a deploy names a shielded coin that another build
     /// holds, the error is
-    /// `ProviderError::Wallet(WalletError::InputsReserved { .. })`. See
+    /// `ProviderError::Wallet(WalletError::InputsReserved { .. })`. When it
+    /// names a shielded coin twice, the error is
+    /// `ProviderError::Wallet(WalletError::DuplicateInput { .. })`. See
     /// [`WalletError`](midnight_provider::WalletError) for the other wallet
     /// failures.
     #[error(transparent)]

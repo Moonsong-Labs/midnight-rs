@@ -9,7 +9,7 @@ use midnight_types::{CoinPublicKey, EncryptionPublicKey};
 use super::call::prove_without_fee;
 use super::helpers;
 use super::provider::Builds;
-use super::shielded::{KeyedOutput, change_due};
+use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
 use super::types::convert::{IntoLedger, IntoSdk};
 use helpers::{
@@ -18,6 +18,7 @@ use helpers::{
 };
 
 use crate::ShieldedOffer;
+use crate::change::change_due;
 use crate::deploy::DeployResult;
 use crate::error::ContractError;
 use crate::offer::{refuse_shortfall, value_by_token};

@@ -1237,14 +1237,16 @@ impl MidnightProvider {
     /// default) compares this network with the one it syncs as, and fails
     /// with
     /// [`WalletError::NetworkMismatch`](midnight_types::WalletError::NetworkMismatch)
-    /// when they differ. A sync with no network takes this one, and fails
-    /// when there is none. An error or an `Ok(None)` here does not fail a
-    /// sync that names its network.
+    /// when they differ. A sync with no network takes this one. It fails when
+    /// there is none, or when the name fails [`Network::is_valid_name`]. An
+    /// error or an `Ok(None)` here does not fail a sync that names its
+    /// network.
     ///
     /// It needs no wallet and runs no resync. Returns `Ok(None)` when the
     /// runtime reports an empty id, which a node with no network id set does.
-    /// Errors when the node cannot be reached, or when its metadata describes
-    /// no such API or another return type.
+    /// Any other id comes back as the node reports it. Errors when the node
+    /// cannot be reached, or when its metadata describes no such API or
+    /// another return type.
     pub async fn ledger_network_id(&self) -> Result<Option<Network>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
@@ -1441,8 +1443,9 @@ fn transaction_ledger_version(tx_bytes: &[u8]) -> Result<LedgerVersion, Provider
 /// elapses. Run the rest of the build through [`Self::keep_on_ok`], which
 /// keeps the reservation when the build succeeds and awaits the release when
 /// it fails. A caller can drop the build future (a `timeout`, a `select!`, an
-/// aborted task) before the release runs. `Drop` cannot await, so in that case
-/// it hands the release to the runtime.
+/// aborted task) before the release runs. `Drop` cannot await, so under a
+/// Tokio runtime it hands the release to the runtime. With no runtime, the
+/// inputs wait for their TTL.
 pub struct HeldInputs {
     wallet: Option<Arc<dyn WalletFacade>>,
     spent: SpentInputs,
@@ -1466,9 +1469,14 @@ impl HeldInputs {
     ///
     /// # Cancellation
     ///
-    /// Dropping the returned future while `work` runs releases the inputs in
-    /// the background, as dropping `self` does. A release that has started
-    /// runs to its end, even when the returned future is dropped during it.
+    /// Under a Tokio runtime, dropping the returned future while `work` runs
+    /// releases the inputs in the background, as dropping `self` does. A
+    /// release that has started runs to its end, even when the returned
+    /// future is dropped during it.
+    ///
+    /// With no Tokio runtime, a drop releases nothing, and the release on
+    /// `Err` runs inline. Inputs that a drop leaves reserved stay unusable
+    /// until their TTL elapses.
     pub fn keep_on_ok<T, E>(
         mut self,
         work: impl Future<Output = Result<T, E>>,
@@ -1502,6 +1510,15 @@ impl HeldInputs {
     }
 }
 
+impl std::fmt::Debug for HeldInputs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeldInputs")
+            .field("spent", &self.spent)
+            .field("armed", &self.wallet.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Drop for HeldInputs {
     fn drop(&mut self) {
         let Some(wallet) = self.wallet.take() else {
@@ -1511,9 +1528,8 @@ impl Drop for HeldInputs {
         if spent.is_empty() {
             return;
         }
-        // No runtime means the process is going down, which frees the
-        // in-memory reservation anyway; the persisted one is rebuilt on the
-        // next sync.
+        // With no runtime, nothing can run the release, so the inputs wait
+        // for their TTL.
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move { wallet.release(&spent).await });
         }

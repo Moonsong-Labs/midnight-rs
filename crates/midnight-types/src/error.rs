@@ -95,6 +95,16 @@ pub enum WalletError {
         held: String,
     },
 
+    /// A build named the same input more than once.
+    ///
+    /// The build stops before it spends or proves anything. Name each input
+    /// once.
+    #[error("{input} is named more than once in one build")]
+    DuplicateInput {
+        /// The first input the build named again.
+        input: String,
+    },
+
     /// ZK proving failed.
     ///
     /// The ledger's `ProofProvider::prove` returns a bare transaction with no
@@ -175,14 +185,15 @@ pub enum WalletError {
         chain: Network,
     },
 
-    /// The sync names no network, and the node reported none.
+    /// The sync names no network, and the node reported no valid one.
     ///
-    /// The node could not answer, or it has no network id set. A wallet with
-    /// no network takes the network that the node runs. To recover, check the
-    /// node URL and that the node is up, or name the network with
-    /// `WalletBuilder::with_network` in `midnight-wallet`.
+    /// The node could not answer, it has no network id set, or its id fails
+    /// [`Network::is_valid_name`]. A wallet with no network takes the network
+    /// that the node runs. To recover, check the node URL and that the node is
+    /// up, or name the network with `WalletBuilder::with_network` in
+    /// `midnight-wallet`.
     #[error(
-        "the node did not report its network: check the node URL and that the node is up, \
+        "the node did not report a valid network: check the node URL and that the node is up, \
          or name the network with `with_network`, for example `with_network(Network::Preprod)`"
     )]
     NetworkUnknown,

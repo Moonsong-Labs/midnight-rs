@@ -95,6 +95,10 @@ pub trait WalletBuilds: WalletFacade {
     ///
     /// The reservation stands until the caller releases it. A build that never
     /// reaches the chain must hand the coins back.
+    ///
+    /// An implementation refuses a nullifier that `nullifiers` names twice
+    /// with [`WalletError::DuplicateInput`], before it spends anything. A
+    /// second spend of one coin succeeds and counts its value twice.
     async fn spend_shielded(
         &self,
         context: &Arc<BuildContext>,

@@ -11,9 +11,13 @@ use crate::{Network, ShieldedRecipient, WalletError};
 /// Decode a `mn_shield-addr_*` bech32 string into the keys it carries.
 ///
 /// `network` is the network that the address must belong to, usually the
-/// network of the wallet that spends. The function returns
+/// network of the wallet that spends.
+///
+/// # Errors
+///
 /// [`WalletError::AddressNetworkMismatch`] for an address of any other
-/// network.
+/// network, and [`WalletError::InvalidAddress`] for a string that is not a
+/// shielded address.
 pub fn parse_shielded_recipient(
     s: &str,
     network: impl Into<Network>,

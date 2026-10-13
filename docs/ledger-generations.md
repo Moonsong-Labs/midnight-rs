@@ -47,7 +47,7 @@ let coin = provider
     .await?
     .into_iter()
     .find(|coin| coin.token_type == token_type && coin.value >= 10)
-    .ok_or("no coin of the token holds 10")?;
+    .ok_or_else(|| std::io::Error::other("no coin of the token holds 10"))?;
 let offer = ShieldedOffer {
     coins: vec![coin],
     outputs: vec![ShieldedPayment {
@@ -90,7 +90,7 @@ Each `Builds` has `build_context`, `execution_context`, `add_funding`, `build_fu
 
 ### A custom wallet
 
-`with_wallet` takes a wallet that implements `WalletFacade` and the `WalletBuilds` trait of each generation: `midnight_provider::ledger_8::WalletBuilds` and `midnight_provider::ledger_9::WalletBuilds`. The provider uses the `WalletBuilds` of the generation the wallet reports in `WalletFacade::ledger_version`. `LocalWallet` implements all three, and a synced `Wallet` goes in behind a `LocalWallet`. `crates/midnight-provider/tests/substituting_the_wallet.rs` has a stub wallet that implements them.
+`with_wallet` takes a wallet that implements `WalletFacade` and the `WalletBuilds` trait of each generation: `midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`. The provider uses the `WalletBuilds` of the generation the wallet reports in `WalletFacade::ledger_version`. `LocalWallet` implements all three, and a synced `Wallet` goes in behind a `LocalWallet`. `crates/midnight-provider/tests/substituting_the_wallet.rs` has a stub wallet that implements them.
 
 ### Proof backends
 

@@ -40,6 +40,12 @@ impl LocalWallet {
     }
 }
 
+impl std::fmt::Debug for LocalWallet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalWallet").finish_non_exhaustive()
+    }
+}
+
 /// A synced [`Wallet`] attaches to a provider as a `LocalWallet`.
 impl IntoWalletFacade for Wallet {
     type Facade = LocalWallet;

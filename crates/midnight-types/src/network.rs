@@ -57,7 +57,31 @@ impl Network {
             Network::Other(s) => s.as_str(),
         }
     }
+
+    /// Whether the name is safe in a bech32 address prefix and as a path
+    /// component.
+    ///
+    /// A wallet puts its network name into the HRP of its addresses, where
+    /// upstream derivation panics on an invalid HRP. It also puts the name
+    /// into its storage path. A valid name has 1 to 68 characters, each a
+    /// lowercase ASCII letter, a digit, `-` or `_`. The bound keeps the
+    /// longest HRP, `mn_shield-addr_<name>`, within the bech32 limit of 83
+    /// characters.
+    ///
+    /// The known networks are valid. [`Network::Other`] holds any name, so
+    /// check a name that comes from outside the program, such as a node's
+    /// answer, before a wallet uses it.
+    pub fn is_valid_name(&self) -> bool {
+        let name = self.as_str();
+        !name.is_empty()
+            && name.len() <= MAX_NAME_LEN
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+    }
 }
+
+const MAX_NAME_LEN: usize = 83 - "mn_shield-addr_".len();
 
 impl fmt::Display for Network {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -144,5 +168,29 @@ mod tests {
         let s: String = "preprod".into();
         let n: Network = s.into();
         assert_eq!(n, Network::Preprod);
+    }
+
+    /// A sync with no network of its own takes the node's name. There, an
+    /// invalid HRP panics the sync, and a leading `/` or `..` moves the
+    /// wallet's files out of the storage dir. The longest valid name must
+    /// still derive both addresses.
+    #[test]
+    fn only_a_name_safe_in_an_address_and_a_path_is_valid() {
+        let longest = "a".repeat(MAX_NAME_LEN);
+        let seed = crate::hd::Seed::from_bytes(&[1; 32]).unwrap();
+        for name in ["preprod", "mainnet", "node-dev_01", longest.as_str()] {
+            let network = Network::from(name);
+            assert!(network.is_valid_name(), "{name:?} is a valid name");
+            seed.unshielded_address(&network);
+            seed.shielded_address(&network);
+        }
+
+        let too_long = "a".repeat(MAX_NAME_LEN + 1);
+        for name in ["", "Preprod", "my net", "/tmp", "..", too_long.as_str()] {
+            assert!(
+                !Network::from(name).is_valid_name(),
+                "{name:?} is not a valid name"
+            );
+        }
     }
 }

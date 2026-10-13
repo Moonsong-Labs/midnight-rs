@@ -109,7 +109,9 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     // rather than assume, so a slow indexer reads as slow and not as broken.
     let mut after = fresh.balance().await.expect("balance").dust;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while !after.night_generates_dust && std::time::Instant::now() < deadline {
+    while !(after.night_generates_dust && after.spendable_utxos > 0)
+        && std::time::Instant::now() < deadline
+    {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         fresh.resync_wallet().await.expect("resync");
         after = fresh.balance().await.expect("balance").dust;
@@ -118,6 +120,12 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     assert!(
         after.night_generates_dust,
         "the address must generate dust once the registration is on chain"
+    );
+    // The indexer marks the UTXO registered whatever Dust key the registration
+    // names. The wallet's Dust state keeps only outputs owned by its own key.
+    assert!(
+        after.spendable_utxos > 0,
+        "the registration must name the Dust key the wallet tracks"
     );
     assert_eq!(
         after.unregistered_night_utxos, 1,

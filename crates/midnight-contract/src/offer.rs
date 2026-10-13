@@ -29,7 +29,7 @@ use crate::error::ContractError;
 ///     .await?
 ///     .into_iter()
 ///     .find(|coin| coin.token_type == token_type && coin.value >= 10)
-///     .ok_or("no coin of the token holds 10")?;
+///     .ok_or_else(|| std::io::Error::other("no coin of the token holds 10"))?;
 /// let offer = ShieldedOffer {
 ///     coins: vec![coin],
 ///     outputs: vec![ShieldedPayment {

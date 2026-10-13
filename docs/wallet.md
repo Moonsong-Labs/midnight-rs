@@ -157,7 +157,7 @@ Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress
 
 The provider is the sync's source: the sync replays the provider's indexer, and the provider's node reports its network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the indexer URL and the node's network to the two-question `ChainView`.
 
-Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. A node that cannot answer, or that reports no network, then fails the sync with `WalletError::NetworkUnknown`.
+Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. The sync then fails with `WalletError::NetworkUnknown` when the node cannot answer, reports no network, or reports a name that fails `Network::is_valid_name`. A valid name has 1 to 68 characters, each a lowercase ASCII letter, a digit, `-` or `_`. Such a name is safe in an address prefix and in the storage path.
 
 `.with_network(..)` names the network, as a `Network` or as a name such as `"preprod"`. A node that runs another network then fails the sync with `WalletError::NetworkMismatch`, before the sync reads the indexer. A node that cannot answer, or that reports no network, does not fail a sync with a named network. Name the network when your program reads it from its configuration. The sync then refuses a node URL of another network.
 
