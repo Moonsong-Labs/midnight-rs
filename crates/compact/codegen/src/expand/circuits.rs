@@ -117,7 +117,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
             };
             quote! { #pid: #pty }
         });
-        let ret = result_type_to_tokens(&w.result_type);
+        let ret = type_to_tokens(&w.result_type);
         let doc = format!("Witness `{}`.", w.name.name());
         quote! {
             #[doc = #doc]
@@ -179,7 +179,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
         let ret_expr = if is_void_type(&w.result_type) {
             quote! { { #call; midnight_contract::runtime::Value::Void } }
         } else {
-            let ret_ty = result_type_to_tokens(&w.result_type);
+            let ret_ty = type_to_tokens(&w.result_type);
             let conv = type_to_value_conversion(&format_ident!("__r"), &w.result_type);
             quote! { { let __r: #ret_ty = #call; #conv } }
         };
@@ -319,7 +319,7 @@ fn emit_call_struct(name: &str, arguments: &[Argument], pure: bool, proof: bool)
 
 fn emit_return_type(name: &str, result_type: &Type) -> TokenStream {
     let type_name = format_ident!("{}Return", to_pascal_case(name));
-    let rust_type = result_type_to_tokens(result_type);
+    let rust_type = type_to_tokens(result_type);
     let doc = format!("Return type of the `{name}` circuit.");
 
     quote! {
@@ -346,12 +346,5 @@ fn emit_calls_enum(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
         pub enum Calls {
             #(#variants),*
         }
-    }
-}
-
-fn result_type_to_tokens(ty: &Type) -> TokenStream {
-    match ty {
-        Type::Tuple(types) if types.is_empty() => quote! { () },
-        other => type_to_tokens(other),
     }
 }
