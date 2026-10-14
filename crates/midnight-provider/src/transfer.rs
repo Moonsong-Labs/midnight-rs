@@ -39,8 +39,9 @@
 use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
-use midnight_types::TransferResult;
-use midnight_types::{ShieldedTokenType, UnshieldedTokenType};
+use midnight_types::{
+    ShieldedTokenType, TransferKind, TransferRequest, TransferResult, UnshieldedTokenType,
+};
 
 use crate::{MidnightProvider, PendingTx, ProviderError};
 
@@ -84,20 +85,18 @@ impl<'a> UnshieldedTransfer<'a> {
     /// dust in the wallet so concurrent in-process builds don't double-select
     /// the same inputs.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.build_inner()).await
+        let provider = self.provider;
+        provider.build_then_prove(self.into_request(true)).await
     }
 
-    async fn build_inner(self) -> Result<TransferResult, ProviderError> {
-        self.provider
-            .build_unshielded_transfer(
-                self.token_type,
-                self.amount,
-                &self.recipient,
-                true,
-                self.coin_selection,
-            )
-            .await
+    fn into_request(self, pay_fees: bool) -> TransferRequest {
+        TransferRequest::new(TransferKind::Unshielded {
+            token_type: self.token_type,
+            amount: self.amount,
+            recipient: self.recipient,
+            pay_fees,
+        })
+        .with_coin_selection(self.coin_selection)
     }
 }
 
@@ -107,10 +106,7 @@ impl<'a> IntoFuture for UnshieldedTransfer<'a> {
 
     fn into_future(self) -> Self::IntoFuture {
         let provider = self.provider;
-        Box::pin(async move {
-            let result = self.build().await?;
-            provider.submit_reserved(&result).await
-        })
+        Box::pin(build_and_submit(provider, self.into_request(true)))
     }
 }
 
@@ -153,20 +149,18 @@ impl<'a> ShieldedTransfer<'a> {
     /// Build the transaction without submitting it. Reserves pending dust in
     /// the wallet so concurrent in-process builds don't double-select.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.build_inner()).await
+        let provider = self.provider;
+        provider.build_then_prove(self.into_request(true)).await
     }
 
-    async fn build_inner(self) -> Result<TransferResult, ProviderError> {
-        self.provider
-            .build_shielded_transfer(
-                self.token_type,
-                self.amount,
-                &self.recipient,
-                true,
-                self.coin_selection,
-            )
-            .await
+    fn into_request(self, pay_fees: bool) -> TransferRequest {
+        TransferRequest::new(TransferKind::Shielded {
+            token_type: self.token_type,
+            amount: self.amount,
+            recipient: self.recipient,
+            pay_fees,
+        })
+        .with_coin_selection(self.coin_selection)
     }
 }
 
@@ -176,10 +170,7 @@ impl<'a> IntoFuture for ShieldedTransfer<'a> {
 
     fn into_future(self) -> Self::IntoFuture {
         let provider = self.provider;
-        Box::pin(async move {
-            let result = self.build().await?;
-            provider.submit_reserved(&result).await
-        })
+        Box::pin(build_and_submit(provider, self.into_request(true)))
     }
 }
 
@@ -233,20 +224,14 @@ impl<'a> ShieldedSwap<'a> {
     /// isolation and is not the fee the merged swap pays; the sponsor learns
     /// that when [`MidnightProvider::balance_transaction`] funds the merge.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.build_inner()).await
-    }
-
-    async fn build_inner(self) -> Result<TransferResult, ProviderError> {
-        self.provider
-            .build_shielded_swap(
-                self.give_token,
-                self.give_amount,
-                self.receive_token,
-                self.receive_amount,
-                self.coin_selection,
-            )
-            .await
+        let request = TransferRequest::new(TransferKind::ShieldedSwap {
+            give_token: self.give_token,
+            give_amount: self.give_amount,
+            receive_token: self.receive_token,
+            receive_amount: self.receive_amount,
+        })
+        .with_coin_selection(self.coin_selection);
+        self.provider.build_then_prove(request).await
     }
 }
 
@@ -285,16 +270,8 @@ pub trait DustlessBuilder: Sized {
 impl<'a> DustlessBuilder for ShieldedTransfer<'a> {
     type Error = ProviderError;
     async fn without_dust(self) -> Result<DustlessTransaction, ProviderError> {
-        let result = self
-            .provider
-            .build_shielded_transfer(
-                self.token_type,
-                self.amount,
-                &self.recipient,
-                false,
-                self.coin_selection,
-            )
-            .await?;
+        let provider = self.provider;
+        let result = provider.build_then_prove(self.into_request(false)).await?;
         Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
     }
 }
@@ -302,16 +279,8 @@ impl<'a> DustlessBuilder for ShieldedTransfer<'a> {
 impl<'a> DustlessBuilder for UnshieldedTransfer<'a> {
     type Error = ProviderError;
     async fn without_dust(self) -> Result<DustlessTransaction, ProviderError> {
-        let result = self
-            .provider
-            .build_unshielded_transfer(
-                self.token_type,
-                self.amount,
-                &self.recipient,
-                false,
-                self.coin_selection,
-            )
-            .await?;
+        let provider = self.provider;
+        let result = provider.build_then_prove(self.into_request(false)).await?;
         Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
     }
 }
@@ -366,8 +335,15 @@ impl<'a> DustRegistration<'a> {
     /// Build the registration transaction without submitting. Spends and
     /// re-creates one of the wallet's tNIGHT UTXOs as part of the build.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.provider.build_register_dust(self.utxo_ctime)).await
+        let provider = self.provider;
+        provider.build_then_prove(self.into_request()).await
+    }
+
+    fn into_request(self) -> TransferRequest {
+        TransferKind::DustRegistration {
+            utxo_ctime: self.utxo_ctime,
+        }
+        .into()
     }
 }
 
@@ -377,9 +353,14 @@ impl<'a> IntoFuture for DustRegistration<'a> {
 
     fn into_future(self) -> Self::IntoFuture {
         let provider = self.provider;
-        Box::pin(async move {
-            let result = self.build().await?;
-            provider.submit_reserved(&result).await
-        })
+        Box::pin(build_and_submit(provider, self.into_request()))
     }
+}
+
+async fn build_and_submit(
+    provider: &MidnightProvider,
+    request: TransferRequest,
+) -> Result<PendingTx, ProviderError> {
+    let result = provider.build_then_prove(request).await?;
+    provider.submit_reserved(&result).await
 }

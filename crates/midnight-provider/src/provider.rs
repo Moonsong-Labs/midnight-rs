@@ -18,7 +18,7 @@ use crate::{
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
-    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
+    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
     TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
@@ -623,88 +623,17 @@ impl MidnightProvider {
 
     // -- Internal build paths driven by the transfer/register builders. --
 
-    /// Build a shielded transfer. `pay_fees` false produces a Dustless
-    /// (fee-less) transaction for another wallet to sponsor via
-    /// [`Self::balance_transaction`]; the builder's `.without_dust()` path
-    /// passes false, every other path passes true.
-    pub(crate) async fn build_shielded_transfer(
-        &self,
-        token_type: ShieldedTokenType,
-        amount: u128,
-        recipient: &str,
-        pay_fees: bool,
-        coin_selection: midnight_types::CoinSelectionStrategy,
-    ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(
-            TransferRequest::new(TransferKind::Shielded {
-                token_type,
-                amount,
-                recipient: recipient.to_string(),
-                pay_fees,
-            })
-            .with_coin_selection(coin_selection),
-        )
-        .await
-    }
-
-    /// Build a shielded swap half. Always fee-less (an unbalanced half can't
-    /// self-fund), so there is no `pay_fees` flag. Reserves the spent give-side
-    /// coins so a later in-process build doesn't re-select them.
-    pub(crate) async fn build_shielded_swap(
-        &self,
-        give_token: ShieldedTokenType,
-        give_amount: u128,
-        receive_token: ShieldedTokenType,
-        receive_amount: u128,
-        coin_selection: midnight_types::CoinSelectionStrategy,
-    ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(
-            TransferRequest::new(TransferKind::ShieldedSwap {
-                give_token,
-                give_amount,
-                receive_token,
-                receive_amount,
-            })
-            .with_coin_selection(coin_selection),
-        )
-        .await
-    }
-
-    /// Build an unshielded transfer. See [`Self::build_shielded_transfer`] for
-    /// the `pay_fees` flag.
-    pub(crate) async fn build_unshielded_transfer(
-        &self,
-        token_type: UnshieldedTokenType,
-        amount: u128,
-        recipient: &str,
-        pay_fees: bool,
-        coin_selection: midnight_types::CoinSelectionStrategy,
-    ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(
-            TransferRequest::new(TransferKind::Unshielded {
-                token_type,
-                amount,
-                recipient: recipient.to_string(),
-                pay_fees,
-            })
-            .with_coin_selection(coin_selection),
-        )
-        .await
-    }
-
-    pub(crate) async fn build_register_dust(
-        &self,
-        utxo_ctime: Option<u64>,
-    ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(TransferRequest::new(TransferKind::DustRegistration {
-            utxo_ctime,
-        }))
-        .await
-    }
-
     /// Prepare a build under the attached wallet, then prove without it, on
     /// the generation the wallet's state is in.
-    async fn build_then_prove(
+    pub(crate) async fn build_then_prove(
+        &self,
+        request: TransferRequest,
+    ) -> Result<TransferResult, ProviderError> {
+        // Boxed; see the frame-size note on `resync_wallet`.
+        Box::pin(self.build_then_prove_inner(request)).await
+    }
+
+    async fn build_then_prove_inner(
         &self,
         request: TransferRequest,
     ) -> Result<TransferResult, ProviderError> {
