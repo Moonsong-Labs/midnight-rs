@@ -628,7 +628,8 @@ where
             "{what} is not a struct-encoded value: {value:?}"
         )));
     };
-    T::try_from(&*av.value).map_err(|e| ContractError::Construction(format!("{what}: {e}")))
+    T::try_from(&*av.value)
+        .map_err(|_| ContractError::Construction(format!("{what} does not decode: {value:?}")))
 }
 
 /// Decode a captured [`CircuitZswapOutput`] (the `(coin, recipient)` args of a
