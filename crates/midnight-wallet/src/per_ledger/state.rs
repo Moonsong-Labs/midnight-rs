@@ -1589,6 +1589,20 @@ pub(crate) mod test_support {
 
     use super::*;
 
+    pub(crate) fn test_seed() -> Seed {
+        Seed::from_bytes(&[0x22; 32]).unwrap()
+    }
+
+    /// A coin the wallet owns and can rebuild, but whose output carries
+    /// nothing it can decrypt.
+    pub(crate) fn unreachable_coin(byte: u8, value: u128) -> crate::CoinInfo {
+        crate::CoinInfo {
+            nonce: crate::Nonce(HashOutput([byte; 32])),
+            type_: crate::ShieldedTokenType(HashOutput([3u8; 32])),
+            value,
+        }
+    }
+
     /// An event with an all-zero source, for tests that read only its content.
     pub(super) fn zero_source_event(content: EventDetails<DefaultDB>) -> Event<DefaultDB> {
         Event {
@@ -1636,7 +1650,9 @@ mod tests {
     };
 
     use super::super::pending::test_support::{dust_batch, ukey};
-    use super::test_support::{ciphertextless_output, zero_source_event};
+    use super::test_support::{
+        ciphertextless_output, test_seed, unreachable_coin, zero_source_event,
+    };
     use super::*;
 
     #[test]
@@ -1706,10 +1722,6 @@ mod tests {
             contract: None,
         });
         assert_eq!(event_spend_nullifier(&other), None);
-    }
-
-    fn test_seed() -> Seed {
-        Seed::from_bytes(&[0x22; 32]).unwrap()
     }
 
     /// Minimal offline wallet for unit tests: fresh state, no sync.
@@ -1989,16 +2001,6 @@ mod tests {
             .unwrap()
             .expect("pending.json should exist after reserve_pending");
         assert_eq!(loaded.unshielded_keys().count(), 1);
-    }
-
-    /// A coin the wallet owns and can rebuild, but whose output carries
-    /// nothing it can decrypt.
-    fn unreachable_coin(byte: u8, value: u128) -> crate::CoinInfo {
-        crate::CoinInfo {
-            nonce: crate::Nonce(HashOutput([byte; 32])),
-            type_: crate::ShieldedTokenType(HashOutput([3u8; 32])),
-            value,
-        }
     }
 
     /// The commitment `coin`'s output carries when `wallet` owns it.

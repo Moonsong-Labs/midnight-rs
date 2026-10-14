@@ -1220,18 +1220,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-
-    fn seed() -> Seed {
-        Seed::from_bytes(&[0x22; 32]).unwrap()
-    }
-
-    fn coin(nonce: u8) -> CoinInfo {
-        CoinInfo {
-            nonce: midnight_types::Nonce(midnight_types::HashOutput([nonce; 32])),
-            type_: midnight_types::ShieldedTokenType(midnight_types::HashOutput([3; 32])),
-            value: 42,
-        }
-    }
+    use crate::ledger_8::state::test_support::{test_seed, unreachable_coin};
 
     /// A chain that crossed the fork serves ledger 8 events, then ledger 9
     /// ones, in one stream. A replay that stopped at the boundary, or lost the
@@ -1244,11 +1233,19 @@ mod tests {
         let events = [
             (
                 1,
-                crate::ledger_8::state::test_support::ciphertextless_output(&seed(), &coin(1), 0),
+                crate::ledger_8::state::test_support::ciphertextless_output(
+                    &test_seed(),
+                    &unreachable_coin(1, 42),
+                    0,
+                ),
             ),
             (
                 2,
-                crate::ledger_9::state::test_support::ciphertextless_output(&seed(), &coin(2), 1),
+                crate::ledger_9::state::test_support::ciphertextless_output(
+                    &test_seed(),
+                    &unreachable_coin(2, 42),
+                    1,
+                ),
             ),
         ];
         let server = tokio::spawn(async move {
@@ -1264,11 +1261,13 @@ mod tests {
             }
         });
 
-        let registered =
-            crate::ledger_8::state::ShieldedRescanPlan::new(&seed(), &[coin(1), coin(2)]);
+        let registered = crate::ledger_8::state::ShieldedRescanPlan::new(
+            &test_seed(),
+            &[unreachable_coin(1, 42), unreachable_coin(2, 42)],
+        );
         let replayed = replay_zswap(
             &SubscriptionClient::new(&url),
-            &seed(),
+            &test_seed(),
             ZswapState::Ledger8(registered.initial_state),
             0,
             false,
@@ -1312,7 +1311,7 @@ mod tests {
         });
 
         let wallet = ledger_9::DustWallet::default(
-            midnight_types::ledger_9::convert::IntoLedger::into_ledger(&seed()),
+            midnight_types::ledger_9::convert::IntoLedger::into_ledger(&test_seed()),
             Some(&ledger_9::INITIAL_PARAMETERS),
         );
         let replay = crate::ledger_9::state::replay_dust_events(
