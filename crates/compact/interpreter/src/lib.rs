@@ -709,41 +709,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         E::Sub { left, right, .. } => eval_arith(ctx, left, right, ArithOp::Sub),
         E::Mul { left, right, .. } => eval_arith(ctx, left, right, ArithOp::Mul),
 
-        E::Eq { left, right, .. } => {
-            let l = eval_expr(ctx, left)?;
-            let r = eval_expr(ctx, right)?;
-            Ok(Value::Bool(values_equal(&l, &r)))
-        }
+        E::Eq { left, right, .. } => Ok(Value::Bool(eval_equal(ctx, left, right)?)),
+        E::Neq { left, right, .. } => Ok(Value::Bool(!eval_equal(ctx, left, right)?)),
 
-        E::Neq { left, right, .. } => {
-            let l = eval_expr(ctx, left)?;
-            let r = eval_expr(ctx, right)?;
-            Ok(Value::Bool(!values_equal(&l, &r)))
-        }
-
-        E::Lt { left, right, .. } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Bool(l < r))
-        }
-
-        E::Le { left, right, .. } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Bool(l <= r))
-        }
-
-        E::Gt { left, right, .. } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Bool(l > r))
-        }
-
-        E::Ge { left, right, .. } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Bool(l >= r))
-        }
+        E::Lt { left, right, .. } => eval_compare(ctx, left, right, u128::lt),
+        E::Le { left, right, .. } => eval_compare(ctx, left, right, u128::le),
+        E::Gt { left, right, .. } => eval_compare(ctx, left, right, u128::gt),
+        E::Ge { left, right, .. } => eval_compare(ctx, left, right, u128::ge),
 
         E::If { cond, then, els } => {
             let c = eval_expr(ctx, cond)?;
@@ -811,7 +783,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             eval_cast(val, &Type::Bytes(*len), ty)
         }
 
-        E::CastFromEnum { ty, from, expr } | E::CastToEnum { ty, from, expr } => {
+        E::CastFromEnum { ty, from, expr }
+        | E::CastToEnum { ty, from, expr }
+        | E::SafeCast { ty, from, expr } => {
             check_type(ty)?;
             check_type(from)?;
             let val = eval_expr(ctx, expr)?;
@@ -849,13 +823,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                 &Type::Field(ir::FieldType::Native),
                 &Type::Unsigned(maxval.clone()),
             )
-        }
-
-        E::SafeCast { ty, from, expr } => {
-            check_type(ty)?;
-            check_type(from)?;
-            let val = eval_expr(ctx, expr)?;
-            eval_cast(val, from, ty)
         }
 
         E::DowncastUnsigned {
@@ -1653,6 +1620,27 @@ fn eval_index(
             "{what} index {n} out of bounds (does not fit in usize)"
         ))
     })
+}
+
+fn eval_compare(
+    ctx: &mut ExecContext,
+    left: &ir::Expr,
+    right: &ir::Expr,
+    cmp: fn(&u128, &u128) -> bool,
+) -> Result<Value, InterpreterError> {
+    let l = eval_as_integer(ctx, left)?;
+    let r = eval_as_integer(ctx, right)?;
+    Ok(Value::Bool(cmp(&l, &r)))
+}
+
+fn eval_equal(
+    ctx: &mut ExecContext,
+    left: &ir::Expr,
+    right: &ir::Expr,
+) -> Result<bool, InterpreterError> {
+    let l = eval_expr(ctx, left)?;
+    let r = eval_expr(ctx, right)?;
+    Ok(values_equal(&l, &r))
 }
 
 #[derive(Clone, Copy)]
