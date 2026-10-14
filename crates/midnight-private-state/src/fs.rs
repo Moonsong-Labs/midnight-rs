@@ -106,6 +106,11 @@ fn default_dir() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".midnight").join("private-state"))
 }
 
+/// The on-disk name of `s`: the hex of its sha256.
+fn hashed_name(s: &str) -> String {
+    hex::encode(Sha256::digest(s.as_bytes()))
+}
+
 /// Whether `base` holds a store from before the per-wallet layout, which no
 /// store reads.
 fn unscoped_store_exists(base: &Path) -> bool {
@@ -135,10 +140,7 @@ impl FsPrivateStateProvider {
     /// unshielded address: its bech32 prefix names the network, so each
     /// network also gets its own store.
     pub fn for_wallet(base: impl AsRef<Path>, wallet_address: &str) -> Self {
-        Self::new(
-            base.as_ref()
-                .join(hex::encode(Sha256::digest(wallet_address.as_bytes()))),
-        )
+        Self::new(base.as_ref().join(hashed_name(wallet_address)))
     }
 
     /// [`Self::for_wallet`] under `~/.midnight/private-state/`. `None` when no
@@ -184,16 +186,13 @@ impl FsPrivateStateProvider {
 
     /// `<states>/<sha256(address)>/`, the per-address journal directory.
     fn address_dir(&self, address: &str) -> PathBuf {
-        self.states_dir()
-            .join(hex::encode(Sha256::digest(address.as_bytes())))
+        self.states_dir().join(hashed_name(address))
     }
 
     /// `<keys>/<sha256(address)>.json`, the flat signing-key file.
     fn key_path(&self, address: &str) -> PathBuf {
-        self.keys_dir().join(format!(
-            "{}.json",
-            hex::encode(Sha256::digest(address.as_bytes()))
-        ))
+        self.keys_dir()
+            .join(format!("{}.json", hashed_name(address)))
     }
 
     fn snapshot_filename(extrinsic_hash: &str) -> String {
@@ -515,22 +514,13 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             // has been edited would otherwise migrate the key to
             // the edited address through an export/import
             // round-trip.
-            let expected_stem = hex::encode(Sha256::digest(rec.address.as_bytes()));
-            // `to_string_lossy` surfaces non-UTF8 paths with U+FFFD
-            // substitutions so the comparison still fails loudly
-            // and the error message identifies the file, instead
-            // of silently degrading to an empty string and
-            // misclassifying the failure.
-            let actual_stem = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if actual_stem != expected_stem {
+            let expected = self.key_path(&rec.address);
+            if path != expected {
                 return Err(PrivateStateError::InvalidFormat(format!(
                     "signing-key file at {} has an address that does not \
-                     match its filename hash (filename={actual_stem}, \
-                     record address hashes to={expected_stem})",
+                     match its filename hash (expected {})",
                     path.display(),
+                    expected.display(),
                 )));
             }
             records.push(rec);
@@ -821,21 +811,14 @@ fn collect_export_entries(
         // Cross-check the marker against the directory name: the directory
         // hash is the source of truth, so a tampered or stale marker must
         // not silently rebind snapshots through an export/import round-trip.
-        let expected_dir = hex::encode(Sha256::digest(address.as_bytes()));
-        // `to_string_lossy` surfaces non-UTF8 paths with U+FFFD so the
-        // comparison still fails loudly and the error message identifies
-        // the directory.
-        let actual_dir = dir
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if actual_dir != expected_dir {
+        let expected = provider.address_dir(&address);
+        if dir != expected {
             return Err(PrivateStateError::InvalidFormat(format!(
                 "address marker at {} holds {:?} whose sha256 does not match \
-                 the directory name (directory={actual_dir}, expected hash \
-                 for marker={expected_dir})",
+                 the directory name (expected directory {})",
                 addr_marker.display(),
                 address,
+                expected.display(),
             )));
         }
         for (_, snap) in read_json_dir::<Snapshot>(&dir)? {
