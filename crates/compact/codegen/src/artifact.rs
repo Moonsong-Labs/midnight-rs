@@ -42,14 +42,7 @@ pub fn load(path: &Path) -> Result<ContractInfo, Box<dyn std::error::Error>> {
 }
 
 pub fn load_str(text: &str) -> Result<ContractInfo, Box<dyn std::error::Error>> {
-    let artifact = ir::parse_str(text).map_err(|e| {
-        // The reader's Display already carries the format name.
-        ArtifactError(
-            e.to_string()
-                .trim_start_matches("analyzed-ir: ")
-                .to_string(),
-        )
-    })?;
+    let artifact = ir::parse_str(text)?;
     Ok(from_program(&artifact)?)
 }
 
@@ -143,13 +136,12 @@ struct Context<'a> {
 
 impl<'a> Context<'a> {
     fn new(artifact: &'a ir::AnalyzedIr) -> Self {
-        let mut circuits = HashMap::new();
-        for e in &artifact.elements {
-            if let ir::ProgramElement::Circuit(c) = e {
-                circuits.insert(c.name.0.as_str(), c);
-            }
+        Context {
+            circuits: artifact
+                .circuits()
+                .map(|c| (c.name.0.as_str(), c))
+                .collect(),
         }
-        Context { circuits }
     }
 
     // -- types ----------------------------------------------------------
