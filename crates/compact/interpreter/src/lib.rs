@@ -2101,40 +2101,10 @@ fn u32_arg(i: &ir::Instruction, name: &str) -> Result<u32, InterpreterError> {
 /// One element of an `idx` path.
 fn path_key(ctx: &mut ExecContext, entry: &ir::Operand) -> Result<Key, InterpreterError> {
     match entry {
-        ir::Operand::Align { value, bytes } => Ok(Key::Value(literal_key(value, *bytes)?)),
         ir::Operand::Stack => Ok(Key::Stack),
-        ir::Operand::Expr(e) => match e.as_ref() {
-            // Resolve the local and encode it with its declared type when
-            // known, so the key's alignment matches what the on-chain insert
-            // produced (an Integer local of type Uint<16> must become a 2-byte
-            // key, not the type-less 8-byte default).
-            ir::Expr::VarRef(id) => match ctx.locals.get(id.0.as_str()) {
-                Some(val @ (Value::Integer(_) | Value::AlignedValue(_) | Value::Bool(_))) => {
-                    let local_ty = ctx.local_types.get(id.0.as_str());
-                    match encode_ledger_key(val, local_ty)? {
-                        StateValue::Cell(ref av) => Ok(Key::Value((**av).clone())),
-                        other => Err(InterpreterError::TypeError(format!(
-                            "variable `{}` did not encode to a cell key (got {other:?})",
-                            id.0
-                        ))),
-                    }
-                }
-                _ => Err(InterpreterError::UndefinedVariable(id.0.clone())),
-            },
-            // Encode the computed value with its inferred type, so the key's
-            // alignment matches what the insert that stored it produced.
-            other => {
-                let ty = infer_type_of_expr(ctx, other);
-                let val = eval_expr(ctx, other)?;
-                match encode_ledger_key(&val, ty.as_ref())? {
-                    StateValue::Cell(ref av) => Ok(Key::Value((**av).clone())),
-                    other => Err(InterpreterError::TypeError(format!(
-                        "a computed ledger path element did not encode to a cell key \
-                         (got {other:?})"
-                    ))),
-                }
-            }
-        },
+        ir::Operand::Align { .. } | ir::Operand::Expr(_) => {
+            operand_aligned(ctx, entry).map(Key::Value)
+        }
         other => Err(InterpreterError::Unsupported(format!(
             "path element {other:?}"
         ))),
@@ -2254,10 +2224,7 @@ fn operand_aligned(
     }
 }
 
-/// The [`AlignedValue`] behind an evaluated [`Value`].
-///
-/// Mirrors `Value::to_state_value`, which wraps the same encoding in a
-/// `StateValue`; a concatenation needs the value itself.
+/// The type-free [`AlignedValue`] of an evaluated [`Value`].
 fn value_aligned(val: &Value) -> Result<AlignedValue, InterpreterError> {
     match val {
         Value::AlignedValue(av) => Ok(av.clone()),
@@ -2365,30 +2332,6 @@ fn reduce_operand(o: &ir::Operand) -> VmArg<'_> {
         | O::AlignedConcat(_) => VmArg::Vm(o),
         O::Expr(e) => VmArg::Expr(e),
         O::List(_) => VmArg::List,
-    }
-}
-
-/// Encode an evaluated [`Value`] as a [`StateValue`] for pushing onto
-/// the ledger query stack, re-aligning integers to the expression's
-/// declared [`Type`] when known.
-///
-/// The default [`Value::to_state_value`] conversion throws away type
-/// information and encodes integers at the u64 width. That's fine for
-/// arithmetic but wrong wherever the on-chain encoding is width-sensitive
-/// (e.g. `Map<Field, _>` or `Map<Uint<16>, _>` keys): the insert path
-/// produces a key with the declared type's alignment, while a u64-aligned
-/// off-chain key would never match it. When the declared type is known,
-/// integers are routed through [`encode_typed`] so the alignment matches
-/// the insert path byte-for-byte; out-of-range integers error instead of
-/// wrapping. Everything else (pre-encoded `AlignedValue`s, booleans,
-/// type-less integers) keeps the `to_state_value` behavior.
-fn encode_ledger_key(
-    val: &Value,
-    ty: Option<&Type>,
-) -> Result<StateValue<InMemoryDB>, InterpreterError> {
-    match (val, ty) {
-        (Value::Integer(_), Some(ty)) => encode_typed(val, ty).map(StateValue::from),
-        _ => Ok(val.to_state_value()),
     }
 }
 
@@ -3110,11 +3053,6 @@ mod tests {
             Value::Integer(big).try_to_aligned_value().unwrap(),
             AlignedValue::from(big)
         );
-        let decoded = match Value::Integer(big).to_state_value() {
-            StateValue::Cell(ref sp) => u128::try_from(&*sp.value).expect("decode u128"),
-            other => panic!("expected Cell, got {other:?}"),
-        };
-        assert_eq!(decoded, big);
     }
 
     #[test]
@@ -3148,12 +3086,50 @@ mod tests {
 
     #[test]
     fn a_typed_integer_ledger_key_takes_the_declared_width() {
+        let program = Program::new(&[], &[], &[]);
+        let mut ps = Vec::new();
+        let mut ctx = test_ctx(
+            &program,
+            &mut ps,
+            HashMap::from([("k".to_string(), uint("65535"))]),
+        );
+        ctx.locals.insert("k".to_string(), Value::Integer(7));
         // Uint<0..65535> is a 2-byte atom, not the type-less 8-byte default.
-        let sv = encode_ledger_key(&Value::Integer(7), Some(&uint("65535"))).expect("encode key");
-        match sv {
-            StateValue::Cell(ref sp) => assert_eq!((**sp).clone(), AlignedValue::from(7u16)),
-            other => panic!("expected Cell, got {other:?}"),
-        }
+        assert_eq!(
+            path_key(&mut ctx, &ir::Operand::Expr(Box::new(var("k")))).expect("encode key"),
+            Key::Value(AlignedValue::from(7u16))
+        );
+    }
+
+    /// A `Map` lookup builds its key as an `idx` path element, and an insert
+    /// pushes it as a cell. A key that encodes differently on the two paths is
+    /// never found.
+    #[test]
+    fn a_tuple_ledger_key_encodes_alike_in_a_path_and_a_push() {
+        let program = Program::new(&[], &[], &[]);
+        let mut ps = Vec::new();
+        let mut ctx = test_ctx(
+            &program,
+            &mut ps,
+            HashMap::from([(
+                "k".to_string(),
+                Type::Tuple(vec![uint("255"), uint("65535")]),
+            )]),
+        );
+        ctx.locals.insert(
+            "k".to_string(),
+            Value::Tuple(vec![Value::Integer(1), Value::Integer(2)]),
+        );
+        let key = ir::Operand::Expr(Box::new(var("k")));
+        let cell = ir::Operand::StateValue(ir::StateValue::Cell(Box::new(key.clone())));
+        let inserted = match push_value(&mut ctx, &cell).expect("push the key") {
+            StateValue::Cell(ref sp) => (**sp).clone(),
+            other => panic!("a pushed key is a cell, got {other:?}"),
+        };
+        assert_eq!(
+            path_key(&mut ctx, &key).expect("a tuple path key"),
+            Key::Value(inserted)
+        );
     }
 
     #[test]

@@ -81,17 +81,6 @@ impl Value {
             )),
         }
     }
-
-    /// Convert to a StateValue for ledger storage.
-    pub fn to_state_value(&self) -> StateValue<InMemoryDB> {
-        match self {
-            Value::AlignedValue(av) => StateValue::from(av.clone()),
-            Value::Integer(n) => StateValue::from(integer_fallback_aligned(*n)),
-            Value::Bool(b) => StateValue::from(AlignedValue::from(*b)),
-            Value::Void => StateValue::from(AlignedValue::from(())),
-            _ => StateValue::Null,
-        }
-    }
 }
 
 /// Width-preserving FAB encoding for an integer with no type information.
