@@ -163,34 +163,14 @@ fn witness_failure_on_builtin_name_propagates() {
 fn unknown_witness_falls_through_to_builtin() {
     use compact_bindgen::AlignedValue;
     use midnight_contract::interpreter;
-    use midnight_contract::runtime::{InterpreterError, Value, WitnessOutcome, WitnessProvider};
-
-    struct KnowsNothing;
-    impl WitnessProvider for KnowsNothing {
-        fn call_witness(
-            &self,
-            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
-            _name: &str,
-            _args: &[Value],
-        ) -> Result<WitnessOutcome, InterpreterError> {
-            Ok(WitnessOutcome::Unknown)
-        }
-    }
+    use midnight_contract::runtime::Value;
 
     let witnesses = vec![persistent_hash_witness()];
     let program = interpreter::Program::new(&[], &witnesses, &[]);
     let state = counter_state(0);
-    let result = interpreter::execute(
-        &persistent_hash_witness_ir(),
-        &program,
-        state,
-        &[],
-        interpreter::Env {
-            witnesses: &KnowsNothing,
-            ..epoch()
-        },
-    )
-    .expect("Unknown must fall through to the persistentHash builtin");
+    // `epoch()` carries `NoWitnesses`, which answers `Unknown` for every name.
+    let result = interpreter::execute(&persistent_hash_witness_ir(), &program, state, &[], epoch())
+        .expect("Unknown must fall through to the persistentHash builtin");
 
     // The builtin hashes the argument at the witness's declared type,
     // `Uint<0..65535>`, which is a two-byte atom. Recompute the expected digest
