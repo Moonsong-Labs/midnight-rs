@@ -1216,8 +1216,9 @@ async fn sync_on_chain(
 #[cfg(test)]
 mod tests {
     use midnight_helpers::{Tagged, ledger_8, ledger_9};
-    use midnight_indexer_client::testutil::{accept_subscriber, bind, next_json, send_next};
-    use serde_json::json;
+    use midnight_indexer_client::testutil::{
+        accept_subscriber, bind, ledger_event, next_json, send_next, subscription_variable,
+    };
 
     use super::*;
     use crate::ledger_8::state::test_support::{test_seed, unreachable_coin};
@@ -1252,9 +1253,9 @@ mod tests {
             // One subscription per generation the replay passes through.
             for _ in 0..2 {
                 let (mut ws, sub) = accept_subscriber(&listener).await;
-                let from = sub["payload"]["variables"]["id"].as_i64().unwrap();
+                let from = subscription_variable(&sub, "id");
                 for (id, raw) in events.iter().filter(|(id, _)| *id >= from) {
-                    let message = json!({"zswapLedgerEvents": {"id": id, "raw": raw, "maxId": 2}});
+                    let message = ledger_event("zswapLedgerEvents", *id, raw, 2);
                     send_next(&mut ws, &sub, message).await;
                 }
                 while next_json(&mut ws).await.is_some() {}
@@ -1304,7 +1305,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut ws, sub) = accept_subscriber(&listener).await;
             for id in 1..=3 {
-                let message = json!({"dustLedgerEvents": {"id": id, "raw": raw, "maxId": 3}});
+                let message = ledger_event("dustLedgerEvents", id, &raw, 3);
                 send_next(&mut ws, &sub, message).await;
             }
             while next_json(&mut ws).await.is_some() {}

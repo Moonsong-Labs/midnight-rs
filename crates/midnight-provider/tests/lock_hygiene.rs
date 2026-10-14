@@ -21,8 +21,8 @@ use std::time::Duration;
 use midnight_helpers::ledger_8::INITIAL_PARAMETERS;
 use midnight_helpers::midnight_serialize::tagged_serialize;
 use midnight_indexer_client::testutil::{
-    ServerWs, bind, next_json, read_http_request, send_next, subscriber_handshake,
-    write_json_response,
+    ServerWs, bind, ledger_event, next_json, read_http_request, send_next, subscriber_handshake,
+    unshielded_progress, write_json_response,
 };
 use midnight_provider::MidnightProvider;
 use midnight_wallet::{
@@ -109,14 +109,11 @@ async fn handle_ws(stream: TcpStream, state: Arc<MockState>) {
     } else {
         // "Empty chain" replies: each replay loop completes immediately.
         let data = if query.contains("zswapLedgerEvents") {
-            json!({"zswapLedgerEvents": {"id": 0, "raw": "", "maxId": 0}})
+            ledger_event("zswapLedgerEvents", 0, "", 0)
         } else if query.contains("dustLedgerEvents") {
-            json!({"dustLedgerEvents": {"id": 0, "raw": "", "maxId": 0}})
+            ledger_event("dustLedgerEvents", 0, "", 0)
         } else {
-            json!({"unshieldedTransactions": {
-                "__typename": "UnshieldedTransactionsProgress",
-                "highestTransactionId": 0,
-            }})
+            unshielded_progress(0)
         };
         send_next(&mut ws, &sub, data).await;
         drain(&mut ws).await;

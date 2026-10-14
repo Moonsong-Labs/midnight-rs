@@ -1015,7 +1015,10 @@ mod tests {
     /// `test-util` feature) and is shared with the indexer-client and
     /// provider test suites.
     mod reconnect_ws {
-        use midnight_indexer_client::testutil::{accept_subscriber, bind, next_json, send_next};
+        use midnight_indexer_client::testutil::{
+            accept_subscriber, bind, next_json, send_next, subscription_variable,
+            unshielded_progress,
+        };
         use serde_json::json;
 
         use super::*;
@@ -1037,21 +1040,6 @@ mod tests {
             })
         }
 
-        fn progress_event(target: i64) -> serde_json::Value {
-            json!({
-                "unshieldedTransactions": {
-                    "__typename": "UnshieldedTransactionsProgress",
-                    "highestTransactionId": target,
-                }
-            })
-        }
-
-        fn requested_tx_id(sub: &serde_json::Value) -> i64 {
-            sub["payload"]["variables"]["transactionId"]
-                .as_i64()
-                .expect("transactionId variable")
-        }
-
         #[tokio::test]
         async fn unshielded_replay_resumes_after_drop_and_dedupes() {
             let (listener, url) = bind().await;
@@ -1059,9 +1047,9 @@ mod tests {
                 // Connection 1: announce target 3, deliver txs 1 and 2, then
                 // drop the socket without a close handshake.
                 let (mut ws, sub) = accept_subscriber(&listener).await;
-                assert_eq!(requested_tx_id(&sub), 0);
+                assert_eq!(subscription_variable(&sub, "transactionId"), 0);
                 assert_eq!(sub["payload"]["variables"]["address"], "addr");
-                send_next(&mut ws, &sub, progress_event(3)).await;
+                send_next(&mut ws, &sub, unshielded_progress(3)).await;
                 send_next(&mut ws, &sub, tx_event(1, 100)).await;
                 send_next(&mut ws, &sub, tx_event(2, 200)).await;
                 drop(ws);
@@ -1070,7 +1058,11 @@ mod tests {
                 // Re-deliver tx 2 (a duplicate the client must skip), then
                 // deliver tx 3 to complete the sync.
                 let (mut ws, sub) = accept_subscriber(&listener).await;
-                assert_eq!(requested_tx_id(&sub), 3, "resume from last_id + 1");
+                assert_eq!(
+                    subscription_variable(&sub, "transactionId"),
+                    3,
+                    "resume from last_id + 1"
+                );
                 send_next(&mut ws, &sub, tx_event(2, 200)).await;
                 send_next(&mut ws, &sub, tx_event(3, 300)).await;
                 while next_json(&mut ws).await.is_some() {}
@@ -1131,8 +1123,8 @@ mod tests {
                 // progress), then drop.
                 let (mut ws, sub) = accept_subscriber(&listener).await;
                 server_connections.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(requested_tx_id(&sub), 0);
-                send_next(&mut ws, &sub, progress_event(3)).await;
+                assert_eq!(subscription_variable(&sub, "transactionId"), 0);
+                send_next(&mut ws, &sub, unshielded_progress(3)).await;
                 send_next(&mut ws, &sub, tx_event(1, 100)).await;
                 send_next(&mut ws, &sub, tx_event(2, 200)).await;
                 drop(ws);
@@ -1145,7 +1137,11 @@ mod tests {
                 loop {
                     let (mut ws, sub) = accept_subscriber(&listener).await;
                     server_connections.fetch_add(1, Ordering::SeqCst);
-                    assert_eq!(requested_tx_id(&sub), 3, "resume from last applied + 1");
+                    assert_eq!(
+                        subscription_variable(&sub, "transactionId"),
+                        3,
+                        "resume from last applied + 1"
+                    );
                     send_next(&mut ws, &sub, tx_event(2, 200)).await;
                     drop(ws);
                 }
@@ -1173,8 +1169,8 @@ mod tests {
             let (listener, url) = bind().await;
             let server = tokio::spawn(async move {
                 let (mut ws, sub) = accept_subscriber(&listener).await;
-                assert_eq!(requested_tx_id(&sub), 0);
-                send_next(&mut ws, &sub, progress_event(5)).await;
+                assert_eq!(subscription_variable(&sub, "transactionId"), 0);
+                send_next(&mut ws, &sub, unshielded_progress(5)).await;
                 send_next(&mut ws, &sub, tx_event(2, 200)).await;
                 send_next(&mut ws, &sub, tx_event(3, 300)).await;
                 // Hostile / corrupt stream: id 1 after id 3 on the same
