@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use subxt::OnlineClient;
 use subxt::config::RpcConfigFor;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
-use subxt::rpcs::client::{RpcClient, RpcParams};
+use subxt::rpcs::client::{RpcClient, RpcParams, rpc_params};
 use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
@@ -997,28 +997,16 @@ impl MidnightProvider {
     pub async fn get_block_number(&self) -> Result<u64, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let header: serde_json::Value =
-            match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!(error = %e, "chain_getHeader failed");
-                    return Err(ProviderError::Rpc(e.to_string()));
-                }
-            };
+        let header = legacy_rpc(&conn)
+            .chain_get_header(None)
+            .await
+            .map_err(rpc_error("chain_getHeader"))?;
 
-        debug!(header = %header, "chain_getHeader response");
+        debug!(header = ?header, "chain_getHeader response");
 
-        let block_number = header
-            .get("number")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProviderError::Rpc("missing 'number' field in header".to_string()))
-            .and_then(|hex| {
-                let hex = hex.strip_prefix("0x").unwrap_or(hex);
-                u64::from_str_radix(hex, 16)
-                    .map_err(|e| ProviderError::Rpc(format!("invalid block number hex: {e}")))
-            })?;
-
-        Ok(block_number)
+        header
+            .map(|header| header.number)
+            .ok_or_else(|| ProviderError::Rpc("chain_getHeader returned no header".to_string()))
     }
 
     /// Get the hash of the node's best block (`chain_getBlockHash` with no
@@ -1031,17 +1019,13 @@ impl MidnightProvider {
     pub async fn best_block_hash(&self) -> Result<NodeBlockHash, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let rpc = LegacyRpcMethods::<RpcConfigFor<subxt::SubstrateConfig>>::new(conn.rpc.clone());
-        match rpc.chain_get_block_hash(None).await {
-            Ok(Some(hash)) => Ok(hash),
-            Ok(None) => Err(ProviderError::Rpc(
-                "chain_getBlockHash returned no best block".to_string(),
-            )),
-            Err(e) => {
-                warn!(error = %e, "chain_getBlockHash failed");
-                Err(ProviderError::Rpc(e.to_string()))
-            }
-        }
+        legacy_rpc(&conn)
+            .chain_get_block_hash(None)
+            .await
+            .map_err(rpc_error("chain_getBlockHash"))?
+            .ok_or_else(|| {
+                ProviderError::Rpc("chain_getBlockHash returned no best block".to_string())
+            })
     }
 
     /// Get the latest finalized block height (`archive_v1_finalizedHeight`).
@@ -1052,13 +1036,11 @@ impl MidnightProvider {
     pub async fn get_finalized_block_height(&self) -> Result<u64, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        match archive_rpc(&conn).archive_v1_finalized_height().await {
-            Ok(height) => Ok(height as u64),
-            Err(e) => {
-                warn!(error = %e, "archive_v1_finalizedHeight failed");
-                Err(ProviderError::Rpc(e.to_string()))
-            }
-        }
+        archive_rpc(&conn)
+            .archive_v1_finalized_height()
+            .await
+            .map(|height| height as u64)
+            .map_err(rpc_error("archive_v1_finalizedHeight"))
     }
 
     /// Get the hashes of the blocks at `height` (`archive_v1_hashByHeight`):
@@ -1076,13 +1058,10 @@ impl MidnightProvider {
 
         let height = usize::try_from(height)
             .map_err(|_| ProviderError::Rpc(format!("block height {height} overflows usize")))?;
-        match archive_rpc(&conn).archive_v1_hash_by_height(height).await {
-            Ok(hashes) => Ok(hashes),
-            Err(e) => {
-                warn!(error = %e, "archive_v1_hashByHeight failed");
-                Err(ProviderError::Rpc(e.to_string()))
-            }
-        }
+        archive_rpc(&conn)
+            .archive_v1_hash_by_height(height)
+            .await
+            .map_err(rpc_error("archive_v1_hashByHeight"))
     }
 
     /// Get the header of the block with `hash` (`archive_v1_header`), or
@@ -1094,13 +1073,10 @@ impl MidnightProvider {
     ) -> Result<Option<NodeHeader>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        match archive_rpc(&conn).archive_v1_header(hash).await {
-            Ok(header) => Ok(header),
-            Err(e) => {
-                warn!(error = %e, "archive_v1_header failed");
-                Err(ProviderError::Rpc(e.to_string()))
-            }
-        }
+        archive_rpc(&conn)
+            .archive_v1_header(hash)
+            .await
+            .map_err(rpc_error("archive_v1_header"))
     }
 
     /// Get the timestamp of the block with `hash`, as time since the Unix
@@ -1143,13 +1119,11 @@ impl MidnightProvider {
     pub async fn system_chain(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let chain: String = match conn.rpc.request("system_chain", RpcParams::new()).await {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(error = %e, "system_chain failed");
-                return Err(ProviderError::Rpc(e.to_string()));
-            }
-        };
+        let chain: String = conn
+            .rpc
+            .request("system_chain", RpcParams::new())
+            .await
+            .map_err(rpc_error("system_chain"))?;
 
         debug!(chain = %chain, "system_chain response");
 
@@ -1236,25 +1210,20 @@ impl MidnightProvider {
 
                 debug!(health = ?sys_health, "system_health response");
 
-                let header: Option<serde_json::Value> =
-                    match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
-                        Ok(v) => Some(v),
-                        Err(e) => {
-                            warn!(error = %e, "chain_getHeader RPC call failed");
-                            None
-                        }
-                    };
+                let header = match legacy_rpc(&conn).chain_get_header(None).await {
+                    Ok(header) => Some(header),
+                    Err(e) => {
+                        warn!(error = %e, "chain_getHeader RPC call failed");
+                        None
+                    }
+                };
 
                 debug!(header = ?header, "chain_getHeader response");
 
                 let block_height = header
                     .as_ref()
-                    .and_then(|v| v.get("number"))
-                    .and_then(|v| v.as_str())
-                    .and_then(|hex| {
-                        let hex = hex.strip_prefix("0x").unwrap_or(hex);
-                        u64::from_str_radix(hex, 16).ok()
-                    });
+                    .and_then(Option::as_ref)
+                    .map(|header| header.number);
 
                 let node_connected = sys_health.is_some() || header.is_some();
                 (node_connected, block_height, peers, is_syncing)
@@ -1287,16 +1256,12 @@ impl MidnightProvider {
         at_block_hash: Option<NodeBlockHash>,
     ) -> Result<Option<String>, ProviderError> {
         let conn = self.get_or_connect().await?;
-        let mut params = RpcParams::new();
-        params
-            .push(address)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        params
-            .push(at_block_hash.map(|hash| format!("{hash:#x}")))
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         match conn
             .rpc
-            .request::<String>("midnight_contractState", params)
+            .request::<String>(
+                "midnight_contractState",
+                rpc_params![address, at_block_hash],
+            )
             .await
         {
             Ok(hex_state) => Ok((!hex_state.is_empty()).then_some(hex_state)),
@@ -1316,18 +1281,11 @@ impl MidnightProvider {
         at_block_hash: Option<NodeBlockHash>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         let conn = self.get_or_connect().await?;
-        let mut params = RpcParams::new();
-        params
-            .push(address)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        params
-            .push(queries)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        params
-            .push(at_block_hash.map(|hash| format!("{hash:#x}")))
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         conn.rpc
-            .request("midnight_queryContractState", params)
+            .request(
+                "midnight_queryContractState",
+                rpc_params![address, queries, at_block_hash],
+            )
             .await
             .map_err(|e| ProviderError::Rpc(e.to_string()))
     }
@@ -1504,6 +1462,20 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
 /// derived from the chain's Substrate config.
 fn archive_rpc(conn: &NodeConnection) -> ChainHeadRpcMethods<RpcConfigFor<subxt::SubstrateConfig>> {
     ChainHeadRpcMethods::new(conn.rpc.clone())
+}
+
+/// Typed view over a connection's raw client for the legacy `chain_*` RPCs,
+/// with hash and header types derived from the chain's Substrate config.
+fn legacy_rpc(conn: &NodeConnection) -> LegacyRpcMethods<RpcConfigFor<subxt::SubstrateConfig>> {
+    LegacyRpcMethods::new(conn.rpc.clone())
+}
+
+/// Log a failed node RPC `method` and wrap its error as [`ProviderError::Rpc`].
+fn rpc_error(method: &'static str) -> impl FnOnce(subxt::rpcs::Error) -> ProviderError {
+    move |e| {
+        warn!(error = %e, "{method} failed");
+        ProviderError::Rpc(e.to_string())
+    }
 }
 
 #[cfg(test)]
