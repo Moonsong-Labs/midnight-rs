@@ -483,36 +483,6 @@ mod encode_roundtrip_tests {
 }
 
 // ===================================================================
-// Conformance corpus: the files of tests/conformance
-// ===================================================================
-
-#[cfg(test)]
-mod conformance_files {
-    use std::path::{Path, PathBuf};
-
-    use serde_json::Value as Json;
-
-    pub(crate) fn conformance_file(path: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../conformance")
-            .join(path)
-    }
-
-    pub(crate) fn read_json(path: &Path) -> Json {
-        let text = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
-    }
-
-    /// The golden that the canonical runtime recorded for `case` of `fixture`.
-    pub(crate) fn golden_json(fixture: &str, case: &str) -> Json {
-        read_json(&conformance_file(&format!(
-            "expected/{fixture}/{case}.json"
-        )))
-    }
-}
-
-// ===================================================================
 // Encodings: the generated types against the canonical runtime's
 // ===================================================================
 
@@ -524,19 +494,19 @@ mod golden_encodings {
     use conformance::state_json::aligned_value_from_json;
     use serde_json::Value as Json;
 
-    use crate::conformance_files::{conformance_file, golden_json, read_json};
+    use conformance::corpus::{corpus_dir, golden, read_json};
 
     /// The value that the canonical runtime recorded at the JSON `pointer` of
     /// the golden of a case.
     fn golden_value(fixture: &str, case: &str, pointer: &str) -> AlignedValue {
-        let golden = golden_json(fixture, case);
+        let golden = golden(fixture, case);
         let json = golden.pointer(pointer).expect("the golden has the value");
         aligned_value_from_json(json).expect("the golden value decodes")
     }
 
     /// The tagged fields of the struct argument of the first step of a case.
     fn first_struct_argument(fixture: &str, case: &str) -> Vec<Json> {
-        let case_json = read_json(&conformance_file(&format!("cases/{fixture}/{case}.json")));
+        let case_json = read_json(&corpus_dir().join(format!("cases/{fixture}/{case}.json")));
         case_json["steps"][0]["args"][0]["struct"]
             .as_array()
             .expect("the argument is a struct")
@@ -598,8 +568,8 @@ mod queue_grows {
     use conformance::runner::{Fixture, ScriptedWitnesses, run_step, state_from_value};
     use midnight_base_crypto::time::Timestamp;
 
-    use crate::conformance_files::{conformance_file, golden_json};
     use crate::containers::Containers;
+    use conformance::corpus::golden;
 
     /// The value that step 0 pushes.
     pub(crate) const FIRST_PUSH: u64 = 11;
@@ -608,7 +578,7 @@ mod queue_grows {
 
     /// The contract state at the JSON `pointer` of the case's golden.
     fn golden_state(pointer: &str) -> StateValue<InMemoryDB> {
-        let golden = golden_json("containers", "queue-grows");
+        let golden = golden("containers", "queue-grows");
         let json = golden.pointer(pointer).expect("golden has the state");
         conformance::state_json::state_value_from_json(json).expect("golden state decodes")
     }
@@ -629,11 +599,7 @@ mod queue_grows {
     /// The SDK's interpreter runs the pushes. `make conformance` checks it
     /// against the canonical runtime on this case.
     pub(crate) fn state_with_pushes(values: &[u64]) -> StateValue<InMemoryDB> {
-        let ir = std::fs::read_to_string(conformance_file(
-            "fixtures/containers/compiler/analyzed-ir.sexp",
-        ))
-        .expect("fixture readable");
-        let fixture = Fixture::load(&ir).expect("fixture loads");
+        let fixture = Fixture::open("containers").expect("fixture loads");
         let witnesses = ScriptedWitnesses::from_json(None).expect("no witnesses");
         let state = values.iter().fold(
             state_from_value(initial_state(), StorageHashMap::new()),
@@ -690,12 +656,12 @@ mod initial_state_defaults {
     use compact_bindgen::{ContractState, InMemoryDB};
     use conformance::report::state_report_json;
 
-    use crate::conformance_files::{conformance_file, read_json};
+    use conformance::corpus::{corpus_dir, read_json};
 
     /// The golden constructor state of the first case of `fixture`. Every
     /// case of a fixture starts from the same state.
     fn golden_constructor_state(fixture: &str) -> serde_json::Value {
-        let dir = conformance_file(&format!("expected/{fixture}"));
+        let dir = corpus_dir().join("expected").join(fixture);
         let mut cases: Vec<_> = std::fs::read_dir(&dir)
             .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
             .map(|entry| entry.expect("dir entry").path())

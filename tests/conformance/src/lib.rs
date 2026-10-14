@@ -4,6 +4,7 @@
 //! `@midnight-ntwrk/compact-runtime`. See
 //! `docs/plans/2026-07-05-conformance-harness-design.md`.
 
+pub mod corpus;
 pub mod report;
 pub mod runner;
 pub mod state_json;

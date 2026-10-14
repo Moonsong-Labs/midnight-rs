@@ -19,6 +19,7 @@ use midnight_typed_state::{
 };
 use serde_json::Value as Json;
 
+use crate::corpus::corpus_dir;
 use crate::report::step_report;
 use crate::state_json::hash_from_json;
 use crate::tagged::{parse_decimal, to_interpreter_value};
@@ -96,9 +97,19 @@ pub struct Fixture {
 }
 
 impl Fixture {
-    pub fn load(analyzed_ir_text: &str) -> Result<Self, String> {
-        let info =
-            compact_codegen::artifact::load_str(analyzed_ir_text).map_err(|e| e.to_string())?;
+    /// The fixture `name`, read from its `compiler/analyzed-ir.sexp` in the
+    /// `fixtures/` directory of the corpus.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be read or does not parse.
+    pub fn open(name: &str) -> Result<Self, String> {
+        let path = corpus_dir()
+            .join("fixtures")
+            .join(name)
+            .join("compiler/analyzed-ir.sexp");
+        let info = compact_codegen::artifact::load(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(Self { info })
     }
 }

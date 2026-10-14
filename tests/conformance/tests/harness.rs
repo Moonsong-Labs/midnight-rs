@@ -4,8 +4,9 @@
 //! `make conformance-regen`).
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use conformance::corpus::{corpus_dir, golden, read_json};
 use conformance::report::state_report_json;
 use conformance::runner::{
     Fixture, ScriptedWitnesses, balance_from_json, coin_public_key_from_json, run_step,
@@ -14,10 +15,6 @@ use conformance::runner::{
 use conformance::state_json::state_value_from_json;
 use midnight_base_crypto::time::Timestamp;
 use serde_json::Value as Json;
-
-fn base_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
 
 /// First differing JSON path between two values, for readable failures.
 fn first_diff(path: String, a: &Json, b: &Json, out: &mut Vec<String>) {
@@ -66,30 +63,9 @@ fn assert_json_eq(context: &str, rust: &Json, ts: &Json) {
 }
 
 fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
-    let base = base_dir();
-    let case: Json =
-        serde_json::from_str(&fs::read_to_string(case_path).expect("case file readable"))
-            .expect("case file is JSON");
-
-    let expected_path = base
-        .join("expected")
-        .join(fixture_name)
-        .join(format!("{case_name}.json"));
-    let expected: Json =
-        serde_json::from_str(&fs::read_to_string(&expected_path).unwrap_or_else(|_| {
-            panic!(
-                "missing golden {}; run `make conformance-regen`",
-                expected_path.display()
-            )
-        }))
-        .expect("golden is JSON");
-
-    let info_path = base
-        .join("fixtures")
-        .join(fixture_name)
-        .join("compiler/analyzed-ir.sexp");
-    let fixture = Fixture::load(&fs::read_to_string(&info_path).expect("contract-info readable"))
-        .expect("contract-info parses");
+    let case = read_json(case_path);
+    let expected = golden(fixture_name, case_name);
+    let fixture = Fixture::open(fixture_name).expect("fixture loads");
 
     // Seed from the canonical constructor output, and cross-check that the
     // decoder plus the Rust serializer reproduce the TS serialized state
@@ -154,7 +130,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
 
 #[test]
 fn conformance_corpus() {
-    let cases_dir = base_dir().join("cases");
+    let cases_dir = corpus_dir().join("cases");
     let mut ran = 0;
     let mut fixtures: Vec<_> = fs::read_dir(&cases_dir)
         .expect("cases dir")
