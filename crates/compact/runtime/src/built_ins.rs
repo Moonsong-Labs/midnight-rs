@@ -1,6 +1,7 @@
 //! Compact runtime builtin circuits: hashes, commitments, elliptic-curve
 //! operations, and field/bytes casts invoked by name during interpretation.
 
+use midnight_base_crypto::hash::HashOutput;
 use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
 use midnight_typed_state::AlignedValue;
 
@@ -69,6 +70,12 @@ fn point_arg(
     })
 }
 
+fn hash_arg(args: &[Value], i: usize, native: &str) -> Result<HashOutput, InterpreterError> {
+    value_to_hash_output(arg(args, i, native)?).map_err(|_| {
+        InterpreterError::TypeError(format!("{native}: argument {} is not a Bytes<32>", i + 1))
+    })
+}
+
 fn arity(args: &[Value], n: usize, native: &str) -> Result<(), InterpreterError> {
     if args.len() != n {
         return Err(InterpreterError::TypeError(format!(
@@ -118,11 +125,11 @@ fn builtin(
             // self().bytes), "midnight:derive_token\0..")`. Matching the
             // on-chain derivation exactly is what lets a minted coin's color
             // line up with the recipient's wallet sync.
-            use midnight_base_crypto::hash::{HashOutput, persistent_commit};
+            use midnight_base_crypto::hash::persistent_commit;
             use midnight_transient_crypto::fab::ValueReprAlignedValue;
 
             let value = arg(args, 0, name)?;
-            let opening = value_to_hash_output(arg(args, 1, name)?)?;
+            let opening = hash_arg(args, 1, name)?;
             // Flatten the value into a single AlignedValue and commit. A
             // `Value::Tuple` concatenates its elements in order; a struct is
             // encoded field-by-field at its declared widths when its type is in
@@ -233,16 +240,8 @@ fn builtin(
             // decoded as an `Fr`, dropping the top byte. It is deliberately *not*
             // a little-endian decode of all 32 bytes: those differ whenever the
             // 32nd byte is non-zero, and the on-chain circuit computes the former.
-            use midnight_base_crypto::hash::HashOutput;
             use midnight_transient_crypto::hash::degrade_to_transient;
-            let hash = match arg(args, 0, name)? {
-                Value::AlignedValue(av) => HashOutput::try_from(&*av.value).ok(),
-                _ => None,
-            }
-            .ok_or_else(|| {
-                InterpreterError::TypeError("degradeToTransient: argument is not Bytes".to_string())
-            })?;
-            AlignedValue::from(degrade_to_transient(hash))
+            AlignedValue::from(degrade_to_transient(hash_arg(args, 0, name)?))
         }
         "upgradeFromTransient" => {
             // Field -> Bytes<32>: the inverse-direction companion of
