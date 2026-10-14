@@ -1397,8 +1397,8 @@ pub(crate) struct ZswapReplay {
     pub state: ZswapLocalState<DefaultDB>,
     /// The id of the last event applied.
     pub last_id: i64,
-    /// Where the stream moved to a later ledger generation: the id of that
-    /// generation's first event, which this replay did not apply.
+    /// Where the stream moved to a later ledger generation. See
+    /// [`crate::replay::LedgerReplay::later_ledger`].
     pub later_ledger: Option<(i64, crate::LedgerVersion)>,
 }
 
@@ -1445,8 +1445,8 @@ pub(crate) struct DustReplay {
     pub last_block_time: Option<Timestamp>,
     /// The nullifiers of the Dust spends the replay saw processed.
     pub spend_nullifiers: Vec<DustNullifier>,
-    /// Where the stream moved to a later ledger generation; see
-    /// [`ZswapReplay::later_ledger`].
+    /// Where the stream moved to a later ledger generation. See
+    /// [`crate::replay::LedgerReplay::later_ledger`].
     pub later_ledger: Option<(i64, crate::LedgerVersion)>,
 }
 
