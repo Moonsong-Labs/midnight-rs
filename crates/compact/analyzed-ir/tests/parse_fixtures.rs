@@ -75,9 +75,13 @@ fn counter_shape() {
 fn mint_probe_carries_dup_arities() {
     let ir = fixture("mint-probe");
     let mut arities = Vec::new();
-    for c in ir.circuits() {
-        collect_dups(&c.body, &mut arities);
-    }
+    each_ledger_instruction(&ir, &mut |i| {
+        if i.op == OpName::Dup
+            && let Some(Operand::Int(n)) = i.arg("n")
+        {
+            arities.push(n.clone());
+        }
+    });
     // kernel.self is dup{n:2}; the mint effects use dup{n:1} and dup{n:2}.
     assert!(
         arities.contains(&1.into()) && arities.contains(&2.into()),
@@ -129,19 +133,17 @@ fn bboard_types() {
 
 // -- helpers ----------------------------------------------------------
 
-fn collect_dups(e: &Expr, out: &mut Vec<num_bigint::BigInt>) {
-    walk_deep(e, &mut |e| {
-        if let Expr::PublicLedger { instructions, .. } = e {
-            for i in instructions {
-                if i.op != OpName::Dup {
-                    continue;
-                }
-                if let Some(Operand::Int(n)) = i.arg("n") {
-                    out.push(n.clone());
+/// Visit every instruction of every public-ledger operation, in every circuit.
+fn each_ledger_instruction(ir: &AnalyzedIr, f: &mut impl FnMut(&Instruction)) {
+    for c in ir.circuits() {
+        walk_deep(&c.body, &mut |e| {
+            if let Expr::PublicLedger { instructions, .. } = e {
+                for i in instructions {
+                    f(i);
                 }
             }
-        }
-    });
+        });
+    }
 }
 
 /// Visit `e` and every subexpression.
@@ -290,23 +292,17 @@ fn adt_default_operands_carry_types() {
         }
     }
 
-    for c in ir.circuits() {
-        walk_deep(&c.body, &mut |e| {
-            if let Expr::PublicLedger { instructions, .. } = e {
-                for i in instructions {
-                    for (_, o) in &i.args {
-                        walk(
-                            o,
-                            &mut saw_add,
-                            &mut saw_null,
-                            &mut saw_max_sizeof,
-                            &mut saw_adt,
-                        );
-                    }
-                }
-            }
-        });
-    }
+    each_ledger_instruction(&ir, &mut |i| {
+        for (_, o) in &i.args {
+            walk(
+                o,
+                &mut saw_add,
+                &mut saw_null,
+                &mut saw_max_sizeof,
+                &mut saw_adt,
+            );
+        }
+    });
 
     assert!(saw_add, "no `+` operand");
     assert!(saw_null, "no typed `null` operand");
@@ -328,17 +324,13 @@ fn a_source_level_addition_is_not_a_vm_addition() {
           (var-ref %a.2))))"#;
     let ir = parse_str(src).expect("parses");
     let mut kinds = Vec::new();
-    walk_deep(&ir.circuits().next().expect("circuit").body, &mut |e| {
-        if let Expr::PublicLedger { instructions, .. } = e {
-            for i in instructions {
-                for (_, o) in &i.args {
-                    kinds.push(match o {
-                        Operand::Add(..) => "vm-add",
-                        Operand::Expr(_) => "expr",
-                        _ => "other",
-                    });
-                }
-            }
+    each_ledger_instruction(&ir, &mut |i| {
+        for (_, o) in &i.args {
+            kinds.push(match o {
+                Operand::Add(..) => "vm-add",
+                Operand::Expr(_) => "expr",
+                _ => "other",
+            });
         }
     });
     assert_eq!(kinds, ["expr", "vm-add"]);
