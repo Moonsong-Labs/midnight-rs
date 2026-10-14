@@ -1,7 +1,5 @@
 //! Devnet setup for the devnet tests of this crate.
 
-#![allow(dead_code, reason = "each test crate uses a subset of these helpers")]
-
 use midnight_provider::{MidnightProvider, Network, Seed};
 use midnight_wallet::WalletBuilder;
 

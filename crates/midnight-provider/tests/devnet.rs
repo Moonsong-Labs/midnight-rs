@@ -1,6 +1,8 @@
 //! Integration tests against a running Midnight devnet.
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
+//! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
 
+#[expect(dead_code, reason = "this test needs only the devnet URLs")]
 mod common;
 
 use midnight_indexer_client::{BlockOffset, IndexerClient};
