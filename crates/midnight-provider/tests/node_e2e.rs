@@ -54,7 +54,7 @@ async fn the_node_runs_the_network_the_tests_sync_as() {
 
 mod contract_deployed {
     use super::*;
-    use compact_bindgen::{InMemoryDB, StateValue, cell_value, hex, lazy, tagged_deserialize};
+    use compact_bindgen::{cell_as, lazy};
 
     fn contract_address() -> Option<String> {
         let Ok(address) = std::env::var("MIDNIGHT_CONTRACT_ADDRESS") else {
@@ -92,12 +92,9 @@ mod contract_deployed {
             results[0].error
         );
 
-        let hex_value = results[0].value.as_ref().expect("expected a value");
-        let bytes = hex::decode(hex_value).expect("valid hex");
-        let sv: StateValue<InMemoryDB> =
-            tagged_deserialize(&mut &bytes[..]).expect("deserialize StateValue");
-        let av = cell_value(&sv).expect("expected Cell");
-        let counter = u64::try_from(&*av.value).expect("u64 from AlignedValue");
+        let counter: u64 =
+            cell_as(&lazy::decode_state_value(&results[0]).expect("decode the state value"))
+                .expect("u64 Cell");
 
         eprintln!("counter value: {counter}");
     }
