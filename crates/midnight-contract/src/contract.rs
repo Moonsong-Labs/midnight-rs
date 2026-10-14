@@ -66,6 +66,20 @@ pub struct Simulated<T, L> {
     pub block_hash: [u8; 32],
 }
 
+/// A circuit call built and proven, before it is submitted.
+struct BuiltCall {
+    /// The tagged-serialized proven transaction.
+    tx_bytes: Vec<u8>,
+    /// The circuit's return value.
+    value: Option<crate::runtime::Value>,
+    /// The private state the witnesses started from.
+    baseline: Vec<u8>,
+    /// The private state after the witnesses ran.
+    private_state: Vec<u8>,
+    /// The extrinsic that wrote `baseline`, when the journal has a head.
+    depends_on: Option<[u8; 32]>,
+}
+
 /// What to do with a contract's private state after a call, comparing the
 /// post-call buffer against the pre-call `baseline`.
 ///
@@ -104,6 +118,13 @@ fn require_private_state_for_witnesses(
         ));
     }
     Ok(())
+}
+
+/// The error for a deploy or a call with no zk config.
+fn missing_zk_config() -> ContractError {
+    ContractError::Construction(
+        "missing zk config, call .with_zk_config(...) on the builder".into(),
+    )
 }
 
 fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersist {
@@ -381,11 +402,7 @@ where
     async fn send_inner(self) -> Result<PendingDeploy<P>, ContractError> {
         let provider = self.provider.as_midnight_provider();
 
-        let zk_config = self.zk_config.ok_or_else(|| {
-            ContractError::Construction(
-                "missing zk config, call .with_zk_config(...) on the builder".into(),
-            )
-        })?;
+        let zk_config = self.zk_config.ok_or_else(missing_zk_config)?;
 
         let mut state = self.initial_state.ok_or_else(|| {
             ContractError::Construction(
@@ -903,10 +920,7 @@ impl<P: Provider> Contract<P> {
 
         let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
 
-        let mut private_state = match &store {
-            Some(store) => store.head(&self.address).await?.unwrap_or_default(),
-            None => Vec::new(),
-        };
+        let (mut private_state, _) = self.witness_baseline(store.as_deref()).await?;
         let coin_public_key = match provider.shielded_public_keys().await {
             Ok((coin_public_key, _)) => Some(coin_public_key),
             Err(midnight_provider::ProviderError::NoWallet) => None,
@@ -965,7 +979,7 @@ impl<P: Provider> Contract<P> {
         P: AsMidnightProvider,
     {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.build_call_with_inner(
+        let built = Box::pin(self.build_call(
             circuit,
             program,
             circuit_name,
@@ -975,11 +989,37 @@ impl<P: Provider> Contract<P> {
             shielded,
             pay_fees,
         ))
-        .await
+        .await?;
+        Ok(built.tx_bytes)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn build_call_with_inner(
+    /// The head of the contract's private-state journal, which the witnesses
+    /// start from, and the extrinsic that wrote it. With no `store`, or an
+    /// empty journal, the witnesses start from an empty buffer.
+    async fn witness_baseline(
+        &self,
+        store: Option<&dyn PrivateStateProvider>,
+    ) -> Result<(Vec<u8>, Option<[u8; 32]>), ContractError> {
+        let Some(store) = store else {
+            return Ok((Vec::new(), None));
+        };
+        // `head_with_extrinsic` returns both fields from a single underlying
+        // read, so a concurrent `append_pending` can't produce a torn read
+        // where data and extrinsic_hash come from different journal versions.
+        Ok(match store.head_with_extrinsic(&self.address).await? {
+            Some((data, ext)) => (data, Some(ext)),
+            None => (Vec::new(), None),
+        })
+    }
+
+    /// Run the circuit on the state at the handle's block and build its proven
+    /// transaction. When `pay_fees` is false the transaction is left
+    /// fee-less.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the inputs of a call, as `build_call_with` and `call_with` take them"
+    )]
+    async fn build_call(
         &self,
         circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
@@ -989,36 +1029,20 @@ impl<P: Provider> Contract<P> {
         coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
         shielded: crate::call::ShieldedInputs,
         pay_fees: bool,
-    ) -> Result<Vec<u8>, ContractError>
+    ) -> Result<BuiltCall, ContractError>
     where
         P: AsMidnightProvider,
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
         let address = crate::address::parse_address(&self.address)?;
-
-        let zk_config = self.zk_config.clone().ok_or_else(|| {
-            ContractError::Construction(
-                "no zk config, call .with_zk_config(...) on the builder".into(),
-            )
-        })?;
-
+        let zk_config = self.zk_config.clone().ok_or_else(missing_zk_config)?;
         let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
+        let (baseline, depends_on) = self
+            .witness_baseline(provider.private_state().as_deref())
+            .await?;
 
-        // Load the private-state head as the witness baseline (empty if none).
-        // Not journaled: this path does not submit, so a private-state
-        // contract's post-call buffer is the caller's to persist.
-        let baseline = match provider.private_state() {
-            Some(store) => store
-                .head_with_extrinsic(&self.address)
-                .await?
-                .map(|(data, _ext)| data)
-                .unwrap_or_default(),
-            None => Vec::new(),
-        };
-
-        let mut private_state = baseline;
-
-        let (tx_bytes, _new_state, _result) = crate::call::call_funded_with(
+        let mut private_state = baseline.clone();
+        let (tx_bytes, _new_state, value) = crate::call::call_funded_with(
             circuit,
             program,
             &state,
@@ -1034,8 +1058,13 @@ impl<P: Provider> Contract<P> {
             pay_fees,
         )
         .await?;
-
-        Ok(tx_bytes)
+        Ok(BuiltCall {
+            tx_bytes,
+            value,
+            baseline,
+            private_state,
+            depends_on,
+        })
     }
 
     /// Execute a circuit call on-chain with arguments and witnesses.
@@ -1095,52 +1124,28 @@ impl<P: Provider> Contract<P> {
         P: AsMidnightProvider,
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
-        let address = crate::address::parse_address(&self.address)?;
-
-        let zk_config = self.zk_config.clone().ok_or_else(|| {
-            ContractError::Construction(
-                "no zk config, call .with_zk_config(...) on the builder".into(),
-            )
-        })?;
-
-        let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
-
-        // Load the journal head as the witness baseline; capture its
-        // extrinsic_hash so the snapshot we write below can record the
-        // dependency. `head_with_extrinsic` returns both fields from a
-        // single underlying read so a concurrent `append_pending` can't
-        // produce a torn read where data and extrinsic_hash come from
-        // different journal versions. With no provider attached the buffer
-        // is just empty.
         let ps_store = provider.private_state();
         require_private_state_for_witnesses(self.declares_witnesses, ps_store.is_some())?;
-        let (baseline, depends_on) = match &ps_store {
-            Some(store) => match store.head_with_extrinsic(&self.address).await? {
-                Some((data, ext)) => (data, Some(ext)),
-                None => (Vec::new(), None),
-            },
-            None => (Vec::new(), None),
-        };
 
-        let mut private_state = baseline.clone();
-
-        let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
-            circuit,
-            program,
-            &state,
-            circuit_name,
-            address,
-            provider,
-            zk_config,
-            args,
-            witnesses,
-            Some(&mut private_state),
-            coin_encryption_keys,
-            shielded,
-            // The submit path always self-funds its fees.
-            true,
-        )
-        .await?;
+        let BuiltCall {
+            tx_bytes,
+            value,
+            baseline,
+            private_state,
+            depends_on,
+        } = self
+            .build_call(
+                circuit,
+                program,
+                circuit_name,
+                args,
+                witnesses,
+                coin_encryption_keys,
+                shielded,
+                // The submit path always self-funds its fees.
+                true,
+            )
+            .await?;
 
         // Prepare the tx so its extrinsic_hash is known, then record the
         // pending snapshot keyed by that hash *before* submitting. Recording
@@ -1236,7 +1241,7 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
         Ok(CallOutcome {
-            value: result,
+            value,
             extrinsic_hash,
             transaction_hash: in_block.transaction_hash,
             block_hash: in_block.block_hash,
