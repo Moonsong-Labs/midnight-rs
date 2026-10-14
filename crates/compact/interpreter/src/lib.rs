@@ -773,11 +773,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             from,
             expr,
         } => {
-            if !field_type.is_native() {
-                return Err(InterpreterError::Unsupported(
-                    "a cast to a secp256k1 field".to_string(),
-                ));
-            }
+            check_type(&Type::Field(field_type.clone()))?;
             check_type(from)?;
             let val = eval_expr(ctx, expr)?;
             eval_cast(val, from, &Type::Field(ir::FieldType::Native))
@@ -788,11 +784,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             field_type,
             expr,
         } => {
-            if !field_type.is_native() {
-                return Err(InterpreterError::Unsupported(
-                    "a cast from a secp256k1 field".to_string(),
-                ));
-            }
+            check_type(&Type::Field(field_type.clone()))?;
             let val = eval_expr(ctx, expr)?;
             eval_cast(
                 val,
@@ -884,11 +876,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             field_type,
             expr,
         } => {
-            if !field_type.is_native() {
-                return Err(InterpreterError::Unsupported(
-                    "field-to-bytes on a secp256k1 field".to_string(),
-                ));
-            }
+            check_type(&Type::Field(field_type.clone()))?;
             let val = eval_expr(ctx, expr)?;
             let fr = value_to_fr(&val).ok_or_else(|| {
                 InterpreterError::TypeError(format!(
