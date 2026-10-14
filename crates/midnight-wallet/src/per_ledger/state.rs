@@ -2484,24 +2484,23 @@ mod tests {
         );
     }
 
+    fn zswap_message(id: i64, raw: &str, max_id: i64) -> serde_json::Value {
+        serde_json::json!({"zswapLedgerEvents": {"id": id, "raw": raw, "maxId": max_id}})
+    }
+
+    fn requested_id(sub: &serde_json::Value) -> i64 {
+        sub["payload"]["variables"]["id"]
+            .as_i64()
+            .expect("id variable")
+    }
+
     /// Mock-WebSocket-server test for recovering a coin whose output carries
     /// no ciphertext this wallet can read, driven through the shielded
     /// rescan. The mock server lives in `midnight_indexer_client::testutil`.
     mod shielded_rescan_ws {
         use midnight_indexer_client::testutil::{accept_subscriber, bind, next_json, send_next};
-        use serde_json::json;
 
         use super::*;
-
-        fn zswap_message(id: i64, raw: &str, max_id: i64) -> serde_json::Value {
-            json!({"zswapLedgerEvents": {"id": id, "raw": raw, "maxId": max_id}})
-        }
-
-        fn requested_zswap_id(sub: &serde_json::Value) -> i64 {
-            sub["payload"]["variables"]["id"]
-                .as_i64()
-                .expect("id variable")
-        }
 
         async fn rescan(wallet: &mut Wallet, url: &str) {
             let commit = wallet.shielded_rescan_plan().run(url).await.unwrap();
@@ -2525,7 +2524,7 @@ mod tests {
                 for _ in 0..2 {
                     let (mut ws, sub) = accept_subscriber(&listener).await;
                     assert_eq!(
-                        requested_zswap_id(&sub),
+                        requested_id(&sub),
                         0,
                         "a rescan must replay from the first event, whatever the cursor says"
                     );
@@ -2595,7 +2594,7 @@ mod tests {
                 // One two-output stream, replayed once per rescan.
                 for _ in 0..2 {
                     let (mut ws, sub) = accept_subscriber(&listener).await;
-                    assert_eq!(requested_zswap_id(&sub), 0);
+                    assert_eq!(requested_id(&sub), 0);
                     for (index, raw) in stream.iter().enumerate() {
                         send_next(&mut ws, &sub, zswap_message(index as i64 + 1, raw, 2)).await;
                     }
@@ -2665,19 +2664,8 @@ mod tests {
     /// zswap replay.
     mod resume_ws {
         use midnight_indexer_client::testutil::{accept_subscriber, bind, next_json, send_next};
-        use serde_json::json;
 
         use super::*;
-
-        fn ledger_event(stream: &str, id: i64, max_id: i64) -> serde_json::Value {
-            json!({ stream: {"id": id, "maxId": max_id, "raw": "00"} })
-        }
-
-        fn requested_id(sub: &serde_json::Value) -> i64 {
-            sub["payload"]["variables"]["id"]
-                .as_i64()
-                .expect("id variable")
-        }
 
         /// A resume asks for the event it already applied, so the indexer
         /// answers at once and its `max_id` says the wallet is at the tip.
@@ -2692,7 +2680,7 @@ mod tests {
             let server = tokio::spawn(async move {
                 let (mut ws, sub) = accept_subscriber(&listener).await;
                 let asked = requested_id(&sub);
-                send_next(&mut ws, &sub, ledger_event("zswapLedgerEvents", 7, 7)).await;
+                send_next(&mut ws, &sub, zswap_message(7, "00", 7)).await;
                 while next_json(&mut ws).await.is_some() {}
                 asked
             });
