@@ -208,7 +208,7 @@ impl FsPrivateStateProvider {
 
     /// Read every snapshot file under `<address>/`, oldest first.
     fn load_snapshots(&self, address: &str) -> Result<Vec<(PathBuf, Snapshot)>, PrivateStateError> {
-        load_snapshots_in(&self.address_dir(address))
+        read_json_dir(&self.address_dir(address))
     }
 
     /// The journal head snapshot for `address`, picked from the `depends_on`
@@ -261,34 +261,20 @@ impl FsPrivateStateProvider {
         // TOCTOU between the two syscalls (a concurrent `forget` could delete
         // the marker between the check and the read, surfacing an Io error
         // where the recreate path was the right answer).
-        match fs::read_to_string(&marker) {
-            Ok(existing) => {
-                if existing.trim() != address {
-                    return Err(PrivateStateError::InvalidFormat(format!(
-                        "address marker at {} holds {:?} but caller passed {:?}; \
-                         the per-address directory does not match the address it \
-                         was created for. Resolve by deleting the directory or \
-                         repairing the marker.",
-                        marker.display(),
-                        existing.trim(),
-                        address,
-                    )));
-                }
-                Ok(())
+        match not_found_as_none(fs::read_to_string(&marker), "read", &marker)? {
+            Some(existing) if existing.trim() != address => {
+                Err(PrivateStateError::InvalidFormat(format!(
+                    "address marker at {} holds {:?} but caller passed {:?}; \
+                     the per-address directory does not match the address it \
+                     was created for. Resolve by deleting the directory or \
+                     repairing the marker.",
+                    marker.display(),
+                    existing.trim(),
+                    address,
+                )))
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let tmp = marker.with_extension("tmp");
-                write_private(&tmp, address.as_bytes())
-                    .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
-                fs::rename(&tmp, &marker).map_err(|e| {
-                    PrivateStateError::Io(format!("rename {}: {e}", marker.display()))
-                })?;
-                Ok(())
-            }
-            Err(e) => Err(PrivateStateError::Io(format!(
-                "read {}: {e}",
-                marker.display()
-            ))),
+            Some(_) => Ok(()),
+            None => write_atomic(&marker, address.as_bytes()),
         }
     }
 
@@ -305,13 +291,7 @@ impl FsPrivateStateProvider {
 
         let json = serde_json::to_vec_pretty(value)
             .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-
-        let tmp = path.with_extension("tmp");
-        write_private(&tmp, &json)
-            .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
-        fs::rename(&tmp, path)
-            .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))?;
-        Ok(())
+        write_atomic(path, &json)
     }
 }
 
@@ -583,62 +563,39 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             return Err(PrivateStateError::PasswordTooShort);
         }
         let mut records: Vec<KeyRecord> = Vec::new();
-        let rd = match fs::read_dir(self.keys_dir()) {
-            Ok(rd) => Some(rd),
-            // Missing keys dir is "nothing to export"; any other read_dir
-            // failure (permission denied, I/O error) is real and must
-            // surface, not silently produce an empty backup.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => {
-                return Err(PrivateStateError::Io(format!(
-                    "read_dir {}: {e}",
-                    self.keys_dir().display()
+        for (path, rec) in read_json_dir::<KeyRecord>(&self.keys_dir())? {
+            // Validate base64 up front so a corrupt on-disk record
+            // doesn't escape into the export and break the importer.
+            decode_b64(&rec.data).map_err(|_| {
+                PrivateStateError::InvalidFormat(format!(
+                    "malformed signing-key record on disk at {}",
+                    path.display()
+                ))
+            })?;
+            // Cross-check the filename: a signing-key file at
+            // `<sha256(address)>.json` whose JSON `address` field
+            // has been edited would otherwise migrate the key to
+            // the edited address through an export/import
+            // round-trip.
+            let expected_stem = hex::encode(Sha256::digest(rec.address.as_bytes()));
+            // `to_string_lossy` surfaces non-UTF8 paths with U+FFFD
+            // substitutions so the comparison still fails loudly
+            // and the error message identifies the file, instead
+            // of silently degrading to an empty string and
+            // misclassifying the failure.
+            let actual_stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if actual_stem != expected_stem {
+                return Err(PrivateStateError::InvalidFormat(format!(
+                    "signing-key file at {} has an address that does not \
+                     match its filename hash (filename={actual_stem}, \
+                     record address hashes to={expected_stem})",
+                    path.display(),
                 )));
             }
-        };
-        if let Some(rd) = rd {
-            for entry in rd {
-                let path = entry
-                    .map_err(|e| PrivateStateError::Io(e.to_string()))?
-                    .path();
-                if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                    continue;
-                }
-                if let Some(rec) = read_json_opt::<KeyRecord>(&path)? {
-                    // Validate base64 up front so a corrupt on-disk record
-                    // doesn't escape into the export and break the importer.
-                    decode_b64(&rec.data).map_err(|_| {
-                        PrivateStateError::InvalidFormat(format!(
-                            "malformed signing-key record on disk at {}",
-                            path.display()
-                        ))
-                    })?;
-                    // Cross-check the filename: a signing-key file at
-                    // `<sha256(address)>.json` whose JSON `address` field
-                    // has been edited would otherwise migrate the key to
-                    // the edited address through an export/import
-                    // round-trip.
-                    let expected_stem = hex::encode(Sha256::digest(rec.address.as_bytes()));
-                    // `to_string_lossy` surfaces non-UTF8 paths with U+FFFD
-                    // substitutions so the comparison still fails loudly
-                    // and the error message identifies the file, instead
-                    // of silently degrading to an empty string and
-                    // misclassifying the failure.
-                    let actual_stem = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    if actual_stem != expected_stem {
-                        return Err(PrivateStateError::InvalidFormat(format!(
-                            "signing-key file at {} has an address that does not \
-                             match its filename hash (filename={actual_stem}, \
-                             record address hashes to={expected_stem})",
-                            path.display(),
-                        )));
-                    }
-                    records.push(rec);
-                }
-            }
+            records.push(rec);
         }
         if records.len() > opts.max_entries {
             return Err(PrivateStateError::TooManyEntries);
@@ -976,35 +933,17 @@ fn collect_export_entries(
     provider: &FsPrivateStateProvider,
 ) -> Result<Vec<ExportEntry>, PrivateStateError> {
     let mut out: Vec<ExportEntry> = Vec::new();
-    let states_dir = provider.states_dir();
-    let rd = match fs::read_dir(&states_dir) {
-        Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-        Err(e) => {
-            return Err(PrivateStateError::Io(format!(
-                "read dir {}: {e}",
-                states_dir.display()
-            )));
-        }
-    };
-    for entry in rd {
-        let dir = entry
-            .map_err(|e| PrivateStateError::Io(e.to_string()))?
-            .path();
+    for dir in list_dir(&provider.states_dir())? {
         if !dir.is_dir() {
             continue;
         }
         let addr_marker = dir.join(ADDRESS_MARKER);
-        let address = match fs::read_to_string(&addr_marker) {
-            Ok(s) => s.trim().to_string(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => {
-                return Err(PrivateStateError::Io(format!(
-                    "read {}: {e}",
-                    addr_marker.display()
-                )));
-            }
+        let Some(address) =
+            not_found_as_none(fs::read_to_string(&addr_marker), "read", &addr_marker)?
+        else {
+            continue;
         };
+        let address = address.trim().to_string();
         // Cross-check the marker against the directory name: the directory
         // hash is the source of truth, so a tampered or stale marker must
         // not silently rebind snapshots through an export/import round-trip.
@@ -1025,7 +964,7 @@ fn collect_export_entries(
                 address,
             )));
         }
-        for (_, snap) in load_snapshots_in(&dir)? {
+        for (_, snap) in read_json_dir::<Snapshot>(&dir)? {
             out.push(ExportEntry {
                 address: address.clone(),
                 snapshot: snap,
@@ -1210,33 +1149,32 @@ fn validate_hash_field(name: &str, field: Option<&str>) -> Result<(), PrivateSta
     Ok(())
 }
 
-/// Load every snapshot file under `dir`, oldest first. Free function so the
-/// export path (which has only the directory path) can reuse it.
-fn load_snapshots_in(dir: &Path) -> Result<Vec<(PathBuf, Snapshot)>, PrivateStateError> {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => {
-            return Err(PrivateStateError::Io(format!(
-                "read dir {}: {e}",
-                dir.display()
-            )));
-        }
+/// The paths of the entries in `dir`, or none when `dir` does not exist. Any
+/// other failure surfaces, so a store that cannot be listed never exports as
+/// an empty backup.
+fn list_dir(dir: &Path) -> Result<Vec<PathBuf>, PrivateStateError> {
+    let io_err =
+        |e: std::io::Error| PrivateStateError::Io(format!("read dir {}: {e}", dir.display()));
+    let Some(entries) = not_found_as_none(fs::read_dir(dir), "read dir", dir)? else {
+        return Ok(Vec::new());
     };
-    let mut out: Vec<(PathBuf, Snapshot)> = Vec::new();
-    for entry in entries {
-        let path = entry
-            .map_err(|e| PrivateStateError::Io(e.to_string()))?
-            .path();
+    entries
+        .map(|entry| entry.map(|e| e.path()).map_err(io_err))
+        .collect()
+}
+
+/// Every `*.json` record in `dir` with its path, sorted by file name. Empty
+/// when `dir` does not exist.
+fn read_json_dir<T: DeserializeOwned>(dir: &Path) -> Result<Vec<(PathBuf, T)>, PrivateStateError> {
+    let mut out = Vec::new();
+    for path in list_dir(dir)? {
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        if let Some(snap) = read_json_opt::<Snapshot>(&path)? {
-            out.push((path, snap));
+        if let Some(record) = read_json_opt(&path)? {
+            out.push((path, record));
         }
     }
-    // Filenames begin with a 020-padded nanos timestamp, so lexicographic
-    // sort is chronological.
     out.sort_by(|a, b| a.0.file_name().cmp(&b.0.file_name()));
     Ok(out)
 }
@@ -1289,39 +1227,49 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     fs::write(path, contents)
 }
 
-fn read_json_opt<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, PrivateStateError> {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string())),
+/// Write `contents` to a `.tmp` sibling of `path`, then rename it into place
+/// (see the module docs).
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), PrivateStateError> {
+    let tmp = path.with_extension("tmp");
+    write_private(&tmp, contents)
+        .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
+    fs::rename(&tmp, path)
+        .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))
+}
+
+/// `None` when `result` failed with `NotFound`. Any other error becomes
+/// [`PrivateStateError::Io`] that names `op` and `path`.
+fn not_found_as_none<T>(
+    result: std::io::Result<T>,
+    op: &str,
+    path: &Path,
+) -> Result<Option<T>, PrivateStateError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(PrivateStateError::Io(format!(
-            "read {}: {e}",
+            "{op} {}: {e}",
             path.display()
         ))),
     }
+}
+
+fn read_json_opt<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, PrivateStateError> {
+    not_found_as_none(fs::read(path), "read", path)?
+        .map(|bytes| {
+            serde_json::from_slice(&bytes).map_err(|e| PrivateStateError::Serialize(e.to_string()))
+        })
+        .transpose()
 }
 
 fn remove_file_opt(path: &Path) -> Result<(), PrivateStateError> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(PrivateStateError::Io(format!(
-            "remove {}: {e}",
-            path.display()
-        ))),
-    }
+    not_found_as_none(fs::remove_file(path), "remove", path)?;
+    Ok(())
 }
 
 fn clear_dir(dir: &Path) -> Result<(), PrivateStateError> {
-    match fs::remove_dir_all(dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(PrivateStateError::Io(format!(
-            "clear {}: {e}",
-            dir.display()
-        ))),
-    }
+    not_found_as_none(fs::remove_dir_all(dir), "clear", dir)?;
+    Ok(())
 }
 
 fn encode_b64(bytes: &[u8]) -> String {
