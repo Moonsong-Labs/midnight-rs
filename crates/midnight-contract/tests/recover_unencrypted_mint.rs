@@ -16,15 +16,21 @@
 //! nonce per mint, so the owner can rebuild the coin from chain state.
 //!
 //! Gated on `MIDNIGHT_NODE_URL` / `MIDNIGHT_INDEXER_URL` (a running devnet +
-//! indexer). The compiled contract defaults to the committed fixture
-//! `devnet/contracts/shielded-mint/compiled`; override with `MINT_KEYED_DIR`.
+//! indexer).
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
-};
-use midnight_contract::Contract;
-use midnight_contract::runtime::Value;
+mod shielded_mint {
+    compact_bindgen::contract!(
+        "../../devnet/contracts/shielded-mint/compiled/compiler/analyzed-ir.sexp"
+    );
+}
+
+use compact_bindgen::Bytes;
 use midnight_wallet::{Seed, Wallet, WalletBuilder};
+
+const ZK_KEYS_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../devnet/contracts/shielded-mint/compiled"
+);
 
 #[tokio::test]
 async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
@@ -38,27 +44,6 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
             return;
         }
     };
-    let keyed = std::env::var("MINT_KEYED_DIR").unwrap_or_else(|_| {
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../devnet/contracts/shielded-mint/compiled"
-        )
-        .to_string()
-    });
-
-    // --- Load the mint circuit IR, helpers, structs, enums, arg-types ---
-    let info_path = format!("{keyed}/compiler/analyzed-ir.sexp");
-    let info_json = std::fs::read_to_string(&info_path).expect("read contract-info");
-    let info: compact_codegen::types::ContractInfo =
-        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
-    let mint = info
-        .circuits
-        .iter()
-        .find(|c| c.name == "mint")
-        .expect("mint circuit");
-    let ir = &mint.def;
-    let program =
-        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
     // --- The recipient's coin public key. Its encryption key is deliberately
     //     never handed to the call, so the mint's output carries no
@@ -78,16 +63,9 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
             .expect("funder sync");
     let provider = provider.with_wallet(wallet);
 
-    // A mint-only contract has no user ledger fields: an empty array.
-    let initial = ContractState::new(
-        StateValue::Array(vec![].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    let contract = Contract::deploy(provider)
-        .with_initial_state(initial)
-        .with_zk_config(&keyed)
+    let contract = shielded_mint::Contract::deploy(provider)
+        .with_initial_state(shielded_mint::LedgerInitialState)
+        .with_zk_config(ZK_KEYS_DIR)
         .await
         .expect("deploy mint contract");
     let address = contract.address().to_string();
@@ -97,28 +75,18 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     //     once per coin. See `mint_external_recipient` for why the recipient
     //     is a constant `left(...)` in the contract ---
     let domain_sep = [0x11u8; 32];
-    let mints: [([u8; 32], u128); 2] = [([0x33u8; 32], 1000), ([0x44u8; 32], 250)];
+    let mints: [([u8; 32], u64); 2] = [([0x33u8; 32], 1000), ([0x44u8; 32], 250)];
 
     for (nonce, mint_value) in mints {
-        let args = [
-            (
-                "domain_sep",
-                Value::AlignedValue(AlignedValue::from(domain_sep)),
-            ),
-            ("value", Value::Integer(mint_value)),
-            ("nonce", Value::AlignedValue(AlignedValue::from(nonce))),
-            ("coinPK", Value::AlignedValue(AlignedValue::from(cpk.0.0))),
-        ];
-
         contract
-            .call_with(
-                ir,
-                &program,
-                "mint",
-                &args,
-                &midnight_contract::runtime::NoWitnesses,
-                &[],
-                midnight_contract::ShieldedInputs::default(),
+            .circuits()
+            .mint(
+                Bytes(domain_sep),
+                mint_value,
+                Bytes(nonce),
+                shielded_mint::ZswapCoinPublicKey {
+                    bytes: Bytes(cpk.0.0),
+                },
             )
             .await
             .expect("mint call");
@@ -152,7 +120,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let holds = |coins: &[midnight_provider::SpendableShieldedCoin], nonce: [u8; 32], value| {
         coins
             .iter()
-            .any(|c| c.token_type == token_type && c.value == value && c.nonce == nonce)
+            .any(|c| c.token_type == token_type && c.value == u128::from(value) && c.nonce == nonce)
     };
     let seen = |coins: &[midnight_provider::SpendableShieldedCoin]| {
         coins
@@ -180,7 +148,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
             .watch_for_coin(midnight_provider::CoinInfo {
                 nonce: midnight_provider::Nonce(midnight_base_crypto::hash::HashOutput(nonce)),
                 type_: token_type,
-                value,
+                value: u128::from(value),
             })
             .await
             .expect("watch_for_coin");
