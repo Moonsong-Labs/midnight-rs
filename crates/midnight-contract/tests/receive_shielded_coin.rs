@@ -28,36 +28,16 @@ mod common;
 
 use compact_bindgen::AlignedValue;
 use midnight_contract::runtime::Value;
-use midnight_contract::{Contract, ShieldedInputs};
+use midnight_contract::{
+    CallOutcome, Contract, ContractError, ShieldedInputs, SpendableShieldedCoin,
+};
+use midnight_provider::MidnightProvider;
 
 #[tokio::test]
 async fn call_circuit_that_spends_the_callers_shielded_coin() {
-    let Some((node_url, indexer_url)) = common::devnet_urls() else {
+    let Some((provider, dir)) = funded_provider().await else {
         return;
     };
-    let Ok(dir) = std::env::var("RECEIVE_SHIELDED_DIR") else {
-        eprintln!("skipping: needs RECEIVE_SHIELDED_DIR");
-        return;
-    };
-    let circuit_name =
-        std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
-
-    // --- Load the circuit IR + defs from the compiled fixture ---
-    let info = common::load_compiled(&dir);
-    let circuit = common::exported_circuit(&info, &circuit_name);
-    let ir = &circuit.def;
-    let program = common::program(&info);
-
-    let arg_name = circuit
-        .arguments()
-        .first()
-        .map(|a| a.name.name().to_string())
-        .expect("circuit must take a ShieldedCoinInfo argument");
-
-    // --- Funder wallet syncs and deploys the fixture ---
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
-    let provider = provider.with_wallet(wallet);
 
     // --- Gap 1: address a specific spendable coin (with its nonce) ---
     let coins = provider
@@ -80,39 +60,8 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         coin.value
     );
 
-    // A fixture that only receives/burns carries no user ledger state (an empty
-    // array); deploy a fresh instance to call against. Move the provider into
-    // the handle (we've already read the spendable coins above).
-    let deployed = Contract::deploy(provider)
-        .with_initial_state(common::contract_state(vec![]))
-        .with_zk_config(&dir)
-        .await
-        .expect("deploy fixture");
-    eprintln!("deployed fixture at {}", deployed.address());
-
-    // Build the `ShieldedCoinInfo { nonce, color, value }` argument from the
-    // exact coin we are about to spend.
-    let coin_info = Value::AlignedValue(AlignedValue::concat(
-        [
-            AlignedValue::from(coin.nonce),
-            AlignedValue::from(coin.token_type.0.0),
-            AlignedValue::from(coin.value),
-        ]
-        .iter(),
-    ));
-
-    // --- Gaps 2 + 3: attach the coin as a shielded input; the SDK spends that
-    //     exact coin and, if the circuit forwards it, builds the transient. ---
-    let outcome = deployed
-        .call_with(
-            ir,
-            &program,
-            &circuit_name,
-            &[(arg_name.as_str(), coin_info)],
-            &midnight_contract::runtime::NoWitnesses,
-            &[],
-            ShieldedInputs { coins: vec![coin] },
-        )
+    let value = coin.value;
+    let (_, outcome) = deploy_and_receive(provider, &dir, coin, value)
         .await
         .expect("circuit call spending the caller's shielded coin");
 
@@ -144,30 +93,9 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
 /// half.
 #[tokio::test]
 async fn attaching_more_than_the_circuit_receives_returns_change() {
-    let Some((node_url, indexer_url)) = common::devnet_urls() else {
+    let Some((provider, dir)) = funded_provider().await else {
         return;
     };
-    let Ok(dir) = std::env::var("RECEIVE_SHIELDED_DIR") else {
-        eprintln!("skipping: needs RECEIVE_SHIELDED_DIR");
-        return;
-    };
-    let circuit_name =
-        std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
-
-    let info = common::load_compiled(&dir);
-    let circuit = common::exported_circuit(&info, &circuit_name);
-    let ir = &circuit.def;
-    let program = common::program(&info);
-
-    let arg_name = circuit
-        .arguments()
-        .first()
-        .map(|a| a.name.name().to_string())
-        .expect("circuit must take a ShieldedCoinInfo argument");
-
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
-    let provider = provider.with_wallet(wallet);
 
     let coins = provider
         .spendable_shielded_coins()
@@ -188,35 +116,10 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
         coin.value
     );
 
-    let deployed = Contract::deploy(provider)
-        .with_initial_state(common::contract_state(vec![]))
-        .with_zk_config(&dir)
-        .await
-        .expect("deploy fixture");
-
     // The argument's value is what the contract receives, deliberately below
-    // the attached coin's value. The nonce is fresh: the received coin is a new
-    // coin the caller funds, not a re-commitment of the one being spent.
-    let coin_info = Value::AlignedValue(AlignedValue::concat(
-        [
-            AlignedValue::from(coin.nonce),
-            AlignedValue::from(coin.token_type.0.0),
-            AlignedValue::from(received),
-        ]
-        .iter(),
-    ));
-
+    // the attached coin's value.
     let token_type = coin.token_type;
-    let outcome = deployed
-        .call_with(
-            ir,
-            &program,
-            &circuit_name,
-            &[(arg_name.as_str(), coin_info)],
-            &midnight_contract::runtime::NoWitnesses,
-            &[],
-            ShieldedInputs { coins: vec![coin] },
-        )
+    let (deployed, outcome) = deploy_and_receive(provider, &dir, coin, received)
         .await
         .expect("partially funded circuit call");
     assert_ne!(outcome.extrinsic_hash, [0u8; 32]);
@@ -246,4 +149,74 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
          chain accepts the surplus and destroys it"
     );
     eprintln!("change of {expected_change} returned to the wallet ✓");
+}
+
+/// A provider with the dev wallet attached, and the fixture directory that
+/// `RECEIVE_SHIELDED_DIR` names. Returns `None` after a skip line when a
+/// variable is missing.
+async fn funded_provider() -> Option<(MidnightProvider, String)> {
+    let (node_url, indexer_url) = common::devnet_urls()?;
+    let Ok(dir) = std::env::var("RECEIVE_SHIELDED_DIR") else {
+        eprintln!("skipping: needs RECEIVE_SHIELDED_DIR");
+        return None;
+    };
+    let provider = MidnightProvider::new(&node_url, &indexer_url);
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    Some((provider.with_wallet(wallet), dir))
+}
+
+/// Deploy the fixture in `dir`, then call its receiving circuit with `coin`
+/// attached as a shielded input and with `value` in the circuit's
+/// `ShieldedCoinInfo` argument. The circuit is `RECEIVE_SHIELDED_CIRCUIT`, or
+/// `receive` when that is unset.
+async fn deploy_and_receive(
+    provider: MidnightProvider,
+    dir: &str,
+    coin: SpendableShieldedCoin,
+    value: u128,
+) -> Result<(Contract<MidnightProvider>, CallOutcome<Option<Value>>), ContractError> {
+    let circuit_name =
+        std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
+    let info = common::load_compiled(dir);
+    let circuit = common::exported_circuit(&info, &circuit_name);
+    let arg_name = circuit
+        .arguments()
+        .first()
+        .map(|a| a.name.name().to_string())
+        .expect("circuit must take a ShieldedCoinInfo argument");
+
+    // A fixture that only receives/burns carries no user ledger state (an empty
+    // array); deploy a fresh instance to call against.
+    let deployed = Contract::deploy(provider)
+        .with_initial_state(common::contract_state(vec![]))
+        .with_zk_config(dir)
+        .await
+        .expect("deploy fixture");
+    eprintln!("deployed fixture at {}", deployed.address());
+
+    // The `ShieldedCoinInfo { nonce, color, value }` argument, built from the
+    // exact coin the call spends.
+    let coin_info = Value::AlignedValue(AlignedValue::concat(
+        [
+            AlignedValue::from(coin.nonce),
+            AlignedValue::from(coin.token_type.0.0),
+            AlignedValue::from(value),
+        ]
+        .iter(),
+    ));
+
+    // --- Gaps 2 + 3: attach the coin as a shielded input; the SDK spends that
+    //     exact coin and, if the circuit forwards it, builds the transient. ---
+    let outcome = deployed
+        .call_with(
+            &circuit.def,
+            &common::program(&info),
+            &circuit_name,
+            &[(arg_name.as_str(), coin_info)],
+            &midnight_contract::runtime::NoWitnesses,
+            &[],
+            ShieldedInputs { coins: vec![coin] },
+        )
+        .await?;
+    Ok((deployed, outcome))
 }
