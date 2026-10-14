@@ -303,9 +303,12 @@ pub fn execute(
     })
 }
 
-/// Refuse a type the interpreter cannot execute, naming it (see
-/// `compact_codegen::artifact::unsupported_type`). Refusing it by name beats
-/// reading it as if it were a native field.
+/// Refuse a type the interpreter cannot execute, naming it. Refusing it by
+/// name beats reading it as if it were a native field.
+///
+/// [`execute`] is public and runs circuits that no artifact supplied, so this
+/// check runs again at run time (the rule is
+/// `compact_codegen::artifact::unsupported_type`).
 fn check_type(ty: &Type) -> Result<(), InterpreterError> {
     compact_codegen::artifact::unsupported_type(ty)
         .map_or(Ok(()), |what| Err(InterpreterError::Unsupported(what)))

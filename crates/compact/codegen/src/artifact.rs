@@ -243,9 +243,7 @@ fn check_type(t: &ir::Type) -> Result<(), ArtifactError> {
 /// vectors, aliases, tuples and struct fields, and the description names the
 /// first such construct that it finds.
 ///
-/// [`load`] refuses an artifact that holds such a type. The interpreter
-/// checks each type again when it runs, because it also runs circuits that
-/// no artifact supplied.
+/// [`load`] refuses an artifact that holds such a type.
 pub fn unsupported_type(t: &ir::Type) -> Option<String> {
     match t {
         ir::Type::Field(ft) if !ft.is_native() => Some("a secp256k1 field type".to_string()),
