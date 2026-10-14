@@ -59,18 +59,18 @@ mod contract_deployed {
     use compact_bindgen::{InMemoryDB, StateValue, cell_value, hex, lazy, tagged_deserialize};
 
     fn contract_address() -> Option<String> {
-        std::env::var("MIDNIGHT_CONTRACT_ADDRESS").ok()
+        let Ok(address) = std::env::var("MIDNIGHT_CONTRACT_ADDRESS") else {
+            eprintln!("skipping: MIDNIGHT_CONTRACT_ADDRESS not set");
+            return None;
+        };
+        Some(address)
     }
 
     #[tokio::test]
     async fn query_counter_field() {
         let p = require_node!();
-        let address = match contract_address() {
-            Some(a) => a,
-            None => {
-                eprintln!("skipping: MIDNIGHT_CONTRACT_ADDRESS not set");
-                return;
-            }
+        let Some(address) = contract_address() else {
+            return;
         };
 
         // State: Array(1) [ Array(3) [ MerkleTree(10), Cell(counter), Map{...} ] ]
@@ -105,12 +105,8 @@ mod contract_deployed {
     #[tokio::test]
     async fn query_batch_with_error() {
         let p = require_node!();
-        let address = match contract_address() {
-            Some(a) => a,
-            None => {
-                eprintln!("skipping: MIDNIGHT_CONTRACT_ADDRESS not set");
-                return;
-            }
+        let Some(address) = contract_address() else {
+            return;
         };
 
         let results = p
