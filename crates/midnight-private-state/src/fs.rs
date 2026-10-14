@@ -195,14 +195,18 @@ impl FsPrivateStateProvider {
             .join(format!("{}.json", hashed_name(address)))
     }
 
-    fn snapshot_filename(extrinsic_hash: &str) -> String {
+    /// `<states>/<sha256(address)>/<nanos>-<extrinsic_hash>.json`, the file
+    /// of a new journal snapshot. The module docs say what the timestamp is
+    /// for.
+    fn new_snapshot_path(&self, address: &str, extrinsic_hash: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         // 020-pad covers nanos through year ~2554; lexicographic sort matches
         // chronological order.
-        format!("{nanos:020}-{extrinsic_hash}.json")
+        self.address_dir(address)
+            .join(format!("{nanos:020}-{extrinsic_hash}.json"))
     }
 
     /// Read every snapshot file under `<address>/`, oldest first.
@@ -339,9 +343,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             depends_on: expected.clone(),
             data: state.to_vec(),
         };
-        let path = self
-            .address_dir(address)
-            .join(Self::snapshot_filename(&ext_hex));
+        let path = self.new_snapshot_path(address, &ext_hex);
         self.write_json_atomic(&path, &snapshot)?;
         debug!(
             address,
@@ -905,9 +907,7 @@ fn apply_import_entries(
         })?;
         let target = write.then(|| match existing {
             Some((path, _)) => path.clone(),
-            None => provider.address_dir(&entry.address).join(
-                FsPrivateStateProvider::snapshot_filename(&entry.snapshot.extrinsic_hash),
-            ),
+            None => provider.new_snapshot_path(&entry.address, &entry.snapshot.extrinsic_hash),
         });
         // Update the in-memory view so Pass 5 can validate the merged
         // journal without touching disk.
@@ -1149,11 +1149,7 @@ mod tests {
     /// `append_pending`, but without its checks.
     fn write_raw(p: &FsPrivateStateProvider, address: &str, snap: &Snapshot) {
         p.ensure_address_marker(address).unwrap();
-        let path = p
-            .address_dir(address)
-            .join(FsPrivateStateProvider::snapshot_filename(
-                &snap.extrinsic_hash,
-            ));
+        let path = p.new_snapshot_path(address, &snap.extrinsic_hash);
         p.write_json_atomic(&path, snap).unwrap();
     }
 
