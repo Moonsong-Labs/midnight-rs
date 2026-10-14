@@ -2545,14 +2545,6 @@ mod tests {
         use midnight_transient_crypto::curve::Fr;
         use midnight_transient_crypto::hash::transient_hash;
 
-        let as_fr = |v: &Value| -> Fr {
-            match v {
-                Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-                Value::Integer(n) => Fr::from(*n),
-                other => panic!("not a field value: {other:?}"),
-            }
-        };
-
         // A Poseidon output is a full-width field element (wider than u128) — the
         // shape that fed the "expected integer" failure in a gateway committee
         // signature's mod-r reduction `c_native - challenge_quotient * order`.
@@ -2576,7 +2568,7 @@ mod tests {
             ],
         )
         .expect("field subtraction must not reject a wide operand");
-        assert_eq!(as_fr(&sub), Fr(c_native.0 - Fr::from(5u64).0));
+        assert_eq!(as_fr(sub), Fr(c_native.0 - Fr::from(5u64).0));
 
         // The full mod-r reduction shape, all field arithmetic.
         let c = run(
@@ -2604,7 +2596,7 @@ mod tests {
             ],
         )
         .expect("field reduction must evaluate");
-        assert_eq!(as_fr(&c), Fr(c_native.0 - Fr::from(3u64).0 * order.0));
+        assert_eq!(as_fr(c), Fr(c_native.0 - Fr::from(3u64).0 * order.0));
     }
 
     #[test]
@@ -2618,10 +2610,7 @@ mod tests {
             order.parse::<BigInt>().expect("a decimal literal"),
         ));
         let result = eval(literal, field()).expect("a Field literal wider than u128 must parse");
-        let got = match result {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected a Field AlignedValue, got {other:?}"),
-        };
+        let got = as_fr(result);
 
         // Independently: the parsed element equals JUBJUB_ORDER's little-endian bytes.
         let order_le: [u8; 32] = [
@@ -2699,6 +2688,14 @@ mod tests {
     fn fr_value(n: u64) -> Value {
         use midnight_transient_crypto::curve::Fr;
         Value::AlignedValue(AlignedValue::from(Fr::from(n)))
+    }
+
+    fn as_fr(v: Value) -> midnight_transient_crypto::curve::Fr {
+        use midnight_transient_crypto::curve::Fr;
+        match v {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).expect("a field element"),
+            other => panic!("expected a Field AlignedValue, got {other:?}"),
+        }
     }
 
     /// The `persistentCommit` builtin must reproduce the ledger's own
@@ -2892,13 +2889,11 @@ mod tests {
         fields.insert("annY".to_string(), fr_value(2));
         fields.insert("annX".to_string(), fr_value(1));
 
-        let got = match try_builtin_typed("transientHash", &[Value::Struct(fields)], &[ty])
-            .expect("builtin known")
-            .expect("ok")
-        {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
+        let got = as_fr(
+            try_builtin_typed("transientHash", &[Value::Struct(fields)], &[ty])
+                .expect("builtin known")
+                .expect("ok"),
+        );
 
         assert_eq!(
             got,
@@ -2931,13 +2926,11 @@ mod tests {
         pair.insert("x".to_string(), fr_value(8));
         let arg = Value::Tuple(vec![Value::Struct(pair)]);
 
-        let got = match try_builtin_typed("transientHash", &[arg], &[ty])
-            .expect("builtin known")
-            .expect("a struct inside a vector must hash")
-        {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
+        let got = as_fr(
+            try_builtin_typed("transientHash", &[arg], &[ty])
+                .expect("builtin known")
+                .expect("a struct inside a vector must hash"),
+        );
 
         assert_eq!(got, transient_hash(&[Fr::from(8u64), Fr::from(9u64)]));
     }
@@ -2974,11 +2967,7 @@ mod tests {
         let via_builtin = try_builtin("transientHash", &[Value::Integer(n)])
             .expect("builtin known")
             .expect("ok");
-        let got = match via_builtin {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        assert_eq!(got, direct);
+        assert_eq!(as_fr(via_builtin), direct);
     }
 
     #[test]
@@ -3257,11 +3246,7 @@ mod tests {
         let result = try_builtin("degradeToTransient", &[Value::AlignedValue(av)])
             .expect("builtin known")
             .expect("ok");
-        let got = match result {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        assert_eq!(got, Fr::from(7u64));
+        assert_eq!(as_fr(result), Fr::from(7u64));
     }
 
     // -----------------------------------------------------------------------
@@ -3348,12 +3333,7 @@ mod tests {
         // significant (casts.ts convertBytesToField), so the value is
         // 0x2A + 0x01·256 = 298.
         let result = eval(bytes_to_field(4, "2a010000"), field()).expect("eval");
-        match result {
-            Value::AlignedValue(av) => {
-                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), Fr::from(298u64));
-            }
-            other => panic!("expected AlignedValue, got {other:?}"),
-        }
+        assert_eq!(as_fr(result), Fr::from(298u64));
     }
 
     #[test]
@@ -3368,12 +3348,7 @@ mod tests {
 
         let result =
             eval(bytes_to_field(32, &hex::encode(&le)), field()).expect("p - 1 must be accepted");
-        match result {
-            Value::AlignedValue(av) => {
-                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), p_minus_1);
-            }
-            other => panic!("expected AlignedValue, got {other:?}"),
-        }
+        assert_eq!(as_fr(result), p_minus_1);
 
         // Increment the little-endian byte string to get exactly p.
         let mut p = le;
@@ -3398,12 +3373,7 @@ mod tests {
         // Bytes<0> (the empty byte string) converts to the Field value 0,
         // matching Fr::from_le_bytes(&[]).
         let result = eval(bytes_to_field(0, ""), field()).expect("eval");
-        match result {
-            Value::AlignedValue(av) => {
-                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), Fr::from(0u64));
-            }
-            other => panic!("expected AlignedValue, got {other:?}"),
-        }
+        assert_eq!(as_fr(result), Fr::from(0u64));
     }
 
     fn field_to_bytes(len: u64, expr: ir::Expr) -> ir::Expr {
