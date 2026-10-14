@@ -1,8 +1,10 @@
 //! Build a synced [`Wallet`] from its seed or mnemonic, as a standalone step.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use midnight_types::chain_pin::{ChainCheck, ChainPin, SyncSource, current_pin, verify_pin};
+use midnight_types::chain_pin::{
+    ChainCheck, ChainPin, ChainView, SyncSource, current_pin, verify_pin,
+};
 use midnight_types::{Network, WalletError};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -438,35 +440,14 @@ impl WalletBuilder {
 
         let mut chain_pin = None;
         if pin {
-            // Take the pin this sync will carry before checking the stored
-            // one, and before the replay it precedes. A chain replaced at any
-            // point after this reads as replaced next time. Taken afterwards,
-            // a swap during the sync would be stamped with the new chain's own
-            // block, and the state resumed from the old one would never be
-            // caught.
+            // Take the pin this sync carries before the check and the replay;
+            // see `require_same_chain`.
             let candidate = current_pin(source).await;
             if let Some(dir) = storage_dir.as_deref()
                 && let Some(stored) = Wallet::stored_chain_pin(dir, network.clone(), &address)?
             {
-                match verify_pin(source, &stored).await {
-                    ChainCheck::SameChain => {}
-                    ChainCheck::Unknown => {
-                        warn!(
-                            height = stored.height,
-                            "node could not answer for the pinned block; keeping the cached state"
-                        );
-                    }
-                    ChainCheck::Replaced { found } => {
-                        return Err(WalletError::ChainMismatch {
-                            path: Wallet::snapshot_path(dir, network.clone(), &address)
-                                .display()
-                                .to_string(),
-                            pinned_height: stored.height,
-                            pinned_hash: stored.hash,
-                            found: found.unwrap_or_else(|| "no block".to_string()),
-                        });
-                    }
-                }
+                let snapshot = Wallet::snapshot_path(dir, network.clone(), &address);
+                require_same_chain(source, &stored, Some(&snapshot)).await?;
             }
             chain_pin = candidate;
         }
@@ -482,13 +463,50 @@ impl WalletBuilder {
     }
 }
 
+/// Refuse a resume of state that `pin` ties to a chain the node no longer
+/// runs.
+///
+/// A node that cannot answer leaves the cached state alone and logs a
+/// warning. The error names `snapshot`, so the user knows what to remove, or
+/// "the wallet snapshot" when there is no path to name.
+///
+/// The caller takes its replacement pin before this check, not after the
+/// sync or resync commits. That pin is the mark the new state belongs to, so
+/// a chain replaced at any point after it reads as replaced next time. Taken
+/// afterwards, a swap during the sync would be stamped with the new chain's
+/// own block, and every later check would pass against a chain that this
+/// state never saw.
+pub(crate) async fn require_same_chain(
+    chain: &dyn ChainView,
+    pin: &ChainPin,
+    snapshot: Option<&Path>,
+) -> Result<(), WalletError> {
+    match verify_pin(chain, pin).await {
+        ChainCheck::SameChain => Ok(()),
+        ChainCheck::Unknown => {
+            warn!(
+                height = pin.height,
+                "node could not answer for the pinned block; keeping the cached state"
+            );
+            Ok(())
+        }
+        ChainCheck::Replaced { found } => Err(WalletError::ChainMismatch {
+            path: snapshot.map_or_else(
+                || "the wallet snapshot".to_string(),
+                |p| p.display().to_string(),
+            ),
+            pinned_height: pin.height,
+            pinned_hash: pin.hash.clone(),
+            found: found.unwrap_or_else(|| "no block".to_string()),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use midnight_types::LedgerVersion;
-    use midnight_types::chain_pin::ChainView;
 
     use super::*;
     use crate::storage::{StoredMetadata, read_metadata, save_snapshot, wallet_storage_id};
