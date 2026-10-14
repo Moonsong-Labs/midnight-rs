@@ -18,12 +18,16 @@ pub struct MapAccessor<'a, K, V> {
 }
 
 impl<'a, K, V> MapAccessor<'a, K, V> {
-    /// Creates a new accessor wrapping the given map reference.
-    pub fn new(map: &'a HashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>) -> Self {
-        Self {
+    /// Wraps a `Map` field.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `sv` is not a `Map`.
+    pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
+        crate::nav::map_value(sv).map(|map| Self {
             map,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Returns the number of entries in the map.
@@ -87,12 +91,16 @@ pub struct SetAccessor<'a, T> {
 }
 
 impl<'a, T> SetAccessor<'a, T> {
-    /// Creates a new accessor wrapping the given map reference.
-    pub fn new(map: &'a HashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>) -> Self {
-        Self {
+    /// Wraps a `Set` field: a `Map` from each element to `Null`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `sv` is not a `Map`.
+    pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
+        crate::nav::map_value(sv).map(|map| Self {
             map,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Returns the number of elements in the set.

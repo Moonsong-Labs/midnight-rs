@@ -1,6 +1,7 @@
 use midnight_base_crypto::fab::{AlignedValue, InvalidBuiltinDecode, ValueSlice};
 use midnight_onchain_state::state::StateValue;
 use midnight_storage::db::InMemoryDB;
+use midnight_storage::storage::HashMap;
 
 use crate::StateError;
 
@@ -40,6 +41,21 @@ where
     for<'vs> T: TryFrom<&'vs ValueSlice, Error = InvalidBuiltinDecode>,
 {
     T::try_from(&*cell_value(sv)?.value).map_err(StateError::Conversion)
+}
+
+/// Extracts the map from a `StateValue::Map`.
+///
+/// Returns an error if the value is not a `Map`.
+pub(crate) fn map_value(
+    sv: &StateValue<InMemoryDB>,
+) -> Result<&HashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>, StateError> {
+    match sv {
+        StateValue::Map(map) => Ok(map),
+        other => Err(StateError::UnexpectedVariant {
+            expected: "Map",
+            actual: variant_name(other),
+        }),
+    }
 }
 
 /// Retrieves a field by index from a `StateValue::Array`.

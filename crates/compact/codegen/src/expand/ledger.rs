@@ -493,13 +493,7 @@ fn emit_map_accessor(
         #[doc = #doc]
         pub fn #method_name(&self) -> Result<MapAccessor<'_, #key_ty, #val_ty>, StateError> {
             let sv = #nav?;
-            match sv {
-                StateValue::Map(map) => Ok(MapAccessor::new(map)),
-                _ => Err(StateError::UnexpectedVariant {
-                    expected: "Map",
-                    actual: variant_name(sv),
-                }),
-            }
+            MapAccessor::from_state(sv)
         }
     }
 }
@@ -518,13 +512,7 @@ fn emit_set_accessor(
         #[doc = #doc]
         pub fn #method_name(&self) -> Result<SetAccessor<'_, #elem_ty>, StateError> {
             let sv = #nav?;
-            match sv {
-                StateValue::Map(map) => Ok(SetAccessor::new(map)),
-                _ => Err(StateError::UnexpectedVariant {
-                    expected: "Map",
-                    actual: variant_name(sv),
-                }),
-            }
+            SetAccessor::from_state(sv)
         }
     }
 }
