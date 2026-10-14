@@ -129,11 +129,11 @@ impl TryFrom<StoredUtxo> for TrackedUtxo {
     }
 }
 
-/// A wallet's storage directory, keyed on a public `wallet_id` (see
+/// A wallet's snapshot directory, keyed on a public `wallet_id` (see
 /// [`wallet_storage_id`]) rather than the seed. The directory name
 /// is the identity, so nothing secret, and nothing else, needs to be persisted
 /// to tell one wallet's snapshot from another's.
-pub(crate) fn storage_dir(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
+pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
     base.join(network).join(wallet_id)
 }
 
@@ -280,14 +280,8 @@ pub(crate) fn load_chain_pin(
     network: &str,
     wallet_id: &str,
 ) -> Result<Option<ChainPin>, WalletError> {
-    let dir = storage_dir(base, network, wallet_id);
+    let dir = snapshot_path(base, network, wallet_id);
     Ok(read_metadata(&dir)?.and_then(|m| m.chain_pin))
-}
-
-/// Where a wallet's snapshot lives, for an error that tells a reader what to
-/// remove.
-pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
-    storage_dir(base, network, wallet_id)
 }
 
 /// The ledger generation of a snapshot's state files, or `None` when there
@@ -297,7 +291,7 @@ pub(crate) fn load_ledger_version(
     network: &str,
     wallet_id: &str,
 ) -> Result<Option<LedgerVersion>, WalletError> {
-    let dir = storage_dir(base, network, wallet_id);
+    let dir = snapshot_path(base, network, wallet_id);
     Ok(read_metadata(&dir)?.map(|m| m.ledger_version))
 }
 
@@ -311,16 +305,12 @@ pub(crate) fn save_snapshot(
     mut metadata: StoredMetadata,
     write_state: impl FnOnce(&Path, u64) -> Result<(), WalletError>,
 ) -> Result<(), WalletError> {
-    let dir = storage_dir(base, network, wallet_id);
+    let dir = snapshot_path(base, network, wallet_id);
     create_private_dir(&dir)?;
 
     // Read the current metadata (if any) so we can bump the generation and
     // clean up the previous binary files only after the new metadata commit.
-    let meta_path = dir.join(METADATA_FILE);
-    let previous_generation: Option<u64> = std::fs::read_to_string(&meta_path)
-        .ok()
-        .and_then(|json| serde_json::from_str::<StoredMetadata>(&json).ok())
-        .map(|m| m.generation);
+    let previous_generation = read_metadata(&dir).ok().flatten().map(|m| m.generation);
     let generation = previous_generation.map(|g| g + 1).unwrap_or(1);
 
     // Write the new generation's binary files first. They are referenced only
@@ -417,7 +407,7 @@ pub(crate) fn save_pending(
     wallet_id: &str,
     pending: &StoredPending,
 ) -> Result<(), WalletError> {
-    let dir = storage_dir(base, network, wallet_id);
+    let dir = snapshot_path(base, network, wallet_id);
     create_private_dir(&dir)?;
 
     let path = dir.join(PENDING_FILE);
@@ -452,7 +442,7 @@ pub(crate) fn load_pending(
     network: &str,
     wallet_id: &str,
 ) -> Result<Option<StoredPending>, WalletError> {
-    let path = storage_dir(base, network, wallet_id).join(PENDING_FILE);
+    let path = snapshot_path(base, network, wallet_id).join(PENDING_FILE);
     let stored = read_json(&path)?;
     if stored.is_some() {
         info!(path = %path.display(), "loaded pending reservations");
@@ -555,7 +545,7 @@ mod tests {
         let base = tempfile::TempDir::new().unwrap();
         save_pending(base.path(), "undeployed", "testwallet", &some_pending()).unwrap();
 
-        let dir = storage_dir(base.path(), "undeployed", "testwallet");
+        let dir = snapshot_path(base.path(), "undeployed", "testwallet");
         assert_eq!(mode_of(&dir), 0o700, "wallet directory must be owner-only");
         assert_eq!(
             mode_of(&dir.join(PENDING_FILE)),
@@ -569,7 +559,7 @@ mod tests {
     #[test]
     fn existing_permissions_are_narrowed() {
         let base = tempfile::TempDir::new().unwrap();
-        let dir = storage_dir(base.path(), "undeployed", "testwallet");
+        let dir = snapshot_path(base.path(), "undeployed", "testwallet");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         let path = dir.join(PENDING_FILE);
