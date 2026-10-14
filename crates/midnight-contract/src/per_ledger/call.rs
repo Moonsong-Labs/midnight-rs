@@ -572,10 +572,7 @@ pub(super) async fn prove_without_fee(
     let built = super::types::build_no_validate(tx_info)
         .await
         .map_err(ProviderError::Wallet)?;
-    let mut bytes = Vec::new();
-    helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
-    Ok(bytes)
+    crate::call::tagged_bytes(&built.finalized, "transaction")
 }
 
 /// Pick the segment a caller-provided shielded input should ride in: the same

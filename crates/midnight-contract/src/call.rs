@@ -264,6 +264,17 @@ pub(crate) fn call_input(
     Ok(interpreter::encode_circuit_input(args, &arg_types)?)
 }
 
+/// `value` in its tagged encoding. `what` names it in the error.
+pub(crate) fn tagged_bytes<T>(value: &T, what: &str) -> Result<Vec<u8>, ContractError>
+where
+    T: midnight_serialize::Serializable + midnight_serialize::Tagged,
+{
+    let mut bytes = Vec::new();
+    tagged_serialize(value, &mut bytes)
+        .map_err(|e| ContractError::Serialization(format!("serialize {what}: {e}")))?;
+    Ok(bytes)
+}
+
 /// `value` in another type of the same encoding: another storage backend,
 /// or another generation's type that encodes it alike.
 pub(crate) fn reencode<A, B>(value: &A, what: &str) -> Result<B, ContractError>
@@ -271,9 +282,7 @@ where
     A: midnight_serialize::Serializable + midnight_serialize::Tagged,
     B: midnight_serialize::Deserializable + midnight_serialize::Tagged,
 {
-    let mut bytes = Vec::new();
-    tagged_serialize(value, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("serialize {what}: {e}")))?;
+    let bytes = tagged_bytes(value, what)?;
     midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
         .map_err(|e| ContractError::Serialization(format!("deserialize {what}: {e}")))
 }
@@ -390,11 +399,8 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let tx: UnprovenTransaction = Transaction::from_intents(network_id, intents);
 
-    let mut bytes = Vec::new();
-    tagged_serialize(&tx, &mut bytes).map_err(|e| ContractError::Serialization(e.to_string()))?;
-
     Ok(UnprovenCallTx {
-        tx_bytes: bytes,
+        tx_bytes: tagged_bytes(&tx, "transaction")?,
         transaction: tx,
         new_state: exec_result.state,
     })
