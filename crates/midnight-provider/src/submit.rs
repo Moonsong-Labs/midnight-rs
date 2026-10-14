@@ -13,8 +13,13 @@ use crate::types::TransactionHash;
 use midnight_types::SpentInputs;
 use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
+use subxt::tx::{TransactionInBlock, TransactionStatus};
 
 use crate::ProviderError;
+
+type AtBlock = subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>;
+type Status = TransactionStatus<subxt::SubstrateConfig, AtBlock>;
+type InBlock = TransactionInBlock<subxt::SubstrateConfig, AtBlock>;
 
 /// Whether a terminal status proves the transaction will never be included, so
 /// the inputs it reserved can be handed back.
@@ -311,10 +316,7 @@ impl std::fmt::Display for Verdict {
 /// retract the transaction from the mempool; the node keeps it queued
 /// until it lands in a block or is dropped by the node itself.
 pub struct PendingTx {
-    progress: subxt::tx::TransactionProgress<
-        subxt::SubstrateConfig,
-        subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
-    >,
+    progress: subxt::tx::TransactionProgress<subxt::SubstrateConfig, AtBlock>,
     reservation: Option<Reservation>,
     transaction_hash: TransactionHash,
 }
@@ -383,27 +385,9 @@ impl PendingTx {
     /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
     /// the [`SubmitError`] kinds of the other failures and what each implies
     /// about retrying.
-    pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ProviderError> {
-        use subxt::tx::TransactionStatus;
-        while let Some(status) = self.progress.next().await {
-            let status = status.map_err(SubmitError::watch)?;
-            if let Some(err) = SubmitError::from_terminal_status(&status) {
-                // Taken by value: holding a borrow of `self` across the await
-                // would make this future require `PendingTx: Sync`, which the
-                // watch stream is not.
-                if rejection_is_definitive(&err)
-                    && let Some(reservation) = self.reservation.take()
-                {
-                    reservation.release().await;
-                }
-                return Err(err.into());
-            }
-            if let TransactionStatus::InBestBlock(in_block) = status {
-                let tx = tx_in_block_with_verdict(&in_block, self.transaction_hash).await?;
-                return Ok((applied(tx)?, self));
-            }
-        }
-        Err(SubmitError::stream_ended("reaching best block").into())
+    pub async fn wait_best(self) -> Result<(TxInBlock, Self), ProviderError> {
+        self.wait_for(TransactionStatus::as_in_block, "reaching best block")
+            .await
     }
 
     /// Drive the watch stream until the transaction is in a finalized block,
@@ -418,8 +402,16 @@ impl PendingTx {
     /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
     /// the [`SubmitError`] kinds of the other failures and what each implies
     /// about retrying.
-    pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ProviderError> {
-        use subxt::tx::TransactionStatus;
+    pub async fn wait_finalized(self) -> Result<(TxInBlock, Self), ProviderError> {
+        self.wait_for(TransactionStatus::as_finalized, "finalization")
+            .await
+    }
+
+    async fn wait_for(
+        mut self,
+        landed: fn(&Status) -> Option<&InBlock>,
+        awaiting: &'static str,
+    ) -> Result<(TxInBlock, Self), ProviderError> {
         while let Some(status) = self.progress.next().await {
             let status = status.map_err(SubmitError::watch)?;
             if let Some(err) = SubmitError::from_terminal_status(&status) {
@@ -433,12 +425,12 @@ impl PendingTx {
                 }
                 return Err(err.into());
             }
-            if let TransactionStatus::InFinalizedBlock(in_block) = status {
-                let tx = tx_in_block_with_verdict(&in_block, self.transaction_hash).await?;
+            if let Some(in_block) = landed(&status) {
+                let tx = tx_in_block_with_verdict(in_block, self.transaction_hash).await?;
                 return Ok((applied(tx)?, self));
             }
         }
-        Err(SubmitError::stream_ended("finalization").into())
+        Err(SubmitError::stream_ended(awaiting).into())
     }
 }
 
@@ -447,10 +439,7 @@ impl PendingTx {
 /// `Failure` when neither is present (the dispatch errored and only
 /// `System::ExtrinsicFailed` was emitted).
 async fn tx_in_block_with_verdict(
-    in_block: &subxt::tx::TransactionInBlock<
-        subxt::SubstrateConfig,
-        subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
-    >,
+    in_block: &InBlock,
     transaction_hash: TransactionHash,
 ) -> Result<TxInBlock, ProviderError> {
     let block_hash = in_block.block_hash().0;
@@ -496,10 +485,7 @@ async fn tx_in_block_with_verdict(
 /// a crash between submit and record would leave a transaction on the wire
 /// with no local handle to reconcile it.
 pub struct PreparedTx {
-    tx: subxt::tx::SubmittableTransaction<
-        subxt::SubstrateConfig,
-        subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
-    >,
+    tx: subxt::tx::SubmittableTransaction<subxt::SubstrateConfig, AtBlock>,
     transaction_hash: TransactionHash,
 }
 
