@@ -178,53 +178,6 @@ fn contract_circuit(s: &Sexp) -> R<ContractCircuit> {
 // Instructions and operands.
 // ---------------------------------------------------------------------
 
-const EXPR_HEADS: &[&str] = &[
-    "quote",
-    "var-ref",
-    "default",
-    "if",
-    "elt-ref",
-    "enum-ref",
-    "tuple",
-    "vector",
-    "tuple-ref",
-    "tuple-slice",
-    "vector-ref",
-    "vector-slice",
-    "bytes-ref",
-    "bytes-slice",
-    "+",
-    "-",
-    "*",
-    "<",
-    "<=",
-    ">",
-    ">=",
-    "==",
-    "!=",
-    "map",
-    "fold",
-    "call",
-    "new",
-    "seq",
-    "let*",
-    "assert",
-    "field->bytes",
-    "cast-from-bytes",
-    "vector->bytes",
-    "bytes->vector",
-    "cast-from-enum",
-    "cast-to-enum",
-    "cast-to-field",
-    "cast-from-field",
-    "safe-cast",
-    "downcast-unsigned",
-    "contract-call",
-    "emit",
-    "public-ledger",
-    "return",
-];
-
 fn operand(s: &Sexp) -> R<Operand> {
     match s {
         Sexp::Int(i) => return Ok(Operand::Int(i.clone())),
@@ -258,8 +211,7 @@ fn operand(s: &Sexp) -> R<Operand> {
             l[1..].iter().map(operand).collect::<R<_>>()?,
         )),
         Some("state-value") => Ok(Operand::StateValue(state_value(&l[1..])?)),
-        Some(h) if EXPR_HEADS.contains(&h) => Ok(Operand::Expr(Box::new(expr(s)?))),
-        Some(_) => err("operand", s),
+        Some(_) => Ok(Operand::Expr(bx(s)?)),
         None => Ok(Operand::List(l.iter().map(operand).collect::<R<_>>()?)),
     }
 }
