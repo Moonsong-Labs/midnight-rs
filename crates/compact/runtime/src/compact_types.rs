@@ -290,15 +290,8 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
         Type::Opaque(_) | Type::Point(_) => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
-            // evaluates to Void. The Compact runtime encodes opaque values
-            // as a single Compress-aligned atom and their default as the
-            // empty value (compact-types.ts: CompactTypeOpaqueString /
-            // CompactTypeOpaqueUint8Array), i.e. an empty atom.
-            Value::Void => fab::AlignedValue::new(
-                fab::Value(vec![fab::ValueAtom(Vec::new())]),
-                fab::Alignment::singleton(fab::AlignmentAtom::Compress),
-            )
-            .ok_or_else(unsupported),
+            // evaluates to Void.
+            Value::Void => Ok(empty_opaque()),
             _ => Err(unsupported()),
         },
         // Composite types accept either the structural spelling, which is
@@ -426,6 +419,14 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
     }
 }
 
+/// The default of an opaque type. The Compact runtime encodes an opaque value as
+/// a single Compress-aligned atom and its default as the empty value
+/// (compact-types.ts: CompactTypeOpaqueString / CompactTypeOpaqueUint8Array),
+/// which is one empty atom.
+fn empty_opaque() -> AlignedValue {
+    AlignedValue::from(Vec::<u8>::new())
+}
+
 /// The compiler's `default<T>`, in the interpreter's value domain.
 ///
 /// The canonical runtime builds a default through the type's descriptor
@@ -443,7 +444,6 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
 ///   does not fit in `usize`, or if a part of the default does not encode at
 ///   its type.
 pub fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
-    use midnight_base_crypto::fab;
     match ty {
         Type::Boolean => Ok(Value::Bool(false)),
         Type::Unsigned(_) | Type::Enum { .. } => Ok(Value::Integer(0)),
@@ -463,14 +463,7 @@ pub fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
         Type::Point(_) => Ok(Value::AlignedValue(AlignedValue::from(
             midnight_transient_crypto::curve::EmbeddedGroupAffine::identity(),
         ))),
-        Type::Opaque(_) => fab::AlignedValue::new(
-            fab::Value(vec![fab::ValueAtom(Vec::new())]),
-            fab::Alignment::singleton(fab::AlignmentAtom::Compress),
-        )
-        .map(Value::AlignedValue)
-        .ok_or_else(|| {
-            InterpreterError::TypeError("empty opaque default is unrepresentable".into())
-        }),
+        Type::Opaque(_) => Ok(Value::AlignedValue(empty_opaque())),
         Type::Struct { fields, .. } => {
             let defaults = fields
                 .iter()
