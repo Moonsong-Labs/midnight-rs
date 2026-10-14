@@ -17,6 +17,8 @@ use midnight_contract::runtime::{Value, bytes_aligned_value};
 use midnight_typed_state::AlignedValue;
 use serde_json::Value as Json;
 
+use crate::state_json::hex_from_json;
+
 /// Convert a tagged case value into the interpreter's argument [`Value`],
 /// mirroring what bindgen-generated code passes: integers stay
 /// `Value::Integer` (the interpreter applies the declared width), everything
@@ -61,10 +63,7 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
             .ok_or_else(|| format!("string does not fit a compress alignment: {body}"))
         }
         "bytes" => {
-            let hex_str = body
-                .as_str()
-                .ok_or_else(|| format!("bytes body must be a hex string: {body}"))?;
-            let bytes = hex::decode(hex_str).map_err(|e| format!("bytes hex: {e}"))?;
+            let bytes = hex_from_json(body).map_err(|e| format!("bytes body: {e}"))?;
             let len = bytes.len();
             Ok(Value::AlignedValue(
                 bytes_aligned_value(bytes, len).map_err(|e| e.to_string())?,
