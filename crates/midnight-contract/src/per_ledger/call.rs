@@ -939,34 +939,17 @@ mod tests {
     /// devnet-E2E concern; this pins the FAB decode mechanics.)
     #[test]
     fn decode_shielded_output_extracts_coin_and_user_recipient() {
-        let nonce = [2u8; 32];
-        let color = [3u8; 32];
-        let value: u128 = 1000;
+        let coin = ZswapCoinInfo {
+            nonce: Nonce(HashOutput([2u8; 32])),
+            type_: ShieldedTokenType(HashOutput([3u8; 32])),
+            value: 1000,
+        };
         let cpk = [4u8; 32];
 
-        let coin = Value::AlignedValue(AlignedValue::concat(
-            [
-                AlignedValue::from(nonce),
-                AlignedValue::from(color),
-                AlignedValue::from(value),
-            ]
-            .iter(),
-        ));
-        let recipient = Value::AlignedValue(AlignedValue::concat(
-            [
-                AlignedValue::from(true),
-                AlignedValue::from(cpk),
-                AlignedValue::from([0u8; 32]),
-            ]
-            .iter(),
-        ));
+        let decoded =
+            decode_shielded_output(&coin_to_user(&coin, cpk)).expect("decode must succeed");
 
-        let decoded = decode_shielded_output(&CircuitZswapOutput { coin, recipient })
-            .expect("decode must succeed");
-
-        assert_eq!(decoded.coin.nonce.0.0, nonce);
-        assert_eq!(decoded.coin.type_.0.0, color);
-        assert_eq!(decoded.coin.value, value);
+        assert_eq!(decoded.coin, coin);
         assert_eq!(
             decoded.recipient,
             Recipient::User(PublicKey(HashOutput(cpk))),
