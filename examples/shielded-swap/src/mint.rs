@@ -38,13 +38,10 @@ pub async fn mint_token_to(
     use midnight_core::compact_bindgen::Bytes;
     use rand::Rng;
 
-    let pending = contract::Contract::deploy(minter)
+    let mint = contract::Contract::deploy(minter)
         .with_initial_state(contract::LedgerInitialState)
         .with_zk_config(ZK_KEYS_DIR)
-        .send()
         .await?;
-    let (_best, pending) = pending.wait_best().await?;
-    let mint = pending.into_contract().await?;
 
     let shielded = recipient.shielded_recipient();
     let coin_pk = shielded.coin_public_key;

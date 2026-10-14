@@ -73,14 +73,11 @@ async fn main() -> anyhow::Result<()> {
 
     // 1. Deploy the counter contract governed by a 2-of-3 committee.
     println!("1. Deploying a governable contract (2-of-3 committee)...");
-    let pending = counter::Contract::deploy(&provider)
+    let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(ZK_KEYS_DIR)
         .with_maintenance_authority(committee, 2)
-        .send()
         .await?;
-    let (_, pending) = pending.wait_best().await?;
-    let contract = pending.into_contract().await?;
     println!("   address: {}", contract.address());
     print_authority(&contract).await?;
 

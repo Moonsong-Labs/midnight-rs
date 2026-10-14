@@ -78,13 +78,10 @@ async fn main() -> anyhow::Result<()> {
 
     // --- A deploys the counter (A is genesis-funded with Dust) ---
     println!("1. A deploys the counter...");
-    let pending = counter::Contract::deploy(&provider_a)
+    let contract = counter::Contract::deploy(&provider_a)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(ZK_KEYS_DIR)
-        .send()
         .await?;
-    let (_best, pending) = pending.wait_best().await?;
-    let contract = pending.into_contract().await?;
     let address = contract.address().to_string();
     // Baseline the counter before B's increment lands, so the final assertion
     // proves the sponsored call actually applied (round moved by exactly one),
