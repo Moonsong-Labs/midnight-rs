@@ -6,11 +6,17 @@
 use std::path::Path;
 
 use compact_bindgen::{
-    ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue, StorageHashMap,
+    AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
+    StorageHashMap,
 };
 use compact_codegen::types::{Circuit, ContractInfo};
+use midnight_base_crypto::hash::PersistentHashWriter;
+use midnight_base_crypto::repr::BinaryHashRepr;
+use midnight_base_crypto::time::Timestamp;
 use midnight_contract::interpreter;
+use midnight_contract::runtime::WitnessProvider;
 use midnight_provider::{MidnightProvider, Network};
+use midnight_transient_crypto::fab::ValueReprAlignedValue;
 use midnight_wallet::Wallet;
 
 /// The seed of the wallet that the dev devnet funds at genesis.
@@ -115,4 +121,25 @@ pub(crate) fn exported_circuit<'a>(info: &'a ContractInfo, name: &str) -> &'a Ci
 /// contract defines, plus its witness and native declarations.
 pub(crate) fn program(info: &ContractInfo) -> interpreter::Program<'_> {
     interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives)
+}
+
+/// No witnesses, a scratch private state, the zero address, the epoch.
+pub(crate) fn epoch() -> interpreter::Env<'static> {
+    interpreter::Env::new(Timestamp::from_secs(0))
+}
+
+/// `epoch()` with `witnesses` answering the witness calls.
+pub(crate) fn with_witnesses(witnesses: &dyn WitnessProvider) -> interpreter::Env<'_> {
+    interpreter::Env {
+        witnesses,
+        ..epoch()
+    }
+}
+
+/// The `persistentHash` of `value`, computed with base-crypto and not with the
+/// interpreter's builtin, so that a test can check the interpreter against it.
+pub(crate) fn persistent_hash(value: AlignedValue) -> AlignedValue {
+    let mut hasher = PersistentHashWriter::default();
+    ValueReprAlignedValue(value).binary_repr(&mut hasher);
+    AlignedValue::from(hasher.finalize().0)
 }

@@ -7,6 +7,7 @@
 
 mod common;
 
+use common::{epoch, with_witnesses};
 use compact_bindgen::{AlignedValue, ContractState, InMemoryDB, StateValue};
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::contract::ContractAddress;
@@ -76,11 +77,6 @@ fn no_program() -> interpreter::Program<'static> {
     interpreter::Program::new(&[], &[], &[])
 }
 
-/// No witnesses, a scratch private state, the zero address, the epoch.
-fn epoch() -> interpreter::Env<'static> {
-    interpreter::Env::new(Timestamp::from_secs(0))
-}
-
 // ---------------------------------------------------------------------------
 // Witness calls
 // ---------------------------------------------------------------------------
@@ -143,10 +139,7 @@ fn witness_failure_on_builtin_name_propagates() {
         &program,
         state,
         &[],
-        interpreter::Env {
-            witnesses: &FailingHsm,
-            ..epoch()
-        },
+        with_witnesses(&FailingHsm),
     ) {
         Ok(_) => panic!("a witness-level failure must propagate, not fall through to the builtin"),
         Err(InterpreterError::Witness(msg)) => {
@@ -175,12 +168,7 @@ fn unknown_witness_falls_through_to_builtin() {
     // The builtin hashes the argument at the witness's declared type,
     // `Uint<0..65535>`, which is a two-byte atom. Recompute the expected digest
     // independently so a different code path (or no builtin at all) fails.
-    use midnight_base_crypto::hash::PersistentHashWriter;
-    use midnight_base_crypto::repr::BinaryHashRepr;
-    use midnight_transient_crypto::fab::ValueReprAlignedValue;
-    let mut hasher = PersistentHashWriter::default();
-    ValueReprAlignedValue(AlignedValue::from(7u16)).binary_repr(&mut hasher);
-    let expected = AlignedValue::from(hasher.finalize().0);
+    let expected = common::persistent_hash(AlignedValue::from(7u16));
 
     match result.result {
         Some(Value::AlignedValue(av)) => assert_eq!(av, expected, "builtin hash mismatch"),

@@ -11,6 +11,7 @@
 
 mod common;
 
+use common::{epoch, with_witnesses};
 use compact_bindgen::{AlignedValue, ContractState, InMemoryDB, StateValue, StorageHashMap};
 use midnight_contract::ContractMaintenanceVerifyingKey;
 use midnight_contract::call;
@@ -61,19 +62,6 @@ fn counter_zk_dir() -> String {
 /// Parse an analyzed-ir.sexp artifact embedded at compile time.
 fn load_info(analyzed_ir_text: &str) -> ContractInfo {
     compact_codegen::artifact::load_str(analyzed_ir_text).unwrap()
-}
-
-/// No witnesses, a scratch private state, the zero address, the epoch.
-fn epoch() -> interpreter::Env<'static> {
-    interpreter::Env::new(midnight_base_crypto::time::Timestamp::from_secs(0))
-}
-
-/// `epoch()` with `witnesses` answering the witness calls.
-fn with_witnesses(witnesses: &dyn WitnessProvider) -> interpreter::Env<'_> {
-    interpreter::Env {
-        witnesses,
-        ..epoch()
-    }
 }
 
 /// The counter ledger at `round`. The fixture states are built by hand, so a
@@ -398,10 +386,6 @@ impl WitnessProvider for BboardWitness {
 /// `convertFieldToBytes`), so this pins the interpreter's `field-to-bytes`
 /// output: a wrong byte order or alignment changes the hash.
 fn bboard_public_key(sk: [u8; 32], instance: u64) -> AlignedValue {
-    use midnight_base_crypto::hash::PersistentHashWriter;
-    use midnight_base_crypto::repr::BinaryHashRepr;
-    use midnight_transient_crypto::fab::ValueReprAlignedValue;
-
     let prefix = b"bboard:pk:";
     let mut pad = [0u8; 32];
     pad[..prefix.len()].copy_from_slice(prefix);
@@ -416,9 +400,7 @@ fn bboard_public_key(sk: [u8; 32], instance: u64) -> AlignedValue {
         ]
         .iter(),
     );
-    let mut hasher = PersistentHashWriter::default();
-    ValueReprAlignedValue(preimage).binary_repr(&mut hasher);
-    AlignedValue::from(hasher.finalize().0)
+    common::persistent_hash(preimage)
 }
 
 /// Read a cell of the bboard state array as an `AlignedValue`.
