@@ -8,9 +8,9 @@ use helpers::mn_ledger::events::EventDetails;
 use helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use helpers::{
-    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, IntoWalletAddress, LedgerContext,
-    LedgerParameters, LedgerState, MAX_SUPPLY, Recipient, SecretKeys, ShieldedWallet, Sp,
-    Timestamp, UnshieldedWallet, Wallet as ContextWallet, WalletState as ZswapLocalState,
+    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, LedgerContext, LedgerParameters,
+    LedgerState, MAX_SUPPLY, Recipient, SecretKeys, ShieldedWallet, Sp, Timestamp,
+    UnshieldedWallet, Wallet as ContextWallet, WalletState as ZswapLocalState,
 };
 use midnight_indexer_client::SubscriptionClient;
 use midnight_types::{SyncCursors, TrackedUtxo};
@@ -1086,13 +1086,6 @@ impl Wallet {
     /// See [`crate::Wallet::unshielded_address`].
     pub fn unshielded_address(&self) -> String {
         self.unshielded_address.clone()
-    }
-
-    /// See [`crate::Wallet::shielded_address`].
-    pub fn shielded_address(&self) -> String {
-        ShieldedWallet::<DefaultDB>::default((&self.seed).into_ledger())
-            .address(&self.network_id)
-            .to_bech32()
     }
 
     pub fn unshielded_utxos(&self) -> &[TrackedUtxo] {

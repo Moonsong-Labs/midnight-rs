@@ -275,7 +275,7 @@ impl Wallet {
 
     /// The wallet's shielded receiving address, e.g. `mn_shield-addr_undeployed1...`.
     pub fn shielded_address(&self) -> String {
-        each!(&self.state, w => w.shielded_address())
+        self.seed.shielded_address(self.network())
     }
 
     /// The unshielded UTXOs this wallet tracks.
