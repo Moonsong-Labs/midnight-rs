@@ -2223,15 +2223,23 @@ mod tests {
         }
     }
 
+    /// A wallet that has saved once, as generation 1, to the returned
+    /// directory. Its tx cursor is `Some`, so that [`noop_commit`] mirrors
+    /// it: with no cursor, every commit counts as a cursor move.
+    fn saved_wallet() -> (tempfile::TempDir, Wallet) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
+        wallet.last_tx_id = Some(3);
+        wallet.save(dir.path()).unwrap();
+        (dir, wallet)
+    }
+
     #[test]
     fn noop_resync_commit_skips_persistence() {
         // Seam for the resync commit path: resync runs before every build,
         // so a commit that changes no durable state must not rewrite the
         // generation files, even though it refreshes `block_context`.
-        let dir = tempfile::TempDir::new().unwrap();
-        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
-        wallet.last_tx_id = Some(3);
-        wallet.save(dir.path()).unwrap();
+        let (dir, mut wallet) = saved_wallet();
         assert_eq!(stored_generations(dir.path()), vec![1]);
 
         let commit = noop_commit(&wallet);
@@ -2244,10 +2252,7 @@ mod tests {
 
     #[test]
     fn resync_commit_persists_when_cursor_advances() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
-        wallet.last_tx_id = Some(3);
-        wallet.save(dir.path()).unwrap();
+        let (dir, mut wallet) = saved_wallet();
 
         let mut commit = noop_commit(&wallet);
         commit.dust_event_id += 1;
@@ -2259,10 +2264,7 @@ mod tests {
 
     #[test]
     fn resync_commit_persists_when_parameters_change() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
-        wallet.last_tx_id = Some(3);
-        wallet.save(dir.path()).unwrap();
+        let (dir, mut wallet) = saved_wallet();
 
         let mut commit = noop_commit(&wallet);
         commit
@@ -2275,10 +2277,7 @@ mod tests {
 
     #[test]
     fn resync_commit_persists_when_reservation_cleared() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
-        wallet.last_tx_id = Some(3);
-        wallet.save(dir.path()).unwrap();
+        let (dir, mut wallet) = saved_wallet();
         let key = ukey("abcd", 0);
         wallet.reserve_pending(
             Vec::new(),
