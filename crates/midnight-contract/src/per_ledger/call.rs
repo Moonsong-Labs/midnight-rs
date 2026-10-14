@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::helpers;
 use super::provider::Builds;
-use super::types::convert::IntoLedger;
+use super::types::convert::{IntoLedger, IntoSdk};
 use helpers::coin_structure::coin::{
     Info as ZswapCoinInfo, PublicAddress, PublicKey, QualifiedInfo, ShieldedTokenType, TokenType,
     UnshieldedTokenType, UserAddress,
@@ -26,6 +26,7 @@ use midnight_typed_state::{ContractState, InMemoryDB};
 
 use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
+use crate::address::format_address;
 use crate::call::ShieldedInputs;
 use crate::change::{change_due, total_by_key};
 use crate::error::ContractError;
@@ -210,7 +211,7 @@ pub(crate) async fn call_transaction(
     // 3. Make the circuit's proving keys resolvable, and prove with the
     //    resolver that finds them.
     let key_location =
-        crate::resolver::register(&hex::encode(contract_address.0.0), circuit_name, &zk_config)?;
+        crate::resolver::register(&format_address(&contract_address), circuit_name, &zk_config)?;
     context.update_resolver(super::resolver::shared()).await;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
@@ -600,7 +601,7 @@ fn shielded_input_to_fallible(
         (true, true) => Err(ContractError::Construction(format!(
             "cannot route shielded input for token {}: the circuit creates outputs of this token \
              in both the guaranteed and fallible segments, so the input's segment is ambiguous",
-            hex::encode(token_type.0.0)
+            token_type.into_sdk()
         ))),
         (false, true) => Ok(true),
         // Guaranteed match, or no match at all: ride in the guaranteed segment.
