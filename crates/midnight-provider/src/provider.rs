@@ -49,14 +49,7 @@ struct NodeConnection {
 pub struct MidnightProvider {
     indexer_url: String,
     node_url: String,
-    /// The wallet, reached only through its API.
-    ///
-    /// How its state is shared is the implementation's business: every method
-    /// on [`WalletFacade`] returns an owned value or covers one transition, so
-    /// nothing here holds a lock. Cloning the `Arc` is cheap and safe.
-    wallet: Option<Arc<dyn WalletFacade>>,
-    /// The same wallet, as each generation's builds.
-    builds: Option<WalletBuildsOf>,
+    wallet: Option<AttachedWallet>,
     /// Proof backends for transaction building, one per ledger generation.
     /// Defaults to the local provers on first use; override with
     /// [`Self::with_proof_provider`] to use a remote prover or a custom
@@ -100,7 +93,6 @@ impl MidnightProvider {
             indexer_url: indexer_url.to_string(),
             node_url: node_url.to_string(),
             wallet: None,
-            builds: None,
             proof_provider: None,
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
@@ -226,17 +218,22 @@ impl MidnightProvider {
     /// it, for example on a timer in a UI.
     pub fn with_wallet(mut self, wallet: impl IntoWalletFacade) -> Self {
         let wallet = Arc::new(wallet.into_facade());
-        self.builds = Some(WalletBuildsOf {
+        self.wallet = Some(AttachedWallet {
+            facade: wallet.clone(),
             ledger_8: wallet.clone(),
-            ledger_9: wallet.clone(),
+            ledger_9: wallet,
         });
-        self.wallet = Some(wallet);
         self
     }
 
     /// The attached wallet, as the API it implements.
     pub(crate) fn facade(&self) -> Option<Arc<dyn WalletFacade>> {
-        self.wallet.clone()
+        self.wallet.as_ref().map(|wallet| wallet.facade.clone())
+    }
+
+    /// The attached wallet, or [`ProviderError::NoWallet`] when there is none.
+    fn attached(&self) -> Result<&AttachedWallet, ProviderError> {
+        self.wallet.as_ref().ok_or(ProviderError::NoWallet)
     }
 
     /// The ledger generation the chain runs at the current finalized block.
@@ -281,18 +278,17 @@ impl MidnightProvider {
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn builds(&self) -> Result<Builds<'_>, ProviderError> {
         self.resync_wallet().await?;
-        let wallet = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let builds = self.builds.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = self.attached()?;
         let provers = self.proof_provider();
-        Ok(match wallet.ledger_version().await {
+        Ok(match wallet.facade.ledger_version().await {
             LedgerVersion::V8 => Builds::Ledger8(ledger_8::Builds::new(
                 self,
-                builds.ledger_8.clone(),
+                wallet.ledger_8.clone(),
                 provers.ledger_8(),
             )),
             LedgerVersion::V9 => Builds::Ledger9(ledger_9::Builds::new(
                 self,
-                builds.ledger_9.clone(),
+                wallet.ledger_9.clone(),
                 provers.ledger_9(),
             )),
         })
@@ -302,8 +298,7 @@ impl MidnightProvider {
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn balance(&self) -> Result<WalletBalance, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.balance().await)
+        Ok(self.attached()?.facade.balance().await)
     }
 
     /// Enumerate the wallet's spendable shielded coins with their full coin
@@ -317,24 +312,21 @@ impl MidnightProvider {
     pub async fn spendable_shielded_coins(
         &self,
     ) -> Result<Vec<SpendableShieldedCoin>, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.spendable_shielded_coins().await)
+        Ok(self.attached()?.facade.spendable_shielded_coins().await)
     }
 
     /// Whether the attached wallet has completed dust sync.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn dust_synced(&self) -> Result<bool, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.dust_synced().await)
+        Ok(self.attached()?.facade.dust_synced().await)
     }
 
     /// The unshielded UTXOs the attached wallet tracks.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn unshielded_utxos(&self) -> Result<Vec<TrackedUtxo>, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.unshielded_utxos().await)
+        Ok(self.attached()?.facade.unshielded_utxos().await)
     }
 
     /// The chain's Dust and TTL parameters, as the attached wallet last synced
@@ -342,8 +334,7 @@ impl MidnightProvider {
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn parameters(&self) -> Result<ChainParameters, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.parameters().await)
+        Ok(self.attached()?.facade.parameters().await)
     }
 
     /// How far the attached wallet's sync has reached. See
@@ -351,8 +342,7 @@ impl MidnightProvider {
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn sync_cursors(&self) -> Result<SyncCursors, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.sync_cursors().await)
+        Ok(self.attached()?.facade.sync_cursors().await)
     }
 
     /// Re-sync the wallet against the indexer.
@@ -378,7 +368,7 @@ impl MidnightProvider {
     }
 
     async fn resync_wallet_inner(&self) -> Result<(), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = &self.attached()?.facade;
 
         // Serialize resyncs across plan → replay → commit: the replay below
         // runs without the wallet lock, so without this guard two concurrent
@@ -391,7 +381,7 @@ impl MidnightProvider {
         //
         // The wallet resumes against its own indexer and checks its own chain
         // pin; this provider is only the node view those checks ask.
-        arc.resync(self).await?;
+        wallet.resync(self).await?;
         Ok(())
     }
 
@@ -461,13 +451,13 @@ impl MidnightProvider {
         coins: impl IntoIterator<Item = CoinInfo> + Send,
     ) -> Result<(), ProviderError> {
         let coins: Vec<CoinInfo> = coins.into_iter().collect();
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = &self.attached()?.facade;
         if coins.is_empty() {
             return Ok(());
         }
         let _resync_guard = self.resync_lock.lock().await;
-        arc.watch_for_coins(coins).await?;
-        self.rescan_shielded_serialized(arc).await
+        wallet.watch_for_coins(coins).await?;
+        self.rescan_shielded_serialized(wallet).await
     }
 
     /// Drop a registration [`Self::watch_for_coin`] made, for a coin that
@@ -485,12 +475,12 @@ impl MidnightProvider {
         &self,
         coins: impl IntoIterator<Item = CoinInfo> + Send,
     ) -> Result<(), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = &self.attached()?.facade;
         // Serialized against resyncs: a resync commits the state its plan
         // snapshotted, which still carries a registration dropped after that
         // snapshot, so an unserialized forget would come back.
         let _resync_guard = self.resync_lock.lock().await;
-        arc.forget_coins(coins.into_iter().collect()).await?;
+        wallet.forget_coins(coins.into_iter().collect()).await?;
         Ok(())
     }
 
@@ -502,9 +492,9 @@ impl MidnightProvider {
     /// repair because its cursor has moved past the events in question.
     /// Dust state, unshielded state, and their cursors are left alone.
     pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = &self.attached()?.facade;
         let _resync_guard = self.resync_lock.lock().await;
-        self.rescan_shielded_serialized(arc).await
+        self.rescan_shielded_serialized(wallet).await
     }
 
     /// The rescan's plan → run → commit sequence. The caller must already
@@ -772,8 +762,7 @@ impl MidnightProvider {
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn release(&self, spent: &SpentInputs) -> Result<(), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        arc.release(spent).await;
+        self.attached()?.facade.release(spent).await;
         Ok(())
     }
 
@@ -793,9 +782,9 @@ impl MidnightProvider {
         result: &TransferResult,
     ) -> Result<PendingTx, ProviderError> {
         match self.submit(&result.tx_bytes).await {
-            Ok(pending) => Ok(match self.wallet.as_ref() {
+            Ok(pending) => Ok(match self.facade() {
                 Some(wallet) => pending.with_reservation(crate::submit::Reservation::new(
-                    wallet.clone(),
+                    wallet,
                     SpentInputs::from(result),
                 )),
                 None => pending,
@@ -822,8 +811,7 @@ impl MidnightProvider {
     pub async fn shielded_public_keys(
         &self,
     ) -> Result<(CoinPublicKey, EncryptionPublicKey), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.shielded_public_keys().await)
+        Ok(self.attached()?.facade.shielded_public_keys().await)
     }
 
     /// Get or create the node connection.
@@ -1176,8 +1164,7 @@ impl MidnightProvider {
     /// [`MidnightProvider::ledger_network_id`]. Errors if no wallet is
     /// attached.
     pub async fn network(&self) -> Result<Network, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.network().await)
+        Ok(self.attached()?.facade.network().await)
     }
 
     /// Best-effort health status of the node.
@@ -1311,8 +1298,14 @@ impl Builds<'_> {
     }
 }
 
-/// One wallet, as the builds of each generation.
-struct WalletBuildsOf {
+/// The attached wallet, reached only through its API: as the facade, and as
+/// the builds of each generation.
+///
+/// How its state is shared is the implementation's business: every method
+/// on [`WalletFacade`] returns an owned value or covers one transition, so
+/// nothing here holds a lock. Cloning an `Arc` is cheap and safe.
+struct AttachedWallet {
+    facade: Arc<dyn WalletFacade>,
     ledger_8: Arc<dyn midnight_wallet_facade::ledger_8::WalletBuilds>,
     ledger_9: Arc<dyn midnight_wallet_facade::ledger_9::WalletBuilds>,
 }
