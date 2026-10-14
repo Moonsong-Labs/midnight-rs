@@ -95,7 +95,7 @@ impl<'a> EmitCtxt<'a> {
                 ListAccessor, MapAccessor, MerkleTree, MerkleTreeAccessor, SetAccessor,
                 StateError, StateValue, StorageArray, StorageHashMap, TransientFr, Uint,
                 ValueSlice, Vector,
-                cell_as, cell_value, decode_contract_state, get_field, get_field_path, hex, lazy,
+                cell_as, cell_value, decode_contract_state, get_field_path, hex, lazy,
                 serde, serde_json, variant_name,
             };
         };
@@ -390,9 +390,8 @@ mod tests {
         // Maybe gets into_option()
         assert!(generated.contains("into_option"));
 
-        // cell_as / get_field used in accessor bodies
+        // cell_as used in accessor bodies
         assert!(generated.contains("cell_as::<"));
-        assert!(generated.contains("get_field"));
 
         // Lazy query wrapper — map fields get key-lookup accessors
         assert!(
@@ -578,13 +577,6 @@ mod tests {
                 "missing accessor for f{i:02}"
             );
         }
-
-        // B-tree path indices: should use get_field_path, not just get_field
-        assert!(
-            generated.contains("get_field_path"),
-            "expected get_field_path for B-tree indices but got:\n{}",
-            generated
-        );
 
         // Wrapper struct
         assert!(generated.contains("pub struct ManyFields"));

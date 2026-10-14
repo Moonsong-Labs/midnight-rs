@@ -32,10 +32,9 @@ pub(crate) fn emit_ledger_wrapper(
 
     let accessors: Vec<_> = fields
         .iter()
-        .filter_map(|field| {
-            let field_index = field.field_index()?;
+        .map(|field| {
             let const_name = format_ident!("FIELD_{}", field.name.to_uppercase());
-            Some(emit_field_accessor(field, &const_name, &field_index))
+            emit_field_accessor(field, &const_name)
         })
         .collect();
 
@@ -406,25 +405,10 @@ pub(crate) fn emit_ledger_wrapper(
     }
 }
 
-/// Generate a `get_field` or `get_field_path` call depending on the index type.
-fn navigate_to_field(const_name: &Ident, field_index: &FieldIndex) -> TokenStream {
-    match field_index {
-        FieldIndex::Single(_) => {
-            quote! { get_field(self.state.data.get_ref(), #const_name) }
-        }
-        FieldIndex::Path(_) => {
-            quote! { get_field_path(self.state.data.get_ref(), #const_name) }
-        }
-    }
-}
-
-fn emit_field_accessor(
-    field: &LedgerField,
-    const_name: &Ident,
-    field_index: &FieldIndex,
-) -> TokenStream {
+fn emit_field_accessor(field: &LedgerField, const_name: &Ident) -> TokenStream {
     let method_name = make_ident(&field.name);
-    let nav = navigate_to_field(const_name, field_index);
+    let field_indices = field_indices_expr(const_name, &field.index);
+    let nav = quote! { get_field_path(self.state.data.get_ref(), #field_indices) };
     let doc = format!(
         "Access the `{}` ledger field ({}).",
         field.name, field.storage
@@ -796,9 +780,8 @@ pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> To
     let accessors: Vec<_> = fields
         .iter()
         .filter_map(|field| {
-            let field_index = field.field_index()?;
             let const_name = format_ident!("FIELD_{}", field.name.to_uppercase());
-            emit_lazy_field_accessor(field, &const_name, &field_index)
+            emit_lazy_field_accessor(field, &const_name)
         })
         .collect();
 
@@ -838,17 +821,13 @@ fn field_indices_expr(const_name: &Ident, field_index: &FieldIndex) -> TokenStre
     }
 }
 
-fn emit_lazy_field_accessor(
-    field: &LedgerField,
-    const_name: &Ident,
-    field_index: &FieldIndex,
-) -> Option<TokenStream> {
+fn emit_lazy_field_accessor(field: &LedgerField, const_name: &Ident) -> Option<TokenStream> {
     let method_name = make_ident(&field.name);
     let doc = format!(
         "Query the `{}` ledger field ({}) from the node.",
         field.name, field.storage
     );
-    let field_indices = field_indices_expr(const_name, field_index);
+    let field_indices = field_indices_expr(const_name, &field.index);
     let path_expr = quote! { lazy::build_query_path(#field_indices) };
 
     match field.storage {

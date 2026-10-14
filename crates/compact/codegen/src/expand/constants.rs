@@ -10,18 +10,14 @@ pub(crate) fn emit_field_constants(fields: &[LedgerField]) -> TokenStream {
         .iter()
         .map(|field| {
             let name = format_ident!("FIELD_{}", field.name.to_uppercase());
-            match field.field_index() {
-                Some(FieldIndex::Single(idx)) => {
-                    let idx = Lit(idx);
+            match &field.index {
+                FieldIndex::Single(idx) => {
+                    let idx = Lit(*idx);
                     quote! { pub const #name: usize = #idx; }
                 }
-                Some(FieldIndex::Path(path)) => {
+                FieldIndex::Path(path) => {
                     let indices: Vec<_> = path.iter().map(|&i| Lit(i)).collect();
                     quote! { pub const #name: &[usize] = &[#(#indices),*]; }
-                }
-                None => {
-                    let msg = format!("field '{}' has an unsupported index format", field.name);
-                    quote! { compile_error!(#msg); }
                 }
             }
         })

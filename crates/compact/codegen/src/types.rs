@@ -124,10 +124,6 @@ impl LedgerField {
             FieldIndex::Path(_) => None,
         }
     }
-
-    pub fn field_index(&self) -> Option<FieldIndex> {
-        Some(self.index.clone())
-    }
 }
 
 #[derive(Debug)]
