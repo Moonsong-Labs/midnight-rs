@@ -427,11 +427,24 @@ fn emit_field_accessor(field: &LedgerField, const_name: &Ident) -> TokenStream {
             emit_cell_accessor(&method_name, &doc, &nav, field.element_type.as_ref())
         }
         StorageKind::Counter => emit_typed_cell_accessor(&method_name, &doc, &nav, &quote! { u64 }),
-        StorageKind::Map => emit_map_accessor(&method_name, &doc, &nav, field),
-        StorageKind::Set => emit_set_accessor(&method_name, &doc, &nav, field),
-        StorageKind::List => emit_list_accessor(&method_name, &doc, &nav, field),
+        StorageKind::Map => {
+            let key_ty = storage_arg_tokens(field.key.as_ref());
+            let val_ty = storage_arg_tokens(field.value.as_ref());
+            let accessor = quote! { MapAccessor<'_, #key_ty, #val_ty> };
+            emit_from_state_accessor(&method_name, &doc, &nav, &accessor)
+        }
+        StorageKind::Set => {
+            let elem_ty = storage_arg_tokens(field.element_type.as_ref());
+            let accessor = quote! { SetAccessor<'_, #elem_ty> };
+            emit_from_state_accessor(&method_name, &doc, &nav, &accessor)
+        }
+        StorageKind::List => {
+            let elem_ty = storage_arg_tokens(field.element_type.as_ref());
+            let accessor = quote! { ListAccessor<'_, #elem_ty> };
+            emit_from_state_accessor(&method_name, &doc, &nav, &accessor)
+        }
         StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => {
-            emit_merkle_tree_accessor(&method_name, &doc, &nav)
+            emit_from_state_accessor(&method_name, &doc, &nav, &quote! { MerkleTreeAccessor<'_> })
         }
     }
 }
@@ -467,68 +480,23 @@ fn emit_typed_cell_accessor(
     }
 }
 
+fn emit_from_state_accessor(
+    method_name: &Ident,
+    doc: &str,
+    nav: &TokenStream,
+    accessor: &TokenStream,
+) -> TokenStream {
+    quote! {
+        #[doc = #doc]
+        pub fn #method_name(&self) -> Result<#accessor, StateError> {
+            <#accessor>::from_state(#nav?)
+        }
+    }
+}
+
 /// The Rust type of a storage type argument, or `Vec<u8>` for an absent one.
 fn storage_arg_tokens(ty: Option<&Type>) -> TokenStream {
     ty.map_or_else(|| quote! { Vec<u8> }, type_to_tokens)
-}
-
-fn emit_map_accessor(
-    method_name: &Ident,
-    doc: &str,
-    nav: &TokenStream,
-    field: &LedgerField,
-) -> TokenStream {
-    let key_ty = storage_arg_tokens(field.key.as_ref());
-    let val_ty = storage_arg_tokens(field.value.as_ref());
-    quote! {
-        #[doc = #doc]
-        pub fn #method_name(&self) -> Result<MapAccessor<'_, #key_ty, #val_ty>, StateError> {
-            let sv = #nav?;
-            MapAccessor::from_state(sv)
-        }
-    }
-}
-
-fn emit_set_accessor(
-    method_name: &Ident,
-    doc: &str,
-    nav: &TokenStream,
-    field: &LedgerField,
-) -> TokenStream {
-    let elem_ty = storage_arg_tokens(field.element_type.as_ref());
-    quote! {
-        #[doc = #doc]
-        pub fn #method_name(&self) -> Result<SetAccessor<'_, #elem_ty>, StateError> {
-            let sv = #nav?;
-            SetAccessor::from_state(sv)
-        }
-    }
-}
-
-fn emit_list_accessor(
-    method_name: &Ident,
-    doc: &str,
-    nav: &TokenStream,
-    field: &LedgerField,
-) -> TokenStream {
-    let elem_ty = storage_arg_tokens(field.element_type.as_ref());
-    quote! {
-        #[doc = #doc]
-        pub fn #method_name(&self) -> Result<ListAccessor<'_, #elem_ty>, StateError> {
-            let sv = #nav?;
-            ListAccessor::from_state(sv)
-        }
-    }
-}
-
-fn emit_merkle_tree_accessor(method_name: &Ident, doc: &str, nav: &TokenStream) -> TokenStream {
-    quote! {
-        #[doc = #doc]
-        pub fn #method_name(&self) -> Result<MerkleTreeAccessor<'_>, StateError> {
-            let sv = #nav?;
-            MerkleTreeAccessor::from_state(sv)
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
