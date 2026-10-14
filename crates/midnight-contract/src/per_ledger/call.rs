@@ -9,15 +9,17 @@ use super::helpers;
 use super::provider::Builds;
 use super::types::convert::IntoLedger;
 use helpers::coin_structure::coin::{
-    Info as ZswapCoinInfo, Nonce, PublicAddress, ShieldedTokenType, TokenType, UnshieldedTokenType,
-    UserAddress,
+    Info as ZswapCoinInfo, PublicAddress, PublicKey, QualifiedInfo, ShieldedTokenType, TokenType,
+    UnshieldedTokenType, UserAddress,
 };
+use helpers::coin_structure::transfer::Recipient;
 use helpers::{
     AlignedValue, BuildContext, BuildContractAction, BuildInput, BuildOutput, BuildTransient,
     BuildUtxoOutput, BuilderContext, ContractAddress, ContractCallPrototype, DefaultDB,
-    EntryPointBuf, FromContext, HashOutput, IntentInfo, KeyLocation, OfferInfo, ProofPreimage,
-    SplittableRng, StandardTransactionInfo, TokenInfo, Transcript, UnshieldedOfferInfo, UtxoOutput,
+    EntryPointBuf, FromContext, IntentInfo, KeyLocation, OfferInfo, ProofPreimage, SplittableRng,
+    StandardTransactionInfo, TokenInfo, Transcript, UnshieldedOfferInfo, UtxoOutput,
 };
+use midnight_base_crypto::fab::{InvalidBuiltinDecode, ValueSlice};
 use midnight_base_crypto::time::Timestamp;
 use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
@@ -338,7 +340,7 @@ pub(crate) async fn call_transaction(
     // / the `sendShielded` path). Each is spent against `kernel.self()`, so
     // compute its contract-owned commitment to pair it with the matching
     // self-output below into a transient.
-    let self_recipient = helpers::coin_structure::transfer::Recipient::Contract(helper_addr);
+    let self_recipient = Recipient::Contract(helper_addr);
     let mut pending_input_coins: Vec<(helpers::coin_structure::coin::Commitment, ZswapCoinInfo)> =
         Vec::with_capacity(exec_result.zswap_inputs.len());
     for zi in &exec_result.zswap_inputs {
@@ -373,18 +375,18 @@ pub(crate) async fn call_transaction(
         // A contract-owned output whose commitment matches a pending
         // `createZswapInput` is a coin created and spent in the same call: emit
         // it as a transient (bundled output + spend) instead of a plain output.
-        let paired = if decoded.is_user {
-            None
-        } else {
-            pending_input_coins
+        let paired = match decoded.recipient {
+            Recipient::Contract(contract) => pending_input_coins
                 .iter()
                 .position(|(c, _)| *c == commitment)
+                .map(|idx| (idx, contract)),
+            Recipient::User(_) => None,
         };
-        if let Some(idx) = paired {
+        if let Some((idx, contract)) = paired {
             pending_input_coins.remove(idx);
             let transient = Box::new(ContractOwnedTransient {
                 coin: decoded.coin,
-                contract: ContractAddress(decoded.recipient_key),
+                contract,
                 segment: if is_fallible { 1 } else { 0 },
             }) as Box<dyn BuildTransient<DefaultDB, BuildContext>>;
             if is_fallible {
@@ -634,44 +636,27 @@ fn shielded_input_to_fallible(
 
 /// A circuit-created shielded coin (`createZswapOutput`) decoded into the
 /// fields a Zswap offer `Output` needs.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct DecodedShieldedOutput {
     /// The coin to mint into the output (nonce, token type/color, value).
     pub coin: ZswapCoinInfo,
-    /// `true` => external user recipient (`ZswapCoinPublicKey`); `false` =>
-    /// contract recipient (`ContractAddress`).
-    pub is_user: bool,
-    /// The recipient's 32-byte key: coin public key (user) or address
-    /// (contract).
-    pub recipient_key: HashOutput,
+    /// The external user (`ZswapCoinPublicKey`) or the contract
+    /// (`ContractAddress`) that receives the coin.
+    pub recipient: Recipient,
 }
 
-/// Read FAB atom `idx` of `av` as a zero-padded 32-byte value. FAB atoms are
-/// zero-trimmed, so a `Bytes<32>`/`HashOutput` atom may be shorter than 32
-/// bytes; pad on the right to recover the fixed-width value.
-///
-/// `what` is the full field context used verbatim in error messages (e.g.
-/// `"shielded output: coin.nonce"`), so callers pass whether it is an input or
-/// an output; this helper stays agnostic.
-fn aligned_atom_bytes32(
-    av: &AlignedValue,
-    idx: usize,
-    what: &str,
-) -> Result<[u8; 32], ContractError> {
-    let atom = av
-        .value
-        .0
-        .get(idx)
-        .ok_or_else(|| ContractError::Construction(format!("{what} missing FAB atom {idx}")))?;
-    if atom.0.len() > 32 {
+/// Decode `value`, a struct the interpreter captured, as `T`. `what` names the
+/// capture in the error.
+fn decode<T>(value: &runtime::Value, what: &str) -> Result<T, ContractError>
+where
+    T: for<'a> TryFrom<&'a ValueSlice, Error = InvalidBuiltinDecode>,
+{
+    let runtime::Value::AlignedValue(av) = value else {
         return Err(ContractError::Construction(format!(
-            "{what} atom is {} bytes, wider than 32",
-            atom.0.len()
+            "{what} is not a struct-encoded value: {value:?}"
         )));
-    }
-    let mut out = [0u8; 32];
-    out[..atom.0.len()].copy_from_slice(&atom.0);
-    Ok(out)
+    };
+    T::try_from(&*av.value).map_err(|e| ContractError::Construction(format!("{what}: {e}")))
 }
 
 /// Decode a captured [`CircuitZswapOutput`] (the `(coin, recipient)` args of a
@@ -686,57 +671,18 @@ fn aligned_atom_bytes32(
 pub(crate) fn decode_shielded_output(
     output: &runtime::CircuitZswapOutput,
 ) -> Result<DecodedShieldedOutput, ContractError> {
-    let coin_av = match &output.coin {
-        runtime::Value::AlignedValue(av) => av,
-        other => {
-            return Err(ContractError::Construction(format!(
-                "shielded output coin is not a struct-encoded value: {other:?}"
-            )));
-        }
-    };
-    let nonce = aligned_atom_bytes32(coin_av, 0, "shielded output: coin.nonce")?;
-    let color = aligned_atom_bytes32(coin_av, 1, "shielded output: coin.color")?;
-    let value_atom = coin_av.value.0.get(2).ok_or_else(|| {
-        ContractError::Construction("shielded output: coin.value missing FAB atom 2".into())
-    })?;
-    if value_atom.0.len() > 16 {
-        return Err(ContractError::Construction(format!(
-            "shielded output: coin.value atom is {} bytes, wider than a Uint<128>",
-            value_atom.0.len()
-        )));
-    }
-    let mut value_bytes = [0u8; 16];
-    value_bytes[..value_atom.0.len()].copy_from_slice(&value_atom.0);
-    let value = u128::from_le_bytes(value_bytes);
-
-    let recipient_av = match &output.recipient {
-        runtime::Value::AlignedValue(av) => av,
-        other => {
-            return Err(ContractError::Construction(format!(
-                "shielded output recipient is not a struct-encoded value: {other:?}"
-            )));
-        }
-    };
-    // Either.is_left: a Boolean FAB atom — `[1]` for true, empty (trimmed) for
-    // false.
-    let is_left_atom = recipient_av.value.0.first().ok_or_else(|| {
-        ContractError::Construction("shielded output: recipient.is_left missing".into())
-    })?;
-    let is_user = is_left_atom.0.first().copied() == Some(1);
-    let recipient_key = if is_user {
-        aligned_atom_bytes32(recipient_av, 1, "shielded output: recipient.left")?
-    } else {
-        aligned_atom_bytes32(recipient_av, 2, "shielded output: recipient.right")?
-    };
-
+    let coin = decode(&output.coin, "shielded output coin")?;
+    // A tuple, not upstream `Recipient`: the commitment hashes only the chosen
+    // side, so the unused side need not be empty.
+    let (is_left, user, contract): (bool, PublicKey, ContractAddress) =
+        decode(&output.recipient, "shielded output recipient")?;
     Ok(DecodedShieldedOutput {
-        coin: ZswapCoinInfo {
-            nonce: Nonce(HashOutput(nonce)),
-            type_: ShieldedTokenType(HashOutput(color)),
-            value,
+        coin,
+        recipient: if is_left {
+            Recipient::User(user)
+        } else {
+            Recipient::Contract(contract)
         },
-        is_user,
-        recipient_key: HashOutput(recipient_key),
     })
 }
 
@@ -753,34 +699,8 @@ pub(crate) fn decode_shielded_output(
 fn decode_shielded_input(
     input: &runtime::CircuitZswapInput,
 ) -> Result<ZswapCoinInfo, ContractError> {
-    let coin_av = match &input.coin {
-        runtime::Value::AlignedValue(av) => av,
-        other => {
-            return Err(ContractError::Construction(format!(
-                "shielded input coin is not a struct-encoded value: {other:?}"
-            )));
-        }
-    };
-    let nonce = aligned_atom_bytes32(coin_av, 0, "shielded input: coin.nonce")?;
-    let color = aligned_atom_bytes32(coin_av, 1, "shielded input: coin.color")?;
-    let value_atom = coin_av.value.0.get(2).ok_or_else(|| {
-        ContractError::Construction("shielded input: coin.value missing FAB atom 2".into())
-    })?;
-    if value_atom.0.len() > 16 {
-        return Err(ContractError::Construction(format!(
-            "shielded input: coin.value atom is {} bytes, wider than a Uint<128>",
-            value_atom.0.len()
-        )));
-    }
-    let mut value_bytes = [0u8; 16];
-    value_bytes[..value_atom.0.len()].copy_from_slice(&value_atom.0);
-    let value = u128::from_le_bytes(value_bytes);
-
-    Ok(ZswapCoinInfo {
-        nonce: Nonce(HashOutput(nonce)),
-        type_: ShieldedTokenType(HashOutput(color)),
-        value,
-    })
+    let coin: QualifiedInfo = decode(&input.coin, "shielded input coin")?;
+    Ok(ZswapCoinInfo::from(&coin))
 }
 
 /// Where a circuit-minted coin's Zswap output goes.
@@ -933,36 +853,22 @@ fn build_shielded_offer_outputs(
     let mut outputs: Vec<ShieldedOfferOutput> = Vec::with_capacity(zswap_outputs.len());
     for zo in zswap_outputs {
         let decoded = decode_shielded_output(zo)?;
-        let token_type = decoded.coin.type_;
-        let value = decoded.coin.value;
-        let commitment = {
-            let recipient = if decoded.is_user {
-                helpers::coin_structure::transfer::Recipient::User(
-                    helpers::coin_structure::coin::PublicKey(decoded.recipient_key),
-                )
-            } else {
-                helpers::coin_structure::transfer::Recipient::Contract(ContractAddress(
-                    decoded.recipient_key,
-                ))
-            };
-            decoded.coin.commitment(&recipient)
-        };
-        let recipient = if decoded.is_user {
-            let epk = epk_by_cpk.get(&decoded.recipient_key.0).copied();
-            MintRecipient::User {
-                cpk: helpers::CoinPublicKey(decoded.recipient_key),
-                epk,
-            }
-        } else {
-            MintRecipient::Contract(ContractAddress(decoded.recipient_key))
+        let coin = decoded.coin;
+        let commitment = coin.commitment(&decoded.recipient);
+        let recipient = match decoded.recipient {
+            Recipient::User(cpk) => MintRecipient::User {
+                cpk,
+                epk: epk_by_cpk.get(&cpk.0.0).copied(),
+            },
+            Recipient::Contract(contract) => MintRecipient::Contract(contract),
         };
         outputs.push((
             commitment,
             decoded,
             MintedCoinOutput {
-                coin: decoded.coin,
-                token_type,
-                value,
+                coin,
+                token_type: coin.type_,
+                value: coin.value,
                 recipient,
             },
         ));
@@ -974,6 +880,8 @@ fn build_shielded_offer_outputs(
 mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
+    use helpers::HashOutput;
+    use helpers::coin_structure::coin::Nonce;
 
     /// A transcript claiming one spend of `token` by `recipient`.
     fn transcript_claiming(
@@ -1076,8 +984,11 @@ mod tests {
         assert_eq!(decoded.coin.nonce.0.0, nonce);
         assert_eq!(decoded.coin.type_.0.0, color);
         assert_eq!(decoded.coin.value, value);
-        assert!(decoded.is_user, "Either::left is a user recipient");
-        assert_eq!(decoded.recipient_key.0, cpk);
+        assert_eq!(
+            decoded.recipient,
+            Recipient::User(PublicKey(HashOutput(cpk))),
+            "Either::left is a user recipient"
+        );
     }
 
     /// The commitment `build_shielded_offer_outputs` returns is the routing key
