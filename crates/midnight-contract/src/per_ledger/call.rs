@@ -85,20 +85,31 @@ impl<D: helpers::DB + Clone, C: helpers::BuilderContext<D>> BuildUtxoOutput<D, C
     }
 }
 
-/// The context that the partition replays a call's ops in: the contract
-/// state with its balance, at the block time that the interpreter ran at.
+/// Partition a call's ops, `program`, into its guaranteed and fallible
+/// transcripts under `parameters`.
 ///
-/// The partition checks each read that the ops recorded, so a clock or
-/// balance check that reads another value here fails the build.
-pub(crate) fn partition_context(
+/// The partition replays the ops in a context of the contract state with its
+/// balance, at the block time that the interpreter ran at. It checks each
+/// read that the ops recorded, so a clock or balance check that reads another
+/// value here fails the build.
+pub(crate) fn partition(
     state: &helpers::ContractState<DefaultDB>,
     address: ContractAddress,
     block_time: Timestamp,
-) -> helpers::QueryContext<DefaultDB> {
+    program: Vec<helpers::Op<helpers::ResultModeVerify, DefaultDB>>,
+    parameters: &helpers::LedgerParameters,
+) -> Result<helpers::mn_ledger::construct::TranscriptPair<DefaultDB>, ContractError> {
     let mut context = helpers::QueryContext::new(state.data.clone(), address);
     context.call_context.tblock = block_time;
     context.call_context.balance = state.balance.clone();
-    context
+    let pre_transcript = helpers::PreTranscript {
+        context,
+        program,
+        comm_comm: None,
+    };
+    let partitioned = helpers::partition_transcripts(&[pre_transcript], parameters)
+        .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
+    Ok(partitioned.into_iter().next().unwrap_or((None, None)))
 }
 
 /// Build this generation's transaction for a circuit call the interpreter
@@ -147,15 +158,14 @@ pub(crate) async fn call_transaction(
         .iter()
         .map(|op| crate::call::reencode(op, "circuit op"))
         .collect::<Result<Vec<helpers::Op<helpers::ResultModeVerify, DefaultDB>>, _>>()?;
-    let pre_transcript = helpers::PreTranscript {
-        context: partition_context(&state_db, helper_addr, block_time),
-        program,
-        comm_comm: None,
-    };
     let chain_parameters = BuilderContext::ledger_parameters(&*context).await;
-    let partitioned = helpers::partition_transcripts(&[pre_transcript], &chain_parameters)
-        .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
-    let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
+    let (guaranteed, fallible) = partition(
+        &state_db,
+        helper_addr,
+        block_time,
+        program,
+        &chain_parameters,
+    )?;
 
     // Commitments the ledger partitioned into the fallible section. A
     // circuit-created coin's Zswap output must ride in the same segment as the

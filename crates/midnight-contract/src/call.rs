@@ -333,19 +333,13 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
 
     let address_for_ctx = contract_address.into_ledger();
-    let pre_transcript = mn_ledger::construct::PreTranscript {
-        context: crate::ledger_9::call::partition_context(state, address_for_ctx, block_time),
-        program: verify_ops(&exec_result),
-        comm_comm: None,
-    };
-
-    let partitioned = mn_ledger::construct::partition_transcripts(
-        &[pre_transcript],
+    let (guaranteed, fallible) = crate::ledger_9::call::partition(
+        state,
+        address_for_ctx,
+        block_time,
+        verify_ops(&exec_result),
         &mn_ledger::structure::INITIAL_PARAMETERS,
-    )
-    .map_err(|e| ContractError::Construction(format!("partition failed: {e:?}")))?;
-
-    let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
+    )?;
 
     let input = call_input(circuit, args)?;
     let output = exec_result.output();
