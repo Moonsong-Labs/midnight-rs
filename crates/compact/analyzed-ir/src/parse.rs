@@ -61,6 +61,11 @@ fn list<'a>(s: &'a Sexp, context: &str) -> R<&'a [Sexp]> {
         .ok_or_else(|| Error::new(format!("{context}: expected a list, got {s}")))
 }
 
+/// A list of exactly `N` elements.
+fn fixed<'a, const N: usize>(s: &'a Sexp, context: &str) -> R<&'a [Sexp; N]> {
+    <&[Sexp; N]>::try_from(list(s, context)?).or_else(|_| err(context, s))
+}
+
 /// `(key value)` with a known head.
 fn keyed<'a>(s: &'a Sexp, key: &str, context: &str) -> R<&'a Sexp> {
     let l = list(s, context)?;
@@ -128,8 +133,8 @@ pub fn ty(s: &Sexp) -> R<Type> {
             let fields = l[2..]
                 .iter()
                 .map(|f| {
-                    let fl = list(f, "tstruct field")?;
-                    Ok((sym(&fl[0], "tstruct field name")?, ty(&fl[1])?))
+                    let [name, t] = fixed(f, "tstruct field")?;
+                    Ok((sym(name, "tstruct field name")?, ty(t)?))
                 })
                 .collect::<R<_>>()?;
             Ok(Type::Struct { name, fields })
@@ -159,18 +164,15 @@ pub fn ty(s: &Sexp) -> R<Type> {
 }
 
 fn contract_circuit(s: &Sexp) -> R<ContractCircuit> {
-    let l = list(s, "contract circuit")?;
-    if l.len() != 4 {
-        return err("contract circuit", s);
-    }
+    let [name, pure, argument_types, result_type] = fixed(s, "contract circuit")?;
     Ok(ContractCircuit {
-        name: sym(&l[0], "contract circuit name")?,
-        pure: boolean(&l[1], "contract circuit pure")?,
-        argument_types: list(&l[2], "contract circuit args")?
+        name: sym(name, "contract circuit name")?,
+        pure: boolean(pure, "contract circuit pure")?,
+        argument_types: list(argument_types, "contract circuit args")?
             .iter()
             .map(ty)
             .collect::<R<_>>()?,
-        result_type: ty(&l[3])?,
+        result_type: ty(result_type)?,
     })
 }
 
@@ -227,20 +229,14 @@ fn state_value(rest: &[Sexp]) -> R<StateValue> {
         Some("map") => Ok(StateValue::Map(
             rest[1..]
                 .iter()
-                .map(|e| {
-                    let el = list(e, "state-value map entry")?;
-                    Ok((operand(&el[0])?, operand(&el[1])?))
-                })
+                .map(|e| operand_pair(e, "state-value map entry"))
                 .collect::<R<_>>()?,
         )),
         Some("merkle-tree") => Ok(StateValue::MerkleTree {
             depth: nat(&rest[1], "merkle depth")?,
             entries: rest[2..]
                 .iter()
-                .map(|e| {
-                    let el = list(e, "state-value tree entry")?;
-                    Ok((operand(&el[0])?, operand(&el[1])?))
-                })
+                .map(|e| operand_pair(e, "state-value tree entry"))
                 .collect::<R<_>>()?,
         }),
         _ => Err(Error::new(format!(
@@ -250,17 +246,19 @@ fn state_value(rest: &[Sexp]) -> R<StateValue> {
     }
 }
 
+fn operand_pair(s: &Sexp, context: &str) -> R<(Operand, Operand)> {
+    let [k, v] = fixed(s, context)?;
+    Ok((operand(k)?, operand(v)?))
+}
+
 fn instruction(s: &Sexp) -> R<Instruction> {
     let l = list(s, "instruction")?;
     let op = OpName::from(sym(&l[0], "instruction op")?.as_str());
     let args = l[1..]
         .iter()
         .map(|a| {
-            let al = list(a, "instruction arg")?;
-            if al.len() != 2 {
-                return err("instruction arg", a);
-            }
-            Ok((sym(&al[0], "instruction arg name")?, operand(&al[1])?))
+            let [name, value] = fixed(a, "instruction arg")?;
+            Ok((sym(name, "instruction arg name")?, operand(value)?))
         })
         .collect::<R<_>>()?;
     Ok(Instruction { op, args })
@@ -279,13 +277,10 @@ fn instructions(s: &Sexp) -> R<Vec<Instruction>> {
 // ---------------------------------------------------------------------
 
 fn argument(s: &Sexp) -> R<Argument> {
-    let l = list(s, "argument")?;
-    if l.len() != 2 {
-        return err("argument", s);
-    }
+    let [name, t] = fixed(s, "argument")?;
     Ok(Argument {
-        name: ident(&l[0], "argument name")?,
-        ty: ty(&l[1])?,
+        name: ident(name, "argument name")?,
+        ty: ty(t)?,
     })
 }
 
@@ -306,14 +301,11 @@ fn tuple_arg(s: &Sexp) -> R<TupleArg> {
 }
 
 fn map_arg(s: &Sexp) -> R<MapArg> {
-    let l = list(s, "map-arg")?;
-    if l.len() != 3 {
-        return err("map-arg", s);
-    }
+    let [e, t, element_t] = fixed(s, "map-arg")?;
     Ok(MapArg {
-        expr: expr(&l[0])?,
-        ty: ty(&l[1])?,
-        element_ty: ty(&l[2])?,
+        expr: expr(e)?,
+        ty: ty(t)?,
+        element_ty: ty(element_t)?,
     })
 }
 
@@ -334,13 +326,10 @@ fn path_element(s: &Sexp) -> R<PathElement> {
     match s {
         Sexp::Int(_) => Ok(PathElement::Index(nat(s, "path index")?)),
         _ => {
-            let l = list(s, "path element")?;
-            if l.len() != 2 {
-                return err("path element", s);
-            }
+            let [t, e] = fixed(s, "path element")?;
             Ok(PathElement::Computed {
-                ty: Box::new(ty(&l[0])?),
-                expr: Box::new(expr(&l[1])?),
+                ty: Box::new(ty(t)?),
+                expr: Box::new(expr(e)?),
             })
         }
     }
@@ -470,15 +459,12 @@ pub fn expr(s: &Sexp) -> R<Expr> {
             args: l[3..].iter().map(map_arg).collect::<R<_>>()?,
         }),
         "fold" => {
-            let init = list(&l[3], "fold init")?;
-            if init.len() != 2 {
-                return err("fold init", &l[3]);
-            }
+            let [init, init_ty] = fixed(&l[3], "fold init")?;
             Ok(Expr::Fold {
                 len: nat(&l[1], "fold len")?,
                 fun: fun(&l[2])?,
-                init: bx(&init[0])?,
-                init_ty: ty(&init[1])?,
+                init: bx(init)?,
+                init_ty: ty(init_ty)?,
                 args: l[4..].iter().map(map_arg).collect::<R<_>>()?,
             })
         }
@@ -495,11 +481,8 @@ pub fn expr(s: &Sexp) -> R<Expr> {
             let bindings = list(&l[1], "let* bindings")?
                 .iter()
                 .map(|b| {
-                    let bl = list(b, "let* binding")?;
-                    if bl.len() != 2 {
-                        return err("let* binding", b);
-                    }
-                    Ok((argument(&bl[0])?, expr(&bl[1])?))
+                    let [binding, value] = fixed(b, "let* binding")?;
+                    Ok((argument(binding)?, expr(value)?))
                 })
                 .collect::<R<_>>()?;
             Ok(Expr::LetStar {
@@ -560,14 +543,11 @@ pub fn expr(s: &Sexp) -> R<Expr> {
             expr: bx(&l[3])?,
         }),
         "contract-call" => {
-            let recv = list(&l[2], "contract-call receiver")?;
-            if recv.len() != 2 {
-                return err("contract-call receiver", &l[2]);
-            }
+            let [receiver, contract_type] = fixed(&l[2], "contract-call receiver")?;
             Ok(Expr::ContractCall {
                 circuit: sym(&l[1], "contract-call circuit")?,
-                receiver: bx(&recv[0])?,
-                contract_type: ty(&recv[1])?,
+                receiver: bx(receiver)?,
+                contract_type: ty(contract_type)?,
                 args: l[3..].iter().map(expr).collect::<R<_>>()?,
             })
         }
@@ -603,33 +583,27 @@ fn op_class(s: &Sexp) -> R<OpClass> {
     if let Some(name) = s.as_sym() {
         return Ok(OpClass::Plain(name.to_string()));
     }
-    let l = list(s, "operation class")?;
-    if l.len() != 3 {
-        return err("operation class", s);
-    }
+    let [name, coin, recipient] = fixed(s, "operation class")?;
     Ok(OpClass::CoinCheck {
-        name: sym(&l[0], "operation class")?,
-        coin: nat(&l[1], "coin argument index")?,
-        recipient: nat(&l[2], "recipient argument index")?,
+        name: sym(name, "operation class")?,
+        coin: nat(coin, "coin argument index")?,
+        recipient: nat(recipient, "recipient argument index")?,
     })
 }
 
 fn ledger_binding(s: &Sexp) -> R<LedgerBinding> {
-    let l = list(s, "ledger binding")?;
-    if l.len() != 4 {
-        return err("ledger binding", s);
-    }
+    let [name, path, exported, t] = fixed(s, "ledger binding")?;
     Ok(LedgerBinding {
-        name: ident(&l[0], "ledger binding name")?,
-        path: list(&l[1], "ledger binding path")?
+        name: ident(name, "ledger binding name")?,
+        path: list(path, "ledger binding path")?
             .iter()
             .map(|i| nat(i, "ledger binding index"))
             .collect::<R<_>>()?,
         exported: boolean(
-            keyed(&l[2], "exported", "ledger binding")?,
+            keyed(exported, "exported", "ledger binding")?,
             "ledger binding exported",
         )?,
-        ty: ty(&l[3])?,
+        ty: ty(t)?,
     })
 }
 
@@ -661,8 +635,8 @@ fn program_element(s: &Sexp) -> R<ProgramElement> {
             body: expr(&l[7])?,
         })),
         Some("native") => {
-            let entry = list(&l[2], "native entry")?;
-            if entry.len() != 3 || entry[0].as_sym() != Some("entry") {
+            let [tag, entry_fn, class] = fixed(&l[2], "native entry")?;
+            if tag.as_sym() != Some("entry") {
                 return err("native entry", &l[2]);
             }
             let type_args = list(&l[3], "native type arguments")?;
@@ -671,8 +645,8 @@ fn program_element(s: &Sexp) -> R<ProgramElement> {
             }
             Ok(ProgramElement::Native(Native {
                 name: ident(&l[1], "native name")?,
-                entry: string(&entry[1], "native entry fn")?,
-                class: sym(&entry[2], "native entry class")?,
+                entry: string(entry_fn, "native entry fn")?,
+                class: sym(class, "native entry class")?,
                 type_arguments: type_args[1..].iter().map(ty).collect::<R<_>>()?,
                 arguments: arguments(&l[4])?,
                 result_type: ty(&l[5])?,
@@ -687,15 +661,15 @@ fn program_element(s: &Sexp) -> R<ProgramElement> {
         Some("public-ledger-declaration") => {
             let mut fields = Vec::new();
             flatten_pl_array(&l[1], &mut fields)?;
-            let c = list(&l[2], "constructor")?;
-            if c.first().and_then(Sexp::as_sym) != Some("constructor") {
+            let [tag, params, body] = fixed(&l[2], "constructor")?;
+            if tag.as_sym() != Some("constructor") {
                 return err("constructor", &l[2]);
             }
             Ok(ProgramElement::PublicLedgerDeclaration(LedgerDeclaration {
                 fields,
                 constructor: Constructor {
-                    arguments: arguments(&c[1])?,
-                    body: expr(&c[2])?,
+                    arguments: arguments(params)?,
+                    body: expr(body)?,
                 },
             }))
         }
@@ -711,6 +685,10 @@ fn program_element(s: &Sexp) -> R<ProgramElement> {
     }
 }
 
+fn version(s: &Sexp, key: &str) -> R<String> {
+    string(keyed(s, key, key)?, key)
+}
+
 pub fn parse(s: &Sexp) -> R<AnalyzedIr> {
     let l = list(s, "analyzed-ir")?;
     if l.first().and_then(Sexp::as_sym) != Some("analyzed-ir") {
@@ -724,15 +702,9 @@ pub fn parse(s: &Sexp) -> R<AnalyzedIr> {
     let mut elements = Vec::new();
     for e in &l[1..] {
         match e.head() {
-            Some("compiler-version") => {
-                compiler_version = Some(string(&list(e, "hdr")?[1], "compiler-version")?)
-            }
-            Some("language-version") => {
-                language_version = Some(string(&list(e, "hdr")?[1], "language-version")?)
-            }
-            Some("runtime-version") => {
-                runtime_version = Some(string(&list(e, "hdr")?[1], "runtime-version")?)
-            }
+            Some("compiler-version") => compiler_version = Some(version(e, "compiler-version")?),
+            Some("language-version") => language_version = Some(version(e, "language-version")?),
+            Some("runtime-version") => runtime_version = Some(version(e, "runtime-version")?),
             Some("exports") => {
                 for x in &list(e, "exports")?[1..] {
                     match x {
