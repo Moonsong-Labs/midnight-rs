@@ -337,27 +337,27 @@ impl PendingReservations {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod test_support {
     use super::*;
     use crate::Seed;
     use helpers::mn_ledger::dust::DustCommitment;
-    use helpers::{Duration, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
+    use helpers::{Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
 
-    fn ukey(intent_hash: &str, output_index: u32) -> SpentUtxoKey {
+    pub(crate) fn ukey(intent_hash: &str, output_index: u32) -> SpentUtxoKey {
         SpentUtxoKey {
             intent_hash: intent_hash.to_string(),
             output_index,
         }
     }
 
-    fn nullifier(n: u64) -> DustNullifier {
+    pub(crate) fn nullifier(n: u64) -> DustNullifier {
         DustNullifier(Fr::from(n))
     }
 
-    /// A structurally-valid `DustSpend` whose identity is `nullifier(n)`.
-    /// The proof is a placeholder preimage — `clear_confirmed` only looks at
+    /// A structurally valid `DustSpend` whose identity is `nullifier(n)`.
+    /// The proof is a placeholder preimage. The pending paths read only
     /// `old_nullifier`, and persistence round-trips the whole struct.
-    fn dust_spend(n: u64) -> DustSpend<ProofPreimageMarker, DefaultDB> {
+    pub(crate) fn dust_spend(n: u64) -> DustSpend<ProofPreimageMarker, DefaultDB> {
         DustSpend {
             v_fee: 1,
             old_nullifier: nullifier(n),
@@ -374,13 +374,23 @@ mod tests {
         }
     }
 
-    fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
+    /// A batch of [`dust_spend`]s. Its seed is a fixed placeholder, because a
+    /// reservation drops the seed.
+    pub(crate) fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
         DustSpendBatch {
             seed: Seed::from_bytes(&[0x00; 32]).unwrap(),
             spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
             updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{dust_batch, dust_spend, nullifier, ukey};
+    use super::*;
+    use crate::Seed;
+    use helpers::{Duration, INITIAL_PARAMETERS};
 
     /// A transaction built for one generation cannot land on a chain that
     /// runs another, so its reservations are dead. Loading them would hide

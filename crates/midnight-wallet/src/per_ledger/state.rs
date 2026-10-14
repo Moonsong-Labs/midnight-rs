@@ -1640,12 +1640,11 @@ mod tests {
     use helpers::midnight_serialize::tagged_serialize;
     use helpers::mn_ledger::dust::DustCommitment;
     use helpers::{
-        DustLocalState, DustNullifier, DustSpend, Fr, HashOutput, INITIAL_PARAMETERS, KeyLocation,
-        Nonce, Nullifier, ProofPreimage, ProofPreimageMarker, QualifiedInfo, Recipient,
-        ShieldedTokenType,
+        DustNullifier, Fr, HashOutput, INITIAL_PARAMETERS, Nonce, Nullifier, QualifiedInfo,
+        Recipient, ShieldedTokenType,
     };
 
-    use super::super::types::DustSpendBatch;
+    use super::super::pending::test_support::{dust_batch, ukey};
     use super::test_support::{ciphertextless_output, zero_source_event};
     use super::*;
 
@@ -1745,34 +1744,6 @@ mod tests {
             pending: PendingReservations::default(),
             storage_dir,
             indexer_url: "http://indexer.invalid".into(),
-        }
-    }
-
-    /// A structurally-valid `DustSpend` whose identity is `DustNullifier(n)`.
-    /// The proof is a placeholder preimage — the pending-replay paths only
-    /// look at `old_nullifier`.
-    fn dust_spend(n: u64) -> DustSpend<ProofPreimageMarker, DefaultDB> {
-        DustSpend {
-            v_fee: 1,
-            old_nullifier: DustNullifier(Fr::from(n)),
-            new_commitment: DustCommitment(Fr::from(n + 1)),
-            proof: ProofPreimage {
-                inputs: Vec::new(),
-                private_transcript: Vec::new(),
-                public_transcript_inputs: Vec::new(),
-                public_transcript_outputs: Vec::new(),
-                binding_input: Fr::from(0u64),
-                communications_commitment: None,
-                key_location: KeyLocation(std::borrow::Cow::Borrowed("test")),
-            },
-        }
-    }
-
-    fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
-        DustSpendBatch {
-            seed: test_seed(),
-            spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
-            updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
         }
     }
 
@@ -1960,10 +1931,7 @@ mod tests {
         wallet.unshielded_utxos = vec![tracked_night_utxo()];
         wallet.reserve_pending(
             Vec::new(),
-            vec![SpentUtxoKey {
-                intent_hash: "ab".repeat(32),
-                output_index: 0,
-            }],
+            vec![ukey(&"ab".repeat(32), 0)],
             Vec::new(),
             Timestamp::from_secs(100),
         );
@@ -2021,10 +1989,7 @@ mod tests {
         let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
         wallet.reserve_pending(
             Vec::new(),
-            vec![SpentUtxoKey {
-                intent_hash: "abcd".into(),
-                output_index: 0,
-            }],
+            vec![ukey("abcd", 0)],
             Vec::new(),
             Timestamp::from_secs(100),
         );
@@ -2314,10 +2279,7 @@ mod tests {
         let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
         wallet.last_tx_id = Some(3);
         wallet.save(dir.path()).unwrap();
-        let key = SpentUtxoKey {
-            intent_hash: "abcd".into(),
-            output_index: 0,
-        };
+        let key = ukey("abcd", 0);
         wallet.reserve_pending(
             Vec::new(),
             vec![key.clone()],
@@ -2347,10 +2309,7 @@ mod tests {
         // confirmed, preserve reservations made after the snapshot.
         let mut wallet = test_wallet(None);
         wallet.last_tx_id = Some(3);
-        let confirmed = SpentUtxoKey {
-            intent_hash: "aaaa".into(),
-            output_index: 0,
-        };
+        let confirmed = ukey("aaaa", 0);
         wallet.reserve_pending(
             Vec::new(),
             vec![confirmed.clone()],
@@ -2362,10 +2321,7 @@ mod tests {
         let _plan = wallet.resync_plan();
 
         // A transfer build interleaves while the (conceptual) replay runs.
-        let late = SpentUtxoKey {
-            intent_hash: "bbbb".into(),
-            output_index: 1,
-        };
+        let late = ukey("bbbb", 1);
         wallet.reserve_pending(
             Vec::new(),
             vec![late.clone()],
@@ -2396,10 +2352,7 @@ mod tests {
         wallet.dust_wallet.dust_local_state = None;
         wallet.reserve_pending(
             vec![dust_batch(&[7])],
-            vec![SpentUtxoKey {
-                intent_hash: "abcd".into(),
-                output_index: 0,
-            }],
+            vec![ukey("abcd", 0)],
             Vec::new(),
             Timestamp::from_secs(100),
         );
