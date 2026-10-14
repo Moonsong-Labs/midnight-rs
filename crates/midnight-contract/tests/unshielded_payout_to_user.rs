@@ -35,25 +35,16 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
-    let keyed = std::env::var("PAYOUT_KEYED_DIR")
-        .unwrap_or_else(|_| common::compiled_dir("unshielded-payout"));
+    let keyed = common::env_dir("PAYOUT_KEYED_DIR")
+        .unwrap_or_else(|| common::compiled_dir("unshielded-payout"));
     let artifact = format!("{keyed}/compiler/analyzed-ir.sexp");
     if !std::path::Path::new(&artifact).exists() {
         eprintln!("skipping: {artifact} is missing; run `make compile-contracts` first");
         return;
     }
 
-    let info_json = std::fs::read_to_string(&artifact).expect("read contract-info");
-    let info: compact_codegen::types::ContractInfo =
-        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
-    let program =
-        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
-    let circuit = |name: &str| {
-        info.circuits
-            .iter()
-            .find(|c| c.name == name)
-            .unwrap_or_else(|| panic!("circuit {name}"))
-    };
+    let info = common::load_compiled(&keyed);
+    let program = common::program(&info);
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
@@ -75,7 +66,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     // Mint to the contract itself, so it has a balance to pay out of.
     contract
         .call_with(
-            &circuit("mintToSelf").def,
+            &common::exported_circuit(&info, "mintToSelf").def,
             &program,
             "mintToSelf",
             &[
@@ -107,7 +98,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
 
     contract
         .call_with(
-            &circuit("payUser").def,
+            &common::exported_circuit(&info, "payUser").def,
             &program,
             "payUser",
             &[

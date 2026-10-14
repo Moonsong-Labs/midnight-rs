@@ -17,7 +17,6 @@ use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
 
-use compact_codegen::ir;
 use compact_codegen::types::ContractInfo;
 
 // ---------------------------------------------------------------------------
@@ -45,17 +44,10 @@ mod bboard {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// An overriding directory from the environment. An empty value reads as
-/// unset, so `VAR=` in a make recipe does not resolve to the process's
-/// working directory.
-fn env_dir(var: &str) -> Option<String> {
-    std::env::var(var).ok().filter(|v| !v.is_empty())
-}
-
 /// Where the interpreter fixtures live: `<name>/compiler/analyzed-ir.sexp`
 /// per contract. Defaults to this crate's own committed fixtures.
 fn fixtures_dir() -> String {
-    env_dir("MIDNIGHT_COMPILED_DIR")
+    common::env_dir("MIDNIGHT_COMPILED_DIR")
         .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures").to_string())
 }
 
@@ -63,24 +55,12 @@ fn fixtures_dir() -> String {
 /// different layout from [`fixtures_dir`] and cannot be served by the same
 /// path. Defaults to the committed devnet artifacts.
 fn counter_zk_dir() -> String {
-    env_dir("COUNTER_KEYED_DIR").unwrap_or_else(|| common::compiled_dir("counter"))
-}
-
-fn load_contract_info(compiled_dir: &str, contract: &str) -> ContractInfo {
-    let path = format!("{compiled_dir}/{contract}/compiler/analyzed-ir.sexp");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    compact_codegen::artifact::load_str(&text).unwrap()
+    common::env_dir("COUNTER_KEYED_DIR").unwrap_or_else(|| common::compiled_dir("counter"))
 }
 
 /// Parse an analyzed-ir.sexp artifact embedded at compile time.
 fn load_info(analyzed_ir_text: &str) -> ContractInfo {
     compact_codegen::artifact::load_str(analyzed_ir_text).unwrap()
-}
-
-/// The tables a circuit body resolves a `call` through: every circuit the
-/// contract defines, plus its witness and native declarations.
-fn program_of(info: &ContractInfo) -> interpreter::Program<'_> {
-    interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives)
 }
 
 /// No witnesses, a scratch private state, the zero address, the epoch.
@@ -94,21 +74,6 @@ fn with_witnesses(witnesses: &dyn WitnessProvider) -> interpreter::Env<'_> {
         witnesses,
         ..epoch()
     }
-}
-
-fn find_circuit<'a>(info: &'a ContractInfo, circuit_name: &str) -> &'a ir::Circuit {
-    try_find_circuit(info, circuit_name).unwrap_or_else(|e| panic!("{e}"))
-}
-
-fn try_find_circuit<'a>(
-    info: &'a ContractInfo,
-    circuit_name: &str,
-) -> Result<&'a ir::Circuit, String> {
-    info.circuits
-        .iter()
-        .find(|c| c.name == circuit_name)
-        .map(|c| &c.def)
-        .ok_or_else(|| format!("circuit {circuit_name} not found"))
 }
 
 /// The counter ledger at `round`. The fixture states are built by hand, so a
@@ -172,8 +137,8 @@ const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/analyzed-ir.sex
 #[test]
 fn counter_increment_with_typed_state() {
     let info = load_info(COUNTER_INFO);
-    let ir = find_circuit(&info, "increment");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "increment").def;
+    let program = common::program(&info);
 
     // Build initial state and verify through typed accessor
     let state = counter_state(0);
@@ -195,8 +160,8 @@ fn counter_increment_with_typed_state() {
 #[test]
 fn counter_build_tx_with_typed_state() {
     let info = load_info(COUNTER_INFO);
-    let ir = find_circuit(&info, "increment");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "increment").def;
+    let program = common::program(&info);
 
     let state = counter_state(0);
 
@@ -232,8 +197,8 @@ fn counter_build_tx_with_typed_state() {
 #[test]
 fn tiny_get_typed() {
     let info = load_info(TINY_INFO);
-    let ir = find_circuit(&info, "get");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "get").def;
+    let program = common::program(&info);
 
     // Build state with known value
     let state = tiny_state(42, 1);
@@ -281,8 +246,8 @@ fn tiny_get_typed() {
 #[test]
 fn tiny_set_typed() {
     let info = load_info(TINY_INFO);
-    let ir = find_circuit(&info, "set");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "set").def;
+    let program = common::program(&info);
 
     let state = tiny_state(0, 0);
 
@@ -344,8 +309,8 @@ fn tiny_set_typed() {
 #[test]
 fn election_advance_typed() {
     let info = load_info(ELECTION_INFO);
-    let ir = find_circuit(&info, "advance");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "advance").def;
+    let program = common::program(&info);
 
     let state = election_state([0xAA; 32]);
 
@@ -478,8 +443,8 @@ fn bboard_post_executes() {
     // oracle pins the exact FAB encoding, including alignment, that the
     // interpreter writes; a typed decode would launder encoding bugs.
     let info = load_info(BBOARD_INFO);
-    let ir = find_circuit(&info, "post");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "post").def;
+    let program = common::program(&info);
 
     // The state bboard's constructor leaves: it writes `vacant` and `none`,
     // which are the defaults, and increments `instance` to 1.
@@ -540,8 +505,8 @@ fn bboard_take_down_executes() {
     // purpose so the oracle pins the exact FAB encoding (including
     // alignment) instead of laundering it through a typed decode.
     let info = load_info(BBOARD_INFO);
-    let ir = find_circuit(&info, "take_down");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "take_down").def;
+    let program = common::program(&info);
 
     let message = [7u8; 32];
     let occupied_message =
@@ -661,8 +626,8 @@ fn execute_all_compiled_circuits() {
         if !std::path::Path::new(&path).exists() {
             continue;
         }
-        let info = load_contract_info(&dir, contract_name);
-        let program = program_of(&info);
+        let info = common::load_compiled(&format!("{dir}/{contract_name}"));
+        let program = common::program(&info);
 
         for circuit in &info.circuits {
             let name = circuit.name.as_str();

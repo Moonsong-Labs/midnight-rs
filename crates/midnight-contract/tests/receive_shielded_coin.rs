@@ -43,18 +43,10 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
 
     // --- Load the circuit IR + defs from the compiled fixture ---
-    let info_json = std::fs::read_to_string(format!("{dir}/compiler/analyzed-ir.sexp"))
-        .expect("read contract-info");
-    let info: compact_codegen::types::ContractInfo =
-        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
-    let circuit = info
-        .circuits
-        .iter()
-        .find(|c| c.name == circuit_name)
-        .unwrap_or_else(|| panic!("circuit `{circuit_name}` not found in fixture"));
+    let info = common::load_compiled(&dir);
+    let circuit = common::exported_circuit(&info, &circuit_name);
     let ir = &circuit.def;
-    let program =
-        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
+    let program = common::program(&info);
 
     let arg_name = circuit
         .arguments()
@@ -162,18 +154,10 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
     let circuit_name =
         std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
 
-    let info_json = std::fs::read_to_string(format!("{dir}/compiler/analyzed-ir.sexp"))
-        .expect("read contract-info");
-    let info: compact_codegen::types::ContractInfo =
-        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
-    let circuit = info
-        .circuits
-        .iter()
-        .find(|c| c.name == circuit_name)
-        .unwrap_or_else(|| panic!("circuit `{circuit_name}` not found in fixture"));
+    let info = common::load_compiled(&dir);
+    let circuit = common::exported_circuit(&info, &circuit_name);
     let ir = &circuit.def;
-    let program =
-        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
+    let program = common::program(&info);
 
     let arg_name = circuit
         .arguments()

@@ -3,9 +3,13 @@
 
 #![allow(dead_code, reason = "each test binary uses a subset of the helpers")]
 
+use std::path::Path;
+
 use compact_bindgen::{
     ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue, StorageHashMap,
 };
+use compact_codegen::types::{Circuit, ContractInfo};
+use midnight_contract::interpreter;
 use midnight_provider::{MidnightProvider, Network};
 use midnight_wallet::Wallet;
 
@@ -74,4 +78,41 @@ pub(crate) fn contract_state(cells: Vec<StateValue<InMemoryDB>>) -> ContractStat
         StorageHashMap::new(),
         ContractMaintenanceAuthority::default(),
     )
+}
+
+/// An overriding directory from the environment. An empty value reads as
+/// unset, so `VAR=` in a make recipe does not resolve to the process's
+/// working directory.
+pub(crate) fn env_dir(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|v| !v.is_empty())
+}
+
+/// The contract info in the compactc output directory `dir`, read from
+/// `compiler/analyzed-ir.sexp`.
+///
+/// # Panics
+///
+/// When the file cannot be read or does not parse.
+pub(crate) fn load_compiled(dir: &str) -> ContractInfo {
+    let path = Path::new(dir).join("compiler/analyzed-ir.sexp");
+    compact_codegen::artifact::load(&path)
+        .unwrap_or_else(|e| panic!("load {}: {e}", path.display()))
+}
+
+/// The circuit that `info` exports under `name`.
+///
+/// # Panics
+///
+/// When `info` exports no circuit of that name.
+pub(crate) fn exported_circuit<'a>(info: &'a ContractInfo, name: &str) -> &'a Circuit {
+    info.circuits
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("circuit {name} not found"))
+}
+
+/// The tables a circuit body resolves a `call` through: every circuit the
+/// contract defines, plus its witness and native declarations.
+pub(crate) fn program(info: &ContractInfo) -> interpreter::Program<'_> {
+    interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives)
 }

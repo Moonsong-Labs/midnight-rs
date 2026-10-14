@@ -391,13 +391,6 @@ fn mint_probe_info() -> compact_codegen::types::ContractInfo {
     compact_codegen::artifact::load_str(text).unwrap()
 }
 
-fn mint_circuit(info: &compact_codegen::types::ContractInfo) -> &compact_codegen::types::Circuit {
-    info.circuits
-        .iter()
-        .find(|c| c.name == "mint")
-        .expect("mint circuit")
-}
-
 /// The `recipient` argument's declared type must carry the nested `Either` /
 /// `ZswapCoinPublicKey` / `ContractAddress` layout the interpreter needs to
 /// slice it. The type is the only source of that layout, so a compiler that
@@ -406,7 +399,7 @@ fn mint_circuit(info: &compact_codegen::types::ContractInfo) -> &compact_codegen
 #[test]
 fn the_recipient_argument_type_carries_its_nested_layout() {
     let info = mint_probe_info();
-    let mint = mint_circuit(&info);
+    let mint = common::exported_circuit(&info, "mint");
 
     let arg_types = compact_codegen::arg_types::circuit_arg_types(mint.arguments());
     let (_, recipient) = arg_types
@@ -475,8 +468,8 @@ fn run_mint(
     use midnight_contract::interpreter;
 
     let info = mint_probe_info();
-    let mint = mint_circuit(&info);
-    let program = interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
+    let mint = common::exported_circuit(&info, "mint");
+    let program = common::program(&info);
 
     // Harvest the inline `Either` / `ZswapCoinPublicKey` / `ContractAddress`
     // defs from the circuit arguments, exactly as the funded call path does.
@@ -612,8 +605,8 @@ fn interpreter_runs_mint_shielded_token_circuit() {
 #[test]
 fn build_unproven_call_tx_handles_struct_arguments() {
     let info = mint_probe_info();
-    let mint = mint_circuit(&info);
-    let program = interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
+    let mint = common::exported_circuit(&info, "mint");
+    let program = common::program(&info);
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xCD; 32]));
     let state = common::contract_state(vec![]);
     let args = mint_args([1u8; 32]);
