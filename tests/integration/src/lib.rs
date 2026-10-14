@@ -777,7 +777,7 @@ mod lazy_tests {
 
     use compact_bindgen::{
         AlignedValue, InMemoryDB, StateValue,
-        lazy::{StateQuery, StateQueryProvider, StateQueryResult},
+        lazy::{StateQuery, StateQueryProvider, StateQueryResult, StorageKey},
         tagged_serialize,
     };
     use midnight_serialize::Deserializable;
@@ -827,11 +827,13 @@ mod lazy_tests {
 
     /// The node's answer to one path: a hex tagged `StateValue`, no value for
     /// an absent map key, or a per-query error.
-    fn resolve(root: &StateValue<InMemoryDB>, path: &[String]) -> Result<Option<String>, String> {
+    fn resolve(
+        root: &StateValue<InMemoryDB>,
+        path: &[StorageKey],
+    ) -> Result<Option<String>, String> {
         let mut current = root.clone();
         for key in path {
-            let bytes = hex::decode(key).map_err(|e| format!("key hex: {e}"))?;
-            let key = <AlignedValue as Deserializable>::deserialize(&mut bytes.as_slice(), 0)
+            let key = <AlignedValue as Deserializable>::deserialize(&mut key.0.as_slice(), 0)
                 .map_err(|e| format!("failed to deserialize key: {e}"))?;
             current = match &current {
                 StateValue::Array(arr) => {

@@ -11,6 +11,7 @@ use midnight_onchain_state::state::StateValue;
 use midnight_serialize::Serializable;
 use midnight_storage::db::InMemoryDB;
 pub use primitive_types::H256;
+use serde::{Deserializer, Serializer};
 
 use crate::StateError;
 use crate::accessors::{LIST_HEAD, LIST_LENGTH, LIST_TAIL};
@@ -19,21 +20,49 @@ use crate::accessors::{LIST_HEAD, LIST_LENGTH, LIST_TAIL};
 // Trait + types
 // ---------------------------------------------------------------------------
 
-/// A query into a contract's state tree.
+/// One step of a [`StateQuery`] path: the raw bytes of a state key.
 ///
-/// Each element in `path` is a hex-encoded serialized `AlignedValue`.
-/// Interpreted as array index, map key, or merkle tree position depending
-/// on the `StateValue` variant at each level.
-#[derive(Debug, Clone)]
-pub struct StateQuery {
-    pub path: Vec<String>,
+/// Serializes as `0x`-prefixed lowercase hex, the form that the
+/// `midnight_queryContractState` RPC takes and echoes back. Deserializes from
+/// hex with or without the prefix.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StorageKey(pub Vec<u8>);
+
+impl serde::Serialize for StorageKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&format!("0x{}", hex::encode(&self.0)))
+    }
 }
 
-/// Result of a single state query.
-#[derive(Debug, Clone)]
+impl<'de> serde::Deserialize<'de> for StorageKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = <String as serde::Deserialize>::deserialize(deserializer)?;
+        let digits = text.strip_prefix("0x").unwrap_or(&text);
+        hex::decode(digits)
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// A path into a contract's state tree, as the `midnight_queryContractState`
+/// RPC takes it: one storage key per step, from the root down.
+///
+/// Each key is a serialized `AlignedValue`. The node reads it as an array
+/// index, a map key, or a Merkle tree position, from the `StateValue`
+/// variant at that level.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StateQuery {
+    pub path: Vec<StorageKey>,
+}
+
+/// The node's answer to one [`StateQuery`]: the hex-encoded value it found,
+/// or the reason it found none.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StateQueryResult {
     pub query: StateQuery,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -99,36 +128,36 @@ pub enum ContractError {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a field index to a hex-encoded serialized `AlignedValue` key.
+/// Convert a field index to a query key: the serialized `AlignedValue`.
 ///
 /// This matches the format expected by the `query_contract_state` RPC:
-/// each path element is a hex-encoded `Serializable::serialize` output
-/// of `AlignedValue::from(index as u8)`.
-pub fn index_to_query_key(index: usize) -> String {
+/// each path element is the `Serializable::serialize` output of
+/// `AlignedValue::from(index as u8)`.
+pub fn index_to_query_key(index: usize) -> StorageKey {
     let av: midnight_base_crypto::fab::AlignedValue = u8::try_from(index)
         .expect("field index must fit in u8")
         .into();
     value_to_query_key(&av)
 }
 
-/// Convert any value that can be turned into an `AlignedValue` to a
-/// hex-encoded query path element.
+/// Convert any value that can be turned into an `AlignedValue` to a query
+/// path element.
 ///
 /// This is used for map key lookups and set membership checks -- the key
-/// is serialized to `AlignedValue` bytes and hex-encoded, just like field
-/// indices, but from an arbitrary typed value instead of a `usize`.
-pub fn value_to_query_key(av: &midnight_base_crypto::fab::AlignedValue) -> String {
+/// is serialized to `AlignedValue` bytes, just like field indices, but from
+/// an arbitrary typed value instead of a `usize`.
+pub fn value_to_query_key(av: &midnight_base_crypto::fab::AlignedValue) -> StorageKey {
     let mut buf = Vec::with_capacity(av.serialized_size());
     av.serialize(&mut buf)
         .expect("AlignedValue serialization to Vec never fails");
-    hex::encode(buf)
+    StorageKey(buf)
 }
 
 /// Build a `StateQuery` path from a slice of field indices.
 ///
 /// For `FieldIndex::Single(idx)`, pass `&[idx]`.
 /// For `FieldIndex::Path(p)`, pass `p` directly.
-pub fn build_query_path(indices: &[usize]) -> Vec<String> {
+pub fn build_query_path(indices: &[usize]) -> Vec<StorageKey> {
     indices.iter().map(|&i| index_to_query_key(i)).collect()
 }
 
@@ -136,7 +165,7 @@ pub fn build_query_path(indices: &[usize]) -> Vec<String> {
 ///
 /// `field` is the field's index path, as for [`build_query_path`]. The
 /// [`ListAccessor`](crate::ListAccessor) docs give the `List` layout.
-pub fn list_length_path(field: &[usize]) -> Vec<String> {
+pub fn list_length_path(field: &[usize]) -> Vec<StorageKey> {
     let mut path = build_query_path(field);
     path.push(index_to_query_key(LIST_LENGTH));
     path
@@ -152,7 +181,7 @@ const MAX_QUERY_PATH_DEPTH: usize = 16;
 #[derive(Debug, Clone)]
 pub struct ListElementPath {
     /// The path to send.
-    pub path: Vec<String>,
+    pub path: Vec<StorageKey>,
     /// `None` if `path` ends at the element's cell. `Some(n)` if `path` ends
     /// at a list node, and the element is at index `n` of that node: read it
     /// with [`ListAccessor::get`](crate::ListAccessor::get).
@@ -215,14 +244,29 @@ mod tests {
     #[test]
     fn index_to_query_key_known_values() {
         // Empirically verified against the midnight node RPC:
-        assert_eq!(index_to_query_key(0), "4001");
-        assert_eq!(index_to_query_key(1), "0101");
-        assert_eq!(index_to_query_key(2), "0201");
+        assert_eq!(index_to_query_key(0), StorageKey(vec![0x40, 0x01]));
+        assert_eq!(index_to_query_key(1), StorageKey(vec![0x01, 0x01]));
+        assert_eq!(index_to_query_key(2), StorageKey(vec![0x02, 0x01]));
     }
 
     #[test]
     fn build_query_path_multi() {
         let path = build_query_path(&[0, 1]);
-        assert_eq!(path, vec!["4001", "0101"]);
+        assert_eq!(
+            path,
+            vec![StorageKey(vec![0x40, 0x01]), StorageKey(vec![0x01, 0x01])]
+        );
+    }
+
+    /// A key travels as `0x`-prefixed hex, the form the node's RPC takes. A
+    /// derived impl sends an array of numbers, which the node rejects.
+    #[test]
+    fn storage_key_travels_as_prefixed_hex() {
+        let key = StorageKey(vec![0x01, 0xab]);
+        assert_eq!(serde_json::to_string(&key).unwrap(), "\"0x01ab\"");
+        assert_eq!(
+            serde_json::from_str::<StorageKey>("\"0x01ab\"").unwrap(),
+            key
+        );
     }
 }

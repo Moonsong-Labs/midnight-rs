@@ -3,7 +3,7 @@
 //! These tests require MIDNIGHT_NODE_URL to be set.
 //! Run: MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 cargo test --test node_e2e -- --show-output
 
-use midnight_provider::{MidnightProvider, Network, Provider, StateQuery, StorageKey};
+use midnight_provider::{MidnightProvider, Network, Provider, StateQuery};
 
 fn node_only_provider() -> Option<MidnightProvider> {
     let node_url = std::env::var("MIDNIGHT_NODE_URL").ok()?;
@@ -62,10 +62,6 @@ mod contract_deployed {
         std::env::var("MIDNIGHT_CONTRACT_ADDRESS").ok()
     }
 
-    fn field_key(index: usize) -> StorageKey {
-        StorageKey(hex::decode(lazy::index_to_query_key(index)).unwrap())
-    }
-
     #[tokio::test]
     async fn query_counter_field() {
         let p = require_node!();
@@ -83,7 +79,7 @@ mod contract_deployed {
             .query_contract_state(
                 &address,
                 vec![StateQuery {
-                    path: vec![field_key(0), field_key(1)],
+                    path: vec![lazy::index_to_query_key(0), lazy::index_to_query_key(1)],
                 }],
             )
             .await
@@ -122,10 +118,10 @@ mod contract_deployed {
                 &address,
                 vec![
                     StateQuery {
-                        path: vec![field_key(0), field_key(1)],
+                        path: vec![lazy::index_to_query_key(0), lazy::index_to_query_key(1)],
                     },
                     StateQuery {
-                        path: vec![field_key(0), field_key(99)],
+                        path: vec![lazy::index_to_query_key(0), lazy::index_to_query_key(99)],
                     },
                 ],
             )
