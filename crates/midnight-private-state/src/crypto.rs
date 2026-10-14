@@ -1,7 +1,7 @@
 //! Password-based encryption for exports: Argon2id key derivation + AES-256-GCM.
 //!
 //! The on-disk/serialized form is `base64(nonce[12] || ciphertext)` plus a
-//! hex-encoded 32-byte salt, both carried in [`EncryptedExport`](crate::EncryptedExport).
+//! hex-encoded 32-byte salt, both carried in [`EncryptedExport`].
 
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit, Payload};

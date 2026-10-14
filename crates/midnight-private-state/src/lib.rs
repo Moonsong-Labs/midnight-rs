@@ -28,7 +28,7 @@ pub use fs::FsPrivateStateProvider;
 pub(crate) const MAX_EXPORT_ENTRIES: usize = 10_000;
 
 /// Minimum length of an export password, in characters.
-pub(crate) const MIN_PASSWORD_LEN: usize = 16;
+const MIN_PASSWORD_LEN: usize = 16;
 
 const FORMAT_STATES: &str = "midnight-rs-private-state-journal-export-v1";
 const FORMAT_KEYS: &str = "midnight-rs-signing-key-export-v1";
