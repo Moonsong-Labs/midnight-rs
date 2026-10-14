@@ -151,6 +151,21 @@ pub(crate) fn reconnect_delay(retry: u32) -> std::time::Duration {
     RECONNECT_BASE_DELAY * 2u32.saturating_pow(retry.saturating_sub(1))
 }
 
+/// How long a replay loop waits for its next message.
+///
+/// The bound sits above the client's transport keepalive, which errors out a
+/// dead socket on its own (see `midnight_indexer_client::subscription`). So a
+/// loop that reaches the bound has a live socket and a server that sends
+/// nothing. A resume reads that silence as "at the tip", and an initial sync
+/// reads it as a fatal stall, so a resume waits less.
+pub(crate) fn event_timeout(resuming: bool) -> std::time::Duration {
+    if resuming {
+        std::time::Duration::from_secs(10)
+    } else {
+        std::time::Duration::from_secs(30)
+    }
+}
+
 /// Whether an incoming event id was already applied and must be skipped.
 ///
 /// Guards resumption: after a mid-replay reconnect (or when resuming from a
@@ -295,22 +310,7 @@ pub(crate) async fn replay_unshielded_events(
         let mut conn_high: Option<i64> = None;
 
         loop {
-            // Semantic timeout above the client's transport keepalive, which
-            // errors a dead socket out on its own. Reaching this bound means
-            // the socket is alive and the server has sent nothing.
-            //
-            // A resume rarely reaches it: the indexer answers the subscribe
-            // with a progress frame carrying its highest transaction id, and
-            // a cursor already at that id ends the replay there. Silence is a
-            // server that skipped the frame, so read it as at tip on a resume
-            // and keep the longer fatal bound for an initial sync, where
-            // silence really is a stall.
-            let event_timeout = if resuming {
-                std::time::Duration::from_secs(10)
-            } else {
-                std::time::Duration::from_secs(30)
-            };
-            let event = tokio::time::timeout(event_timeout, subscription.next()).await;
+            let event = tokio::time::timeout(event_timeout(resuming), subscription.next()).await;
 
             match event {
                 Ok(Some(Ok(ev))) => {
@@ -445,6 +445,10 @@ pub(crate) async fn replay_unshielded_events(
                     )));
                 }
                 Err(_) => {
+                    // A resume rarely gets here: the indexer answers the
+                    // subscribe with a progress frame that carries its highest
+                    // transaction id, and a cursor already at that id ends the
+                    // replay there. Silence is a server that skipped the frame.
                     if resuming {
                         info!(last_seen_tx_id, "unshielded already at tip");
                         return Ok((utxos, last_seen_tx_id, last_height, spent_keys));

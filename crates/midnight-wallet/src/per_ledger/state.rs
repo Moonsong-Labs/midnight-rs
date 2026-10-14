@@ -23,8 +23,8 @@ use super::types::convert::{IntoLedger, IntoSdk};
 use crate::chain_pin::ChainPin;
 use crate::replay::{
     DustEventEnvelope, LedgerEventMessage, RECONNECT_MAX_RETRIES, ZswapEventEnvelope,
-    already_applied, last_applied_before, order_regression, progress_cancelled, reconnect_delay,
-    replay_unshielded_events, resume_id, send_progress,
+    already_applied, event_timeout, last_applied_before, order_regression, progress_cancelled,
+    reconnect_delay, replay_unshielded_events, resume_id, send_progress,
 };
 use crate::storage::wallet_storage_id;
 use crate::{Seed, SpentUtxoKey, SyncProgress, WalletError};
@@ -1455,15 +1455,6 @@ pub(crate) async fn replay_zswap_events(
     let mut count: u64 = 0;
     let mut retries: u32 = 0;
     let mut later_ledger = None;
-    // Semantic timeout, layered above the client's transport keepalive: the
-    // client guarantees a dead socket errors out within its idle timeout
-    // (20s), so reaching this bound means the server is alive but sending no
-    // events — "already at tip" when resuming, a fatal stall otherwise.
-    let event_timeout = if resuming {
-        std::time::Duration::from_secs(10)
-    } else {
-        std::time::Duration::from_secs(30)
-    };
 
     'reconnect: loop {
         let resume_id = resume_id(count, last_id);
@@ -1489,7 +1480,7 @@ pub(crate) async fn replay_zswap_events(
         let mut conn_high: Option<i64> = None;
 
         loop {
-            let event = tokio::time::timeout(event_timeout, subscription.next()).await;
+            let event = tokio::time::timeout(event_timeout(resuming), subscription.next()).await;
 
             match event {
                 Ok(Some(Ok(envelope))) => {
@@ -1656,13 +1647,6 @@ pub(crate) async fn replay_dust_events(
     let mut count: u64 = 0;
     let mut since_checkpoint: u64 = 0;
     let mut retries: u32 = 0;
-    // Semantic timeout above the client's transport keepalive; see
-    // `replay_zswap_events` for the rationale.
-    let event_timeout = if resuming {
-        std::time::Duration::from_secs(10)
-    } else {
-        std::time::Duration::from_secs(30)
-    };
 
     'reconnect: loop {
         let resume_id = resume_id(count, last_id);
@@ -1688,7 +1672,7 @@ pub(crate) async fn replay_dust_events(
         let mut conn_high: Option<i64> = None;
 
         loop {
-            let event = tokio::time::timeout(event_timeout, subscription.next()).await;
+            let event = tokio::time::timeout(event_timeout(resuming), subscription.next()).await;
 
             match event {
                 Ok(Some(Ok(envelope))) => {
