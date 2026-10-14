@@ -654,10 +654,18 @@ impl<'a> TransferBuilder<'a> {
             Some(t) => Timestamp::from_secs(t),
             None => Timestamp::from_secs(now.to_secs().saturating_sub(3600)),
         };
-        let ctime_of = |u: &TrackedUtxo| {
-            u.ctime
+        let availability = |u: &TrackedUtxo| {
+            let ctime = u
+                .ctime
                 .and_then(|t| u64::try_from(t).ok())
-                .map_or(fallback_ctime, Timestamp::from_secs)
+                .map_or(fallback_ctime, Timestamp::from_secs);
+            generationless_fee_availability(
+                u.value,
+                ctime,
+                dust_params.night_dust_ratio,
+                dust_params.generation_decay_rate,
+                now,
+            )
         };
 
         // One input, the one carrying the most generationless dust. A second
@@ -669,16 +677,7 @@ impl<'a> TransferBuilder<'a> {
         // A UTXO whose creation time the indexer left out is ranked below
         // every UTXO that has one. Its age is a guess, and a guess that runs
         // ahead of the truth declares an allowance the ledger will not grant.
-        let chosen = choose_registration_input(&all_night, |u| {
-            generationless_fee_availability(
-                u.value,
-                ctime_of(u),
-                dust_params.night_dust_ratio,
-                dust_params.generation_decay_rate,
-                now,
-            )
-        })
-        .ok_or_else(|| {
+        let chosen = choose_registration_input(&all_night, availability).ok_or_else(|| {
             WalletError::Transfer(
                 "every tNIGHT UTXO already generates dust: this address is registered".into(),
             )
@@ -729,13 +728,7 @@ impl<'a> TransferBuilder<'a> {
         // Declared over the same input the guaranteed offer carries. The
         // ledger sums availability over that offer's inputs, so a declaration
         // covering anything else is rejected.
-        let allow_fee_payment = generationless_fee_availability(
-            chosen.value,
-            ctime_of(chosen),
-            dust_params.night_dust_ratio,
-            dust_params.generation_decay_rate,
-            now,
-        );
+        let allow_fee_payment = availability(chosen);
 
         let mut tx_info = StandardTransactionInfo::new_from_context(
             self.context.clone(),
