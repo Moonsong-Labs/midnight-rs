@@ -1214,14 +1214,34 @@ async fn sync_on_chain(
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use midnight_types::hd::Seed;
+    use midnight_types::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
+
+    pub(crate) fn test_seed() -> Seed {
+        Seed::from_bytes(&[0x22; 32]).unwrap()
+    }
+
+    /// A coin the wallet owns and can rebuild, but whose output carries
+    /// nothing it can decrypt.
+    pub(crate) fn unreachable_coin(byte: u8, value: u128) -> CoinInfo {
+        CoinInfo {
+            nonce: Nonce(HashOutput([byte; 32])),
+            type_: ShieldedTokenType(HashOutput([3u8; 32])),
+            value,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use midnight_helpers::{Tagged, ledger_8, ledger_9};
     use midnight_indexer_client::testutil::{
         accept_subscriber, bind, ledger_event, next_json, send_next, subscription_variable,
     };
 
+    use super::test_support::{test_seed, unreachable_coin};
     use super::*;
-    use crate::ledger_8::state::test_support::{test_seed, unreachable_coin};
 
     /// A chain that crossed the fork serves ledger 8 events, then ledger 9
     /// ones, in one stream. A replay that stopped at the boundary, or lost the
