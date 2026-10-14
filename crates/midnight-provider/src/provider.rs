@@ -248,22 +248,9 @@ impl MidnightProvider {
     /// returns an error, or when it returns parameters of a generation this
     /// build does not link.
     pub async fn ledger_version(&self) -> Result<LedgerVersion, ProviderError> {
-        let conn = self.get_or_connect().await?;
-
-        let payload = subxt::dynamic::runtime_api_call::<(), Result<Vec<u8>, subxt::dynamic::Value>>(
-            "MidnightRuntimeApi",
-            "get_ledger_parameters",
-            (),
-        );
-        let parameters = conn
-            .client
-            .at_current_block()
-            .await
-            .map_err(|e| ProviderError::Rpc(format!("reading the finalized block: {e}")))?
-            .runtime_apis()
-            .call(payload)
-            .await
-            .map_err(|e| ProviderError::Rpc(format!("calling get_ledger_parameters: {e}")))?
+        let parameters = self
+            .call_runtime_api::<Result<Vec<u8>, subxt::dynamic::Value>>("get_ledger_parameters")
+            .await?
             .map_err(|e| ProviderError::Rpc(format!("get_ledger_parameters failed: {e}")))?;
         LedgerVersion::of_ledger_parameters(&parameters)
             .map_err(|e| ProviderError::Rpc(format!("decoding the ledger parameters: {e}")))
@@ -856,6 +843,22 @@ impl MidnightProvider {
         }
         Ok(guard.as_ref().unwrap().clone())
     }
+
+    async fn call_runtime_api<R: subxt::ext::scale_decode::DecodeAsType>(
+        &self,
+        method: &str,
+    ) -> Result<R, ProviderError> {
+        let conn = self.get_or_connect().await?;
+        let payload = subxt::dynamic::runtime_api_call::<(), R>("MidnightRuntimeApi", method, ());
+        conn.client
+            .at_current_block()
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("reading the finalized block: {e}")))?
+            .runtime_apis()
+            .call(payload)
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("calling {method}: {e}")))
+    }
 }
 
 #[async_trait]
@@ -1139,23 +1142,9 @@ impl MidnightProvider {
     /// cannot be reached, or when its metadata describes no such API or
     /// another return type.
     pub async fn ledger_network_id(&self) -> Result<Option<Network>, ProviderError> {
-        let conn = self.get_or_connect().await?;
-
-        let payload = subxt::dynamic::runtime_api_call::<(), String>(
-            "MidnightRuntimeApi",
-            "get_network_id",
-            (),
-        );
-        let id = conn
-            .client
-            .at_current_block()
+        self.call_runtime_api::<String>("get_network_id")
             .await
-            .map_err(|e| ProviderError::Rpc(format!("reading the finalized block: {e}")))?
-            .runtime_apis()
-            .call(payload)
-            .await
-            .map_err(|e| ProviderError::Rpc(format!("calling get_network_id: {e}")))?;
-        Ok(network_from_runtime_id(id))
+            .map(network_from_runtime_id)
     }
 
     /// The [`Network`] this provider's wallet derives addresses for.
