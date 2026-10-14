@@ -23,6 +23,7 @@ use super::types::convert::{IntoLedger, IntoSdk};
 use crate::chain_pin::ChainPin;
 use crate::replay::{LedgerStream, replay_ledger_events, replay_unshielded_events};
 use crate::storage::wallet_storage_id;
+use crate::wallet::ChainSync;
 use crate::{Seed, SpentUtxoKey, SyncProgress, WalletError};
 
 /// A Midnight wallet: identity (seed, addresses) and synced ledger state.
@@ -438,23 +439,6 @@ pub struct ShieldedRescanCommit {
     pub(crate) zswap_event_id: i64,
 }
 
-/// Who a sync is for, and where it keeps what it learns.
-pub(crate) struct SyncIdentity<'a> {
-    pub indexer_url: &'a str,
-    pub seed: Seed,
-    pub address: &'a str,
-    pub network_id: &'a str,
-    pub storage_dir: Option<&'a Path>,
-    /// Whether the sync writes its state under `storage_dir` as it goes:
-    /// Dust checkpoints, the pending reservations it loads, and the synced
-    /// state. A sync whose state waits for a commit writes nothing, and the
-    /// commit saves it.
-    pub save: bool,
-    /// The finalized block the node reported for this sync, persisted so a
-    /// later resume can ask whether it is still on this chain.
-    pub chain_pin: Option<ChainPin>,
-}
-
 /// What a sync replayed before its Dust replay.
 pub(crate) struct SyncStart {
     pub zswap_state: ZswapLocalState<DefaultDB>,
@@ -526,12 +510,12 @@ impl Wallet {
     /// state in this generation. `block` is the chain's latest block, whose
     /// ledger parameters are in this generation.
     pub(crate) async fn finish_sync(
-        sync: SyncIdentity<'_>,
+        sync: ChainSync<'_>,
         block: &midnight_indexer_client::Block,
         start: SyncStart,
         progress: Option<mpsc::Sender<SyncProgress>>,
     ) -> Result<Self, WalletError> {
-        let SyncIdentity {
+        let ChainSync {
             indexer_url,
             seed,
             address,
@@ -551,7 +535,7 @@ impl Wallet {
             dust,
         } = start;
         let wallet_id = wallet_storage_id(address);
-        let secret_keys = zswap_keys(&seed);
+        let secret_keys = zswap_keys(seed);
 
         let parameters = decode_ledger_parameters(block)?;
         let block_timestamp = block
@@ -562,7 +546,7 @@ impl Wallet {
         let (dust_wallet, start_dust_id) = match dust {
             DustStart::Resume { wallet, next_id } => (*wallet, next_id),
             DustStart::Fresh { next_id } => (
-                DustWallet::default((&seed).into_ledger(), Some(&parameters)),
+                DustWallet::default(seed.into_ledger(), Some(&parameters)),
                 next_id,
             ),
         };
@@ -637,7 +621,7 @@ impl Wallet {
         };
 
         let mut state = Self {
-            seed,
+            seed: seed.clone(),
             secret_keys,
             network_id: network_id.to_string(),
             unshielded_address: address.to_string(),

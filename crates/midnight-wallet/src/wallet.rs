@@ -969,16 +969,20 @@ struct Resume {
 }
 
 /// Who a sync is for, and where it keeps what it learns.
-struct ChainSync<'a> {
-    indexer_url: &'a str,
-    seed: &'a Seed,
-    address: &'a str,
-    network_id: &'a str,
-    storage_dir: Option<&'a Path>,
-    /// Whether the sync saves its state under `storage_dir` as it goes, or
-    /// leaves that to a commit.
-    save: bool,
-    chain_pin: Option<ChainPin>,
+pub(crate) struct ChainSync<'a> {
+    pub(crate) indexer_url: &'a str,
+    pub(crate) seed: &'a Seed,
+    pub(crate) address: &'a str,
+    pub(crate) network_id: &'a str,
+    pub(crate) storage_dir: Option<&'a Path>,
+    /// Whether the sync writes its state under `storage_dir` as it goes:
+    /// Dust checkpoints, the pending reservations it loads, and the synced
+    /// state. A sync whose state waits for a commit writes nothing, and the
+    /// commit saves it.
+    pub(crate) save: bool,
+    /// The pin this sync persists, so a later resume can ask whether it is
+    /// still on this chain.
+    pub(crate) chain_pin: Option<ChainPin>,
 }
 
 /// One sync attempt: read the chain's generation, load the snapshot in its
@@ -1182,15 +1186,7 @@ async fn sync_on_chain(
                 },
             };
             let wallet = ledger_8::Wallet::finish_sync(
-                ledger_8::state::SyncIdentity {
-                    indexer_url: sync.indexer_url,
-                    seed: sync.seed.clone(),
-                    address: sync.address,
-                    network_id: sync.network_id,
-                    storage_dir: sync.storage_dir,
-                    save: sync.save,
-                    chain_pin: sync.chain_pin,
-                },
+                sync,
                 block,
                 ledger_8::state::SyncStart {
                     zswap_state,
@@ -1225,15 +1221,7 @@ async fn sync_on_chain(
                 },
             };
             let wallet = ledger_9::Wallet::finish_sync(
-                ledger_9::state::SyncIdentity {
-                    indexer_url: sync.indexer_url,
-                    seed: sync.seed.clone(),
-                    address: sync.address,
-                    network_id: sync.network_id,
-                    storage_dir: sync.storage_dir,
-                    save: sync.save,
-                    chain_pin: sync.chain_pin,
-                },
+                sync,
                 block,
                 ledger_9::state::SyncStart {
                     zswap_state,
