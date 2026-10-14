@@ -278,8 +278,7 @@ impl SubscriptionClient {
                     match ack_msg.get("type").and_then(|v| v.as_str()) {
                         Some("connection_ack") => break,
                         Some("ping") => {
-                            let pong = serde_json::json!({"type": "pong"});
-                            let _ = sink.send(Message::Text(pong.to_string().into())).await;
+                            let _ = sink.send(pong_frame()).await;
                             continue;
                         }
                         _ => {
@@ -426,8 +425,7 @@ impl SubscriptionClient {
                                 }
                             }
                             "ping" => {
-                                let pong = serde_json::json!({"type": "pong"});
-                                let _ = sink.send(Message::Text(pong.to_string().into())).await;
+                                let _ = sink.send(pong_frame()).await;
                             }
                             "error" => {
                                 let err_msg = parsed
@@ -452,6 +450,10 @@ impl SubscriptionClient {
             _cancel: cancel_tx,
         })
     }
+}
+
+fn pong_frame() -> Message {
+    Message::Text(serde_json::json!({"type": "pong"}).to_string().into())
 }
 
 fn host_from_url(url: &str) -> String {
