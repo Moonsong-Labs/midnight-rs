@@ -575,30 +575,30 @@ mod tests {
         ProviderError::Submission(e)
     }
 
+    fn every_variant() -> [SubmitError; 7] {
+        let m = || "x".to_string();
+        [
+            SubmitError::NotSubmitted { message: m() },
+            SubmitError::SubmitRpc { message: m() },
+            SubmitError::Invalid {
+                message: m(),
+                code: None,
+            },
+            SubmitError::Dropped { message: m() },
+            SubmitError::NodeError { message: m() },
+            SubmitError::WatchStream { message: m() },
+            SubmitError::VerdictFetch { message: m() },
+        ]
+    }
+
     /// The wait site is where a node's rejection arrives, and it is the only
     /// place a reservation can be freed on one. Freeing on a status that still
     /// permits inclusion would let a later build spend the same coins.
     #[test]
     fn only_a_definitive_rejection_frees_inputs_at_the_wait_site() {
-        let m = || "x".to_string();
-
-        assert!(rejection_is_definitive(&SubmitError::Invalid {
-            message: m(),
-            code: None
-        }));
-
-        for still_possible in [
-            SubmitError::Dropped { message: m() },
-            SubmitError::NodeError { message: m() },
-            SubmitError::WatchStream { message: m() },
-            SubmitError::VerdictFetch { message: m() },
-            SubmitError::SubmitRpc { message: m() },
-            SubmitError::NotSubmitted { message: m() },
-        ] {
-            assert!(
-                !rejection_is_definitive(&still_possible),
-                "only Invalid rules out inclusion"
-            );
+        for e in every_variant() {
+            let expected = matches!(e, SubmitError::Invalid { .. });
+            assert_eq!(rejection_is_definitive(&e), expected, "{e:?}");
         }
     }
 
@@ -609,27 +609,9 @@ mod tests {
     /// it.
     #[test]
     fn only_a_failed_submission_frees_inputs_at_the_submit_site() {
-        let m = || "x".to_string();
-
-        assert!(never_reached_the_node(&err(SubmitError::NotSubmitted {
-            message: m()
-        })));
-
-        for ambiguous in [
-            SubmitError::SubmitRpc { message: m() },
-            SubmitError::Invalid {
-                message: m(),
-                code: None,
-            },
-            SubmitError::Dropped { message: m() },
-            SubmitError::NodeError { message: m() },
-            SubmitError::WatchStream { message: m() },
-            SubmitError::VerdictFetch { message: m() },
-        ] {
-            assert!(
-                !never_reached_the_node(&err(ambiguous)),
-                "only NotSubmitted proves the transaction never left"
-            );
+        for e in every_variant() {
+            let expected = matches!(e, SubmitError::NotSubmitted { .. });
+            assert_eq!(never_reached_the_node(&err(e.clone())), expected, "{e:?}");
         }
 
         assert!(!never_reached_the_node(&ProviderError::NoWallet));
