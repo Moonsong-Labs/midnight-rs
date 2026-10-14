@@ -151,8 +151,7 @@ impl<'a> Builds<'a> {
     }
 
     async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
-        let external: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &tx_bytes[..])
-            .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))?;
+        let external = deserialize_transaction(tx_bytes)?;
 
         // Refuse any non-fee token deficit: this path only adds Dust, so a
         // shortfall in any other token (an unfunded swap side) would just fail
@@ -217,18 +216,13 @@ impl<'a> Builds<'a> {
 /// Merge proven transactions of this generation into one. See
 /// [`MidnightProvider::merge_transactions`].
 pub fn merge_transactions(txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
-    let deserialize = |bytes: &[u8]| -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
-        tagged_deserialize(&mut &bytes[..])
-            .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))
-    };
-
     let mut iter = txs.iter();
     let first = iter.next().ok_or_else(|| {
         ProviderError::Transaction("merge_transactions requires at least one transaction".into())
     })?;
-    let mut merged = deserialize(first)?;
+    let mut merged = deserialize_transaction(first)?;
     for bytes in iter {
-        let other = deserialize(bytes)?;
+        let other = deserialize_transaction(bytes)?;
         merged = merged
             .merge(&other)
             .map_err(|e| ProviderError::Transaction(format!("merge transactions: {e:?}")))?;
@@ -238,4 +232,9 @@ pub fn merge_transactions(txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
     tagged_serialize(&merged, &mut out)
         .map_err(|e| ProviderError::Transaction(format!("serialize merged transaction: {e}")))?;
     Ok(out)
+}
+
+fn deserialize_transaction(bytes: &[u8]) -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
+    tagged_deserialize(&mut &bytes[..])
+        .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))
 }
