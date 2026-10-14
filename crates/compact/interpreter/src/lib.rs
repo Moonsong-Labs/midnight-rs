@@ -760,19 +760,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         // order.
         E::VectorRef { ty, expr, index } => {
             let val = eval_expr(ctx, expr)?;
-            let idx_val = eval_expr(ctx, index)?;
-            let n = value_to_u128(&idx_val).ok_or_else(|| {
-                InterpreterError::TypeError(format!(
-                    "vector index expression did not evaluate to an integer (got {idx_val:?})"
-                ))
-            })?;
-            // `as usize` would silently wrap an index like 2^64 + 1 to 1 on
-            // 64-bit targets and read the wrong element; reject it instead.
-            let idx = usize::try_from(n).map_err(|_| {
-                InterpreterError::TypeError(format!(
-                    "vector index {n} out of bounds (does not fit in usize)"
-                ))
-            })?;
+            let idx = eval_index(ctx, index, "vector")?;
             indexed_element(&val, Some(ty), idx, "vector")
         }
 
@@ -986,13 +974,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         // Vector<N, Uint<8>> layout.
         E::BytesToVector { len, expr } => {
             let val = eval_expr(ctx, expr)?;
-            let len = ir_length(*len)?;
-            let bytes = value_to_byte_string(&val, len)?;
-            let elements = (0..len)
-                .map(|i| {
-                    let b = bytes.get(i).copied().unwrap_or(0);
-                    Value::AlignedValue(AlignedValue::from(b))
-                })
+            let elements = padded_bytes(&val, ir_length(*len)?)?
+                .into_iter()
+                .map(|b| Value::AlignedValue(AlignedValue::from(b)))
                 .collect();
             Ok(Value::Tuple(elements))
         }
@@ -1096,27 +1080,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         E::BytesRef { ty, expr, index } => {
             check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
-            let n = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
-                InterpreterError::TypeError("byte index is not an integer".into())
-            })?;
-            let i = usize::try_from(n).map_err(|_| {
-                InterpreterError::TypeError(format!(
-                    "byte index {n} out of bounds (does not fit in usize)"
-                ))
-            })?;
+            let i = eval_index(ctx, index, "byte")?;
             let Type::Bytes(width) = ty.resolved() else {
                 return Err(InterpreterError::TypeError(format!(
                     "byte reference has non-bytes operand type {ty:?}"
                 )));
             };
-            let width = ir_length(*width)?;
-            if i >= width {
-                return Err(InterpreterError::TypeError(format!(
-                    "byte index {i} out of bounds for a {width}-byte value"
-                )));
-            }
-            let bytes = value_to_byte_string(&val, width)?;
-            Ok(Value::Integer(bytes.get(i).copied().unwrap_or(0) as u128))
+            byte_at(&val, ir_length(*width)?, i, "byte")
         }
 
         // A run of `len` elements from a tuple or vector, taken from a
@@ -1143,9 +1113,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         } => {
             check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
-            let start = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
-                InterpreterError::TypeError("slice index is not an integer".into())
-            })? as usize;
+            let start = eval_index(ctx, index, "slice")?;
             slice_elements(&val, ty, start, ir_length(*len)?)
         }
 
@@ -1158,14 +1126,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         } => {
             check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
-            let n = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
-                InterpreterError::TypeError("slice index is not an integer".into())
-            })?;
-            let start = usize::try_from(n).map_err(|_| {
-                InterpreterError::TypeError(format!(
-                    "slice index {n} out of bounds (does not fit in usize)"
-                ))
-            })?;
+            let start = eval_index(ctx, index, "slice")?;
             let len = ir_length(*len)?;
             let Type::Bytes(width) = ty.resolved() else {
                 return Err(InterpreterError::TypeError(format!(
@@ -1178,10 +1139,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                     "slice of {len} bytes at {start} is out of bounds for a {width}-byte value"
                 )));
             }
-            let bytes = value_to_byte_string(&val, width)?;
-            let slice = (start..start + len)
-                .map(|i| bytes.get(i).copied().unwrap_or(0))
-                .collect();
+            let slice = padded_bytes(&val, width)?[start..start + len].to_vec();
             Ok(Value::AlignedValue(bytes_aligned_value(slice, len)?))
         }
     }
@@ -1485,6 +1443,23 @@ fn value_to_byte_string(val: &Value, length: usize) -> Result<&[u8], Interpreter
     }
 }
 
+/// The `length` bytes of a `Bytes<length>` value. The FAB normal form trims
+/// trailing zero bytes, so this puts back the ones the encoding dropped.
+fn padded_bytes(val: &Value, length: usize) -> Result<Vec<u8>, InterpreterError> {
+    let mut bytes = value_to_byte_string(val, length)?.to_vec();
+    bytes.resize(length, 0);
+    Ok(bytes)
+}
+
+fn byte_at(val: &Value, length: usize, i: usize, what: &str) -> Result<Value, InterpreterError> {
+    if i >= length {
+        return Err(InterpreterError::TypeError(format!(
+            "{what} index {i} out of bounds for a {length}-byte value"
+        )));
+    }
+    Ok(Value::Integer(padded_bytes(val, length)?[i].into()))
+}
+
 /// Decode a `Vector<length, Uint<8>>` value into its byte string (element i
 /// → byte i). Accepts the structured `Value::Tuple` form and the flattened
 /// one-atom-per-element `AlignedValue` form.
@@ -1567,22 +1542,7 @@ fn indexed_element(
             // A Bytes value yields one byte per index, out of the single atom
             // that holds them all.
             if let Type::Bytes(length) = ty.resolved() {
-                let length = ir_length(*length)?;
-                if i >= length {
-                    return Err(InterpreterError::TypeError(format!(
-                        "{what} index {i} out of bounds for a {length}-byte value"
-                    )));
-                }
-                // The FAB normal form trims trailing zero bytes, so a byte
-                // past the payload is one the encoding dropped.
-                let byte = av
-                    .value
-                    .0
-                    .first()
-                    .and_then(|atom| atom.0.get(i))
-                    .copied()
-                    .unwrap_or(0);
-                return Ok(Value::Integer(byte as u128));
+                return byte_at(val, ir_length(*length)?, i, what);
             }
             let range = element_atom_range(ty, i).ok_or_else(|| {
                 InterpreterError::TypeError(match element_count(ty) {
@@ -1678,6 +1638,21 @@ fn eval_as_integer(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<u128, Inter
     let val = eval_expr(ctx, expr)?;
     value_to_u128(&val)
         .ok_or_else(|| InterpreterError::TypeError(format!("expected integer, got {val:?}")))
+}
+
+fn eval_index(
+    ctx: &mut ExecContext,
+    expr: &ir::Expr,
+    what: &str,
+) -> Result<usize, InterpreterError> {
+    let n = eval_as_integer(ctx, expr)?;
+    // `as usize` would silently wrap an index like 2^64 + 1 to 1 on 64-bit
+    // targets and read the wrong element; reject it instead.
+    usize::try_from(n).map_err(|_| {
+        InterpreterError::TypeError(format!(
+            "{what} index {n} out of bounds (does not fit in usize)"
+        ))
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -3783,6 +3758,12 @@ mod tests {
             )),
             Value::AlignedValue(AlignedValue::from([1u8, 2])),
         ] {
+            // A loop over a `Bytes` argument reads its bytes the same way.
+            if let Value::AlignedValue(_) = input {
+                let err = indexed_element(&input, Some(&Type::Bytes(1)), 0, "loop")
+                    .expect_err("malformed byte value");
+                assert!(matches!(err, InterpreterError::TypeError(_)), "got {err}");
+            }
             let err = run(&reference, &[("x", input)]).expect_err("malformed byte value");
             assert!(matches!(err, InterpreterError::TypeError(_)), "got {err}");
         }
