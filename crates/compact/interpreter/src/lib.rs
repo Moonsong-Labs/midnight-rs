@@ -1760,6 +1760,7 @@ fn exec_ledger_query(
     instructions: &[ir::Instruction],
 ) -> Result<Value, InterpreterError> {
     let cost_model = &INITIAL_COST_MODEL;
+    let debug = std::env::var("INTERPRETER_DEBUG").is_ok();
     let mut ops: Vec<Op<ResultModeGather, InMemoryDB>> = Vec::new();
     for instruction in instructions {
         ops.push(build_op(ctx, instruction)?);
@@ -1768,7 +1769,7 @@ fn exec_ledger_query(
     // Record the ops for transcript construction
     ctx.gather_ops.extend(ops.iter().cloned());
 
-    if std::env::var("INTERPRETER_DEBUG").is_ok() {
+    if debug {
         eprintln!("[interpreter] executing {} ops:", ops.len());
         for (i, op) in ops.iter().enumerate() {
             eprintln!("  {i:3}: {op:?}");
@@ -1792,29 +1793,20 @@ fn exec_ledger_query(
     let res = qc
         .query::<ResultModeGather>(&ops, None, cost_model)
         .map_err(|e| InterpreterError::LedgerQueryFailed(format!("{e:?}")))?;
-    let events = res.events;
-    let new_state = ContractState {
+    let reads: Vec<AlignedValue> = res
+        .events
+        .into_iter()
+        .filter_map(|e| match e {
+            GatherEvent::Read(av) => Some(av),
+            GatherEvent::Log(_) => None,
+        })
+        .collect();
+    ctx.state = ContractState {
         data: res.context.state,
         ..ctx.state.clone()
     };
 
-    // Collect popeq read results
-    for event in &events {
-        if let GatherEvent::Read(av) = event {
-            ctx.reads.push(av.clone());
-        }
-    }
-
-    ctx.state = new_state;
-
-    if std::env::var("INTERPRETER_DEBUG").is_ok() {
-        let reads: Vec<_> = events
-            .iter()
-            .filter_map(|e| match e {
-                GatherEvent::Read(av) => Some(av),
-                _ => None,
-            })
-            .collect();
+    if debug {
         eprintln!("  -> {} read events", reads.len());
         for (i, av) in reads.iter().enumerate() {
             eprintln!(
@@ -1826,14 +1818,12 @@ fn exec_ledger_query(
     }
 
     // Return the last read value if any, otherwise void
-    if let Some(last_read) = events.iter().rev().find_map(|e| match e {
-        GatherEvent::Read(av) => Some(av.clone()),
-        _ => None,
-    }) {
-        Ok(Value::AlignedValue(last_read))
-    } else {
-        Ok(Value::Void)
-    }
+    let result = reads
+        .last()
+        .cloned()
+        .map_or(Value::Void, Value::AlignedValue);
+    ctx.reads.extend(reads);
+    Ok(result)
 }
 
 /// One expanded VM instruction as the op the VM runs.
