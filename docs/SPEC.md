@@ -172,7 +172,7 @@ One node RPC, `midnight_contractState`, serves the whole state. `MidnightProvide
 ```
 Provider.get_contract_state(address, at)              → hex string   // at = None: the best block
 MidnightProvider.get_state_from_node(address, at)     → hex string
-  → deserialize_state → ContractState<InMemoryDB>
+  → hex decode → decode_contract_state → ContractState<InMemoryDB>
 ```
 
 Generated bindings expose this as `contract.ledger().await?`, which calls `midnight_contractState` over node RPC and returns a sync `Ledger` struct with typed field accessors. `contract.ledger_query()` (custom node builds only) routes per-field reads through `midnight_queryContractState` via the `StateQueryProvider` bridge in `midnight-provider`.
