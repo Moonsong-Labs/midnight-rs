@@ -150,11 +150,11 @@ fn reconnect_delay(retry: u32) -> std::time::Duration {
 
 /// How long a replay loop waits for its next message.
 ///
-/// The bound sits above the client's transport keepalive, which errors out a
-/// dead socket on its own (see `midnight_indexer_client::subscription`). So a
-/// loop that reaches the bound has a live socket and a server that sends
-/// nothing. A resume reads that silence as "at the tip", and an initial sync
-/// reads it as a fatal stall, so a resume waits less.
+/// An initial sync reads silence as a fatal stall, so its bound sits above the
+/// client's transport keepalive, which errors out a dead socket on its own
+/// (see `midnight_indexer_client::subscription`). A loop that reaches it has a
+/// live socket and a server that sends nothing. A resume reads silence as "at
+/// the tip", so it waits less.
 fn event_timeout(resuming: bool) -> std::time::Duration {
     if resuming {
         std::time::Duration::from_secs(10)
