@@ -927,18 +927,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                 ))
             })?;
             let len = ir_length(*len)?;
-            let mut bytes = fr.as_le_bytes();
-            // Trim trailing zeros here (not just in bytes_aligned_value) so
-            // the width check below sees the value's true byte length.
-            while matches!(bytes.last(), Some(0)) {
-                bytes.pop();
-            }
-            if bytes.len() > len {
-                return Err(InterpreterError::TypeError(format!(
-                    "range error: Field value {fr:?} does not fit into {len} bytes"
-                )));
-            }
-            Ok(Value::AlignedValue(bytes_aligned_value(bytes, len)?))
+            bytes_aligned_value(fr.as_le_bytes(), len)
+                .map(Value::AlignedValue)
+                .map_err(|_| {
+                    InterpreterError::TypeError(format!(
+                        "range error: Field value {fr:?} does not fit into {len} bytes"
+                    ))
+                })
         }
 
         // Bytes<len> → Vector<len, Uint<8>>. Element i is byte i. The

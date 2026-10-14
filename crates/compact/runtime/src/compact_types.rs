@@ -186,12 +186,8 @@ pub fn bytes_aligned_value(
 ) -> Result<AlignedValue, InterpreterError> {
     use midnight_base_crypto::fab;
     let byte_len = bytes.len();
-    let mut atom = bytes;
-    while matches!(atom.last(), Some(0)) {
-        atom.pop();
-    }
     fab::AlignedValue::new(
-        fab::Value(vec![fab::ValueAtom(atom)]),
+        fab::Value(vec![fab::ValueAtom::from(bytes)]),
         fab::Alignment::singleton(fab::AlignmentAtom::Bytes {
             length: length as u32,
         }),
