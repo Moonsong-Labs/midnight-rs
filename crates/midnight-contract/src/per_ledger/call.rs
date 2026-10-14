@@ -536,7 +536,7 @@ async fn attach_and_prove(
     // the most expensive operation in the SDK, so the circuit's proof is paid
     // for once per iteration rather than once per call. Dust is attached below,
     // after proving, in its own intent segment, which leaves the circuit proof
-    // untouched. A transaction with no user circuit takes
+    // untouched. A transaction with no user circuit can take
     // `super::deploy::build_with_mock_fee_proofs` instead.
     let mut bytes = prove_without_fee(tx_info).await?;
 
