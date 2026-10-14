@@ -543,17 +543,17 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             .collect();
         reject_duplicate_paths(&resolved)?;
 
-        if opts.conflict == ConflictStrategy::Error
-            && let Some((_, rec)) = resolved.iter().find(|(p, _)| p.exists())
-        {
-            return Err(PrivateStateError::ImportConflict(rec.address.clone()));
-        }
-
+        // Decide every record before the first write, so a conflict leaves
+        // the store unchanged.
         let mut result = ImportResult::default();
+        let mut admitted = Vec::with_capacity(resolved.len());
         for (path, rec) in &resolved {
             if result.admit(path.exists(), opts.conflict, || rec.address.clone())? {
-                self.write_json_atomic(path, rec)?;
+                admitted.push((path, rec));
             }
+        }
+        for (path, rec) in admitted {
+            self.write_json_atomic(path, rec)?;
         }
         Ok(result)
     }
@@ -1623,6 +1623,39 @@ mod tests {
         assert!(
             matches!(err, PrivateStateError::InvalidFormat(_)),
             "expected InvalidFormat, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn import_signing_keys_conflict_writes_nothing() {
+        let (_dir, dst) = provider();
+        dst.set_signing_key("0200aa", b"old").await.unwrap();
+        // The new key comes first, so an import that writes before it meets
+        // the conflict leaves that key behind.
+        let records = [
+            KeyRecord {
+                address: "0200bb".into(),
+                data: b"new".to_vec(),
+            },
+            KeyRecord {
+                address: "0200aa".into(),
+                data: b"other".to_vec(),
+            },
+        ];
+        let exp = envelope(FORMAT_KEYS, &records);
+
+        let err = dst
+            .import_signing_keys(&exp, &ImportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::ImportConflict(ref a) if a == "0200aa"),
+            "expected ImportConflict(0200aa), got {err:?}"
+        );
+        assert_eq!(dst.get_signing_key("0200bb").await.unwrap(), None);
+        assert_eq!(
+            dst.get_signing_key("0200aa").await.unwrap().as_deref(),
+            Some(&b"old"[..])
         );
     }
 
