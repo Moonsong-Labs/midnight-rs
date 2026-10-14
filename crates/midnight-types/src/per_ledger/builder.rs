@@ -743,15 +743,8 @@ impl<'a> TransferBuilder<'a> {
         });
         tx_info.use_mock_proofs_for_fees(true);
 
-        let spent_unshielded_inputs: Vec<SpentUtxoKey> = night_utxos
-            .iter()
-            .filter_map(|u| {
-                Some(SpentUtxoKey {
-                    intent_hash: u.intent_hash.clone()?,
-                    output_index: u.output_index? as u32,
-                })
-            })
-            .collect();
+        let spent_unshielded_inputs: Vec<SpentUtxoKey> =
+            night_utxos.iter().filter_map(|u| u.spent_key()).collect();
 
         let mut prepared = prepare_no_validate(tx_info).await?;
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);

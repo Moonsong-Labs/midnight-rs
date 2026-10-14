@@ -571,26 +571,27 @@ pub(crate) async fn replay_unshielded_events(
                             }
                             // Attach the event's tx id so a malformed UTXO
                             // is identifiable from the error alone.
-                            apply_unshielded_tx(&mut utxos, &tx_data).map_err(|e| match e {
-                                WalletError::MalformedUtxo {
-                                    field,
-                                    value,
-                                    reason,
-                                    tx_id: None,
-                                } => WalletError::MalformedUtxo {
-                                    field,
-                                    value,
-                                    reason,
-                                    tx_id,
-                                },
-                                other => other,
-                            })?;
+                            let confirmed =
+                                apply_unshielded_tx(&mut utxos, &tx_data).map_err(|e| match e {
+                                    WalletError::MalformedUtxo {
+                                        field,
+                                        value,
+                                        reason,
+                                        tx_id: None,
+                                    } => WalletError::MalformedUtxo {
+                                        field,
+                                        value,
+                                        reason,
+                                        tx_id,
+                                    },
+                                    other => other,
+                                })?;
                             // Only an applied transaction counts as progress
                             // for the reconnect bound; deduped re-deliveries
                             // must not reset it.
                             retries = 0;
                             applied_txs += 1;
-                            spent_keys.extend(spent_utxo_keys(&tx_data));
+                            spent_keys.extend(confirmed);
                             if let Some(id) = tx_id {
                                 last_seen_tx_id = last_seen_tx_id.max(id);
                             }
@@ -722,26 +723,6 @@ fn parse_utxo(u: &SubscriptionUtxo) -> Result<TrackedUtxo, WalletError> {
     })
 }
 
-/// Extract the `(intent_hash, output_index)` keys of every spent UTXO in an
-/// unshielded transaction event. UTXOs missing either identity field (or
-/// with an out-of-range index) can't match a reservation — reservations
-/// always carry both — and are skipped. Used to clear matching
-/// `PendingReservations` entries once the chain confirms the spends.
-fn spent_utxo_keys(tx_data: &UnshieldedTxData) -> Vec<SpentUtxoKey> {
-    tx_data
-        .spent_utxos
-        .iter()
-        .filter_map(|u| {
-            let intent_hash = u.intent_hash.clone()?;
-            let output_index = u32::try_from(u.output_index?).ok()?;
-            Some(SpentUtxoKey {
-                intent_hash,
-                output_index,
-            })
-        })
-        .collect()
-}
-
 /// Apply one unshielded transaction event to the tracked UTXO set,
 /// all-or-nothing: every spent and created UTXO is parsed upfront, and the
 /// first malformed field rejects the whole event with a typed error before
@@ -750,10 +731,13 @@ fn spent_utxo_keys(tx_data: &UnshieldedTxData) -> Vec<SpentUtxoKey> {
 /// paths only commit a fully successful replay (`sync_inner` builds the
 /// wallet at the end; `ResyncPlan::run` only then yields a `ResyncCommit`),
 /// a malformed event never leaves partial state behind.
+///
+/// Returns the [`TrackedUtxo::spent_key`] of each spent UTXO that has one,
+/// so the caller can clear the reservations the event confirms.
 fn apply_unshielded_tx(
     utxos: &mut Vec<TrackedUtxo>,
     tx_data: &UnshieldedTxData,
-) -> Result<(), WalletError> {
+) -> Result<Vec<SpentUtxoKey>, WalletError> {
     // Parse everything upfront. If any field fails to parse the UTXO vec is
     // left untouched so retries cannot produce duplicates.
     let spent: Vec<TrackedUtxo> = tx_data
@@ -782,7 +766,7 @@ fn apply_unshielded_tx(
     }
     utxos.extend(created);
 
-    Ok(())
+    Ok(spent.iter().filter_map(TrackedUtxo::spent_key).collect())
 }
 
 /// Forward a progress event to the optional progress channel.
@@ -884,23 +868,18 @@ mod tests {
         }
     }
 
+    /// A reservation names an input, so only the spent side of an event can
+    /// confirm one.
     #[test]
-    fn spent_utxo_keys_extracts_only_fully_identified_utxos() {
+    fn apply_unshielded_tx_reports_the_spent_keys_only() {
         let tx_data = UnshieldedTxData {
             transaction: None,
             created_utxos: vec![sub_utxo(Some("created"), Some(0))],
-            spent_utxos: vec![
-                sub_utxo(Some("abcd"), Some(2)),
-                sub_utxo(None, Some(1)),
-                sub_utxo(Some("ffff"), None),
-                sub_utxo(Some("eeee"), Some(-1)),
-            ],
+            spent_utxos: vec![sub_utxo(Some("abcd"), Some(2))],
         };
 
-        // Only spent UTXOs carrying both identity fields (with an in-range
-        // index) produce keys; created UTXOs never do.
         assert_eq!(
-            spent_utxo_keys(&tx_data),
+            apply_unshielded_tx(&mut Vec::new(), &tx_data).unwrap(),
             vec![SpentUtxoKey {
                 intent_hash: "abcd".into(),
                 output_index: 2,

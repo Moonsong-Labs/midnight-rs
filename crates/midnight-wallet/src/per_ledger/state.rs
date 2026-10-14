@@ -923,11 +923,7 @@ impl Wallet {
         // Filter out UTXOs reserved by recent (still-pending) builds so the
         // selector doesn't re-pick them before the indexer confirms the
         // spend.
-        let pending_unshielded: std::collections::HashSet<(String, i64)> = self
-            .pending
-            .unshielded_keys()
-            .map(|k| (k.intent_hash.clone(), k.output_index as i64))
-            .collect();
+        let pending_unshielded: Vec<&SpentUtxoKey> = self.pending.unshielded_keys().collect();
 
         {
             let mut guard = ctx
@@ -941,12 +937,9 @@ impl Wallet {
             // and synthesizes inputs the chain will reject.
             let mut utxo_state = (*ledger_state.utxo).clone();
             for tracked in &self.unshielded_utxos {
-                let key = match (&tracked.intent_hash, tracked.output_index) {
-                    (Some(h), Some(idx)) => Some((h.clone(), idx)),
-                    _ => None,
-                };
-                if let Some(k) = key
-                    && pending_unshielded.contains(&k)
+                if tracked
+                    .spent_key()
+                    .is_some_and(|key| pending_unshielded.contains(&&key))
                 {
                     continue;
                 }
