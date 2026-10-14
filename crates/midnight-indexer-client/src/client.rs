@@ -14,7 +14,7 @@ const GRAPHQL_PATH: &str = "/api/v3/graphql";
 /// Returns the GraphQL endpoint for an indexer URL.
 ///
 /// Keeps a URL whose path ends in `/graphql`, and drops a `/ws` that follows
-/// `/graphql`. Appends `/api/v3/graphql` to any other URL.
+/// `/graphql`. Appends [`GRAPHQL_PATH`] to any other URL.
 pub(crate) fn graphql_url(base: &str) -> String {
     let base = base.trim_end_matches('/');
     let base = match base.strip_suffix("/ws") {
