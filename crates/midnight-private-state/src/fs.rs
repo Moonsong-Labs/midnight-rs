@@ -58,7 +58,8 @@ const ADDRESS_MARKER: &str = "address.txt";
 #[serde(deny_unknown_fields)]
 struct KeyRecord {
     address: String,
-    data: String,
+    #[serde(with = "crate::base64_bytes")]
+    data: Vec<u8>,
 }
 
 /// One entry in a private-state export: the address it belongs to plus the
@@ -485,16 +486,13 @@ impl PrivateStateProvider for FsPrivateStateProvider {
     async fn set_signing_key(&self, address: &str, key: &[u8]) -> Result<(), PrivateStateError> {
         let rec = KeyRecord {
             address: address.to_string(),
-            data: encode_b64(key),
+            data: key.to_vec(),
         };
         self.write_json_atomic(&self.key_path(address), &rec)
     }
 
     async fn get_signing_key(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
-        match read_json_opt::<KeyRecord>(&self.key_path(address))? {
-            Some(rec) => Ok(Some(decode_b64(&rec.data)?)),
-            None => Ok(None),
-        }
+        Ok(read_json_opt::<KeyRecord>(&self.key_path(address))?.map(|rec| rec.data))
     }
 
     async fn remove_signing_key(&self, address: &str) -> Result<(), PrivateStateError> {
@@ -532,14 +530,6 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         opts.check_password()?;
         let mut records: Vec<KeyRecord> = Vec::new();
         for (path, rec) in read_json_dir::<KeyRecord>(&self.keys_dir())? {
-            // Validate base64 up front so a corrupt on-disk record
-            // doesn't escape into the export and break the importer.
-            decode_b64(&rec.data).map_err(|_| {
-                PrivateStateError::InvalidFormat(format!(
-                    "malformed signing-key record on disk at {}",
-                    path.display()
-                ))
-            })?;
             // Cross-check the filename: a signing-key file at
             // `<sha256(address)>.json` whose JSON `address` field
             // has been edited would otherwise migrate the key to
@@ -575,14 +565,10 @@ impl PrivateStateProvider for FsPrivateStateProvider {
     ) -> Result<ImportResult, PrivateStateError> {
         let records: Vec<KeyRecord> = crypto::open(FORMAT_KEYS, data, opts)?;
 
-        // Resolve each record to its path; eagerly base64-decode so a corrupt
-        // entry aborts before any file is written.
-        let mut resolved = Vec::with_capacity(records.len());
-        for rec in records {
-            decode_b64(&rec.data)?;
-            let path = self.key_path(&rec.address);
-            resolved.push((path, rec));
-        }
+        let resolved: Vec<(PathBuf, KeyRecord)> = records
+            .into_iter()
+            .map(|rec| (self.key_path(&rec.address), rec))
+            .collect();
         reject_duplicate_paths(&resolved)?;
 
         if opts.conflict == ConflictStrategy::Error
@@ -1161,7 +1147,8 @@ fn not_found_as_none<T>(
 fn read_json_opt<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, PrivateStateError> {
     not_found_as_none(fs::read(path), "read", path)?
         .map(|bytes| {
-            serde_json::from_slice(&bytes).map_err(|e| PrivateStateError::Serialize(e.to_string()))
+            serde_json::from_slice(&bytes)
+                .map_err(|e| PrivateStateError::Serialize(format!("{}: {e}", path.display())))
         })
         .transpose()
 }
@@ -1174,18 +1161,6 @@ fn remove_file_opt(path: &Path) -> Result<(), PrivateStateError> {
 fn clear_dir(dir: &Path) -> Result<(), PrivateStateError> {
     not_found_as_none(fs::remove_dir_all(dir), "clear", dir)?;
     Ok(())
-}
-
-fn encode_b64(bytes: &[u8]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(bytes)
-}
-
-fn decode_b64(s: &str) -> Result<Vec<u8>, PrivateStateError> {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(s)
-        .map_err(|e| PrivateStateError::InvalidFormat(format!("data is not base64: {e}")))
 }
 
 fn parse_hash(s: &str) -> Result<[u8; 32], PrivateStateError> {
@@ -1652,17 +1627,20 @@ mod tests {
         p.set_signing_key("0200aa", b"k").await.unwrap();
         // Corrupt the file in place: replace `data` with non-base64.
         let key_path = p.key_path("0200aa");
-        let mut rec: KeyRecord = read_json_opt(&key_path).unwrap().unwrap();
-        rec.data = "!!!not-base64!!!".into();
-        p.write_json_atomic(&key_path, &rec).unwrap();
+        fs::write(
+            &key_path,
+            r#"{"address":"0200aa","data":"!!!not-base64!!!"}"#,
+        )
+        .unwrap();
 
         let err = p
             .export_signing_keys(&ExportOptions::new(PW))
             .await
             .unwrap_err();
         assert!(
-            matches!(err, PrivateStateError::InvalidFormat(_)),
-            "expected InvalidFormat, got {err:?}"
+            matches!(err, PrivateStateError::Serialize(ref m)
+                if m.contains(&key_path.display().to_string())),
+            "expected Serialize naming the file, got {err:?}"
         );
     }
 
