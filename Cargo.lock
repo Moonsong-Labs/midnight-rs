@@ -3596,7 +3596,6 @@ dependencies = [
  "midnight-helpers",
  "midnight-indexer-client",
  "midnight-provider",
- "midnight-serialize",
  "midnight-types",
  "midnight-wallet-facade",
  "serde",
