@@ -1,0 +1,64 @@
+//! Helpers for the test binaries of this crate. Each binary includes this
+//! module with `mod common;`.
+
+#![allow(dead_code, reason = "each test binary uses a subset of the helpers")]
+
+use midnight_provider::{MidnightProvider, Network};
+use midnight_wallet::Wallet;
+
+/// The seed of the wallet that the dev devnet funds at genesis.
+pub(crate) const DEV_WALLET_SEED: &str =
+    "0000000000000000000000000000000000000000000000000000000000000001";
+
+/// A second seed, for a wallet that a test pays to.
+pub(crate) const RECIPIENT_SEED: &str =
+    "0000000000000000000000000000000000000000000000000000000000000002";
+
+/// The devnet's node and indexer URLs, from `MIDNIGHT_NODE_URL` and
+/// `MIDNIGHT_INDEXER_URL`.
+///
+/// Returns `None` after a skip line when either variable is missing.
+///
+/// # Panics
+///
+/// When either variable is missing while `MIDNIGHT_E2E` is set. The make
+/// targets that run the devnet tests set it, so a test that they run never
+/// skips.
+pub(crate) fn devnet_urls() -> Option<(String, String)> {
+    match (
+        std::env::var("MIDNIGHT_NODE_URL"),
+        std::env::var("MIDNIGHT_INDEXER_URL"),
+    ) {
+        (Ok(node_url), Ok(indexer_url)) => Some((node_url, indexer_url)),
+        _ if std::env::var_os("MIDNIGHT_E2E").is_some() => {
+            panic!("MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL is missing while MIDNIGHT_E2E is set")
+        }
+        _ => {
+            eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+            None
+        }
+    }
+}
+
+/// The wallet of `seed` on the undeployed network, synced through `provider`.
+///
+/// # Panics
+///
+/// When `seed` is not a 32-byte hex seed, or when the sync fails.
+pub(crate) async fn synced_wallet(provider: &MidnightProvider, seed: &str) -> Wallet {
+    Wallet::from_seed(seed)
+        .unwrap()
+        .with_network(Network::Undeployed)
+        .sync(provider)
+        .await
+        .unwrap_or_else(|e| panic!("sync of seed {seed}: {e:?}"))
+}
+
+/// The compactc output directory of the devnet contract `contract`, which
+/// holds `compiler/`, `keys/` and `zkir/`.
+pub(crate) fn compiled_dir(contract: &str) -> String {
+    format!(
+        "{}/../../devnet/contracts/{contract}/compiled",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}

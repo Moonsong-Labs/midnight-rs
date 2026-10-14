@@ -9,6 +9,8 @@
 //! [`fixtures_dir`] and [`counter_zk_dir`] for the two layouts and the
 //! variables that override them.
 
+mod common;
+
 use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
     StorageHashMap,
@@ -17,7 +19,6 @@ use midnight_contract::ContractMaintenanceVerifyingKey;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
-use midnight_wallet::Wallet;
 
 use compact_codegen::ir;
 use compact_codegen::types::ContractInfo;
@@ -65,13 +66,7 @@ fn fixtures_dir() -> String {
 /// different layout from [`fixtures_dir`] and cannot be served by the same
 /// path. Defaults to the committed devnet artifacts.
 fn counter_zk_dir() -> String {
-    env_dir("COUNTER_KEYED_DIR").unwrap_or_else(|| {
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../devnet/contracts/counter/compiled"
-        )
-        .to_string()
-    })
+    env_dir("COUNTER_KEYED_DIR").unwrap_or_else(|| common::compiled_dir("counter"))
 }
 
 fn load_contract_info(compiled_dir: &str, contract: &str) -> ContractInfo {
@@ -829,25 +824,12 @@ async fn governance_deploy_then_apply_both_updates() {
     use midnight_contract::{Contract, NodeBlockHash, SigningKey};
     use midnight_onchain_runtime::state::EntryPointBuf;
 
-    let (node_url, indexer_url) = match (
-        std::env::var("MIDNIGHT_NODE_URL").ok(),
-        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
-    ) {
-        (Some(n), Some(i)) => (n, i),
-        _ => {
-            eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
-            return;
-        }
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
+        return;
     };
 
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&provider)
-            .await
-            .expect("indexer sync should succeed");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let keys_dir = counter_zk_dir();

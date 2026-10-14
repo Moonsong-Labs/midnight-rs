@@ -11,41 +11,27 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
+mod common;
+
 mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
-use midnight_provider::{DustlessBuilder, MidnightProvider, Network};
-use midnight_wallet::Wallet;
-
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/counter/compiled"
-);
-const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+use midnight_provider::{DustlessBuilder, MidnightProvider};
 
 #[tokio::test]
 async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .unwrap()
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(common::compiled_dir("counter"))
         .send()
         .await
         .expect("submit deploy")

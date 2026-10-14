@@ -24,25 +24,20 @@
 //! release ceremony) lives in that repo, which has the gateway contract and the
 //! ECDSA monitor; this harness proves the SDK half of the acceptance locally.
 
+mod common;
+
 use compact_bindgen::AlignedValue;
 use midnight_contract::runtime::Value;
 use midnight_contract::{Contract, ShieldedInputs};
-use midnight_wallet::Wallet;
 
 #[tokio::test]
 async fn call_circuit_that_spends_the_callers_shielded_coin() {
-    let (node_url, indexer_url, dir) = match (
-        std::env::var("MIDNIGHT_NODE_URL").ok(),
-        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
-        std::env::var("RECEIVE_SHIELDED_DIR").ok(),
-    ) {
-        (Some(n), Some(i), Some(d)) => (n, i, d),
-        _ => {
-            eprintln!(
-                "skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL + RECEIVE_SHIELDED_DIR"
-            );
-            return;
-        }
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
+        return;
+    };
+    let Ok(dir) = std::env::var("RECEIVE_SHIELDED_DIR") else {
+        eprintln!("skipping: needs RECEIVE_SHIELDED_DIR");
+        return;
     };
     let circuit_name =
         std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
@@ -69,13 +64,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
 
     // --- Funder wallet syncs and deploys the fixture ---
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&provider)
-            .await
-            .expect("funder sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     // --- Gap 1: address a specific spendable coin (with its nonce) ---
@@ -167,18 +156,12 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
 /// half.
 #[tokio::test]
 async fn attaching_more_than_the_circuit_receives_returns_change() {
-    let (node_url, indexer_url, dir) = match (
-        std::env::var("MIDNIGHT_NODE_URL").ok(),
-        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
-        std::env::var("RECEIVE_SHIELDED_DIR").ok(),
-    ) {
-        (Some(n), Some(i), Some(d)) => (n, i, d),
-        _ => {
-            eprintln!(
-                "skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL + RECEIVE_SHIELDED_DIR"
-            );
-            return;
-        }
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
+        return;
+    };
+    let Ok(dir) = std::env::var("RECEIVE_SHIELDED_DIR") else {
+        eprintln!("skipping: needs RECEIVE_SHIELDED_DIR");
+        return;
     };
     let circuit_name =
         std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
@@ -203,13 +186,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
         .expect("circuit must take a ShieldedCoinInfo argument");
 
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&provider)
-            .await
-            .expect("funder sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let coins = provider

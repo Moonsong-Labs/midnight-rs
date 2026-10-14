@@ -18,6 +18,8 @@
 //! this skips wherever compactc has not run. Override the directory with
 //! `PAYOUT_KEYED_DIR`.
 
+mod common;
+
 use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
 };
@@ -25,7 +27,6 @@ use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
 use midnight_provider::UnshieldedTokenType;
-use midnight_wallet::Wallet;
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];
 const MINTED: u128 = 1_000;
@@ -33,20 +34,11 @@ const PAID: u128 = 10;
 
 #[tokio::test]
 async fn a_contract_pays_an_unshielded_token_to_a_user() {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
-    let keyed = std::env::var("PAYOUT_KEYED_DIR").unwrap_or_else(|_| {
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../devnet/contracts/unshielded-payout/compiled"
-        )
-        .to_string()
-    });
+    let keyed = std::env::var("PAYOUT_KEYED_DIR")
+        .unwrap_or_else(|_| common::compiled_dir("unshielded-payout"));
     let artifact = format!("{keyed}/compiler/analyzed-ir.sexp");
     if !std::path::Path::new(&artifact).exists() {
         eprintln!("skipping: {artifact} is missing; run `make compile-contracts` first");
@@ -66,13 +58,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     };
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&provider)
-            .await
-            .expect("sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let contract = Contract::deploy(provider)
@@ -115,13 +101,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     // A different wallet from the one that deploys and pays the fees, so an
     // output wrongly owned by the caller would fail this.
     let recipient_provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000002")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&recipient_provider)
-            .await
-            .expect("recipient sync");
+    let wallet = common::synced_wallet(&recipient_provider, common::RECIPIENT_SEED).await;
     let recipient = midnight_helpers::ledger_9::UnshieldedWallet::default(
         midnight_types::ledger_9::convert::IntoLedger::into_ledger(wallet.seed()),
     )

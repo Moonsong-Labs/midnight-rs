@@ -9,6 +9,8 @@
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
 
+mod common;
+
 mod call_context {
     compact_bindgen::contract!(
         "../../devnet/contracts/call-context/compiled/compiler/analyzed-ir.sexp"
@@ -17,46 +19,29 @@ mod call_context {
 
 use compact_bindgen::Bytes;
 use midnight_contract::DustlessBuilder;
-use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::Wallet;
+use midnight_provider::MidnightProvider;
 
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/call-context/compiled"
-);
-const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 const DOMAIN_SEP: [u8; 32] = [0x5c; 32];
 const MINTED: u64 = 1_000;
 
 #[tokio::test]
 async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL is missing under make test-e2e");
-        }
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
+    let zk_keys_dir = common::compiled_dir("call-context");
     assert!(
-        std::path::Path::new(ZK_KEYS_DIR).join("keys").is_dir(),
-        "{ZK_KEYS_DIR}/keys is missing; run `make compile-contracts CONTRACTS=call-context`"
+        std::path::Path::new(&zk_keys_dir).join("keys").is_dir(),
+        "{zk_keys_dir}/keys is missing; run `make compile-contracts CONTRACTS=call-context`"
     );
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .unwrap()
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let contract = call_context::Contract::deploy(&provider)
         .with_initial_state(call_context::LedgerInitialState::default())
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(&zk_keys_dir)
         .await
         .expect("deploy");
 
@@ -94,7 +79,7 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
     // The unlock above landed after `hash`, so the best block's time is past
     // `now + 1`. Only a call that runs at the time of its pin passes `before`.
     call_context::Contract::at(&provider, contract.address())
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(&zk_keys_dir)
         .at_block(hash)
         .build()
         .circuits()

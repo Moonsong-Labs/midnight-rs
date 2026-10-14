@@ -7,6 +7,8 @@
 //! Gated on `MIDNIGHT_NODE_URL` / `MIDNIGHT_INDEXER_URL` (a running devnet +
 //! indexer).
 
+mod common;
+
 mod shielded_mint {
     compact_bindgen::contract!(
         "../../devnet/contracts/shielded-mint/compiled/compiler/analyzed-ir.sexp"
@@ -14,48 +16,29 @@ mod shielded_mint {
 }
 
 use compact_bindgen::Bytes;
-use midnight_wallet::{Seed, Wallet, WalletBuilder};
-
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/shielded-mint/compiled"
-);
+use midnight_wallet::Seed;
 
 #[tokio::test]
 async fn mint_to_external_recipient_discovered_by_sync() {
-    let (node_url, indexer_url) = match (
-        std::env::var("MIDNIGHT_NODE_URL").ok(),
-        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
-    ) {
-        (Some(n), Some(i)) => (n, i),
-        _ => {
-            eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
-            return;
-        }
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
+        return;
     };
 
     // --- Recipient (cpk, epk) from a second seed (derived, never synced for
     //     the mint itself) ---
-    let recip_seed =
-        Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000002").unwrap();
+    let recip_seed = Seed::from_hex(common::RECIPIENT_SEED).unwrap();
     let recip = recip_seed.shielded_recipient();
     let cpk = recip.coin_public_key;
     let epk = recip.enc_public_key;
 
     // --- Funder wallet deploys the mint contract ---
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&provider)
-            .await
-            .expect("funder sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let contract = shielded_mint::Contract::deploy(provider)
         .with_initial_state(shielded_mint::LedgerInitialState)
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(common::compiled_dir("shielded-mint"))
         .await
         .expect("deploy mint contract");
     eprintln!("deployed mint contract at {}", contract.address());
@@ -98,11 +81,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
 
     // --- Recipient syncs normally and must discover the minted coin ---
     let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = WalletBuilder::new(&recip_seed)
-        .with_network(midnight_provider::Network::Undeployed)
-        .sync(&recip_provider)
-        .await
-        .expect("recipient sync");
+    let wallet = common::synced_wallet(&recip_provider, common::RECIPIENT_SEED).await;
     let recip_provider = recip_provider.with_wallet(wallet);
 
     // The call above returns once the chain finalized the mint, which is
