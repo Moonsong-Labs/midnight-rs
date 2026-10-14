@@ -265,19 +265,8 @@ impl<'a> MerkleTreeAccessor<'a> {
     /// the past roots of a `HistoricMerkleTree`. Read slot `[2]` of `sv` for
     /// them.
     pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
-        let arr = match sv {
-            StateValue::Array(arr) => arr,
-            other => {
-                return Err(StateError::UnexpectedVariant {
-                    expected: "Array",
-                    actual: crate::nav::variant_name(other),
-                });
-            }
-        };
-
         // Element [0]: BoundedMerkleTree
-        let tree_sv = arr.get(0).ok_or(StateError::IndexOutOfBounds(0))?;
-        let tree = match tree_sv {
+        let tree = match crate::nav::get_field(sv, 0)? {
             StateValue::BoundedMerkleTree(t) => t,
             other => {
                 return Err(StateError::UnexpectedVariant {
@@ -288,7 +277,7 @@ impl<'a> MerkleTreeAccessor<'a> {
         };
 
         // Element [1]: Cell containing u64 (first_free counter)
-        let first_free = crate::nav::cell_as(arr.get(1).ok_or(StateError::IndexOutOfBounds(1))?)?;
+        let first_free = crate::nav::cell_as(crate::nav::get_field(sv, 1)?)?;
 
         Ok(Self { tree, first_free })
     }
