@@ -519,14 +519,17 @@ fn check_operand(o: &ir::Operand) -> Result<(), ArtifactError> {
     }
 }
 
+/// Load the artifact at `rel`, a path relative to this crate's manifest
+/// directory.
+#[cfg(test)]
+pub(crate) fn load_fixture(rel: &str) -> ContractInfo {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+    load(&path).unwrap_or_else(|e| panic!("load {}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn fixture(rel: &str) -> ContractInfo {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-        load(&path).expect("the artifact loads")
-    }
 
     /// The runtime checks the coin commitment before it runs the
     /// instructions, and that check is not one of them, so the interpreter
@@ -565,7 +568,8 @@ mod tests {
 
     #[test]
     fn loads_the_bboard_artifact() {
-        let info = fixture("../../../tests/conformance/fixtures/bboard/compiler/analyzed-ir.sexp");
+        let info =
+            load_fixture("../../../tests/conformance/fixtures/bboard/compiler/analyzed-ir.sexp");
         let names: Vec<_> = info.circuits.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"post") && names.contains(&"public_key"));
         let message = info
@@ -583,7 +587,8 @@ mod tests {
 
     #[test]
     fn loads_the_gateway_artifact() {
-        let info = fixture("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
+        let info =
+            load_fixture("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
         assert_eq!(info.circuits.len(), 6);
         assert_eq!(info.ledger.len(), 10);
         let threshold = info.ledger.iter().find(|f| f.name == "threshold").unwrap();

@@ -152,6 +152,7 @@ mod tests {
     use super::helpers::{make_ident, to_pascal_case};
     use super::types::{type_to_tokens, uint_tokens};
     use super::*;
+    use crate::artifact::load_fixture;
 
     #[test]
     fn uint_type_mapping() {
@@ -309,9 +310,8 @@ mod tests {
     /// argument and then sent unit in its place.
     #[test]
     fn opaque_arguments_are_encoded_not_dropped() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../midnight-contract/tests/fixtures/bboard/compiler/analyzed-ir.sexp");
-        let info = crate::artifact::load(&path).unwrap();
+        let info =
+            load_fixture("../../midnight-contract/tests/fixtures/bboard/compiler/analyzed-ir.sexp");
         let generated = generated_source(&info, "Bboard");
 
         assert!(
@@ -333,9 +333,8 @@ mod tests {
     /// a typed one, both compile.
     #[test]
     fn contract_arguments_are_typed_and_encoded() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/conformance/fixtures/peers/compiler/analyzed-ir.sexp");
-        let info = crate::artifact::load(&path).unwrap();
+        let info =
+            load_fixture("../../../tests/conformance/fixtures/peers/compiler/analyzed-ir.sexp");
         let flat = generated_source(&info, "Peers")
             .split_whitespace()
             .collect::<String>()
@@ -355,9 +354,8 @@ mod tests {
 
     #[test]
     fn generate_gateway_crate() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
-        let info = crate::artifact::load(&path).unwrap();
+        let info =
+            load_fixture("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
         let generated = generated_source(&info, "Gateway");
 
         // Ledger types and accessors
@@ -418,10 +416,9 @@ mod tests {
 
     #[test]
     fn generate_counter_crate() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        let info = load_fixture(
             "../../../crates/midnight-contract/tests/fixtures/counter/compiler/analyzed-ir.sexp",
         );
-        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Counter");
 
         // Counter has one exported ledger field: round (Counter storage)
@@ -462,10 +459,9 @@ mod tests {
 
     #[test]
     fn generate_election_crate() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        let info = load_fixture(
             "../../../crates/midnight-contract/tests/fixtures/election/compiler/analyzed-ir.sexp",
         );
-        let info = crate::artifact::load(&path).expect("election analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Election");
 
         // Multiple circuits
@@ -524,10 +520,9 @@ mod tests {
 
     #[test]
     fn generate_tiny_crate() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        let info = load_fixture(
             "../../../crates/midnight-contract/tests/fixtures/tiny/compiler/analyzed-ir.sexp",
         );
-        let info = crate::artifact::load(&path).expect("tiny analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Tiny");
 
         // Circuit types
@@ -546,9 +541,8 @@ mod tests {
 
     #[test]
     fn generate_zerocash_crate() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/zerocash/compiler/analyzed-ir.sexp");
-        let info = crate::artifact::load(&path).expect("zerocash analyzed-ir.sexp should parse");
+        let info =
+            load_fixture("../../../tests/fixtures/compiled/zerocash/compiler/analyzed-ir.sexp");
         let generated = generated_source(&info, "Zerocash");
 
         // Circuit types
@@ -572,9 +566,8 @@ mod tests {
 
     #[test]
     fn generate_many_fields_crate() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/many-fields/compiler/analyzed-ir.sexp");
-        let info = crate::artifact::load(&path).unwrap();
+        let info =
+            load_fixture("../../../tests/fixtures/compiled/many-fields/compiler/analyzed-ir.sexp");
         let generated = generated_source(&info, "ManyFields");
 
         // All 16 fields should have accessors
@@ -613,9 +606,8 @@ mod tests {
 
     #[test]
     fn generate_counter_with_ir() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/conformance/fixtures/counter/compiler/analyzed-ir.sexp");
-        let info = crate::artifact::load(&path).unwrap();
+        let info =
+            load_fixture("../../../tests/conformance/fixtures/counter/compiler/analyzed-ir.sexp");
         assert!(
             info.circuits.iter().any(|c| !c.pure()),
             "the counter fixture should carry an on-chain circuit"
@@ -650,9 +642,8 @@ mod tests {
 
     #[test]
     fn generate_gateway_initial_state() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
-        let info = crate::artifact::load(&path).unwrap();
+        let info =
+            load_fixture("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
         let generated = generated_source(&info, "Gateway");
 
         // InitialState struct
@@ -718,10 +709,9 @@ mod tests {
     #[test]
     fn the_initial_state_doc_notes_only_a_real_constructor() {
         let initial_state_doc = |fixture: &str, name: &str| {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            let info = load_fixture(&format!(
                 "../../../tests/conformance/fixtures/{fixture}/compiler/analyzed-ir.sexp"
             ));
-            let info = crate::artifact::load(&path).unwrap();
             let generated = generated_source(&info, name);
             doc_above(&generated, &format!("pub struct {name}InitialState"))
         };
