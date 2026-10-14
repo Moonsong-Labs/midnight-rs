@@ -5,9 +5,16 @@ use crate::ir::Type;
 use crate::types::{Circuit, FieldIndex, LedgerField, StorageKind};
 
 use super::circuit_calls::typed_params;
+use super::circuits::return_type_ident;
+use super::constants::field_const_ident;
 use super::emit_ir::type_ref;
 use super::helpers::{make_ident, to_pascal_case};
 use super::types::{encode_to_aligned_value, type_to_tokens};
+
+/// The name of the lazy query struct of the contract `contract_name`.
+fn query_struct_ident(contract_name: &str) -> Ident {
+    format_ident!("{}Query", contract_name)
+}
 
 pub(crate) fn emit_ledger_wrapper(
     fields: &[LedgerField],
@@ -16,7 +23,7 @@ pub(crate) fn emit_ledger_wrapper(
     info: &crate::types::ContractInfo,
 ) -> TokenStream {
     let struct_name = format_ident!("{}", name);
-    let query_struct_name = format_ident!("{}Query", name);
+    let query_struct_name = query_struct_ident(name);
 
     // Circuits that carry an on-chain entry point, and so a verifier key.
     // Pure circuits are evaluated off-chain and have neither.
@@ -34,7 +41,7 @@ pub(crate) fn emit_ledger_wrapper(
     let accessors: Vec<_> = fields
         .iter()
         .map(|field| {
-            let const_name = format_ident!("FIELD_{}", field.name.to_uppercase());
+            let const_name = field_const_ident(&field.name);
             emit_field_accessor(field, &const_name)
         })
         .collect();
@@ -776,12 +783,12 @@ fn merkle_tree_default(field: &LedgerField) -> TokenStream {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> TokenStream {
-    let struct_name = format_ident!("{}Query", name);
+    let struct_name = query_struct_ident(name);
 
     let accessors: Vec<_> = fields
         .iter()
         .filter_map(|field| {
-            let const_name = format_ident!("FIELD_{}", field.name.to_uppercase());
+            let const_name = field_const_ident(&field.name);
             emit_lazy_field_accessor(field, &const_name)
         })
         .collect();
@@ -1045,8 +1052,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             continue;
         }
 
-        let sanitized = circuit.name.replace(['$', '-'], "_");
-        let method_name = format_ident!("{}", sanitized);
+        let method_name = make_ident(&circuit.name);
         let call_ty = format_ident!("{}CallBuilder", to_pascal_case(&circuit.name));
         let circuit_name_str = &circuit.name;
 
@@ -1354,7 +1360,7 @@ pub(crate) fn emit_simulator(
         .map(|circuit| {
             let method_name = make_ident(&circuit.name);
             let params = typed_params(circuit.arguments());
-            let return_ty = format_ident!("{}Return", to_pascal_case(&circuit.name));
+            let return_ty = return_type_ident(&circuit.name);
             let setup = circuit_setup(&ledger_name, circuit);
             let (_, decode) = circuit_decode(circuit);
             let doc = format!(
