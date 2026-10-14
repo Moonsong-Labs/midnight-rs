@@ -9,9 +9,10 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::ir::Type;
+use crate::ir::{Argument, Type};
 use crate::types::ContractInfo;
 
+use super::helpers::make_ident;
 use super::types::{encode_to_aligned_value, type_to_tokens};
 
 /// Emit the contract's declarations as typed constructor functions:
@@ -179,6 +180,23 @@ pub(crate) fn has_typed_conversion(ty: &Type) -> bool {
         // Rejected at load by `artifact::check_type`; unreachable here.
         Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => false,
     }
+}
+
+/// The parameter list for `arguments`, one `name: Type` per argument. An
+/// argument with no typed conversion takes a `runtime::Value`.
+pub(super) fn typed_params(arguments: &[Argument]) -> Vec<TokenStream> {
+    arguments
+        .iter()
+        .map(|arg| {
+            let name = make_ident(arg.name.name());
+            if has_typed_conversion(&arg.ty) {
+                let ty = type_to_tokens(&arg.ty);
+                quote! { #name: #ty }
+            } else {
+                quote! { #name: midnight_contract::runtime::Value }
+            }
+        })
+        .collect()
 }
 
 /// Generate the expression to convert a typed Rust argument to

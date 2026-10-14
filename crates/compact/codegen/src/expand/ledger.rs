@@ -4,6 +4,7 @@ use quote::{format_ident, quote};
 use crate::ir::Type;
 use crate::types::{Circuit, FieldIndex, LedgerField, StorageKind};
 
+use super::circuit_calls::typed_params;
 use super::emit_ir::type_ref;
 use super::helpers::{make_ident, to_pascal_case};
 use super::types::{encode_to_aligned_value, type_to_tokens};
@@ -1090,7 +1091,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         // Constructor params / call-struct fields (identical syntax) and the
         // destructure idents, each with a leading comma.
-        let param_list = circuit_params(circuit);
+        let param_list = typed_params(circuit.arguments());
         let ident_list: Vec<_> = circuit
             .arguments()
             .iter()
@@ -1352,7 +1353,7 @@ pub(crate) fn emit_simulator(
         .filter(|circuit| !circuit.pure())
         .map(|circuit| {
             let method_name = make_ident(&circuit.name);
-            let params = circuit_params(circuit);
+            let params = typed_params(circuit.arguments());
             let return_ty = format_ident!("{}Return", to_pascal_case(&circuit.name));
             let setup = circuit_setup(&ledger_name, circuit);
             let (_, decode) = circuit_decode(circuit);
@@ -1469,24 +1470,6 @@ pub(crate) fn emit_simulator(
             #(#methods)*
         }
     }
-}
-
-/// The parameter list of `circuit`, one `name: Type` per argument. An argument
-/// with no typed conversion takes a `runtime::Value`.
-pub(super) fn circuit_params(circuit: &Circuit) -> Vec<TokenStream> {
-    circuit
-        .arguments()
-        .iter()
-        .map(|arg| {
-            let name = make_ident(arg.name.name());
-            if super::circuit_calls::has_typed_conversion(&arg.ty) {
-                let ty = type_to_tokens(&arg.ty);
-                quote! { #name: #ty }
-            } else {
-                quote! { #name: midnight_contract::runtime::Value }
-            }
-        })
-        .collect()
 }
 
 /// The statements that run before generated code executes `circuit`.

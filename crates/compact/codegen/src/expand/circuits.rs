@@ -5,10 +5,11 @@ use crate::ir::{Argument, Type, Witness};
 use crate::types::Circuit;
 
 use super::circuit_calls::{
-    has_typed_conversion, is_void_type, type_to_value_conversion, value_to_type_conversion,
+    has_typed_conversion, is_void_type, type_to_value_conversion, typed_params,
+    value_to_type_conversion,
 };
 use super::helpers::{make_ident, to_pascal_case};
-use super::ledger::{circuit_decode, circuit_params, circuit_setup};
+use super::ledger::{circuit_decode, circuit_setup};
 use super::types::type_to_tokens;
 
 pub(crate) fn emit_circuit_types(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
@@ -58,7 +59,7 @@ pub(crate) fn emit_pure_circuits(circuits: &[Circuit], contract_name: &str) -> T
         .filter(|circuit| circuit.pure())
         .map(|circuit| {
             let fn_name = make_ident(&circuit.name);
-            let params = circuit_params(circuit);
+            let params = typed_params(circuit.arguments());
             let return_ty = format_ident!("{}Return", to_pascal_case(&circuit.name));
             let setup = circuit_setup(&ledger_name, circuit);
             let (_, decode) = circuit_decode(circuit);
@@ -108,15 +109,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     // Trait method signatures.
     let trait_methods = witnesses.iter().map(|w| {
         let method = format_ident!("{}", w.name.name().replace(['$', '-'], "_"));
-        let params = w.arguments.iter().map(|arg| {
-            let pid = make_ident(arg.name.name());
-            let pty = if has_typed_conversion(&arg.ty) {
-                type_to_tokens(&arg.ty)
-            } else {
-                quote! { midnight_contract::runtime::Value }
-            };
-            quote! { #pid: #pty }
-        });
+        let params = typed_params(&w.arguments);
         let ret = type_to_tokens(&w.result_type);
         let doc = format!("Witness `{}`.", w.name.name());
         quote! {
