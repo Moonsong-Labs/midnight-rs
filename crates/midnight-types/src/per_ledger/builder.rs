@@ -173,6 +173,13 @@ fn dust_nullifiers(batches: &[DustSpendBatch]) -> Vec<crate::DustNullifier> {
         .collect()
 }
 
+fn flat_spends(batches: &[DustSpendBatch]) -> Vec<DustSpend<ProofPreimageMarker, DefaultDB>> {
+    batches
+        .iter()
+        .flat_map(|b| b.spends.iter().cloned())
+        .collect()
+}
+
 fn sdk_nullifiers(nullifiers: &[Nullifier]) -> Vec<crate::Nullifier> {
     nullifiers.iter().map(|n| n.into_sdk()).collect()
 }
@@ -868,17 +875,27 @@ async fn assemble_unproven(
 pub async fn build_no_validate(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
 ) -> Result<BuiltTransaction, WalletError> {
-    let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
-
-    if tx_info.funding_seeds.is_empty() && tx_info.dust_registrations.is_empty() {
-        let finalized = prove_tx_no_validate(&mut tx_info, tx).await?;
-        Ok(BuiltTransaction {
-            finalized,
-            dust_batches: Vec::new(),
-        })
-    } else {
-        pay_fees_no_validate(&mut tx_info, tx, now, ttl).await
+    if pays_own_fee(&tx_info) && !tx_info.mock_proofs_for_fees {
+        let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
+        return balance_fees_with_proofs(&mut tx_info, tx, now, ttl).await;
     }
+    let PreparedTransfer {
+        mut tx_info,
+        tx,
+        dust_batches,
+        ..
+    } = prepare_no_validate(tx_info).await?;
+    let finalized = prove_tx_no_validate(&mut tx_info, tx).await?;
+    Ok(BuiltTransaction {
+        finalized,
+        dust_batches,
+    })
+}
+
+/// Whether `tx_info` draws Dust for its own fee: it names a funding seed or
+/// registers a Dust address.
+fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> bool {
+    !tx_info.funding_seeds.is_empty() || !tx_info.dust_registrations.is_empty()
 }
 
 /// Select the inputs and balance the fee, and stop before proving.
@@ -896,18 +913,17 @@ pub async fn prepare_no_validate(
 ) -> Result<PreparedTransfer, WalletError> {
     let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
 
-    let (tx, dust_batches) =
-        if tx_info.funding_seeds.is_empty() && tx_info.dust_registrations.is_empty() {
-            (tx, Vec::new())
-        } else if tx_info.mock_proofs_for_fees {
-            balance_fees_with_mocks(&mut tx_info, tx, now, ttl)?
-        } else {
-            return Err(WalletError::Transfer(
-                "cannot prepare a self-funded build that prices its fee with real proofs; \
-                 it would prove on every balancing round"
-                    .into(),
-            ));
-        };
+    let (tx, dust_batches) = if !pays_own_fee(&tx_info) {
+        (tx, Vec::new())
+    } else if tx_info.mock_proofs_for_fees {
+        balance_fees_with_mocks(&mut tx_info, tx, now, ttl)?
+    } else {
+        return Err(WalletError::Transfer(
+            "cannot prepare a self-funded build that prices its fee with real proofs; \
+             it would prove on every balancing round"
+                .into(),
+        ));
+    };
 
     Ok(PreparedTransfer::new(tx_info, tx, dust_batches))
 }
@@ -960,10 +976,7 @@ pub fn balance_external(
     let mut tracker = FeeBalanceTracker::default();
     for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
         let batches = gather_dust_spends(&tx_info, tracker.request(), now)?;
-        let spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> = batches
-            .iter()
-            .flat_map(|b| b.spends.iter().cloned())
-            .collect();
+        let spends = flat_spends(&batches);
 
         // The first round draws nothing and prices `external` as it is.
         let fee_tx: Option<UnprovenTx> = (!spends.is_empty()).then(|| {
@@ -1000,14 +1013,13 @@ pub fn balance_external(
     Err(tracker.into_error())
 }
 
-/// Upper bound on fee-balancing rounds in [`pay_fees_no_validate`]. Each
-/// round requests the candidate's full dust need, so in practice the loop
-/// converges in 2-3 rounds; hitting the cap means the fee keeps growing
-/// faster than the spends added to pay it.
+/// Upper bound on the rounds of a fee-balancing loop. Each round requests the
+/// candidate's full dust need, so in practice the loop converges in 2-3
+/// rounds; hitting the cap means the fee keeps growing faster than the spends
+/// added to pay it.
 const MAX_FEE_BALANCE_ITERATIONS: usize = 10;
 
-/// Convergence bookkeeping for the fee-balancing loop in
-/// [`pay_fees_no_validate`].
+/// Convergence bookkeeping for a fee-balancing loop.
 ///
 /// Each round rebuilds the candidate transaction from the original unpaid
 /// `tx`, so dust spends never accumulate across rounds; the request passed
@@ -1071,21 +1083,7 @@ fn balance_fees_with_mocks(
     let mut tracker = FeeBalanceTracker::default();
 
     for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
-        let batches = gather_dust_spends(tx_info, tracker.request(), now)?;
-        let flat_spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> = batches
-            .iter()
-            .flat_map(|b| b.spends.iter().cloned())
-            .collect();
-        let mut paid_tx = tx.clone();
-        apply_dust(
-            tx_info,
-            &mut paid_tx,
-            &flat_spends,
-            tx_info.rng.clone().split(),
-            ttl,
-            now,
-        );
-
+        let (paid_tx, batches) = dust_candidate(tx_info, &tx, tracker.request(), now, ttl)?;
         let mock = paid_tx.mock_prove().map_err(transfer_err("mock_prove"))?;
         let (fee, shortfall) = compute_missing_dust(tx_info, &mock)?;
         if let Some(dust) = shortfall {
@@ -1098,47 +1096,18 @@ fn balance_fees_with_mocks(
     Err(tracker.into_error())
 }
 
-async fn pay_fees_no_validate(
+/// Converge the Dust fee with a real proof of each candidate, and return the
+/// proof of the candidate that balances.
+async fn balance_fees_with_proofs(
     tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
     tx: UnprovenTx,
     now: Timestamp,
     ttl: Timestamp,
 ) -> Result<BuiltTransaction, WalletError> {
-    // Iterations are side-effect-free: `gather_dust_spends` only calls
-    // `DustWallet::speculative_spend`, which takes `&self` and clones the
-    // local state instead of writing it back, and each round rebuilds
-    // `paid_tx` from the original `tx`. The only wallet mutation is
-    // `mark_spent`, reached exclusively through `confirm_dust_spends` on
-    // the success paths below; it must never move inside the loop, or a
-    // retry after an unbalanced round would double-spend the dust the
-    // failed round selected.
-    if tx_info.mock_proofs_for_fees {
-        let (paid_tx, dust_batches) = balance_fees_with_mocks(tx_info, tx, now, ttl)?;
-        let finalized = prove_tx_no_validate(tx_info, paid_tx).await?;
-        return Ok(BuiltTransaction {
-            finalized,
-            dust_batches,
-        });
-    }
-
     let mut tracker = FeeBalanceTracker::default();
 
     for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
-        let batches = gather_dust_spends(tx_info, tracker.request(), now)?;
-        let flat_spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> = batches
-            .iter()
-            .flat_map(|b| b.spends.iter().cloned())
-            .collect();
-        let mut paid_tx = tx.clone();
-        apply_dust(
-            tx_info,
-            &mut paid_tx,
-            &flat_spends,
-            tx_info.rng.clone().split(),
-            ttl,
-            now,
-        );
-
+        let (paid_tx, batches) = dust_candidate(tx_info, &tx, tracker.request(), now, ttl)?;
         let proven = prove_tx_no_validate(tx_info, paid_tx).await?;
         let (fee, shortfall) = compute_missing_dust(tx_info, &proven)?;
         if let Some(dust) = shortfall {
@@ -1152,6 +1121,28 @@ async fn pay_fees_no_validate(
         });
     }
     Err(tracker.into_error())
+}
+
+/// `tx` paid with Dust spends that cover `request`, and the batches those
+/// spends come from.
+fn dust_candidate(
+    tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>,
+    tx: &UnprovenTx,
+    request: u128,
+    now: Timestamp,
+    ttl: Timestamp,
+) -> Result<(UnprovenTx, Vec<DustSpendBatch>), WalletError> {
+    let batches = gather_dust_spends(tx_info, request, now)?;
+    let mut paid_tx = tx.clone();
+    apply_dust(
+        tx_info,
+        &mut paid_tx,
+        &flat_spends(&batches),
+        tx_info.rng.clone().split(),
+        ttl,
+        now,
+    );
+    Ok((paid_tx, batches))
 }
 
 fn gather_dust_spends(
@@ -1177,9 +1168,9 @@ fn gather_dust_spends(
             break;
         }
         // `get`, not `get_mut`: gathering must not mutate wallet state.
-        // The fee-balancing retries in `pay_fees_no_validate` rely on
-        // `speculative_spend` (`&self`) leaving the wallet untouched until
-        // `confirm_dust_spends` applies the chosen batch via `mark_spent`.
+        // The fee-balancing retries rely on `speculative_spend` (`&self`)
+        // leaving the wallet untouched until `confirm_dust_spends` applies the
+        // chosen batch via `mark_spent`.
         let wallet = wallets
             .get(seed)
             .ok_or_else(|| WalletError::Transfer("unrecognized wallet seed".into()))?;
