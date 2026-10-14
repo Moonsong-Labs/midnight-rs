@@ -20,6 +20,7 @@ use midnight_typed_state::{
 };
 use serde_json::Value as Json;
 
+use crate::report::step_report;
 use crate::tagged::{parse_decimal, to_interpreter_value};
 
 /// A witness provider that replays scripted values: for each witness name, a
@@ -100,44 +101,11 @@ impl Fixture {
             compact_codegen::artifact::load_str(analyzed_ir_text).map_err(|e| e.to_string())?;
         Ok(Self { info })
     }
-
-    /// The circuit's IR body, as the SDK's call path receives it (generated
-    /// bindings embed the same typed value as a constructor).
-    pub fn circuit(&self, circuit: &str) -> Result<&compact_codegen::ir::Circuit, String> {
-        self.info
-            .circuits
-            .iter()
-            .find(|c| c.name == circuit)
-            .map(|c| &c.def)
-            .ok_or_else(|| format!("circuit {circuit} not found"))
-    }
-
-    /// Declared argument and result types plus inline struct/enum defs for a
-    /// circuit.
-    pub fn circuit_defs(&self, circuit: &str) -> Result<CircuitMeta, String> {
-        let entry = self
-            .info
-            .circuits
-            .iter()
-            .find(|c| c.name == circuit)
-            .ok_or_else(|| format!("circuit {circuit} not found"))?;
-        let arg_types = circuit_arg_types(entry.arguments());
-        let result_type = entry.result_type().resolved().clone();
-        Ok(CircuitMeta {
-            arg_types,
-            result_type,
-        })
-    }
-}
-
-/// A circuit's declared types and the definitions its IR references.
-pub struct CircuitMeta {
-    pub arg_types: Vec<(String, Type)>,
-    pub result_type: Type,
 }
 
 /// Run one step (a single circuit invocation) of a case at `block_time`, as
-/// the caller that holds `coin_public_key`.
+/// the caller that holds `coin_public_key`, and build its canonical step
+/// report.
 pub fn run_step(
     fixture: &Fixture,
     circuit: &str,
@@ -146,25 +114,27 @@ pub fn run_step(
     witnesses: &ScriptedWitnesses,
     block_time: Timestamp,
     coin_public_key: Option<CoinPublicKey>,
-) -> Result<(Vec<(String, Value)>, ExecutionResult), String> {
-    let circuit_def = fixture.circuit(circuit)?;
-    let meta = fixture.circuit_defs(circuit)?;
+) -> Result<(Json, ExecutionResult), String> {
+    let entry = fixture
+        .info
+        .circuits
+        .iter()
+        .find(|c| c.name == circuit)
+        .ok_or_else(|| format!("circuit {circuit} not found"))?;
+    let arg_types = circuit_arg_types(entry.arguments());
 
-    if args_tagged.len() != meta.arg_types.len() {
+    if args_tagged.len() != arg_types.len() {
         return Err(format!(
             "circuit {circuit} expects {} argument(s), case has {}",
-            meta.arg_types.len(),
+            arg_types.len(),
             args_tagged.len()
         ));
     }
-    let args: Vec<(String, Value)> = meta
-        .arg_types
+    let args: Vec<(&str, Value)> = arg_types
         .iter()
         .zip(args_tagged)
-        .map(|((name, _ty), tagged)| Ok((name.clone(), to_interpreter_value(tagged)?)))
+        .map(|((name, _ty), tagged)| Ok((name.as_str(), to_interpreter_value(tagged)?)))
         .collect::<Result<Vec<_>, String>>()?;
-
-    let arg_refs: Vec<(&str, Value)> = args.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
 
     let program = interpreter::Program::new(
         &fixture.info.helpers,
@@ -172,10 +142,10 @@ pub fn run_step(
         &fixture.info.natives,
     );
     let result = interpreter::execute(
-        circuit_def,
+        &entry.def,
         &program,
         state,
-        &arg_refs,
+        &args,
         interpreter::Env {
             witnesses,
             coin_public_key,
@@ -184,7 +154,12 @@ pub fn run_step(
     )
     .map_err(|e| format!("circuit {circuit}: {e}"))?;
 
-    Ok((args, result))
+    let type_refs: Vec<(&str, Type)> = arg_types
+        .iter()
+        .map(|(n, t)| (n.as_str(), t.clone()))
+        .collect();
+    let report = step_report(circuit, &args, &type_refs, &result);
+    Ok((report, result))
 }
 
 /// Wrap a bare `StateValue` into the harness's normalized `ContractState`,

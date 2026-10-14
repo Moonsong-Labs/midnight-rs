@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use conformance::report::{state_report_json, step_report};
+use conformance::report::state_report_json;
 use conformance::runner::{
     Fixture, ScriptedWitnesses, balance_from_json, coin_public_key_from_json, run_step,
     state_from_value,
@@ -128,7 +128,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
         let witnesses =
             ScriptedWitnesses::from_json(step.get("witnesses")).expect("witness script parses");
 
-        let (args, result) = run_step(
+        let (rust_report, result) = run_step(
             &fixture,
             circuit,
             state,
@@ -142,15 +142,6 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
             .assert_drained()
             .unwrap_or_else(|e| panic!("{fixture_name}/{case_name} step {i} ({circuit}): {e}"));
 
-        let arg_refs: Vec<(&str, midnight_contract::runtime::Value)> =
-            args.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
-        let meta = fixture.circuit_defs(circuit).expect("circuit defs load");
-        let type_refs: Vec<(&str, compact_codegen::ir::Type)> = meta
-            .arg_types
-            .iter()
-            .map(|(n, t)| (n.as_str(), t.clone()))
-            .collect();
-        let rust_report = step_report(circuit, &arg_refs, &type_refs, &result);
         assert_json_eq(
             &format!("{fixture_name}/{case_name} step {i} ({circuit})"),
             &rust_report,
