@@ -8,7 +8,7 @@
 mod common;
 
 use common::{epoch, with_witnesses};
-use compact_bindgen::{AlignedValue, ContractState, InMemoryDB, StateValue};
+use compact_bindgen::AlignedValue;
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::call;
@@ -21,10 +21,6 @@ use compact_codegen::ir::{
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn counter_state(round: u64) -> ContractState<InMemoryDB> {
-    common::contract_state(vec![StateValue::from(round)])
-}
 
 fn id(name: &str) -> Ident {
     Ident(name.to_string())
@@ -133,7 +129,7 @@ fn witness_failure_on_builtin_name_propagates() {
 
     let witnesses = vec![persistent_hash_witness()];
     let program = interpreter::Program::new(&[], &witnesses, &[]);
-    let state = counter_state(0);
+    let state = common::contract_state(vec![]);
     match interpreter::execute(
         &persistent_hash_witness_ir(),
         &program,
@@ -160,7 +156,7 @@ fn unknown_witness_falls_through_to_builtin() {
 
     let witnesses = vec![persistent_hash_witness()];
     let program = interpreter::Program::new(&[], &witnesses, &[]);
-    let state = counter_state(0);
+    let state = common::contract_state(vec![]);
     // `epoch()` carries `NoWitnesses`, which answers `Unknown` for every name.
     let result = interpreter::execute(&persistent_hash_witness_ir(), &program, state, &[], epoch())
         .expect("Unknown must fall through to the persistentHash builtin");
@@ -227,7 +223,7 @@ fn witness_context_threads_private_state() {
         },
     );
 
-    let state = counter_state(0);
+    let state = common::contract_state(vec![]);
     let mut private_state = Vec::new();
 
     // First call: witness sees an empty (= 0) state and returns 0.
@@ -318,7 +314,7 @@ fn interpreter_captures_create_zswap_output() {
         },
     );
 
-    let state = counter_state(0);
+    let state = common::contract_state(vec![]);
     let coin = Value::AlignedValue(AlignedValue::from([7u8; 32]));
     let recipient = Value::AlignedValue(AlignedValue::from([9u8; 32]));
 
