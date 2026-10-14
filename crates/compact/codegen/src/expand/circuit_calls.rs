@@ -85,24 +85,20 @@ pub(crate) fn is_void_type(ty: &Type) -> bool {
 pub(crate) fn value_to_type_conversion(ty: &Type, context: &str) -> TokenStream {
     match ty {
         Type::Boolean => {
-            let mismatch_msg = format!("{context}: expected a Bool value, got {{:?}}");
+            let mismatch = mismatch_arm(context, "a Bool value");
             quote! {
                 match __val {
                     midnight_contract::runtime::Value::Bool(__b) => {
                         ::core::result::Result::Ok(__b)
                     }
-                    __other => ::core::result::Result::Err(
-                        midnight_contract::runtime::InterpreterError::TypeError(
-                            ::std::format!(#mismatch_msg, __other)
-                        )
-                    ),
+                    #mismatch
                 }
             }
         }
         Type::Unsigned(_) => {
             let rust_ty = type_to_tokens(ty);
             let overflow_msg = format!("{context}: value {{}} does not fit in {{}}");
-            let mismatch_msg = format!("{context}: expected an Integer value, got {{:?}}");
+            let mismatch = mismatch_arm(context, "an Integer value");
             quote! {
                 match __val {
                     midnight_contract::runtime::Value::Integer(__n) => {
@@ -116,11 +112,7 @@ pub(crate) fn value_to_type_conversion(ty: &Type, context: &str) -> TokenStream 
                             )
                         })
                     }
-                    __other => ::core::result::Result::Err(
-                        midnight_contract::runtime::InterpreterError::TypeError(
-                            ::std::format!(#mismatch_msg, __other)
-                        )
-                    ),
+                    #mismatch
                 }
             }
         }
@@ -128,7 +120,7 @@ pub(crate) fn value_to_type_conversion(ty: &Type, context: &str) -> TokenStream 
         _ => {
             let rust_ty = type_to_tokens(ty);
             let convert_msg = format!("{context}: failed to convert value to {{}}: {{}}");
-            let mismatch_msg = format!("{context}: expected an AlignedValue, got {{:?}}");
+            let mismatch = mismatch_arm(context, "an AlignedValue");
             quote! {
                 match __val {
                     midnight_contract::runtime::Value::AlignedValue(__av) => {
@@ -142,14 +134,23 @@ pub(crate) fn value_to_type_conversion(ty: &Type, context: &str) -> TokenStream 
                             )
                         })
                     }
-                    __other => ::core::result::Result::Err(
-                        midnight_contract::runtime::InterpreterError::TypeError(
-                            ::std::format!(#mismatch_msg, __other)
-                        )
-                    ),
+                    #mismatch
                 }
             }
         }
+    }
+}
+
+/// The match arm of [`value_to_type_conversion`] for a `Value` of another
+/// variant than `expected`.
+fn mismatch_arm(context: &str, expected: &str) -> TokenStream {
+    let msg = format!("{context}: expected {expected}, got {{:?}}");
+    quote! {
+        __other => ::core::result::Result::Err(
+            midnight_contract::runtime::InterpreterError::TypeError(
+                ::std::format!(#msg, __other)
+            )
+        ),
     }
 }
 
