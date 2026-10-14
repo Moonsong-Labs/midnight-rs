@@ -99,6 +99,28 @@ fn election_state(authority: [u8; 32]) -> ContractState<InMemoryDB> {
     ])
 }
 
+/// Answers the witness `name` with `key`, and every other witness with
+/// `Unknown`.
+struct SecretKeyWitness {
+    name: &'static str,
+    key: [u8; 32],
+}
+
+impl WitnessProvider for SecretKeyWitness {
+    fn call_witness(
+        &self,
+        _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
+        name: &str,
+        _args: &[Value],
+    ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
+        Ok(if name == self.name {
+            WitnessOutcome::Value(Value::AlignedValue(AlignedValue::from(self.key)))
+        } else {
+            WitnessOutcome::Unknown
+        })
+    }
+}
+
 /// Test the generated InitialState (named LedgerInitialState when contract! has no name arg).
 #[test]
 fn counter_deploy_with_initial_state() {
@@ -196,27 +218,9 @@ fn tiny_get_typed() {
     // state() returns the generated STATE enum; just check it doesn't error
     let _state_val = ledger.state().unwrap();
 
-    struct TinyWitness;
-    impl WitnessProvider for TinyWitness {
-        fn call_witness(
-            &self,
-            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
-            name: &str,
-            _args: &[Value],
-        ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
-            match name {
-                "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
-                    AlignedValue::from([1u8; 32]),
-                ))),
-                _ => Ok(WitnessOutcome::Unknown),
-            }
-        }
-    }
-
     // The state cell is `set` (1), so `get()` must return `some(42)`:
     // the Maybe<Field> struct literal [is_some = true, value = 42].
-    let r = interpreter::execute(ir, &program, state, &[], with_witnesses(&TinyWitness))
-        .expect("tiny get executes");
+    let r = interpreter::execute(ir, &program, state, &[], epoch()).expect("tiny get executes");
     let expected = AlignedValue::concat(
         [
             AlignedValue::from(true),
@@ -239,23 +243,6 @@ fn tiny_set_typed() {
 
     let state = tiny_state(0, 0);
 
-    struct TinySetWitness;
-    impl WitnessProvider for TinySetWitness {
-        fn call_witness(
-            &self,
-            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
-            name: &str,
-            _args: &[Value],
-        ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
-            match name {
-                "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
-                    AlignedValue::from([0u8; 32]),
-                ))),
-                _ => Ok(WitnessOutcome::Unknown),
-            }
-        }
-    }
-
     use midnight_transient_crypto::curve::Fr;
     // Enum variants resolve from the type's own variant list, so the circuit
     // and its program are all the interpreter needs.
@@ -267,7 +254,10 @@ fn tiny_set_typed() {
             "v",
             Value::AlignedValue(AlignedValue::from(Fr::from(42u64))),
         )],
-        with_witnesses(&TinySetWitness),
+        with_witnesses(&SecretKeyWitness {
+            name: "private$secret_key",
+            key: [0; 32],
+        }),
     );
 
     let r = result.expect("tiny set executes");
@@ -307,30 +297,16 @@ fn election_advance_typed() {
     assert_eq!(ledger.tally_yes().unwrap(), 0u64);
     assert_eq!(ledger.tally_no().unwrap(), 0u64);
 
-    struct ElectionWitness;
-    impl WitnessProvider for ElectionWitness {
-        fn call_witness(
-            &self,
-            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
-            name: &str,
-            _args: &[Value],
-        ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
-            match name {
-                "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
-                    AlignedValue::from([1u8; 32]),
-                ))),
-                _ => Ok(WitnessOutcome::Unknown),
-            }
-        }
-    }
-
     // `advance()` derives the caller's public key from the secret-key
     // witness and asserts it equals the stored authority. The witness here
     // is not the authority ([0xAA; 32]), so the circuit's own Compact
     // `assert` fires — a semantic outcome of the circuit logic, not an
     // interpreter gap. Accept exactly that assertion and nothing else.
-    let err = match interpreter::execute(ir, &program, state, &[], with_witnesses(&ElectionWitness))
-    {
+    let witness = SecretKeyWitness {
+        name: "private$secret_key",
+        key: [1; 32],
+    };
+    let err = match interpreter::execute(ir, &program, state, &[], with_witnesses(&witness)) {
         Ok(_) => panic!("advance must fail the authorization assert"),
         Err(e) => e,
     };
@@ -362,22 +338,10 @@ fn election_advance_typed() {
 /// The bboard `local_secret_key()` witness used by the post/take_down tests.
 const BBOARD_SK: [u8; 32] = [1u8; 32];
 
-struct BboardWitness;
-impl WitnessProvider for BboardWitness {
-    fn call_witness(
-        &self,
-        _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
-        name: &str,
-        _args: &[Value],
-    ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
-        match name {
-            "local_secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
-                AlignedValue::from(BBOARD_SK),
-            ))),
-            _ => Ok(WitnessOutcome::Unknown),
-        }
-    }
-}
+const BBOARD_WITNESS: SecretKeyWitness = SecretKeyWitness {
+    name: "local_secret_key",
+    key: BBOARD_SK,
+};
 
 /// Independently compute bboard's `public_key(sk, instance as Field as
 /// Bytes<32>)`: `persistentHash<Vector<3, Bytes<32>>>([pad(32, "bboard:pk:"),
@@ -445,7 +409,7 @@ fn bboard_post_executes() {
             "new_message",
             Value::AlignedValue(AlignedValue::from(new_message)),
         )],
-        with_witnesses(&BboardWitness),
+        with_witnesses(&BBOARD_WITNESS),
     )
     .expect("bboard post executes");
     eprintln!("bboard post: executed ✓ (ops: {})", r.gather_ops.len());
@@ -502,7 +466,7 @@ fn bboard_take_down_executes() {
         StateValue::from(bboard_public_key(BBOARD_SK, 1)),
     ]);
 
-    let r = interpreter::execute(ir, &program, state, &[], with_witnesses(&BboardWitness))
+    let r = interpreter::execute(ir, &program, state, &[], with_witnesses(&BBOARD_WITNESS))
         .expect("bboard take_down executes");
     eprintln!("bboard take_down: executed ✓ (ops: {})", r.gather_ops.len());
 
