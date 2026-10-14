@@ -44,7 +44,7 @@ pub use coin::{
     Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType,
     UnshieldedTokenType,
 };
-pub use error::WalletError;
+pub use error::{WalletError, refuse_repeated_nullifiers};
 pub use ledger_version::{LedgerVersion, UnknownLedger};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::Network;

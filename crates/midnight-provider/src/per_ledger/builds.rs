@@ -1,10 +1,9 @@
 //! The attached wallet's builds on this generation, with this generation's
 //! prover.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
-use midnight_types::{SpendableShieldedCoin, TransferRequest, TransferResult, WalletError};
+use midnight_types::{SpendableShieldedCoin, TransferRequest, TransferResult};
 
 use super::facade::{ReservedBuild, WalletBuilds};
 use super::helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
@@ -119,7 +118,8 @@ impl<'a> Builds<'a> {
     ///
     /// # Errors
     ///
-    /// [`ProviderError::Wallet`] with [`WalletError::DuplicateInput`] when
+    /// [`ProviderError::Wallet`] with
+    /// [`WalletError::DuplicateInput`](midnight_types::WalletError::DuplicateInput) when
     /// `coins` names a coin twice. The provider checks this before it asks
     /// the wallet, so a custom wallet that breaks the
     /// [`WalletBuilds::spend_shielded`] contract cannot spend a coin twice.
@@ -131,13 +131,7 @@ impl<'a> Builds<'a> {
         rng: &mut StdRng,
     ) -> Result<(Vec<PreparedInput>, HeldInputs), ProviderError> {
         let nullifiers: Vec<_> = coins.iter().map(|c| c.nullifier).collect();
-        let mut named = HashSet::with_capacity(nullifiers.len());
-        if let Some(repeated) = nullifiers.iter().find(|n| !named.insert(**n)) {
-            return Err(WalletError::DuplicateInput {
-                input: format!("shielded coin {repeated:?}"),
-            }
-            .into());
-        }
+        midnight_types::refuse_repeated_nullifiers(&nullifiers)?;
         let (prepared, spent) = self.wallet.spend_shielded(context, nullifiers, rng).await?;
         Ok((prepared, HeldInputs::of(spent, self.provider.facade())))
     }
