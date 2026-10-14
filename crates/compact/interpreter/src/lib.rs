@@ -2705,11 +2705,9 @@ mod tests {
     /// struct hashes exactly as the flat sequence does.
     #[test]
     fn transient_hash_orders_a_struct_by_its_declared_type() {
-        use compact_codegen::ir::{FieldType, Type};
         use midnight_transient_crypto::curve::Fr;
         use midnight_transient_crypto::hash::transient_hash;
 
-        let field = || Type::Field(FieldType::Native);
         let ty = Type::Struct {
             name: "JubjubSchnorrHashInput".to_string(),
             fields: vec![
@@ -2749,11 +2747,9 @@ mod tests {
     /// by element would hand each element the vector's type and reject it.
     #[test]
     fn transient_hash_orders_a_struct_nested_in_a_vector() {
-        use compact_codegen::ir::{FieldType, Type};
         use midnight_transient_crypto::curve::Fr;
         use midnight_transient_crypto::hash::transient_hash;
 
-        let field = || Type::Field(FieldType::Native);
         let element = Type::Struct {
             name: "Pair".to_string(),
             fields: vec![("x".to_string(), field()), ("y".to_string(), field())],
@@ -3100,6 +3096,21 @@ mod tests {
     // overflow.
     // -----------------------------------------------------------------------
 
+    fn assert_integers(value: Value, expected: &[u128]) {
+        match value {
+            Value::Tuple(els) => {
+                assert_eq!(els.len(), expected.len(), "{els:?}");
+                for (el, &want) in els.iter().zip(expected) {
+                    assert!(
+                        values_equal(el, &Value::Integer(want)),
+                        "expected {want}, got {el:?}"
+                    );
+                }
+            }
+            other => panic!("expected Tuple, got {other:?}"),
+        }
+    }
+
     #[test]
     fn spread_splices_tuple_value_into_constructor() {
         let v = Value::Tuple(vec![Value::Integer(2), Value::Integer(3)]);
@@ -3109,18 +3120,7 @@ mod tests {
             ir::Expr::Tuple(vec![single(int(1)), spread(2, var("v")), single(int(4))]),
         );
         let result = run(&circ, &[("v", v)]).expect("eval");
-        match result {
-            Value::Tuple(els) => {
-                assert_eq!(els.len(), 4, "spread must splice, not nest: {els:?}");
-                for (el, want) in els.iter().zip([1u128, 2, 3, 4]) {
-                    assert!(
-                        values_equal(el, &Value::Integer(want)),
-                        "expected {want}, got {el:?}"
-                    );
-                }
-            }
-            other => panic!("expected Tuple, got {other:?}"),
-        }
+        assert_integers(result, &[1, 2, 3, 4]);
     }
 
     #[test]
@@ -3134,14 +3134,7 @@ mod tests {
             ir::Expr::VectorLit(vec![spread(2, var("v"))]),
         );
         let result = run(&circ, &[("v", Value::AlignedValue(av))]).expect("eval");
-        match result {
-            Value::Tuple(els) => {
-                assert_eq!(els.len(), 2);
-                assert!(values_equal(&els[0], &Value::Integer(7)), "{:?}", els[0]);
-                assert!(values_equal(&els[1], &Value::Integer(9)), "{:?}", els[1]);
-            }
-            other => panic!("expected Tuple, got {other:?}"),
-        }
+        assert_integers(result, &[7, 9]);
     }
 
     #[test]
@@ -3261,18 +3254,7 @@ mod tests {
             expr: Box::new(bytes("01020300")),
         };
         let result = eval(expr, vector(4, uint("255"))).expect("eval");
-        match result {
-            Value::Tuple(els) => {
-                assert_eq!(els.len(), 4);
-                for (el, want) in els.iter().zip([1u128, 2, 3, 0]) {
-                    assert!(
-                        values_equal(el, &Value::Integer(want)),
-                        "expected {want}, got {el:?}"
-                    );
-                }
-            }
-            other => panic!("expected Tuple, got {other:?}"),
-        }
+        assert_integers(result, &[1, 2, 3, 0]);
     }
 
     #[test]
