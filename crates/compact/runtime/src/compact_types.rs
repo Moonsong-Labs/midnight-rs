@@ -5,7 +5,7 @@
 
 use std::ops::Range;
 
-use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
+use midnight_typed_state::AlignedValue;
 
 use compact_codegen::ir::{Type, uint_byte_width};
 use num_bigint::BigUint;
@@ -13,16 +13,6 @@ use num_bigint::BigUint;
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
 use crate::error::InterpreterError;
 use crate::value::Value;
-
-/// The `AlignedValue` a `StateValue::Cell` wraps, or `None` for any other
-/// variant. `Null`, `Map`, `Array` and `BoundedMerkleTree` are state-tree
-/// containers with no aligned-value form.
-pub fn cell_aligned_value(sv: &StateValue<InMemoryDB>) -> Option<AlignedValue> {
-    match sv {
-        StateValue::Cell(sp) => Some((**sp).clone()),
-        _ => None,
-    }
-}
 
 /// Precomputed layout of a struct: field name → (atom offset, atom count).
 #[derive(Debug, Clone)]
@@ -254,22 +244,9 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
     let unsupported =
         || InterpreterError::TypeError(format!("cannot encode value {val:?} as type {ty:?}"));
 
-    // A `StateValue::Cell` wraps exactly one `AlignedValue`, so unwrapping it is
-    // the encoding; re-dispatch on the flat value so it still has to satisfy the
-    // declared type. The other variants are containers in the state tree with no
-    // aligned-value representation at all (upstream defines only
-    // `From<AlignedValue> for StateValue`, never the reverse, and the canonical
-    // runtime exposes just `asCell()`), so there is nothing to encode and this
-    // reports that rather than substituting an empty value. Mirrors
-    // `midnight_typed_state::nav::cell_value`.
-    if let Value::StateValue(sv) = val {
-        return match cell_aligned_value(sv) {
-            Some(av) => encode_typed(&Value::AlignedValue(av), ty),
-            None => Err(InterpreterError::TypeError(format!(
-                "cannot encode a {} state value: only a Cell holds an aligned value",
-                variant_name(sv)
-            ))),
-        };
+    // A Cell unwraps to its aligned value, which must still satisfy `ty`.
+    if let Value::StateValue(_) = val {
+        return encode_typed(&Value::AlignedValue(val.try_to_aligned_value()?), ty);
     }
 
     match ty {

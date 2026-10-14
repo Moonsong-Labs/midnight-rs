@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
+use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, cell_value, variant_name};
 
 use crate::error::InterpreterError;
 
@@ -66,14 +66,12 @@ impl Value {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(AlignedValue::concat(parts.iter()))
             }
-            Value::StateValue(sv) => {
-                crate::compact_types::cell_aligned_value(sv).ok_or_else(|| {
-                    InterpreterError::TypeError(format!(
-                        "cannot encode a {} state value: only a Cell holds an aligned value",
-                        variant_name(sv)
-                    ))
-                })
-            }
+            Value::StateValue(sv) => cell_value(sv).cloned().map_err(|_| {
+                InterpreterError::TypeError(format!(
+                    "cannot encode a {} state value: only a Cell holds an aligned value",
+                    variant_name(sv)
+                ))
+            }),
             Value::Struct(_) => Err(InterpreterError::TypeError(
                 "cannot encode a struct without its declared type: field widths come from the \
                  struct's declaration"
