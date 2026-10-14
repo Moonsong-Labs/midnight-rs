@@ -14,11 +14,19 @@ pub(crate) fn dev_seed() -> Seed {
 
 /// The node URL and the indexer URL of the devnet. Returns `None`, after a
 /// skip notice on stderr, when one of them is not set.
+///
+/// # Panics
+///
+/// When one of them is not set under `make test-e2e`, which sets
+/// `MIDNIGHT_E2E`.
 pub(crate) fn devnet_urls() -> Option<(String, String)> {
     let (Ok(node), Ok(indexer)) = (
         std::env::var("MIDNIGHT_NODE_URL"),
         std::env::var("MIDNIGHT_INDEXER_URL"),
     ) else {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!("MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL is missing under make test-e2e");
+        }
         eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
         return None;
     };

@@ -15,6 +15,9 @@ macro_rules! require_node {
         match node_only_provider() {
             Some(p) => p,
             None => {
+                if std::env::var_os("MIDNIGHT_E2E").is_some() {
+                    panic!("MIDNIGHT_NODE_URL is missing under make test-e2e");
+                }
                 eprintln!("skipping: MIDNIGHT_NODE_URL not set");
                 return;
             }
