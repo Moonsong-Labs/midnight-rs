@@ -105,6 +105,20 @@ mod synthetic_tests {
         )
     }
 
+    /// Build a compound `StateValue::Array` for a merkle-tree field.
+    ///
+    /// Layout: `[BoundedMerkleTree(blank), Cell(first_free), Map(empty)]`
+    fn merkle_tree_state(depth: u8, first_free: u64) -> StateValue<InMemoryDB> {
+        StateValue::Array(
+            vec![
+                StateValue::BoundedMerkleTree(MerkleTree::blank(depth)),
+                StateValue::from(first_free),
+                StateValue::Map(StorageHashMap::new()),
+            ]
+            .into(),
+        )
+    }
+
     // ---------------------------------------------------------------
     // Election contract: 9 fields
     //   0: authority  (cell, Bytes<32>)
@@ -112,29 +126,15 @@ mod synthetic_tests {
     //   2: topic      (cell, Struct Maybe{is_some: bool, value: Opaque})
     //   3: tally_yes  (counter, Uint<64>)
     //   4: tally_no   (counter, Uint<64>)
-    //   5: committed_votes (merkle-tree) -- use Null placeholder
-    //   6: eligible_voters (merkle-tree) -- use Null placeholder
+    //   5: committed_votes (merkle-tree)
+    //   6: eligible_voters (merkle-tree)
     //   7: committed  (set, Bytes<32>)
     //   8: revealed   (set, Bytes<32>)
     // ---------------------------------------------------------------
     pub(crate) mod election_tests {
         use super::*;
-        use crate::election::Election;
+        use crate::election::{Election, FIELD_COMMITTED};
         use compact_bindgen::Bytes;
-
-        /// Build a compound `StateValue::Array` for a merkle-tree field.
-        ///
-        /// Layout: `[BoundedMerkleTree(blank), Cell(first_free=0), Map(empty)]`
-        pub(super) fn empty_merkle_tree_value(depth: u8) -> StateValue<InMemoryDB> {
-            StateValue::Array(
-                vec![
-                    StateValue::BoundedMerkleTree(MerkleTree::blank(depth)),
-                    StateValue::from(0u64),
-                    StateValue::Map(StorageHashMap::new()),
-                ]
-                .into(),
-            )
-        }
 
         /// Build a 9-element election state array.
         pub(crate) fn election_state(
@@ -159,9 +159,9 @@ mod synthetic_tests {
                     // 4: tally_no (counter)
                     StateValue::from(tally_no),
                     // 5: committed_votes (merkle-tree, depth=10)
-                    empty_merkle_tree_value(10),
+                    merkle_tree_state(10, 0),
                     // 6: eligible_voters (merkle-tree, depth=10)
-                    empty_merkle_tree_value(10),
+                    merkle_tree_state(10, 0),
                     // 7: committed (set, empty)
                     StateValue::Map(StorageHashMap::new()),
                     // 8: revealed (set, empty)
@@ -169,6 +169,21 @@ mod synthetic_tests {
                 ]
                 .into(),
             )
+        }
+
+        /// An election state whose `committed` set holds `keys`.
+        pub(crate) fn election_state_with_committed(keys: &[[u8; 32]]) -> StateValue<InMemoryDB> {
+            let state = election_state([0u8; 32], 0, 0, 0);
+            let StateValue::Array(fields) = &state else {
+                panic!("an election state is an array");
+            };
+            let committed = keys.iter().fold(StorageHashMap::new(), |map, key| {
+                map.insert(AlignedValue::from(*key), StateValue::Null)
+            });
+            let fields = fields
+                .insert(FIELD_COMMITTED, StateValue::Map(committed))
+                .expect("committed is a field");
+            StateValue::Array(fields)
         }
 
         #[test]
@@ -212,25 +227,7 @@ mod synthetic_tests {
             let key1 = [0x11u8; 32];
             let key2 = [0x22u8; 32];
 
-            let committed_map = StorageHashMap::new()
-                .insert(AlignedValue::from(key1), StateValue::Null)
-                .insert(AlignedValue::from(key2), StateValue::Null);
-
-            let root = StateValue::Array(
-                vec![
-                    StateValue::from(AlignedValue::from([0u8; 32])),
-                    StateValue::from(AlignedValue::from(0u8)),
-                    StateValue::from(AlignedValue::from(false)),
-                    StateValue::from(0u64),
-                    StateValue::from(0u64),
-                    empty_merkle_tree_value(10),
-                    empty_merkle_tree_value(10),
-                    StateValue::Map(committed_map),
-                    StateValue::Map(StorageHashMap::new()),
-                ]
-                .into(),
-            );
-            let state = make_state(root);
+            let state = make_state(election_state_with_committed(&[key1, key2]));
             let ledger = Election::new(state);
 
             let committed = ledger.committed().expect("committed");
@@ -256,17 +253,21 @@ mod synthetic_tests {
         use super::*;
         use crate::tiny::Tiny;
 
-        #[test]
-        fn tiny_value_field() {
-            let field_val = TransientFr::from(12345u64);
-            let root = StateValue::Array(
+        /// Build a 3-element tiny state array with a zero authority.
+        pub(super) fn tiny_state(value: TransientFr, state: u8) -> StateValue<InMemoryDB> {
+            StateValue::Array(
                 vec![
                     StateValue::from(AlignedValue::from([0u8; 32])),
-                    StateValue::from(AlignedValue::from(field_val)),
-                    StateValue::from(AlignedValue::from(0u8)),
+                    StateValue::from(AlignedValue::from(value)),
+                    StateValue::from(AlignedValue::from(state)),
                 ]
                 .into(),
-            );
+            )
+        }
+
+        #[test]
+        fn tiny_value_field() {
+            let root = tiny_state(TransientFr::from(12345u64), 0);
             let state = make_state(root);
             let ledger = Tiny::new(state);
 
@@ -301,14 +302,7 @@ mod synthetic_tests {
             }
 
             for (index, expected) in [(0u8, STATE::Unset), (1, STATE::Set)] {
-                let root = StateValue::Array(
-                    vec![
-                        StateValue::from(AlignedValue::from([0u8; 32])),
-                        StateValue::from(AlignedValue::from(TransientFr::from(0u64))),
-                        StateValue::from(AlignedValue::from(index)),
-                    ]
-                    .into(),
-                );
+                let root = tiny_tests::tiny_state(TransientFr::from(0u64), index);
                 let ledger = Tiny::new(make_state(root));
                 assert_eq!(ledger.state().expect("state"), expected, "STATE {index}");
             }
@@ -394,21 +388,9 @@ mod synthetic_tests {
         use super::*;
         use compact_bindgen::MerkleTreeAccessor;
 
-        /// Build a compound merkle tree StateValue with given depth and first_free.
-        fn make_merkle_tree_state(depth: u8, first_free: u64) -> StateValue<InMemoryDB> {
-            StateValue::Array(
-                vec![
-                    StateValue::BoundedMerkleTree(MerkleTree::blank(depth)),
-                    StateValue::from(first_free),
-                    StateValue::Map(StorageHashMap::new()),
-                ]
-                .into(),
-            )
-        }
-
         #[test]
         fn merkle_tree_with_first_free() {
-            let sv = make_merkle_tree_state(20, 42);
+            let sv = merkle_tree_state(20, 42);
             let accessor = MerkleTreeAccessor::from_state(&sv).expect("from_state");
             assert_eq!(accessor.height(), 20);
             assert_eq!(accessor.first_free(), 42);
@@ -900,9 +882,11 @@ mod lazy_tests {
     // ---------------------------------------------------------------
     mod election_lazy {
         use super::*;
-        use crate::election::{ElectionQuery, FIELD_COMMITTED};
-        use crate::synthetic_tests::election_tests::election_state;
-        use compact_bindgen::{Bytes, StorageHashMap};
+        use crate::election::ElectionQuery;
+        use crate::synthetic_tests::election_tests::{
+            election_state, election_state_with_committed,
+        };
+        use compact_bindgen::Bytes;
 
         #[tokio::test]
         async fn lazy_authority() {
@@ -923,15 +907,7 @@ mod lazy_tests {
         #[tokio::test]
         async fn lazy_set_contains() {
             let key = [0x11u8; 32];
-            let state = election_state([0u8; 32], 0, 0, 0);
-            let StateValue::Array(fields) = &state else {
-                panic!("an election state is an array");
-            };
-            let committed = StorageHashMap::new().insert(AlignedValue::from(key), StateValue::Null);
-            let fields = fields
-                .insert(FIELD_COMMITTED, StateValue::Map(committed))
-                .expect("committed is a field");
-            let node = WalkingNode::new(vec![StateValue::Array(fields)]);
+            let node = WalkingNode::new(vec![election_state_with_committed(&[key])]);
             let query = ElectionQuery::new(node, "mock", None);
             assert!(query.committed(Bytes(key)).await.unwrap());
         }
