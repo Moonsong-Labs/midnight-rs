@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 
 /// Parsed macro input supporting these forms:
@@ -19,35 +19,28 @@ struct ContractInput {
 impl Parse for ContractInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = input.call(syn::Attribute::parse_outer)?;
-
-        if input.peek(syn::Ident) && input.peek2(syn::Token![,]) {
+        let name = if input.peek(syn::Ident) && input.peek2(syn::Token![,]) {
             let name: syn::Ident = input.parse()?;
-            let _comma: syn::Token![,] = input.parse()?;
-            let path: syn::LitStr = input.parse()?;
-            let crate_path = extract_crate_path(&attrs)?;
-            Ok(ContractInput {
-                attrs: strip_crate_attr(attrs),
-                name: Some(name),
-                path,
-                crate_path,
-            })
+            input.parse::<syn::Token![,]>()?;
+            Some(name)
         } else {
-            let path: syn::LitStr = input.parse()?;
-            let crate_path = extract_crate_path(&attrs)?;
-            let attrs = strip_crate_attr(attrs);
-            if !attrs.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    &path,
-                    "attributes require a named contract: contract!(#[...] Name, \"path\")",
-                ));
-            }
-            Ok(ContractInput {
-                attrs,
-                name: None,
-                path,
-                crate_path,
-            })
+            None
+        };
+        let path: syn::LitStr = input.parse()?;
+        let crate_path = extract_crate_path(&attrs)?;
+        let attrs = strip_crate_attr(attrs);
+        if name.is_none() && !attrs.is_empty() {
+            return Err(syn::Error::new_spanned(
+                &path,
+                "attributes require a named contract: contract!(#[...] Name, \"path\")",
+            ));
         }
+        Ok(ContractInput {
+            attrs,
+            name,
+            path,
+            crate_path,
+        })
     }
 }
 
@@ -166,15 +159,16 @@ pub fn contract(input: TokenStream) -> TokenStream {
         const _: &[u8] = include_bytes!(#full_path_str);
     };
 
+    let snake = compact_codegen::to_snake_case(&contract_name);
+    let lint_allows = quote! {
+        #[allow(dead_code, clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
+    };
     let output = if name.is_some() {
-        let mod_name = syn::Ident::new(
-            &compact_codegen::to_snake_case(&contract_name),
-            proc_macro2::Span::call_site(),
-        );
+        let mod_name = format_ident!("{}", snake);
         quote! {
             #track_file
             #(#attrs)*
-            #[allow(dead_code, clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
+            #lint_allows
             pub mod #mod_name {
                 #inner
             }
@@ -189,17 +183,11 @@ pub fn contract(input: TokenStream) -> TokenStream {
         // referenced. The module keeps the imports scoped to the generated
         // code, while `pub use ...::*` keeps every generated item visible at
         // the call site exactly as before.
-        let mod_name = syn::Ident::new(
-            &format!(
-                "__{}_bindings",
-                compact_codegen::to_snake_case(&contract_name)
-            ),
-            proc_macro2::Span::call_site(),
-        );
+        let mod_name = format_ident!("__{}_bindings", snake);
         quote! {
             #track_file
             #[doc(hidden)]
-            #[allow(dead_code, clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
+            #lint_allows
             mod #mod_name {
                 #inner
             }
