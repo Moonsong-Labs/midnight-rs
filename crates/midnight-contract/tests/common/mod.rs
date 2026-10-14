@@ -3,6 +3,9 @@
 
 #![allow(dead_code, reason = "each test binary uses a subset of the helpers")]
 
+use compact_bindgen::{
+    ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue, StorageHashMap,
+};
 use midnight_provider::{MidnightProvider, Network};
 use midnight_wallet::Wallet;
 
@@ -60,5 +63,15 @@ pub(crate) fn compiled_dir(contract: &str) -> String {
     format!(
         "{}/../../devnet/contracts/{contract}/compiled",
         env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// A contract state whose ledger is the array `cells`, with no operations and
+/// the default maintenance authority.
+pub(crate) fn contract_state(cells: Vec<StateValue<InMemoryDB>>) -> ContractState<InMemoryDB> {
+    ContractState::new(
+        StateValue::Array(cells.into()),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
     )
 }

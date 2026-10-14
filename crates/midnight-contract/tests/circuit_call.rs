@@ -5,10 +5,9 @@
 //! builder. They cover witness dispatch, private-state threading, captured
 //! Zswap outputs, `kernel.self()`, and struct arguments.
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
-    StorageHashMap,
-};
+mod common;
+
+use compact_bindgen::{AlignedValue, ContractState, InMemoryDB, StateValue};
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::call;
@@ -23,12 +22,7 @@ use compact_codegen::ir::{
 // ---------------------------------------------------------------------------
 
 fn counter_state(round: u64) -> ContractState<InMemoryDB> {
-    let root = StateValue::Array(vec![StateValue::from(round)].into());
-    ContractState::new(
-        root,
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    )
+    common::contract_state(vec![StateValue::from(round)])
 }
 
 fn id(name: &str) -> Ident {
@@ -488,11 +482,7 @@ fn run_mint(
     // defs from the circuit arguments, exactly as the funded call path does.
 
     // Deployed mint contract has no user ledger fields: data is an empty array.
-    let state = ContractState::new(
-        StateValue::Array(vec![].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = common::contract_state(vec![]);
 
     let args = mint_args(domain_sep);
 
@@ -557,11 +547,7 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
         },
     );
 
-    let state = ContractState::new(
-        StateValue::Array(vec![].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = common::contract_state(vec![]);
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0x5Au8; 32]));
 
     let result = interpreter::execute(
@@ -629,11 +615,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
     let mint = mint_circuit(&info);
     let program = interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xCD; 32]));
-    let state = ContractState::new(
-        StateValue::Array(vec![].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = common::contract_state(vec![]);
     let args = mint_args([1u8; 32]);
 
     let ok = call::build_unproven_call_tx(

@@ -11,10 +11,7 @@
 
 mod common;
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
-    StorageHashMap,
-};
+use compact_bindgen::{AlignedValue, ContractState, InMemoryDB, StateValue, StorageHashMap};
 use midnight_contract::ContractMaintenanceVerifyingKey;
 use midnight_contract::call;
 use midnight_contract::interpreter;
@@ -114,6 +111,41 @@ fn try_find_circuit<'a>(
         .ok_or_else(|| format!("circuit {circuit_name} not found"))
 }
 
+/// The counter ledger at `round`. The fixture states are built by hand, so a
+/// test that reads one through the generated `Ledger` does not check the
+/// generator against itself.
+fn counter_state(round: u64) -> ContractState<InMemoryDB> {
+    common::contract_state(vec![StateValue::from(round)])
+}
+
+/// The tiny ledger: a zero authority, `value`, and the STATE cell `state`.
+fn tiny_state(value: u64, state: u8) -> ContractState<InMemoryDB> {
+    common::contract_state(vec![
+        StateValue::from(AlignedValue::from([0u8; 32])),
+        StateValue::from(AlignedValue::from(
+            midnight_transient_crypto::curve::Fr::from(value),
+        )),
+        StateValue::from(AlignedValue::from(state)),
+    ])
+}
+
+/// The election ledger with `authority` and every other field at zero. The
+/// two Merkle tree fields hold `Null`, where the generated builder writes
+/// blank trees.
+fn election_state(authority: [u8; 32]) -> ContractState<InMemoryDB> {
+    common::contract_state(vec![
+        StateValue::from(AlignedValue::from(authority)),
+        StateValue::from(AlignedValue::from(0u8)),
+        StateValue::from(AlignedValue::from(false)),
+        StateValue::from(0u64),
+        StateValue::from(0u64),
+        StateValue::Null,
+        StateValue::Null,
+        StateValue::Map(StorageHashMap::new()),
+        StateValue::Map(StorageHashMap::new()),
+    ])
+}
+
 /// Test the generated InitialState (named LedgerInitialState when contract! has no name arg).
 #[test]
 fn counter_deploy_with_initial_state() {
@@ -144,11 +176,7 @@ fn counter_increment_with_typed_state() {
     let program = program_of(&info);
 
     // Build initial state and verify through typed accessor
-    let state = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = counter_state(0);
     let ledger = counter::Ledger::new(state.clone());
     assert_eq!(ledger.round().unwrap(), 0u64);
 
@@ -170,11 +198,7 @@ fn counter_build_tx_with_typed_state() {
     let ir = find_circuit(&info, "increment");
     let program = program_of(&info);
 
-    let state = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = counter_state(0);
 
     let address = midnight_coin_structure::contract::ContractAddress(
         midnight_base_crypto::hash::HashOutput([0xAA; 32]),
@@ -212,20 +236,7 @@ fn tiny_get_typed() {
     let program = program_of(&info);
 
     // Build state with known value
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from([0u8; 32])),
-                StateValue::from(AlignedValue::from(
-                    midnight_transient_crypto::curve::Fr::from(42u64),
-                )),
-                StateValue::from(AlignedValue::from(1u8)),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = tiny_state(42, 1);
 
     // Verify typed accessors work on the state
     let ledger = tiny::Ledger::new(state.clone());
@@ -273,20 +284,7 @@ fn tiny_set_typed() {
     let ir = find_circuit(&info, "set");
     let program = program_of(&info);
 
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from([0u8; 32])),
-                StateValue::from(AlignedValue::from(
-                    midnight_transient_crypto::curve::Fr::from(0u64),
-                )),
-                StateValue::from(AlignedValue::from(0u8)),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = tiny_state(0, 0);
 
     struct TinySetWitness;
     impl WitnessProvider for TinySetWitness {
@@ -349,25 +347,7 @@ fn election_advance_typed() {
     let ir = find_circuit(&info, "advance");
     let program = program_of(&info);
 
-    let authority = [0xAA; 32];
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from(authority)),
-                StateValue::from(AlignedValue::from(0u8)),
-                StateValue::from(AlignedValue::from(false)),
-                StateValue::from(0u64),
-                StateValue::from(0u64),
-                StateValue::Null,
-                StateValue::Null,
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::Map(StorageHashMap::new()),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = election_state([0xAA; 32]);
 
     // Verify initial state through typed accessors
     let ledger = election::Ledger::new(state.clone());
@@ -568,19 +548,12 @@ fn bboard_take_down_executes() {
         AlignedValue::concat([AlignedValue::from(true), AlignedValue::from(message)].iter());
     // Post-`post` ledger state: occupied board whose poster matches the
     // witness key at instance 1.
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(1u64),
-                StateValue::from(occupied_message),
-                StateValue::from(1u64),
-                StateValue::from(bboard_public_key(BBOARD_SK, 1)),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = common::contract_state(vec![
+        StateValue::from(1u64),
+        StateValue::from(occupied_message),
+        StateValue::from(1u64),
+        StateValue::from(bboard_public_key(BBOARD_SK, 1)),
+    ]);
 
     let r = interpreter::execute(ir, &program, state, &[], with_witnesses(&BboardWitness))
         .expect("bboard take_down executes");
@@ -652,7 +625,6 @@ fn bboard_pure_public_key_matches_the_oracle() {
 #[test]
 fn execute_all_compiled_circuits() {
     use midnight_contract::runtime::InterpreterError;
-    use midnight_transient_crypto::curve::Fr;
 
     /// Every circuit the three fixtures define. A fixture regenerated with a
     /// contract added or removed changes this.
@@ -675,50 +647,9 @@ fn execute_all_compiled_circuits() {
     }
 
     let states: Vec<(&str, ContractState<InMemoryDB>)> = vec![
-        (
-            "counter",
-            ContractState::new(
-                StateValue::Array(vec![StateValue::from(0u64)].into()),
-                StorageHashMap::new(),
-                ContractMaintenanceAuthority::default(),
-            ),
-        ),
-        (
-            "tiny",
-            ContractState::new(
-                StateValue::Array(
-                    vec![
-                        StateValue::from(AlignedValue::from([0u8; 32])),
-                        StateValue::from(AlignedValue::from(Fr::from(0u64))),
-                        StateValue::from(AlignedValue::from(0u8)),
-                    ]
-                    .into(),
-                ),
-                StorageHashMap::new(),
-                ContractMaintenanceAuthority::default(),
-            ),
-        ),
-        (
-            "election",
-            ContractState::new(
-                StateValue::Array(
-                    vec![
-                        StateValue::from(AlignedValue::from([0u8; 32])),
-                        StateValue::from(AlignedValue::from(0u8)),
-                        StateValue::from(AlignedValue::from(false)),
-                        StateValue::from(0u64),
-                        StateValue::from(0u64),
-                        StateValue::Null,
-                        StateValue::Null,
-                        StateValue::Map(StorageHashMap::new()),
-                        StateValue::Map(StorageHashMap::new()),
-                    ]
-                    .into(),
-                ),
-                StorageHashMap::new(),
-                ContractMaintenanceAuthority::default(),
-            ),
-        ),
+        ("counter", counter_state(0)),
+        ("tiny", tiny_state(0, 0)),
+        ("election", election_state([0; 32])),
     ];
 
     let mut ok = 0u32;
@@ -835,11 +766,7 @@ async fn governance_deploy_then_apply_both_updates() {
     let keys_dir = counter_zk_dir();
     let vk_bytes = std::fs::read(format!("{keys_dir}/keys/increment.verifier"))
         .expect("read increment.verifier");
-    let initial = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let initial = counter_state(0);
 
     // The caller owns the committee signing key; the SDK only learns its public
     // half.

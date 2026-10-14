@@ -10,9 +10,7 @@
 
 mod common;
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
-};
+use compact_bindgen::{AlignedValue, StateValue};
 use midnight_contract::{ShieldedOffer, ShieldedPayment, ShieldedTokenType};
 use midnight_provider::MidnightProvider;
 
@@ -31,19 +29,12 @@ async fn deploy_funded_with_shielded_offer() {
         return;
     };
 
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(0u64),
-                StateValue::Null,
-                StateValue::from(1u64),
-                StateValue::from(AlignedValue::from([0u8; 32])),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = common::contract_state(vec![
+        StateValue::from(0u64),
+        StateValue::Null,
+        StateValue::from(1u64),
+        StateValue::from(AlignedValue::from([0u8; 32])),
+    ]);
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
