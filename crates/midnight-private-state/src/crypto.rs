@@ -9,8 +9,10 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use rand::RngCore;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
-use crate::PrivateStateError;
+use crate::{EncryptedExport, ExportOptions, ImportOptions, PrivateStateError};
 
 const SALT_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
@@ -119,6 +121,61 @@ pub(crate) fn decrypt(
             },
         )
         .map_err(|_| PrivateStateError::Decrypt)
+}
+
+/// Serialize `records` and encrypt them into an envelope tagged `format`.
+///
+/// Errors with [`PrivateStateError::TooManyEntries`] when `records` holds more
+/// entries than `opts` allows. The caller checks the password first, with
+/// [`ExportOptions::check_password`].
+pub(crate) fn seal<T: Serialize>(
+    format: &str,
+    opts: &ExportOptions,
+    records: &[T],
+) -> Result<EncryptedExport, PrivateStateError> {
+    if records.len() > opts.max_entries {
+        return Err(PrivateStateError::TooManyEntries);
+    }
+    let payload =
+        serde_json::to_vec(records).map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
+    let (salt, ciphertext) = encrypt(&opts.password, format.as_bytes(), &payload)?;
+    Ok(EncryptedExport {
+        format: format.to_string(),
+        salt,
+        ciphertext,
+    })
+}
+
+/// Decrypt and decode the records of an envelope that [`seal`] made with the
+/// tag `format`.
+///
+/// Errors with [`PrivateStateError::InvalidFormat`] when the tag is not
+/// `format` or the payload does not decode, and with
+/// [`PrivateStateError::TooManyEntries`] when it holds more entries than
+/// `opts` allows.
+pub(crate) fn open<T: DeserializeOwned>(
+    format: &str,
+    export: &EncryptedExport,
+    opts: &ImportOptions,
+) -> Result<Vec<T>, PrivateStateError> {
+    if export.format != format {
+        return Err(PrivateStateError::InvalidFormat(format!(
+            "expected format {format}, got {}",
+            export.format
+        )));
+    }
+    let payload = decrypt(
+        &opts.password,
+        format.as_bytes(),
+        &export.salt,
+        &export.ciphertext,
+    )?;
+    let records: Vec<T> = serde_json::from_slice(&payload)
+        .map_err(|e| PrivateStateError::InvalidFormat(format!("malformed import payload: {e}")))?;
+    if records.len() > opts.max_entries {
+        return Err(PrivateStateError::TooManyEntries);
+    }
+    Ok(records)
 }
 
 #[cfg(test)]

@@ -45,8 +45,7 @@ use tracing::{debug, warn};
 
 use crate::{
     ConflictStrategy, EncryptedExport, ExportOptions, FORMAT_KEYS, FORMAT_STATES, ImportOptions,
-    ImportResult, MIN_PASSWORD_LEN, PrivateStateError, PrivateStateProvider, Snapshot,
-    SnapshotStatus, crypto,
+    ImportResult, PrivateStateError, PrivateStateProvider, Snapshot, SnapshotStatus, crypto,
 };
 
 const STATES_SUBDIR: &str = "states";
@@ -510,23 +509,11 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         &self,
         opts: &ExportOptions,
     ) -> Result<EncryptedExport, PrivateStateError> {
-        if opts.password.chars().count() < MIN_PASSWORD_LEN {
-            return Err(PrivateStateError::PasswordTooShort);
-        }
+        opts.check_password()?;
         let entries = collect_export_entries(self)?;
-        if entries.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
-        let payload = serde_json::to_vec(&entries)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        let (salt, ciphertext) =
-            crypto::encrypt(&opts.password, FORMAT_STATES.as_bytes(), &payload)?;
+        let export = crypto::seal(FORMAT_STATES, opts, &entries)?;
         debug!(count = entries.len(), "exported snapshot journal");
-        Ok(EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext,
-        })
+        Ok(export)
     }
 
     async fn import_private_states(
@@ -534,24 +521,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         data: &EncryptedExport,
         opts: &ImportOptions,
     ) -> Result<ImportResult, PrivateStateError> {
-        if data.format != FORMAT_STATES {
-            return Err(PrivateStateError::InvalidFormat(format!(
-                "expected format {FORMAT_STATES}, got {}",
-                data.format
-            )));
-        }
-        let payload = crypto::decrypt(
-            &opts.password,
-            FORMAT_STATES.as_bytes(),
-            &data.salt,
-            &data.ciphertext,
-        )?;
-        let entries: Vec<ExportEntry> = serde_json::from_slice(&payload).map_err(|e| {
-            PrivateStateError::InvalidFormat(format!("decoded payload is not a snapshot list: {e}"))
-        })?;
-        if entries.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
+        let entries = crypto::open(FORMAT_STATES, data, opts)?;
         apply_import_entries(self, entries, opts.conflict)
     }
 
@@ -559,9 +529,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         &self,
         opts: &ExportOptions,
     ) -> Result<EncryptedExport, PrivateStateError> {
-        if opts.password.chars().count() < MIN_PASSWORD_LEN {
-            return Err(PrivateStateError::PasswordTooShort);
-        }
+        opts.check_password()?;
         let mut records: Vec<KeyRecord> = Vec::new();
         for (path, rec) in read_json_dir::<KeyRecord>(&self.keys_dir())? {
             // Validate base64 up front so a corrupt on-disk record
@@ -597,17 +565,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             }
             records.push(rec);
         }
-        if records.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
-        let payload = serde_json::to_vec(&records)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        let (salt, ciphertext) = crypto::encrypt(&opts.password, FORMAT_KEYS.as_bytes(), &payload)?;
-        Ok(EncryptedExport {
-            format: FORMAT_KEYS.to_string(),
-            salt,
-            ciphertext,
-        })
+        crypto::seal(FORMAT_KEYS, opts, &records)
     }
 
     async fn import_signing_keys(
@@ -615,24 +573,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         data: &EncryptedExport,
         opts: &ImportOptions,
     ) -> Result<ImportResult, PrivateStateError> {
-        if data.format != FORMAT_KEYS {
-            return Err(PrivateStateError::InvalidFormat(format!(
-                "expected format {FORMAT_KEYS}, got {}",
-                data.format
-            )));
-        }
-        let payload = crypto::decrypt(
-            &opts.password,
-            FORMAT_KEYS.as_bytes(),
-            &data.salt,
-            &data.ciphertext,
-        )?;
-        let records: Vec<KeyRecord> = serde_json::from_slice(&payload).map_err(|e| {
-            PrivateStateError::InvalidFormat(format!("malformed import payload: {e}"))
-        })?;
-        if records.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
+        let records: Vec<KeyRecord> = crypto::open(FORMAT_KEYS, data, opts)?;
 
         // Resolve each record to its path; eagerly base64-decode so a corrupt
         // entry aborts before any file is written.

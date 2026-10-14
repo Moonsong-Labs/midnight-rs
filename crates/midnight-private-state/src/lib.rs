@@ -203,6 +203,15 @@ impl ExportOptions {
         self.max_entries = max.min(MAX_EXPORT_ENTRIES);
         self
     }
+
+    /// Errors with [`PrivateStateError::PasswordTooShort`] when the password
+    /// has fewer than [`MIN_PASSWORD_LEN`] characters.
+    pub(crate) fn check_password(&self) -> Result<(), PrivateStateError> {
+        if self.password.chars().count() < MIN_PASSWORD_LEN {
+            return Err(PrivateStateError::PasswordTooShort);
+        }
+        Ok(())
+    }
 }
 
 /// Options for an encrypted import.
