@@ -725,7 +725,6 @@ mod tests {
     fn generate_empty_contract() {
         let info = ContractInfo {
             compiler_version: format!("{}.0", crate::types::SUPPORTED_COMPILER_FAMILY),
-            runtime_version: "0.16.101".to_string(),
             circuits: vec![crate::types::Circuit {
                 name: "noop".to_string(),
                 def: crate::ir::Circuit {
@@ -738,12 +737,7 @@ mod tests {
                     body: crate::ir::Expr::Seq(Vec::new()),
                 },
             }],
-            witnesses: Vec::new(),
-            contracts: Vec::new(),
-            ledger: Vec::new(),
-            has_constructor: false,
-            helpers: Vec::new(),
-            natives: Vec::new(),
+            ..Default::default()
         };
         let generated = generated_source(&info, "Empty");
 

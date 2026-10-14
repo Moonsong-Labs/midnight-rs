@@ -44,6 +44,7 @@ fn version_family(version: &str) -> Option<String> {
 }
 
 #[derive(Debug)]
+#[cfg_attr(test, derive(Default))]
 pub struct ContractInfo {
     pub compiler_version: String,
     pub runtime_version: String,
