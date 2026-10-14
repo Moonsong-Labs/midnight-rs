@@ -40,6 +40,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
 
+use crate::client::graphql_url;
 use crate::error::IndexerError;
 use crate::types::GraphQLResponse;
 
@@ -155,19 +156,14 @@ pub struct SubscriptionClient {
 impl SubscriptionClient {
     /// Create a new subscription client.
     ///
-    /// `ws_url` should be the base indexer URL (e.g. `http://127.0.0.1:8088`)
-    /// or the full WebSocket subscription path. The client will normalize the
-    /// URL to the subscription endpoint at `/api/v3/graphql/ws`.
+    /// `ws_url` is the base indexer URL (e.g. `http://127.0.0.1:8088`), or a
+    /// URL whose path ends in `/graphql` or `/graphql/ws`. The client
+    /// subscribes at that path with `/ws` after `/graphql`, or at
+    /// `/api/v3/graphql/ws` under a base URL. An `http` or `https` scheme
+    /// becomes `ws` or `wss`.
     pub fn new(ws_url: impl Into<String>) -> Self {
         let raw: String = ws_url.into();
-        let base = raw.trim_end_matches('/');
-        let mut url = if base.ends_with("/graphql/ws") {
-            base.to_string()
-        } else if base.ends_with("/graphql") {
-            format!("{base}/ws")
-        } else {
-            format!("{base}/api/v3/graphql/ws")
-        };
+        let mut url = format!("{}/ws", graphql_url(&raw));
         // Ensure ws:// or wss:// scheme
         if url.starts_with("http://") {
             url = format!("ws://{}", &url[7..]);
