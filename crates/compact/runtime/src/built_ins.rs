@@ -267,12 +267,6 @@ fn builtin(
             // Return as-is for now
             return Ok(Some(args.get(1).cloned().unwrap_or(Value::Void)));
         }
-        // Note: "disclose" is handled directly in eval_expr for CallWitness
-        // and CallPure (before try_builtin is called) so that the disclosed
-        // value is recorded in ctx.communication_outputs. This case is
-        // unreachable from those paths but kept as a safety fallback for any
-        // other call path that might invoke try_builtin with "disclose".
-        "disclose" => return Ok(Some(args.first().cloned().unwrap_or(Value::Void))),
         _ => return Ok(None), // Not a builtin
     };
     Ok(Some(Value::AlignedValue(av)))

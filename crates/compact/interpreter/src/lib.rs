@@ -1197,10 +1197,6 @@ fn eval_pure_call(
 ) -> Result<Value, InterpreterError> {
     let program = ctx.program;
     let name = program.runtime_name(id);
-    // Handle disclose specially: record the value as a communication output.
-    if name == "disclose" {
-        return disclose(ctx, values);
-    }
     match try_builtin_typed(name, &values, &program.argument_types(id)) {
         Some(result) => result,
         None => Err(InterpreterError::Unsupported(format!(
@@ -1217,13 +1213,6 @@ fn eval_witness_call(
 ) -> Result<Value, InterpreterError> {
     let program = ctx.program;
     let name = program.runtime_name(id);
-    // Handle disclose before anything else: it must always record the value
-    // in communication_outputs regardless of the witness provider. A witness
-    // provider that intercepts "disclose" would break the communication
-    // commitment.
-    if name == "disclose" {
-        return disclose(ctx, values);
-    }
 
     // The Compact "witness" native primitives (see [`WitnessNative`]).
     // These are effectful and have no witness-provider/builtin entry, so the
@@ -1319,17 +1308,6 @@ fn eval_witness_call(
     Err(InterpreterError::Witness(format!(
         "no witness provider or builtin for: {name}"
     )))
-}
-
-/// Record a disclosed value as a communication output and pass it through.
-fn disclose(ctx: &mut ExecContext, values: Vec<Value>) -> Result<Value, InterpreterError> {
-    match values.into_iter().next() {
-        Some(arg) => {
-            ctx.communication_outputs.push(arg.try_to_aligned_value()?);
-            Ok(arg)
-        }
-        None => Ok(Value::Void),
-    }
 }
 
 /// The element type of a byte string, `Uint<0..255>`: what indexing or
