@@ -126,10 +126,7 @@ impl SubmitError {
     /// surfaces. Returns `None` for non-terminal statuses and for the two
     /// success terminals (`InBestBlock` / `InFinalizedBlock`), which the
     /// wait loops handle themselves.
-    fn from_terminal_status<T: subxt::Config, C>(
-        status: &subxt::tx::TransactionStatus<T, C>,
-    ) -> Option<Self> {
-        use subxt::tx::TransactionStatus;
+    fn from_terminal_status<T: subxt::Config, C>(status: &TransactionStatus<T, C>) -> Option<Self> {
         match status {
             TransactionStatus::Invalid { message } => Some(Self::Invalid {
                 message: message.clone(),
@@ -619,7 +616,6 @@ mod tests {
 
     use super::*;
     use subxt::SubstrateConfig;
-    use subxt::tx::TransactionStatus;
 
     /// The client type parameter is irrelevant for the terminal-status
     /// variants, which only carry a message.
