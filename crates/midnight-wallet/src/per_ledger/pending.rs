@@ -147,11 +147,14 @@ impl PendingReservations {
     /// the batch landed with it) or a conflicting tx consumed that input,
     /// in which case the reserved tx can never apply and the whole batch
     /// is dead either way.
+    ///
+    /// Returns true when it removed a reservation.
     pub(crate) fn clear_confirmed(
         &mut self,
         spent_unshielded: &[SpentUtxoKey],
         dust_nullifiers: &[DustNullifier],
-    ) {
+    ) -> bool {
+        let before = (self.unshielded.len(), self.dust.len());
         if !spent_unshielded.is_empty() {
             self.unshielded
                 .retain(|p| !spent_unshielded.contains(&p.key));
@@ -163,6 +166,7 @@ impl PendingReservations {
                     .any(|s| dust_nullifiers.contains(&s.old_nullifier))
             });
         }
+        (self.unshielded.len(), self.dust.len()) != before
     }
 
     /// Drop the reservations a specific build took, because that build will

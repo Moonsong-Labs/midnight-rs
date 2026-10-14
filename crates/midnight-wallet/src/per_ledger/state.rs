@@ -1168,8 +1168,6 @@ impl Wallet {
             || Some(last_tx_id) != self.last_tx_id
             || last_block_height > self.last_block_height;
         let parameters_changed = parameters != self.parameters;
-        let pending_before =
-            self.pending.dust_batches().count() + self.pending.unshielded_keys().count();
         // Captured before the overwrite for the same reason the pending set
         // is merged rather than replaced: a registration added after this
         // resync's plan was snapshotted is not in the replayed state.
@@ -1206,11 +1204,9 @@ impl Wallet {
         // Reservations whose spends this replay just observed confirmed are
         // no longer in flight; drop them so the underlying UTXOs become
         // spendable again immediately instead of waiting for TTL eviction.
-        self.pending
+        let pending_changed = self
+            .pending
             .clear_confirmed(&spent_unshielded, &dust_nullifiers);
-        let pending_changed = self.pending.dust_batches().count()
-            + self.pending.unshielded_keys().count()
-            != pending_before;
 
         // Re-persist the committed state (moved cursors, refreshed
         // parameters, cleared pending set) so a crash before the next sync
