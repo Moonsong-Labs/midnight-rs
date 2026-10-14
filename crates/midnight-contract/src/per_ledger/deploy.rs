@@ -18,10 +18,10 @@ use helpers::{
 };
 
 use crate::ShieldedOffer;
-use crate::change::change_due;
+use crate::change::{change_due, total_by_key};
 use crate::deploy::DeployResult;
 use crate::error::ContractError;
-use crate::offer::{refuse_shortfall, value_by_token};
+use crate::offer::refuse_shortfall;
 
 /// Deploy `initial_state` with Dust fee payment from the provider's funded
 /// wallet. See [`crate::deploy::deploy_funded`].
@@ -154,12 +154,12 @@ async fn pay_offer(
     prepared: Vec<PreparedInput>,
     (change_cpk, change_epk): (CoinPublicKey, EncryptionPublicKey),
 ) -> Result<Vec<u8>, ContractError> {
-    let held_value = value_by_token(
+    let held_value = total_by_key(
         prepared
             .iter()
             .map(|input| (input.token_type().into_sdk(), input.value())),
     )?;
-    let paid_value = value_by_token(
+    let paid_value = total_by_key(
         offer
             .outputs
             .iter()

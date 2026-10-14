@@ -27,7 +27,7 @@ use midnight_typed_state::{ContractState, InMemoryDB};
 use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
 use crate::call::ShieldedInputs;
-use crate::change::change_due;
+use crate::change::{change_due, total_by_key};
 use crate::error::ContractError;
 use crate::runtime;
 
@@ -182,18 +182,17 @@ pub(crate) async fn call_transaction(
     // Value this call mints, per (token, segment). The ledger credits a mint
     // against the offer's balance, so a circuit output covered by one draws
     // nothing from the attached coins and must not be charged to them.
-    let mut minted_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
-        std::collections::BTreeMap::new();
+    let mut mints = Vec::new();
     for (transcript, is_fallible) in [(guaranteed.as_ref(), false), (fallible.as_ref(), true)] {
         let Some(transcript) = transcript else {
             continue;
         };
         for kv in transcript.effects.shielded_mints.iter() {
             let token = helper_addr.custom_shielded_token_type(*kv.0);
-            let minted = minted_value.entry((token, is_fallible)).or_default();
-            *minted = minted.saturating_add(u128::from(*kv.1));
+            mints.push(((token, is_fallible), u128::from(*kv.1)));
         }
     }
+    let minted_value = total_by_key(mints)?;
 
     let guaranteed_payouts = payouts_of(guaranteed.as_ref());
     let fallible_payouts = payouts_of(fallible.as_ref());
@@ -359,8 +358,7 @@ pub(crate) async fn call_transaction(
     // the attached coins are reconciled below. Transients are excluded: their
     // output and input halves cancel, so they consume none of the attached
     // value.
-    let mut circuit_output_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
-        std::collections::BTreeMap::new();
+    let mut drawn = Vec::new();
     for (commitment, decoded, output) in build_shielded_offer_outputs(
         &exec_result.zswap_outputs,
         coin_encryption_keys,
@@ -396,14 +394,7 @@ pub(crate) async fn call_transaction(
                 guaranteed_transients.push(transient);
             }
         } else {
-            let drawn = circuit_output_value
-                .entry((decoded.coin.type_, is_fallible))
-                .or_default();
-            *drawn = drawn.checked_add(decoded.coin.value).ok_or_else(|| {
-                ContractError::Construction(
-                    "circuit shielded output values overflow a u128 total".into(),
-                )
-            })?;
+            drawn.push(((decoded.coin.type_, is_fallible), decoded.coin.value));
             if is_fallible {
                 fallible_outputs.push(Box::new(output));
             } else {
@@ -411,6 +402,7 @@ pub(crate) async fn call_transaction(
             }
         }
     }
+    let circuit_output_value = total_by_key(drawn)?;
 
     // Any `createZswapInput` not paired with a same-call self-output spends a
     // coin already in the contract's Zswap state (a persistent contract-owned
@@ -493,24 +485,17 @@ async fn attach_and_prove(
     } = circuit_offers;
     let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB, BuildContext>>> = Vec::new();
     let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB, BuildContext>>> = Vec::new();
-    let mut attached_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
-        std::collections::BTreeMap::new();
+    let mut attached = Vec::new();
     for input in prepared {
         let to_fallible = shielded_input_to_fallible(input.token_type(), &output_segments)?;
-        let attached = attached_value
-            .entry((input.token_type(), to_fallible))
-            .or_default();
-        *attached = attached.checked_add(input.value()).ok_or_else(|| {
-            ContractError::Construction(
-                "attached shielded coin values overflow a u128 total".into(),
-            )
-        })?;
+        attached.push(((input.token_type(), to_fallible), input.value()));
         if to_fallible {
             fallible_inputs.push(Box::new(input));
         } else {
             guaranteed_inputs.push(Box::new(input));
         }
     }
+    let attached_value = total_by_key(attached)?;
 
     // Return whatever the attached coins carry beyond what the circuit's outputs
     // draw. Zswap asserts only `balance >= 0` per (token, segment), so a surplus
