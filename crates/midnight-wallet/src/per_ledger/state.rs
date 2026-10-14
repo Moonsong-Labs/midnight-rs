@@ -16,16 +16,12 @@ use helpers::{
 use midnight_indexer_client::SubscriptionClient;
 use midnight_types::{SyncCursors, TrackedUtxo};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use super::pending::PendingReservations;
 use super::types::convert::{IntoLedger, IntoSdk};
 use crate::chain_pin::ChainPin;
-use crate::replay::{
-    DustEventEnvelope, LedgerEventMessage, RECONNECT_MAX_RETRIES, ZswapEventEnvelope,
-    already_applied, event_timeout, last_applied_before, order_regression, progress_cancelled,
-    reconnect_delay, replay_unshielded_events, resume_id, send_progress,
-};
+use crate::replay::{LedgerStream, replay_ledger_events, replay_unshielded_events};
 use crate::storage::wallet_storage_id;
 use crate::{Seed, SpentUtxoKey, SyncProgress, WalletError};
 
@@ -179,11 +175,6 @@ fn anchor_window(
     } else {
         dust_grace_period
     }
-}
-
-/// Hex-decode the event a `LedgerEventMessage` carries.
-fn event_bytes(msg: &LedgerEventMessage, kind: &str) -> Result<Vec<u8>, WalletError> {
-    hex::decode(&msg.raw).map_err(|e| WalletError::Sync(format!("decode {kind} event hex: {e}")))
 }
 
 /// Tagged-deserialize an event of this generation.
@@ -1448,163 +1439,34 @@ pub(crate) async fn replay_zswap_events(
     resuming: bool,
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<ZswapReplay, WalletError> {
-    use midnight_indexer_client::subscription::queries::ZSWAP_LEDGER_EVENTS_SUBSCRIPTION;
-
     let mut state = initial_state;
-    let mut last_id: i64 = last_applied_before(start_id);
-    let mut count: u64 = 0;
-    let mut retries: u32 = 0;
-    let mut later_ledger = None;
-
-    'reconnect: loop {
-        let resume_id = resume_id(count, last_id);
-        let variables = serde_json::json!({ "id": resume_id });
-        let mut subscription = match sub_client
-            .subscribe::<ZswapEventEnvelope>(ZSWAP_LEDGER_EVENTS_SUBSCRIPTION, variables)
-            .await
-        {
-            Ok(s) => s,
-            Err(e) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
-                retries += 1;
-                warn!(retries, error = %e, "zswap subscribe failed, retrying");
-                tokio::time::sleep(reconnect_delay(retries)).await;
-                continue 'reconnect;
+    let replay = replay_ledger_events(
+        sub_client,
+        LedgerStream::Zswap,
+        super::LEDGER,
+        start_id,
+        resuming,
+        progress,
+        |id, raw, ledger| {
+            if ledger < super::LEDGER {
+                return Err(WalletError::LedgerMismatch {
+                    expected: super::LEDGER,
+                    found: ledger,
+                });
             }
-            Err(e) => {
-                return Err(WalletError::Sync(format!(
-                    "subscribe zswapLedgerEvents: {e}"
-                )));
-            }
-        };
-        // Highest id delivered on *this* connection; see `order_regression`.
-        let mut conn_high: Option<i64> = None;
-
-        loop {
-            let event = tokio::time::timeout(event_timeout(resuming), subscription.next()).await;
-
-            match event {
-                Ok(Some(Ok(envelope))) => {
-                    let msg = &envelope.zswap_ledger_events;
-
-                    if let Some(prev) = order_regression(msg.id, conn_high) {
-                        return Err(WalletError::EventOrder {
-                            kind: "zswap",
-                            id: msg.id,
-                            prev,
-                        });
-                    }
-                    conn_high = Some(msg.id);
-
-                    if msg.max_id == 0 {
-                        debug!("no zswap events on this chain");
-                        break 'reconnect;
-                    }
-
-                    if already_applied(msg.id, last_id, start_id, count > 0) {
-                        debug!(id = msg.id, last_id, "skipping re-delivered zswap event");
-                        if msg.id >= msg.max_id {
-                            info!(count, last_id, "zswap replay complete");
-                            send_progress(&progress, SyncProgress::ZswapComplete { events: count });
-                            break 'reconnect;
-                        }
-                        continue;
-                    }
-
-                    let raw = event_bytes(msg, "zswap")?;
-                    let ledger = crate::LedgerVersion::of_event(&raw)?;
-                    if ledger > super::LEDGER {
-                        info!(id = msg.id, %ledger, "zswap events move to a later ledger");
-                        later_ledger = Some((msg.id, ledger));
-                        break 'reconnect;
-                    }
-                    if ledger < super::LEDGER {
-                        return Err(WalletError::LedgerMismatch {
-                            expected: super::LEDGER,
-                            found: ledger,
-                        });
-                    }
-                    let ev = decode_event(&raw, "zswap")?;
-                    state = state.replay_events(secret_keys, [&ev]).map_err(|e| {
-                        WalletError::Sync(format!("replay zswap event id={}: {e}", msg.id))
-                    })?;
-
-                    // Only an applied event counts as progress for the
-                    // reconnect bound; deduped re-deliveries must not reset it.
-                    retries = 0;
-                    last_id = msg.id;
-                    count += 1;
-
-                    if count.is_multiple_of(10_000) {
-                        info!(
-                            count,
-                            id = msg.id,
-                            max_id = msg.max_id,
-                            "zswap replay progress"
-                        );
-                        let alive = send_progress(
-                            &progress,
-                            SyncProgress::ZswapEvents {
-                                current: msg.id,
-                                max: msg.max_id,
-                            },
-                        );
-                        if !alive {
-                            return Err(progress_cancelled("zswap"));
-                        }
-                    }
-
-                    if msg.id >= msg.max_id {
-                        info!(count, last_id, "zswap replay complete");
-                        send_progress(&progress, SyncProgress::ZswapComplete { events: count });
-                        break 'reconnect;
-                    }
-                }
-                Ok(Some(Err(e))) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
-                    retries += 1;
-                    warn!(retries, error = %e, "zswap subscription dropped, reconnecting");
-                    tokio::time::sleep(reconnect_delay(retries)).await;
-                    continue 'reconnect;
-                }
-                Ok(Some(Err(e))) => {
-                    return Err(WalletError::Sync(format!(
-                        "zswap subscription error during replay: {e}"
-                    )));
-                }
-                Ok(None) => {
-                    if resuming && count == 0 {
-                        info!(last_id, "zswap already at tip");
-                        send_progress(&progress, SyncProgress::ZswapComplete { events: 0 });
-                        break 'reconnect;
-                    }
-                    // Mid-replay stream end without a `complete`: treat as a
-                    // dropped connection and resume from the cursor.
-                    if retries < RECONNECT_MAX_RETRIES {
-                        retries += 1;
-                        warn!(retries, "zswap subscription ended early, reconnecting");
-                        tokio::time::sleep(reconnect_delay(retries)).await;
-                        continue 'reconnect;
-                    }
-                    return Err(WalletError::Sync(format!(
-                        "zswap subscription ended before replay completed \
-                         (after {RECONNECT_MAX_RETRIES} reconnect attempts)"
-                    )));
-                }
-                Err(_) => {
-                    if resuming && count == 0 {
-                        info!(last_id, "zswap already at tip");
-                        send_progress(&progress, SyncProgress::ZswapComplete { events: 0 });
-                        break 'reconnect;
-                    }
-                    return Err(WalletError::Sync("timeout waiting for zswap events".into()));
-                }
-            }
-        }
-    }
+            let ev = decode_event(raw, "zswap")?;
+            state = state
+                .replay_events(secret_keys, [&ev])
+                .map_err(|e| WalletError::Sync(format!("replay zswap event id={id}: {e}")))?;
+            Ok(())
+        },
+    )
+    .await?;
 
     Ok(ZswapReplay {
         state,
-        last_id,
-        later_ledger,
+        last_id: replay.last_id,
+        later_ledger: replay.later_ledger,
     })
 }
 
@@ -1635,180 +1497,56 @@ pub(crate) async fn replay_dust_events(
     checkpoint: Option<impl Fn(&DustWallet<DefaultDB>, i64)>,
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<DustReplay, WalletError> {
-    use midnight_indexer_client::subscription::queries::DUST_LEDGER_EVENTS_SUBSCRIPTION;
-
-    let mut later_ledger = None;
-
-    let mut last_id: i64 = last_applied_before(start_id);
     let mut last_block_time: Option<Timestamp> = None;
     // Nullifiers of every DustSpendProcessed event seen during this replay,
     // surfaced to the caller so it can clear confirmed pending reservations.
     let mut spend_nullifiers: Vec<DustNullifier> = Vec::new();
-    let mut count: u64 = 0;
-    let mut since_checkpoint: u64 = 0;
-    let mut retries: u32 = 0;
-
-    'reconnect: loop {
-        let resume_id = resume_id(count, last_id);
-        let variables = serde_json::json!({ "id": resume_id });
-        let mut subscription = match sub_client
-            .subscribe::<DustEventEnvelope>(DUST_LEDGER_EVENTS_SUBSCRIPTION, variables)
-            .await
-        {
-            Ok(s) => s,
-            Err(e) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
-                retries += 1;
-                warn!(retries, error = %e, "dust subscribe failed, retrying");
-                tokio::time::sleep(reconnect_delay(retries)).await;
-                continue 'reconnect;
-            }
-            Err(e) => {
-                return Err(WalletError::Sync(format!(
-                    "subscribe dustLedgerEvents: {e}"
-                )));
-            }
-        };
-        // Highest id delivered on *this* connection; see `order_regression`.
-        let mut conn_high: Option<i64> = None;
-
-        loop {
-            let event = tokio::time::timeout(event_timeout(resuming), subscription.next()).await;
-
-            match event {
-                Ok(Some(Ok(envelope))) => {
-                    let msg = &envelope.dust_ledger_events;
-
-                    if let Some(prev) = order_regression(msg.id, conn_high) {
-                        return Err(WalletError::EventOrder {
-                            kind: "dust",
-                            id: msg.id,
-                            prev,
-                        });
-                    }
-                    conn_high = Some(msg.id);
-
-                    if msg.max_id == 0 {
-                        debug!("no dust events on this chain");
-                        break 'reconnect;
-                    }
-
-                    if already_applied(msg.id, last_id, start_id, count > 0) {
-                        debug!(id = msg.id, last_id, "skipping re-delivered dust event");
-                        if msg.id >= msg.max_id {
-                            info!(count, last_id, "dust replay complete");
-                            send_progress(&progress, SyncProgress::DustComplete { events: count });
-                            break 'reconnect;
-                        }
-                        continue;
-                    }
-
-                    let raw = event_bytes(msg, "dust")?;
-                    let ledger = crate::LedgerVersion::of_event(&raw)?;
-                    if ledger > super::LEDGER {
-                        info!(id = msg.id, %ledger, "dust events move to a later ledger");
-                        later_ledger = Some((msg.id, ledger));
-                        break 'reconnect;
-                    }
-                    if ledger == super::LEDGER {
-                        let ev = decode_event(&raw, "dust")?;
-                        dust_wallet.replay_events([&ev]).map_err(|e| {
-                            WalletError::Sync(format!("apply dust event id={}: {e}", msg.id))
-                        })?;
-                        if let Some(t) = event_block_time(&ev) {
-                            last_block_time = Some(t);
-                        }
-                        if let Some(n) = event_spend_nullifier(&ev) {
-                            spend_nullifiers.push(n);
-                        }
-                    }
-
-                    // Only a new event counts as progress for the reconnect
-                    // bound; deduped re-deliveries must not reset it.
-                    retries = 0;
-                    last_id = msg.id;
-                    count += 1;
-                    since_checkpoint += 1;
-
-                    if count.is_multiple_of(10_000) {
-                        info!(
-                            count,
-                            id = msg.id,
-                            max_id = msg.max_id,
-                            "dust replay progress"
-                        );
-                        let alive = send_progress(
-                            &progress,
-                            SyncProgress::DustEvents {
-                                current: msg.id,
-                                max: msg.max_id,
-                            },
-                        );
-                        if !alive {
-                            return Err(progress_cancelled("dust"));
-                        }
-                    }
-
-                    if since_checkpoint >= DUST_CHECKPOINT_INTERVAL {
-                        if let Some(ref save) = checkpoint {
-                            save(&dust_wallet, last_id);
-                        }
-                        since_checkpoint = 0;
-                    }
-
-                    if msg.id >= msg.max_id {
-                        info!(count, last_id, "dust replay complete");
-                        send_progress(&progress, SyncProgress::DustComplete { events: count });
-                        break 'reconnect;
-                    }
+    let mut consumed: u64 = 0;
+    // The closure owns `checkpoint` and borrows the rest through these
+    // bindings. The sync's checkpoint is `Send` but not `Sync`, so a borrow of
+    // it would make the replay future lose `Send`.
+    let (wallet, block_time, nullifiers) = (
+        &mut dust_wallet,
+        &mut last_block_time,
+        &mut spend_nullifiers,
+    );
+    let replay = replay_ledger_events(
+        sub_client,
+        LedgerStream::Dust,
+        super::LEDGER,
+        start_id,
+        resuming,
+        progress,
+        move |id, raw, ledger| {
+            if ledger == super::LEDGER {
+                let ev = decode_event(raw, "dust")?;
+                wallet
+                    .replay_events([&ev])
+                    .map_err(|e| WalletError::Sync(format!("apply dust event id={id}: {e}")))?;
+                if let Some(t) = event_block_time(&ev) {
+                    *block_time = Some(t);
                 }
-                Ok(Some(Err(e))) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
-                    retries += 1;
-                    warn!(retries, error = %e, "dust subscription dropped, reconnecting");
-                    tokio::time::sleep(reconnect_delay(retries)).await;
-                    continue 'reconnect;
-                }
-                Ok(Some(Err(e))) => {
-                    return Err(WalletError::Sync(format!(
-                        "dust subscription error during replay: {e}"
-                    )));
-                }
-                Ok(None) => {
-                    if resuming && count == 0 {
-                        info!(last_id, "dust already at tip");
-                        send_progress(&progress, SyncProgress::DustComplete { events: 0 });
-                        break 'reconnect;
-                    }
-                    // Mid-replay stream end without a `complete`: treat as a
-                    // dropped connection and resume from the cursor.
-                    if retries < RECONNECT_MAX_RETRIES {
-                        retries += 1;
-                        warn!(retries, "dust subscription ended early, reconnecting");
-                        tokio::time::sleep(reconnect_delay(retries)).await;
-                        continue 'reconnect;
-                    }
-                    return Err(WalletError::Sync(format!(
-                        "dust subscription ended before replay completed \
-                         (after {RECONNECT_MAX_RETRIES} reconnect attempts)"
-                    )));
-                }
-                Err(_) => {
-                    if resuming && count == 0 {
-                        info!(last_id, "dust already at tip");
-                        send_progress(&progress, SyncProgress::DustComplete { events: 0 });
-                        break 'reconnect;
-                    }
-                    return Err(WalletError::Sync("timeout waiting for dust events".into()));
+                if let Some(n) = event_spend_nullifier(&ev) {
+                    nullifiers.push(n);
                 }
             }
-        }
-    }
+            consumed += 1;
+            if consumed.is_multiple_of(DUST_CHECKPOINT_INTERVAL)
+                && let Some(save) = &checkpoint
+            {
+                save(wallet, id);
+            }
+            Ok(())
+        },
+    )
+    .await?;
 
     Ok(DustReplay {
         wallet: dust_wallet,
-        last_id,
+        last_id: replay.last_id,
         last_block_time,
         spend_nullifiers,
-        later_ledger,
+        later_ledger: replay.later_ledger,
     })
 }
 
@@ -2900,7 +2638,8 @@ mod tests {
         assert!(wallet.watched_coins().is_empty());
     }
 
-    /// Mock-WebSocket-server tests for the zswap and dust replays' resume.
+    /// Mock-WebSocket-server test for a replay's resume, driven through the
+    /// zswap replay.
     mod resume_ws {
         use midnight_indexer_client::testutil::{accept_subscriber, bind, next_json, send_next};
         use serde_json::json;
@@ -2952,52 +2691,6 @@ mod tests {
             assert_eq!(
                 replay.last_id, 7,
                 "the re-delivered event must not advance the cursor"
-            );
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(5),
-                "took {:?}: the replay waited for the idle timeout instead of reading max_id",
-                started.elapsed()
-            );
-            assert_eq!(
-                server.await.unwrap(),
-                7,
-                "must subscribe at the applied cursor, not past it"
-            );
-        }
-
-        /// The dust replay carries its own copy of the resume, so it needs
-        /// its own guard. See the zswap test for what the cost is.
-        #[tokio::test]
-        async fn dust_resume_at_the_tip_returns_without_waiting() {
-            let (listener, url) = bind().await;
-            let server = tokio::spawn(async move {
-                let (mut ws, sub) = accept_subscriber(&listener).await;
-                let asked = requested_id(&sub);
-                send_next(&mut ws, &sub, ledger_event("dustLedgerEvents", 7, 7)).await;
-                while next_json(&mut ws).await.is_some() {}
-                asked
-            });
-
-            let sub_client = SubscriptionClient::new(&url);
-            let started = std::time::Instant::now();
-            let replay = replay_dust_events(
-                &sub_client,
-                DustWallet::default((&test_seed()).into_ledger(), Some(&INITIAL_PARAMETERS)),
-                8,
-                true,
-                None::<fn(&DustWallet<DefaultDB>, i64)>,
-                None,
-            )
-            .await
-            .expect("a resume at the tip must succeed");
-
-            assert_eq!(
-                replay.last_id, 7,
-                "the re-delivered event must not advance the cursor"
-            );
-            assert!(
-                replay.spend_nullifiers.is_empty(),
-                "a skipped event must apply nothing"
             );
             assert!(
                 started.elapsed() < std::time::Duration::from_secs(5),
