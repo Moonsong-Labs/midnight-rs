@@ -345,7 +345,7 @@ async fn shielded_transfer_conserves_value() {
          selected coins has to return as change"
     );
     assert!(
-        !result.spent_shielded_inputs.is_empty(),
+        !result.spent.shielded.is_empty(),
         "the build selects coins up front, so it must surface their nullifiers \
          for reservation"
     );
@@ -411,10 +411,10 @@ async fn shielded_transfer_spans_multiple_coins() {
         });
 
     assert!(
-        result.spent_shielded_inputs.len() >= 2,
+        result.spent.shielded.len() >= 2,
         "covering {amount} needs more than the largest coin ({largest}), so at \
          least two inputs; got {}",
-        result.spent_shielded_inputs.len()
+        result.spent.shielded.len()
     );
     assert_eq!(
         shielded_delta(&result.tx_bytes, token),
@@ -465,7 +465,7 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
     // nullifiers so the caller can reserve them (unlike a plain transfer, whose
     // coins the ledger selects internally).
     assert!(
-        !result.spent_shielded_inputs.is_empty(),
+        !result.spent.shielded.is_empty(),
         "swap half should surface the spent give-side coin nullifiers"
     );
     assert!(

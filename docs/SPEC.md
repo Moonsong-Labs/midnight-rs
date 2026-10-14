@@ -316,8 +316,7 @@ ledger_N::WalletBuilds::prepare_transfer(request, proof_provider)   // one hold 
   → ReservedBuild
   ↓
 (wallet released)    PreparedTransfer::prove       // the only real proving
-  → TransferResult { tx_bytes, ledger_version, spent_unshielded_inputs,
-                     spent_shielded_inputs, spent_dust, fee_speck, reserved_at }
+  → TransferResult { tx_bytes, ledger_version, spent, fee_speck }
   ↓
 (.await path only)   provider.submit(tx_bytes).await → PendingTx
 ```

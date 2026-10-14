@@ -313,8 +313,7 @@ let result = provider
     .transfer_shielded(token_type, amount, &recipient)
     .build()
     .await?;
-// result: TransferResult { tx_bytes, ledger_version, spent_unshielded_inputs,
-//                          spent_shielded_inputs, spent_dust, fee_speck, reserved_at }
+// result: TransferResult { tx_bytes, ledger_version, spent, fee_speck }
 println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / SPECKS_PER_DUST as f64);
 let pending = provider.submit(&result.tx_bytes).await?;
 ```

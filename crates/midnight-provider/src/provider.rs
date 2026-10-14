@@ -772,13 +772,13 @@ impl MidnightProvider {
             Ok(pending) => Ok(match self.facade() {
                 Some(wallet) => pending.with_reservation(crate::submit::Reservation::new(
                     wallet,
-                    SpentInputs::from(result),
+                    result.spent.clone(),
                 )),
                 None => pending,
             }),
             Err(err) => {
                 if crate::submit::never_reached_the_node(&err)
-                    && let Err(release_err) = self.release(&SpentInputs::from(result)).await
+                    && let Err(release_err) = self.release(&result.spent).await
                 {
                     tracing::warn!(
                         error = %release_err,

@@ -124,13 +124,9 @@ impl PreparedTransfer {
     /// Prove the transaction and serialize it. The slowest step in a build,
     /// and it touches no wallet.
     pub async fn prove(self) -> Result<TransferResult, WalletError> {
+        let spent = self.spent_inputs();
         let PreparedTransfer {
-            mut tx_info,
-            tx,
-            dust_batches,
-            spent_unshielded_inputs,
-            spent_shielded_inputs,
-            reserved_at,
+            mut tx_info, tx, ..
         } = self;
 
         // Keep a handle to the ledger context so we can read `parameters`
@@ -155,11 +151,8 @@ impl PreparedTransfer {
         Ok(TransferResult {
             tx_bytes: bytes,
             ledger_version: super::LEDGER,
-            spent_unshielded_inputs,
-            spent_shielded_inputs: sdk_nullifiers(&spent_shielded_inputs),
-            spent_dust: dust_nullifiers(&dust_batches),
+            spent,
             fee_speck,
-            reserved_at,
         })
     }
 }

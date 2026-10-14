@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{
-    LedgerVersion, MidnightProvider, NIGHT, Network, ProviderError, ShieldedTokenType, SpentInputs,
+    LedgerVersion, MidnightProvider, NIGHT, Network, ProviderError, ShieldedTokenType,
     TransferKind, TransferRequest, WalletError, WalletFacade,
 };
 use midnight_wallet::{LocalWallet, Wallet};
@@ -151,7 +151,7 @@ async fn the_wallet_is_readable_while_a_build_proves() {
 
     // The build still had to reserve before it proved, so release what it took.
     provider
-        .release(&SpentInputs::from(&result))
+        .release(&result.spent)
         .await
         .expect("release the reservation");
 }

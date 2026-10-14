@@ -17,16 +17,10 @@ pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
     /// The generation the transaction is built for.
     pub ledger_version: LedgerVersion,
-    /// The unshielded UTXOs this transaction spends. Its build reserved them,
-    /// and `WalletFacade::release` names them by these keys if the
-    /// transaction never reaches the chain.
-    pub spent_unshielded_inputs: Vec<SpentUtxoKey>,
-    /// The shielded coins this transaction spends, by nullifier. Reserved and
-    /// released the same way.
-    pub spent_shielded_inputs: Vec<Nullifier>,
-    /// The Dust spends that fund this transaction's fee, by nullifier.
-    /// Reserved and released the same way.
-    pub spent_dust: Vec<DustNullifier>,
+    /// What this transaction spends, which its build reserved.
+    /// `WalletFacade::release` takes it back if the transaction never reaches
+    /// the chain.
+    pub spent: SpentInputs,
     /// Deterministic Dust fee the chain will charge for this transaction, in
     /// SPECK (`1 DUST = 10^15 SPECK`). Computed via
     /// `Transaction::fees(&ledger.parameters, false)` against the parameters
@@ -42,10 +36,6 @@ pub struct TransferResult {
     /// never less than `min_time_to_dismiss`. The check never changes the
     /// fee, but a quote does not mean that the node accepts the transaction.
     pub fee_speck: u128,
-    /// The chain time this build selected against, which its reservation is
-    /// stamped with. A release names it, so handing this result back drops
-    /// this build's own entry, not one a later build made in a later block.
-    pub reserved_at: Timestamp,
 }
 
 impl std::fmt::Debug for TransferResult {
@@ -53,11 +43,8 @@ impl std::fmt::Debug for TransferResult {
         f.debug_struct("TransferResult")
             .field("tx_bytes", &format_args!("{} bytes", self.tx_bytes.len()))
             .field("ledger_version", &self.ledger_version)
-            .field("spent_unshielded_inputs", &self.spent_unshielded_inputs)
-            .field("spent_shielded_inputs", &self.spent_shielded_inputs)
-            .field("spent_dust", &self.spent_dust)
+            .field("spent", &self.spent)
             .field("fee_speck", &self.fee_speck)
-            .field("reserved_at", &self.reserved_at)
             .finish()
     }
 }
@@ -106,17 +93,6 @@ impl SpentInputs {
     /// and nothing to hand back.
     pub fn is_empty(&self) -> bool {
         self.dust.is_empty() && self.unshielded.is_empty() && self.shielded.is_empty()
-    }
-}
-
-impl From<&TransferResult> for SpentInputs {
-    fn from(result: &TransferResult) -> Self {
-        Self {
-            dust: result.spent_dust.clone(),
-            unshielded: result.spent_unshielded_inputs.clone(),
-            shielded: result.spent_shielded_inputs.clone(),
-            reserved_at: result.reserved_at,
-        }
     }
 }
 
