@@ -15,8 +15,7 @@ use super::helpers::transient_crypto::proofs::{
     KeyLocation, Proof, ProofPreimage, Resolver as ResolverTrait, WrappedIr,
 };
 use super::helpers::{
-    CostModel, DB, PedersenRandomness, ProofMarker, ProofPreimageMarker, ProofProvider, Resolver,
-    Signature, StdRng, Transaction,
+    CostModel, DB, ProofProvider, ProvenTransaction, Resolver, StdRng, UnprovenTransaction,
 };
 use crate::remote_prover::{
     INITIAL_BACKOFF, MAX_BACKOFF, PROOF_SERVER_TIMEOUT, PROVING_PANIC_PREFIX, ProofServerError,
@@ -48,11 +47,11 @@ fn is_transient_attempt<D: DB>(err: &TransactionProvingError<D>) -> bool {
 impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
     async fn prove(
         &self,
-        tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, D>,
+        tx: UnprovenTransaction<D>,
         _rng: StdRng,
         resolver: &'static Resolver,
         cost_model: CostModel,
-    ) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
+    ) -> ProvenTransaction<D> {
         info!(url = %self.url, "remote proving");
         let base_url = self.url.clone();
 
@@ -83,12 +82,12 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
 }
 
 async fn prove_with_retries<D: DB + Clone>(
-    tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, D>,
+    tx: UnprovenTransaction<D>,
     base_url: String,
     http: reqwest::Client,
     resolver: &Resolver,
     cost_model: CostModel,
-) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
+) -> ProvenTransaction<D> {
     let start = Instant::now();
     let mut delay = INITIAL_BACKOFF;
     loop {

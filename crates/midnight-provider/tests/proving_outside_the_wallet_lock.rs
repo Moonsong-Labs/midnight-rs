@@ -82,21 +82,11 @@ macro_rules! test_provers {
         impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for BrokenProver {
             async fn prove(
                 &self,
-                _tx: midnight_helpers::$ledger::Transaction<
-                    midnight_helpers::$ledger::Signature,
-                    midnight_helpers::$ledger::ProofPreimageMarker,
-                    midnight_helpers::$ledger::PedersenRandomness,
-                    DefaultDB,
-                >,
+                _tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
                 _rng: StdRng,
                 _resolver: &'static midnight_helpers::$ledger::Resolver,
                 _cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::Transaction<
-                midnight_helpers::$ledger::Signature,
-                midnight_helpers::$ledger::ProofMarker,
-                midnight_helpers::$ledger::PedersenRandomness,
-                DefaultDB,
-            > {
+            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
                 panic!("prover is down");
             }
         }
@@ -105,21 +95,11 @@ macro_rules! test_provers {
         impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ParkedProver {
             async fn prove(
                 &self,
-                tx: midnight_helpers::$ledger::Transaction<
-                    midnight_helpers::$ledger::Signature,
-                    midnight_helpers::$ledger::ProofPreimageMarker,
-                    midnight_helpers::$ledger::PedersenRandomness,
-                    DefaultDB,
-                >,
+                tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
                 rng: StdRng,
                 resolver: &'static midnight_helpers::$ledger::Resolver,
                 cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::Transaction<
-                midnight_helpers::$ledger::Signature,
-                midnight_helpers::$ledger::ProofMarker,
-                midnight_helpers::$ledger::PedersenRandomness,
-                DefaultDB,
-            > {
+            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
                 self.started.notify_one();
                 self.release.notified().await;
                 self.$ledger.prove(tx, rng, resolver, cost_model).await

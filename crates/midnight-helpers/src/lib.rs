@@ -29,6 +29,13 @@ pub mod ledger_8 {
 
     /// The ledger context every build in this workspace runs against.
     pub type BuildContext = LedgerContext<DefaultDB>;
+
+    /// An intent before its proofs are made.
+    pub type UnprovenIntent<D> = Intent<Signature, ProofPreimageMarker, PedersenRandomness, D>;
+
+    /// A transaction with its proofs made and its binding not yet sealed, as
+    /// a [`ProofProvider`] returns it.
+    pub type ProvenTransaction<D> = Transaction<Signature, ProofMarker, PedersenRandomness, D>;
 }
 
 /// Ledger generation 9, which a chain runs from the 8 to 9 hard fork on.
@@ -41,6 +48,13 @@ pub mod ledger_9 {
 
     /// The ledger context every build in this workspace runs against.
     pub type BuildContext = LedgerContext<DefaultDB>;
+
+    /// An intent before its proofs are made.
+    pub type UnprovenIntent<D> = Intent<Signature, ProofPreimageMarker, PedersenRandomness, D>;
+
+    /// A transaction with its proofs made and its binding not yet sealed, as
+    /// a [`ProofProvider`] returns it.
+    pub type ProvenTransaction<D> = Transaction<Signature, ProofMarker, PedersenRandomness, D>;
 }
 
 pub use midnight_ledger_unsafe_helpers::{CoinSelectionStrategy, ContractVerifyingKeyBytes};

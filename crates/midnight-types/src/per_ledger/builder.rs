@@ -15,11 +15,11 @@ use helpers::{
     BuildContext, BuildUtxoOutput, BuildUtxoSpend, BuilderContext, CoinSelectionStrategy,
     DefaultDB, DustActions, DustLocalState, DustRegistration, DustRegistrationBuilder, DustSpend,
     DustWallet, FromContext, HashMapStorage, InputInfo, Intent, IntentInfo, LedgerParameters,
-    NIGHT, Nullifier, OfferInfo, OutputInfo, PedersenRandomness, ProofPreimageMarker,
-    ProofProvider, Segment, ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng,
-    StandardTransactionInfo, StdRng, Timestamp, TokenType, Transaction, TransactionSigningKey,
-    UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo,
-    UtxoSpendInfo, WalletAddress,
+    NIGHT, Nullifier, OfferInfo, OutputInfo, ProofPreimageMarker, ProofProvider, Segment,
+    ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng, StandardTransactionInfo,
+    StdRng, Timestamp, TokenType, Transaction, TransactionSigningKey, UnshieldedOffer,
+    UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo,
+    WalletAddress,
 };
 
 use crate::hd::Seed;
@@ -29,7 +29,7 @@ use crate::{
     panic_message,
 };
 
-type UnprovenTx = Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>;
+type UnprovenTx = helpers::UnprovenTransaction<DefaultDB>;
 type FinalizedTx = helpers::FinalizedTransaction<DefaultDB>;
 
 /// One funding seed's Dust contribution to a transaction.
@@ -828,11 +828,7 @@ async fn assemble_unproven(
     }
     let fallible_offer = fallible_offers_vec.into_iter().collect();
 
-    let mut intents = HashMapStorage::<
-        u16,
-        Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
-        DefaultDB,
-    >::new();
+    let mut intents = HashMapStorage::<u16, helpers::UnprovenIntent<DefaultDB>, DefaultDB>::new();
     for (segment_id, intent_info) in tx_info.intents.iter_mut() {
         let intent = intent_info
             .build(&mut tx_info.rng, ttl, tx_info.context.clone(), *segment_id)
@@ -956,7 +952,7 @@ pub fn balance_external(
 
         // The first round draws nothing and prices `external` as it is.
         let fee_tx: Option<UnprovenTx> = (!spends.is_empty()).then(|| {
-            let mut intent: Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB> =
+            let mut intent: helpers::UnprovenIntent<DefaultDB> =
                 Intent::empty(&mut tx_info.rng, ttl);
             intent.dust_actions = Some(Sp::new(DustActions {
                 spends: spends.into(),
@@ -1396,7 +1392,7 @@ mod tests {
     fn intent_at(segment: u16) -> FinalizedTx {
         use helpers::SeedableRng;
         let mut rng = StdRng::seed_from_u64(7);
-        let intent: Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB> =
+        let intent: helpers::UnprovenIntent<DefaultDB> =
             Intent::empty(&mut rng, Timestamp::from_secs(1));
         let tx: UnprovenTx =
             Transaction::from_intents("undeployed", HashMapStorage::new().insert(segment, intent));

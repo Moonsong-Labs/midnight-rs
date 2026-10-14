@@ -76,21 +76,11 @@ macro_rules! proof_counter {
         impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ProofCounter {
             async fn prove(
                 &self,
-                tx: midnight_helpers::$ledger::Transaction<
-                    midnight_helpers::$ledger::Signature,
-                    midnight_helpers::$ledger::ProofPreimageMarker,
-                    midnight_helpers::$ledger::PedersenRandomness,
-                    DefaultDB,
-                >,
+                tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
                 rng: StdRng,
                 resolver: &'static midnight_helpers::$ledger::Resolver,
                 cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::Transaction<
-                midnight_helpers::$ledger::Signature,
-                midnight_helpers::$ledger::ProofMarker,
-                midnight_helpers::$ledger::PedersenRandomness,
-                DefaultDB,
-            > {
+            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
                 if self.fail.load(Ordering::Relaxed) {
                     // `resume_unwind`, not `panic!`: it skips the panic hook,
                     // so the log shows no panic for an expected failure.

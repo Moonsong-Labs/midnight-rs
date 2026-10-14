@@ -46,18 +46,8 @@ pub(crate) async fn deploy_funded(
             &mut self,
             _rng: &mut helpers::StdRng,
             _context: Arc<C>,
-            intent: &helpers::Intent<
-                helpers::Signature,
-                helpers::ProofPreimageMarker,
-                helpers::PedersenRandomness,
-                DefaultDB,
-            >,
-        ) -> helpers::Intent<
-            helpers::Signature,
-            helpers::ProofPreimageMarker,
-            helpers::PedersenRandomness,
-            DefaultDB,
-        > {
+            intent: &helpers::UnprovenIntent<DefaultDB>,
+        ) -> helpers::UnprovenIntent<DefaultDB> {
             intent.add_deploy(self.deploy.clone())
         }
     }

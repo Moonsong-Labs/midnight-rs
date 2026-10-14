@@ -250,18 +250,8 @@ pub(crate) async fn call_transaction(
             &mut self,
             rng: &mut helpers::StdRng,
             _context: std::sync::Arc<C>,
-            intent: &helpers::Intent<
-                helpers::Signature,
-                helpers::ProofPreimageMarker,
-                helpers::PedersenRandomness,
-                DefaultDB,
-            >,
-        ) -> helpers::Intent<
-            helpers::Signature,
-            helpers::ProofPreimageMarker,
-            helpers::PedersenRandomness,
-            DefaultDB,
-        > {
+            intent: &helpers::UnprovenIntent<DefaultDB>,
+        ) -> helpers::UnprovenIntent<DefaultDB> {
             use rand::Rng;
 
             let call = ContractCallPrototype {
