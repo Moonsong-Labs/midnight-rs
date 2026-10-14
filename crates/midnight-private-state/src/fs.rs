@@ -730,38 +730,17 @@ fn find_leaf(snapshots: Vec<Snapshot>) -> Result<Option<Snapshot>, PrivateStateE
     // One leaf, but we still need to rule out an isolated cycle hiding
     // alongside this valid root-leaf chain (e.g., {A_root, B<->C}). Do a
     // BFS from every root (snapshot with `depends_on=None`) following
-    // child edges; anything not reached belongs to a cycle. We can't
-    // reuse `topo_sort` here because it intentionally appends orphans so
-    // the snapshot inventory is complete.
-    use std::collections::HashMap;
-    use std::collections::VecDeque;
+    // child edges; anything not reached belongs to a cycle.
     let by_hash: HashMap<&str, &Snapshot> = snapshots
         .iter()
         .map(|s| (s.extrinsic_hash.as_str(), s))
         .collect();
-    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut roots: Vec<&str> = Vec::new();
-    for s in &snapshots {
-        match s.depends_on.as_deref() {
-            None => roots.push(s.extrinsic_hash.as_str()),
-            Some(parent) => children
-                .entry(parent)
-                .or_default()
-                .push(s.extrinsic_hash.as_str()),
-        }
-    }
-    let mut reachable: HashSet<&str> = HashSet::with_capacity(total);
-    let mut q: VecDeque<&str> = roots.into();
-    while let Some(h) = q.pop_front() {
-        if !reachable.insert(h) {
-            continue;
-        }
-        if let Some(cs) = children.get(h) {
-            for c in cs {
-                q.push_back(c);
-            }
-        }
-    }
+    let roots = snapshots
+        .iter()
+        .filter(|s| s.depends_on.is_none())
+        .map(|s| s.extrinsic_hash.as_str())
+        .collect();
+    let reachable: HashSet<&str> = walk_children(&snapshots, roots).into_iter().collect();
     if reachable.len() != total {
         let mut orphans: Vec<String> = by_hash
             .keys()
@@ -805,42 +784,23 @@ fn find_leaf(snapshots: Vec<Snapshot>) -> Result<Option<Snapshot>, PrivateStateE
 /// each snapshot follows its parent. Within one parent the order is
 /// extrinsic_hash-lexicographic so the result is deterministic.
 fn topo_sort(snapshots: Vec<Snapshot>) -> Vec<Snapshot> {
-    use std::collections::HashMap;
-    use std::collections::VecDeque;
-
     let mut by_hash: HashMap<String, Snapshot> = snapshots
         .into_iter()
         .map(|s| (s.extrinsic_hash.clone(), s))
         .collect();
 
-    let mut children: HashMap<String, Vec<String>> = HashMap::new();
-    let mut roots: Vec<String> = Vec::new();
-    for s in by_hash.values() {
-        match &s.depends_on {
-            None => roots.push(s.extrinsic_hash.clone()),
-            Some(parent) => children
-                .entry(parent.clone())
-                .or_default()
-                .push(s.extrinsic_hash.clone()),
-        }
-    }
-    roots.sort();
-    for v in children.values_mut() {
-        v.sort();
-    }
+    let mut roots: Vec<&str> = by_hash
+        .values()
+        .filter(|s| s.depends_on.is_none())
+        .map(|s| s.extrinsic_hash.as_str())
+        .collect();
+    roots.sort_unstable();
+    let order: Vec<String> = walk_children(by_hash.values(), roots)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
 
-    let mut out = Vec::with_capacity(by_hash.len());
-    let mut q: VecDeque<String> = roots.into();
-    while let Some(h) = q.pop_front() {
-        if let Some(s) = by_hash.remove(&h) {
-            if let Some(cs) = children.remove(&h) {
-                for c in cs {
-                    q.push_back(c);
-                }
-            }
-            out.push(s);
-        }
-    }
+    let mut out: Vec<Snapshot> = order.iter().filter_map(|h| by_hash.remove(h)).collect();
     // Orphans (snapshot whose `depends_on` points at a missing parent) won't
     // be reached by the BFS; append them in hash order so they're still
     // included in the inventory.
@@ -848,6 +808,40 @@ fn topo_sort(snapshots: Vec<Snapshot>) -> Vec<Snapshot> {
     orphans.sort_by(|a, b| a.extrinsic_hash.cmp(&b.extrinsic_hash));
     out.extend(orphans);
     out
+}
+
+/// The hashes reachable from `starts` along child edges (a child's
+/// `depends_on` names its parent), breadth first. Each hash appears once, and
+/// every child comes after its parent. Siblings come in hash order.
+fn walk_children<'a>(
+    snapshots: impl IntoIterator<Item = &'a Snapshot>,
+    starts: Vec<&'a str>,
+) -> Vec<&'a str> {
+    use std::collections::VecDeque;
+
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    for s in snapshots {
+        if let Some(parent) = s.depends_on.as_deref() {
+            children.entry(parent).or_default().push(&s.extrinsic_hash);
+        }
+    }
+    for siblings in children.values_mut() {
+        siblings.sort_unstable();
+    }
+
+    let mut visited = HashSet::new();
+    let mut order = Vec::new();
+    let mut queue: VecDeque<&str> = starts.into();
+    while let Some(hash) = queue.pop_front() {
+        if !visited.insert(hash) {
+            continue;
+        }
+        order.push(hash);
+        if let Some(cs) = children.get(hash) {
+            queue.extend(cs);
+        }
+    }
+    order
 }
 
 /// Cascade-drop a snapshot and every snapshot that transitively depends on
@@ -866,64 +860,33 @@ fn cascade_drop(
     {
         return Ok(());
     }
+    let path_by_hash: HashMap<&str, &Path> = snapshots
+        .iter()
+        .map(|(path, s)| (s.extrinsic_hash.as_str(), path.as_path()))
+        .collect();
+    let doomed = walk_children(snapshots.iter().map(|(_, s)| s), vec![start_hash]);
 
-    let mut failed: HashSet<String> = HashSet::new();
-    failed.insert(start_hash.to_string());
-    loop {
-        let mut grew = false;
-        for (_, snap) in &snapshots {
-            if failed.contains(&snap.extrinsic_hash) {
-                continue;
-            }
-            if let Some(parent) = &snap.depends_on
-                && failed.contains(parent)
-            {
-                failed.insert(snap.extrinsic_hash.clone());
-                grew = true;
-            }
-        }
-        if !grew {
-            break;
-        }
-    }
-
-    // Delete child-first and stop at the first failure, so a partial
-    // cascade is always recoverable. The doomed set is the start snapshot
-    // plus everything that (transitively) depends on it. Deleting a parent
-    // before its child and then failing would leave the surviving child an
-    // orphan whose `depends_on` points at a now-missing parent, which
-    // `find_leaf` rejects. Deleting children before parents means every
-    // surviving doomed snapshot still has its parent on disk, so the
-    // journal stays a valid chain and re-running `mark_failed` resumes the
-    // drop from where it stopped.
-    let mut path_by_hash: HashMap<String, PathBuf> = HashMap::new();
-    let mut doomed: Vec<Snapshot> = Vec::new();
-    for (path, snap) in snapshots {
-        if failed.contains(&snap.extrinsic_hash) {
-            path_by_hash.insert(snap.extrinsic_hash.clone(), path);
-            doomed.push(snap);
-        }
-    }
-    for snap in child_first(doomed) {
-        if let Some(path) = path_by_hash.get(&snap.extrinsic_hash) {
+    // Delete child-first (the reverse of the walk order) and stop at the
+    // first failure, so a partial cascade is always recoverable. The doomed
+    // set is the start snapshot plus everything that (transitively) depends
+    // on it. Deleting a parent before its child and then failing would leave
+    // the surviving child an orphan whose `depends_on` points at a
+    // now-missing parent, which `find_leaf` rejects. Deleting children
+    // before parents means every surviving doomed snapshot still has its
+    // parent on disk, so the journal stays a valid chain and re-running
+    // `mark_failed` resumes the drop from where it stopped.
+    for hash in doomed.into_iter().rev() {
+        if let Some(path) = path_by_hash.get(hash) {
             remove_file_opt(path).map_err(|e| {
                 PrivateStateError::Io(format!(
-                    "cascade_drop on {address} stopped at snapshot {} ({}): {e}; \
+                    "cascade_drop on {address} stopped at snapshot {hash} ({}): {e}; \
                      re-run mark_failed to resume",
-                    snap.extrinsic_hash,
                     path.display()
                 ))
             })?;
         }
     }
     Ok(())
-}
-
-/// Order `snapshots` so that each one comes before its parent.
-fn child_first(snapshots: Vec<Snapshot>) -> Vec<Snapshot> {
-    let mut ordered = topo_sort(snapshots);
-    ordered.reverse();
-    ordered
 }
 
 /// Walk the per-address journal directories, collecting every snapshot
@@ -1684,18 +1647,20 @@ mod tests {
     }
 
     #[test]
-    fn a_cascade_removes_children_before_parents() {
-        // The chain is 1 <- 2 <- 3, given out of order.
-        let doomed = vec![
-            pending(2, Some(1), b""),
-            pending(3, Some(2), b""),
+    fn a_cascade_from_mid_chain_removes_children_before_parents() {
+        // The chain is 1 <- 5 <- 3, given out of order. The cascade starts
+        // at 5, which is not a root, and its child 3 sorts below it.
+        let journal = [
+            pending(5, Some(1), b""),
+            pending(3, Some(5), b""),
             pending(1, None, b""),
         ];
-        let order: Vec<String> = child_first(doomed)
+        let start = hex::encode(ext(5));
+        let delete_order: Vec<&str> = walk_children(&journal, vec![start.as_str()])
             .into_iter()
-            .map(|s| s.extrinsic_hash)
+            .rev()
             .collect();
-        assert_eq!(order, [3, 2, 1].map(|h| hex::encode(ext(h))));
+        assert_eq!(delete_order, [3, 5].map(|h| hex::encode(ext(h))));
     }
 
     #[cfg(unix)]
