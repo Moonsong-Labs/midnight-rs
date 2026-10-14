@@ -238,6 +238,34 @@ pub(crate) fn tagged_from_file<
         .map_err(|e| WalletError::Storage(format!("deserialize {filename}: {e}")))
 }
 
+/// `value`'s tagged serialization, hex-encoded. `what` names it in an error.
+pub(crate) fn tagged_to_hex<
+    T: midnight_helpers::midnight_serialize::Serializable
+        + midnight_helpers::midnight_serialize::Tagged,
+>(
+    value: &T,
+    what: &str,
+) -> Result<String, WalletError> {
+    let mut buf = Vec::new();
+    tagged_serialize(value, &mut buf)
+        .map_err(|e| WalletError::Storage(format!("serialize {what}: {e}")))?;
+    Ok(hex::encode(buf))
+}
+
+/// The value that [`tagged_to_hex`] encoded as `encoded`.
+pub(crate) fn tagged_from_hex<
+    T: midnight_helpers::midnight_serialize::Deserializable
+        + midnight_helpers::midnight_serialize::Tagged,
+>(
+    encoded: &str,
+    what: &str,
+) -> Result<T, WalletError> {
+    let bytes =
+        hex::decode(encoded).map_err(|e| WalletError::Storage(format!("decode {what}: {e}")))?;
+    tagged_deserialize(&bytes[..])
+        .map_err(|e| WalletError::Storage(format!("deserialize {what}: {e}")))
+}
+
 /// Read a snapshot's `metadata.json`, or `None` when there is no snapshot.
 pub(crate) fn read_metadata(dir: &Path) -> Result<Option<StoredMetadata>, WalletError> {
     read_json(&dir.join(METADATA_FILE))

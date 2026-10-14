@@ -34,12 +34,12 @@ use helpers::{
     DefaultDB, DustLocalState, DustNullifier, DustSpend, Nullifier, ProofPreimageMarker, Sp,
     Timestamp,
 };
-use midnight_serialize::{tagged_deserialize, tagged_serialize};
 use tracing::warn;
 
 use super::types::DustSpendBatch;
 use crate::storage::{
     StoredPending, StoredPendingDustBatch, StoredPendingShielded, StoredPendingUnshielded,
+    tagged_from_hex, tagged_to_hex,
 };
 use crate::{SpentUtxoKey, WalletError};
 
@@ -234,15 +234,9 @@ impl PendingReservations {
     pub(crate) fn to_stored(&self) -> Result<StoredPending, WalletError> {
         let mut dust = Vec::with_capacity(self.dust.len());
         for p in &self.dust {
-            let mut spends_buf = Vec::new();
-            tagged_serialize(&p.spends, &mut spends_buf)
-                .map_err(|e| WalletError::Storage(format!("serialize pending dust spends: {e}")))?;
-            let mut state_buf = Vec::new();
-            tagged_serialize(&p.updated_state, &mut state_buf)
-                .map_err(|e| WalletError::Storage(format!("serialize pending dust state: {e}")))?;
             dust.push(StoredPendingDustBatch {
-                spends_hex: hex::encode(&spends_buf),
-                updated_state_hex: hex::encode(&state_buf),
+                spends_hex: tagged_to_hex(&p.spends, "pending dust spends")?,
+                updated_state_hex: tagged_to_hex(&p.updated_state, "pending dust state")?,
                 reserved_at_secs: p.reserved_at.to_secs(),
             });
         }
@@ -259,12 +253,8 @@ impl PendingReservations {
 
         let mut shielded = Vec::with_capacity(self.shielded.len());
         for p in &self.shielded {
-            let mut nf_buf = Vec::new();
-            tagged_serialize(&p.nullifier, &mut nf_buf).map_err(|e| {
-                WalletError::Storage(format!("serialize pending shielded nullifier: {e}"))
-            })?;
             shielded.push(StoredPendingShielded {
-                nullifier_hex: hex::encode(&nf_buf),
+                nullifier_hex: tagged_to_hex(&p.nullifier, "pending shielded nullifier")?,
                 reserved_at_secs: p.reserved_at.to_secs(),
             });
         }
@@ -311,21 +301,9 @@ impl PendingReservations {
         }
         let mut dust = Vec::with_capacity(stored.dust.len());
         for s in stored.dust {
-            let spends_bytes = hex::decode(&s.spends_hex)
-                .map_err(|e| WalletError::Storage(format!("decode pending dust spends: {e}")))?;
-            let spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> =
-                tagged_deserialize(&spends_bytes[..]).map_err(|e| {
-                    WalletError::Storage(format!("deserialize pending dust spends: {e}"))
-                })?;
-            let state_bytes = hex::decode(&s.updated_state_hex)
-                .map_err(|e| WalletError::Storage(format!("decode pending dust state: {e}")))?;
-            let updated_state: Sp<DustLocalState<DefaultDB>, DefaultDB> =
-                tagged_deserialize(&state_bytes[..]).map_err(|e| {
-                    WalletError::Storage(format!("deserialize pending dust state: {e}"))
-                })?;
             dust.push(PendingDustBatch {
-                spends,
-                updated_state,
+                spends: tagged_from_hex(&s.spends_hex, "pending dust spends")?,
+                updated_state: tagged_from_hex(&s.updated_state_hex, "pending dust state")?,
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
             });
         }
@@ -344,14 +322,8 @@ impl PendingReservations {
 
         let mut shielded = Vec::with_capacity(stored.shielded.len());
         for s in stored.shielded {
-            let nf_bytes = hex::decode(&s.nullifier_hex).map_err(|e| {
-                WalletError::Storage(format!("decode pending shielded nullifier: {e}"))
-            })?;
-            let nullifier: Nullifier = tagged_deserialize(&nf_bytes[..]).map_err(|e| {
-                WalletError::Storage(format!("deserialize pending shielded nullifier: {e}"))
-            })?;
             shielded.push(PendingShieldedSpend {
-                nullifier,
+                nullifier: tagged_from_hex(&s.nullifier_hex, "pending shielded nullifier")?,
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
             });
         }
