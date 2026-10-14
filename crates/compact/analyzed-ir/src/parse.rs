@@ -355,6 +355,18 @@ fn bx(s: &Sexp) -> R<Box<Expr>> {
     Ok(Box::new(expr(s)?))
 }
 
+fn ty_expr_expr(l: &[Sexp], make: fn(Type, Box<Expr>, Box<Expr>) -> Expr) -> R<Expr> {
+    Ok(make(ty(&l[1])?, bx(&l[2])?, bx(&l[3])?))
+}
+
+fn nat_expr_expr(l: &[Sexp], head: &str, make: fn(u64, Box<Expr>, Box<Expr>) -> Expr) -> R<Expr> {
+    Ok(make(nat(&l[1], head)?, bx(&l[2])?, bx(&l[3])?))
+}
+
+fn ty_ty_expr(l: &[Sexp], make: fn(Type, Type, Box<Expr>) -> Expr) -> R<Expr> {
+    Ok(make(ty(&l[1])?, ty(&l[2])?, bx(&l[3])?))
+}
+
 pub fn expr(s: &Sexp) -> R<Expr> {
     let l = list(s, "expression")?;
     let head = l
@@ -393,73 +405,29 @@ pub fn expr(s: &Sexp) -> R<Expr> {
             index: nat(&l[3], "tuple-slice index")?,
             len: nat(&l[4], "tuple-slice len")?,
         }),
-        "vector-ref" => Ok(Expr::VectorRef {
-            ty: ty(&l[1])?,
-            expr: bx(&l[2])?,
-            index: bx(&l[3])?,
-        }),
+        "vector-ref" => ty_expr_expr(l, |ty, expr, index| Expr::VectorRef { ty, expr, index }),
         "vector-slice" => Ok(Expr::VectorSlice {
             ty: ty(&l[1])?,
             expr: bx(&l[2])?,
             index: bx(&l[3])?,
             len: nat(&l[4], "vector-slice len")?,
         }),
-        "bytes-ref" => Ok(Expr::BytesRef {
-            ty: ty(&l[1])?,
-            expr: bx(&l[2])?,
-            index: bx(&l[3])?,
-        }),
+        "bytes-ref" => ty_expr_expr(l, |ty, expr, index| Expr::BytesRef { ty, expr, index }),
         "bytes-slice" => Ok(Expr::BytesSlice {
             ty: ty(&l[1])?,
             expr: bx(&l[2])?,
             index: bx(&l[3])?,
             len: nat(&l[4], "bytes-slice len")?,
         }),
-        "+" => Ok(Expr::Add {
-            ty: ty(&l[1])?,
-            left: bx(&l[2])?,
-            right: bx(&l[3])?,
-        }),
-        "-" => Ok(Expr::Sub {
-            ty: ty(&l[1])?,
-            left: bx(&l[2])?,
-            right: bx(&l[3])?,
-        }),
-        "*" => Ok(Expr::Mul {
-            ty: ty(&l[1])?,
-            left: bx(&l[2])?,
-            right: bx(&l[3])?,
-        }),
-        "<" => Ok(Expr::Lt {
-            bits: nat(&l[1], "<")?,
-            left: bx(&l[2])?,
-            right: bx(&l[3])?,
-        }),
-        "<=" => Ok(Expr::Le {
-            bits: nat(&l[1], "<=")?,
-            left: bx(&l[2])?,
-            right: bx(&l[3])?,
-        }),
-        ">" => Ok(Expr::Gt {
-            bits: nat(&l[1], ">")?,
-            left: bx(&l[2])?,
-            right: bx(&l[3])?,
-        }),
-        ">=" => Ok(Expr::Ge {
-            bits: nat(&l[1], ">=")?,
-            left: bx(&l[2])?,
-            right: bx(&l[3])?,
-        }),
-        "==" => Ok(Expr::Eq {
-            ty: ty(&l[1])?,
-            left: bx(&l[2])?,
-            right: bx(&l[3])?,
-        }),
-        "!=" => Ok(Expr::Neq {
-            ty: ty(&l[1])?,
-            left: bx(&l[2])?,
-            right: bx(&l[3])?,
-        }),
+        "+" => ty_expr_expr(l, |ty, left, right| Expr::Add { ty, left, right }),
+        "-" => ty_expr_expr(l, |ty, left, right| Expr::Sub { ty, left, right }),
+        "*" => ty_expr_expr(l, |ty, left, right| Expr::Mul { ty, left, right }),
+        "<" => nat_expr_expr(l, head, |bits, left, right| Expr::Lt { bits, left, right }),
+        "<=" => nat_expr_expr(l, head, |bits, left, right| Expr::Le { bits, left, right }),
+        ">" => nat_expr_expr(l, head, |bits, left, right| Expr::Gt { bits, left, right }),
+        ">=" => nat_expr_expr(l, head, |bits, left, right| Expr::Ge { bits, left, right }),
+        "==" => ty_expr_expr(l, |ty, left, right| Expr::Eq { ty, left, right }),
+        "!=" => ty_expr_expr(l, |ty, left, right| Expr::Neq { ty, left, right }),
         "map" => Ok(Expr::Map {
             len: nat(&l[1], "map len")?,
             fun: fun(&l[2])?,
@@ -519,16 +487,8 @@ pub fn expr(s: &Sexp) -> R<Expr> {
             len: nat(&l[1], "bytes->vector")?,
             expr: bx(&l[2])?,
         }),
-        "cast-from-enum" => Ok(Expr::CastFromEnum {
-            ty: ty(&l[1])?,
-            from: ty(&l[2])?,
-            expr: bx(&l[3])?,
-        }),
-        "cast-to-enum" => Ok(Expr::CastToEnum {
-            ty: ty(&l[1])?,
-            from: ty(&l[2])?,
-            expr: bx(&l[3])?,
-        }),
+        "cast-from-enum" => ty_ty_expr(l, |ty, from, expr| Expr::CastFromEnum { ty, from, expr }),
+        "cast-to-enum" => ty_ty_expr(l, |ty, from, expr| Expr::CastToEnum { ty, from, expr }),
         "cast-to-field" => Ok(Expr::CastToField {
             field_type: field_type(&l[1])?,
             from: ty(&l[2])?,
@@ -539,11 +499,7 @@ pub fn expr(s: &Sexp) -> R<Expr> {
             field_type: field_type(&l[2])?,
             expr: bx(&l[3])?,
         }),
-        "safe-cast" => Ok(Expr::SafeCast {
-            ty: ty(&l[1])?,
-            from: ty(&l[2])?,
-            expr: bx(&l[3])?,
-        }),
+        "safe-cast" => ty_ty_expr(l, |ty, from, expr| Expr::SafeCast { ty, from, expr }),
         "downcast-unsigned" => Ok(Expr::DowncastUnsigned {
             from_maxval: big_nat(&l[1], "downcast-unsigned")?,
             to_maxval: big_nat(&l[2], "downcast-unsigned")?,
