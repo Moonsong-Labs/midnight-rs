@@ -71,7 +71,7 @@ fn atoms_of<'a>(types: impl IntoIterator<Item = &'a Type>) -> Option<usize> {
 
 /// Compute a layout straight from a field list, for a type that carries its
 /// own fields instead of being named in a table. Returns `None` when a field's
-/// width cannot be determined.
+/// width cannot be determined, or when an offset does not fit a `usize`.
 pub fn layout_from_fields(fields: &[(String, Type)]) -> Option<StructLayout> {
     let mut out = Vec::with_capacity(fields.len());
     let mut offset = 0usize;
