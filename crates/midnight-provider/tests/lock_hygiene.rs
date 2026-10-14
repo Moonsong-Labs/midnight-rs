@@ -25,9 +25,13 @@ use midnight_indexer_client::testutil::{
     write_json_response,
 };
 use midnight_provider::MidnightProvider;
-use midnight_wallet::{LocalWallet, Network, Wallet, WalletBuilder, WalletError, WalletFacade};
+use midnight_wallet::{
+    LocalWallet, Network, SyncHandle, SyncProgress, Wallet, WalletBuilder, WalletError,
+    WalletFacade,
+};
 use serde_json::json;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------------------
 // Mock indexer
@@ -157,12 +161,48 @@ fn block_response() -> String {
 // ---------------------------------------------------------------------------
 
 fn builder() -> WalletBuilder {
-    Wallet::from_seed(&"11".repeat(32)).unwrap()
+    // No sync source here reports a network, so the wallet names one.
+    Wallet::from_seed(&"11".repeat(32))
+        .unwrap()
+        .with_network(Network::Undeployed)
 }
 
 fn provider(url: &str) -> MidnightProvider {
     // The node URL is never dialed in these paths.
     MidnightProvider::new("ws://127.0.0.1:1", url)
+}
+
+/// Fast mode: attach a synced wallet in milliseconds.
+async fn synced_provider(url: &str) -> MidnightProvider {
+    let provider = provider(url);
+    let wallet = builder()
+        .unpinned()
+        .sync(&provider)
+        .await
+        .expect("initial sync against the mock indexer");
+    provider.with_wallet(wallet)
+}
+
+/// Stall mode: start a streamed sync, then wait until the mock holds its
+/// subscriptions.
+async fn stalled_streamed_sync(
+    url: &str,
+    state: &MockState,
+) -> (mpsc::Receiver<SyncProgress>, SyncHandle) {
+    state.stall.store(true, Ordering::SeqCst);
+    let sync = builder()
+        .unpinned()
+        .sync_with_progress(&provider(url))
+        .await
+        .expect("streamed sync");
+
+    // Initial sync runs zswap + unshielded first (dust starts after both
+    // complete), so a stalled initial sync holds two subscriptions.
+    wait_until("stalled sync subscriptions", || {
+        state.stalled_subs.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+    sync
 }
 
 async fn wait_until(what: &str, f: impl Fn() -> bool) {
@@ -190,16 +230,7 @@ async fn wait_until(what: &str, f: impl Fn() -> bool) {
 #[tokio::test]
 async fn balance_completes_while_resync_replay_is_in_flight() {
     let (url, state) = spawn_mock().await;
-
-    // Fast mode: attach a synced wallet in milliseconds.
-    let provider = provider(&url);
-    let wallet = builder()
-        .with_network(Network::Undeployed)
-        .unpinned()
-        .sync(&provider)
-        .await
-        .expect("initial sync against the mock indexer");
-    let provider = provider.with_wallet(wallet);
+    let provider = synced_provider(&url).await;
 
     // Stall mode: the next resync's replay phase hangs on silent
     // subscriptions.
@@ -230,22 +261,7 @@ async fn balance_completes_while_resync_replay_is_in_flight() {
 #[tokio::test]
 async fn dropping_receiver_cancels_streamed_sync_and_closes_subscriptions() {
     let (url, state) = spawn_mock().await;
-    state.stall.store(true, Ordering::SeqCst);
-
-    let provider = provider(&url);
-    let (rx, handle) = builder()
-        .with_network(Network::Undeployed)
-        .unpinned()
-        .sync_with_progress(&provider)
-        .await
-        .expect("streamed sync");
-
-    // Initial sync runs zswap + unshielded first (dust starts after both
-    // complete), so a stalled initial sync holds two subscriptions.
-    wait_until("stalled sync subscriptions", || {
-        state.stalled_subs.load(Ordering::SeqCst) >= 2
-    })
-    .await;
+    let (rx, handle) = stalled_streamed_sync(&url, &state).await;
 
     drop(rx);
 
@@ -269,20 +285,7 @@ async fn dropping_receiver_cancels_streamed_sync_and_closes_subscriptions() {
 #[tokio::test]
 async fn dropping_sync_handle_aborts_sync_and_closes_subscriptions() {
     let (url, state) = spawn_mock().await;
-    state.stall.store(true, Ordering::SeqCst);
-
-    let provider = provider(&url);
-    let (mut rx, handle) = builder()
-        .with_network(Network::Undeployed)
-        .unpinned()
-        .sync_with_progress(&provider)
-        .await
-        .expect("streamed sync");
-
-    wait_until("stalled sync subscriptions", || {
-        state.stalled_subs.load(Ordering::SeqCst) >= 2
-    })
-    .await;
+    let (mut rx, handle) = stalled_streamed_sync(&url, &state).await;
 
     drop(handle);
 
@@ -313,16 +316,7 @@ async fn dropping_sync_handle_aborts_sync_and_closes_subscriptions() {
 #[tokio::test]
 async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
     let (url, state) = spawn_mock().await;
-
-    // Fast mode: attach a synced wallet in milliseconds.
-    let provider = provider(&url);
-    let wallet = builder()
-        .with_network(Network::Undeployed)
-        .unpinned()
-        .sync(&provider)
-        .await
-        .expect("initial sync against the mock indexer");
-    let provider = provider.with_wallet(wallet);
+    let provider = synced_provider(&url).await;
 
     state.quiet_unshielded.store(true, Ordering::SeqCst);
 
@@ -406,7 +400,6 @@ async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
     let chain = SwappableChain::new(&url);
 
     let wallet = builder()
-        .with_network(Network::Undeployed)
         .sync(&chain)
         .await
         .expect("initial sync against the mock indexer");
