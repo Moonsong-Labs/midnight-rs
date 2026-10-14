@@ -199,13 +199,7 @@ pub async fn prove_tx_no_validate(
     let resolver = BuilderContext::resolver(&*tx_info.context).await;
     let cost_model = tx_info
         .context
-        .ledger_state
-        .lock()
-        .map_err(|_| WalletError::Transfer("ledger state lock poisoned".into()))?
-        .parameters
-        .cost_model
-        .runtime_cost_model
-        .clone();
+        .with_ledger_state(|ls| ls.parameters.cost_model.runtime_cost_model.clone());
     let mut rng = tx_info.rng.split();
     // `ProofProvider::prove` returns a bare transaction, so a backend that
     // fails has nowhere to report it but the unwind. Catch it here and hand
@@ -816,17 +810,21 @@ pub struct BuiltTransaction {
     pub dust_batches: Vec<DustSpendBatch>,
 }
 
+/// The chain time of `context`, and the TTL derived from it: that time plus the
+/// ledger's `global_ttl`.
+fn now_and_ttl(context: &BuildContext) -> (Timestamp, Timestamp) {
+    let now = context.latest_block_context().tblock;
+    let ttl = now + context.with_ledger_state(|ls| ls.parameters.global_ttl);
+    (now, ttl)
+}
+
 /// Assemble the unproven transaction `tx_info` describes, with its offers and
 /// intents built but no Dust attached and nothing proven. Also returns the
 /// chain time it read and the TTL derived from it, which fee balancing needs.
 async fn assemble_unproven(
     tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
 ) -> Result<(UnprovenTx, Timestamp, Timestamp), WalletError> {
-    let now = tx_info.context.latest_block_context().tblock;
-    let delay = tx_info
-        .context
-        .with_ledger_state(|ls| ls.parameters.global_ttl);
-    let ttl = now + delay;
+    let (now, ttl) = now_and_ttl(&tx_info.context);
 
     let guaranteed_offer = tx_info
         .guaranteed_offer
@@ -858,11 +856,7 @@ async fn assemble_unproven(
 
     let network_id = tx_info
         .context
-        .ledger_state
-        .lock()
-        .map_err(|_| WalletError::Transfer("ledger state lock poisoned".into()))?
-        .network_id
-        .clone();
+        .with_ledger_state(|ls| ls.network_id.clone());
 
     let tx = Transaction::new(network_id, intents, guaranteed_offer, fallible_offer);
 
@@ -963,11 +957,7 @@ pub fn balance_external(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     external: &FinalizedTx,
 ) -> Result<Option<PreparedTransfer>, WalletError> {
-    let now = tx_info.context.latest_block_context().tblock;
-    let ttl = now
-        + tx_info
-            .context
-            .with_ledger_state(|ls| ls.parameters.global_ttl);
+    let (now, ttl) = now_and_ttl(&tx_info.context);
     let network_id = tx_info
         .context
         .with_ledger_state(|ls| ls.network_id.clone());
@@ -1007,7 +997,7 @@ pub fn balance_external(
         let Some(fee_tx) = fee_tx else {
             return Ok(None);
         };
-        confirm_dust_spends(&mut tx_info, &batches)?;
+        confirm_dust_spends(&mut tx_info, &batches);
         return Ok(Some(PreparedTransfer::new(tx_info, fee_tx, batches)));
     }
     Err(tracker.into_error())
@@ -1090,7 +1080,7 @@ fn balance_fees_with_mocks(
             tracker.record_shortfall(fee, dust);
             continue;
         }
-        confirm_dust_spends(tx_info, &batches)?;
+        confirm_dust_spends(tx_info, &batches);
         return Ok((paid_tx, batches));
     }
     Err(tracker.into_error())
@@ -1114,7 +1104,7 @@ async fn balance_fees_with_proofs(
             tracker.record_shortfall(fee, dust);
             continue;
         }
-        confirm_dust_spends(tx_info, &batches)?;
+        confirm_dust_spends(tx_info, &batches);
         return Ok(BuiltTransaction {
             finalized: proven,
             dust_batches: batches,
@@ -1152,17 +1142,12 @@ fn gather_dust_spends(
 ) -> Result<Vec<DustSpendBatch>, WalletError> {
     let mut batches: Vec<DustSpendBatch> = Vec::new();
     let mut remaining = required_amount;
-    let state = tx_info
-        .context
-        .ledger_state
-        .lock()
-        .map_err(|_| WalletError::Transfer("ledger state lock poisoned".into()))?;
-    let params = &state.parameters.dust;
+    let params = tx_info.context.with_ledger_state(|ls| ls.parameters.dust);
     let wallets = tx_info
         .context
         .wallets
         .lock()
-        .map_err(|_| WalletError::Transfer("wallets lock poisoned".into()))?;
+        .expect("wallets lock poisoned");
     for seed in &tx_info.funding_seeds {
         if remaining == 0 {
             break;
@@ -1176,7 +1161,7 @@ fn gather_dust_spends(
             .ok_or_else(|| WalletError::Transfer("unrecognized wallet seed".into()))?;
         let (new_spends, updated_state) = wallet
             .dust
-            .speculative_spend(remaining, ctime, params)
+            .speculative_spend(remaining, ctime, &params)
             .map_err(transfer_err("speculative_spend"))?;
         for spend in &new_spends {
             remaining = remaining.saturating_sub(spend.v_fee);
@@ -1199,12 +1184,12 @@ fn gather_dust_spends(
 fn confirm_dust_spends(
     tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
     batches: &[DustSpendBatch],
-) -> Result<(), WalletError> {
+) {
     let mut wallets = tx_info
         .context
         .wallets
         .lock()
-        .map_err(|_| WalletError::Transfer("wallets lock poisoned".into()))?;
+        .expect("wallets lock poisoned");
     for batch in batches {
         if let Some(wallet) = wallets.get_mut(&(&batch.seed).into_ledger()) {
             wallet
@@ -1212,7 +1197,6 @@ fn confirm_dust_spends(
                 .mark_spent(&batch.spends, batch.updated_state.clone());
         }
     }
-    Ok(())
 }
 
 /// Price a candidate transaction. Returns the fee (with margin, in
