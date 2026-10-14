@@ -345,23 +345,23 @@ pub(crate) async fn call_transaction(
     // output and input halves cancel, so they consume none of the attached
     // value.
     let mut drawn = Vec::new();
-    for (commitment, decoded, output) in build_shielded_offer_outputs(
+    for (commitment, output) in build_shielded_offer_outputs(
         &exec_result.zswap_outputs,
         coin_encryption_keys,
         (change_cpk, change_epk),
     )? {
         let is_fallible = fallible_commitments.contains(&commitment);
-        output_segments.push((decoded.coin.type_, is_fallible));
+        output_segments.push((output.coin.type_, is_fallible));
 
         // A contract-owned output whose commitment matches a pending
         // `createZswapInput` is a coin created and spent in the same call: emit
         // it as a transient (bundled output + spend) instead of a plain output.
-        let paired = match decoded.recipient {
-            Recipient::Contract(contract) => pending_input_coins
+        let paired = match output.recipient {
+            MintRecipient::Contract(contract) => pending_input_coins
                 .iter()
                 .position(|(c, _)| *c == commitment)
                 .map(|idx| (idx, contract)),
-            Recipient::User(_) => None,
+            MintRecipient::User { .. } => None,
         };
         if let Some((idx, contract)) = paired {
             pending_input_coins.remove(idx);
@@ -369,7 +369,7 @@ pub(crate) async fn call_transaction(
                 .at(is_fallible)
                 .transients
                 .push(Box::new(ContractOwnedTransient {
-                    coin: decoded.coin,
+                    coin: output.coin,
                     contract,
                     segment: if is_fallible {
                         INTENT_SEGMENT
@@ -378,7 +378,7 @@ pub(crate) async fn call_transaction(
                     },
                 }));
         } else {
-            drawn.push(((decoded.coin.type_, is_fallible), decoded.coin.value));
+            drawn.push(((output.coin.type_, is_fallible), output.coin.value));
             offers.at(is_fallible).outputs.push(Box::new(output));
         }
     }
@@ -690,17 +690,15 @@ enum MintRecipient {
 /// claims (`claimed_shielded_spends`).
 struct MintedCoinOutput {
     coin: ZswapCoinInfo,
-    token_type: ShieldedTokenType,
-    value: u128,
     recipient: MintRecipient,
 }
 
 impl helpers::TokenInfo for MintedCoinOutput {
     fn token_type(&self) -> ShieldedTokenType {
-        self.token_type
+        self.coin.type_
     }
     fn value(&self) -> u128 {
-        self.value
+        self.coin.value
     }
 }
 
@@ -773,16 +771,12 @@ impl helpers::BuildTransient<helpers::DefaultDB, helpers::BuildContext> for Cont
     }
 }
 
-/// A circuit-created Zswap offer output, its coin commitment, and the decoded
-/// coin/recipient. The commitment lets [`call_transaction`] route the output to
-/// the offer for the segment the ledger partitioned the coin's creating op into,
-/// and match it against a `createZswapInput` to form a transient; the decoded
-/// fields let it build the transient's coin when they pair.
-type ShieldedOfferOutput = (
-    helpers::coin_structure::coin::Commitment,
-    DecodedShieldedOutput,
-    MintedCoinOutput,
-);
+/// A circuit-created Zswap offer output and its coin commitment. The commitment
+/// lets [`call_transaction`] route the output to the offer for the segment the
+/// ledger partitioned the coin's creating op into, and match it against a
+/// `createZswapInput` to form a transient; the output gives the coin and the
+/// contract of that transient when they pair.
+type ShieldedOfferOutput = (helpers::coin_structure::coin::Commitment, MintedCoinOutput);
 
 /// Turn the coins a circuit created via `createZswapOutput` into Zswap offer
 /// outputs, each paired with its coin commitment.
@@ -819,8 +813,7 @@ fn build_shielded_offer_outputs(
     let mut outputs: Vec<ShieldedOfferOutput> = Vec::with_capacity(zswap_outputs.len());
     for zo in zswap_outputs {
         let decoded = decode_shielded_output(zo)?;
-        let coin = decoded.coin;
-        let commitment = coin.commitment(&decoded.recipient);
+        let commitment = decoded.coin.commitment(&decoded.recipient);
         let recipient = match decoded.recipient {
             Recipient::User(cpk) => MintRecipient::User {
                 cpk,
@@ -830,11 +823,8 @@ fn build_shielded_offer_outputs(
         };
         outputs.push((
             commitment,
-            decoded,
             MintedCoinOutput {
-                coin,
-                token_type: coin.type_,
-                value: coin.value,
+                coin: decoded.coin,
                 recipient,
             },
         ));
@@ -994,7 +984,7 @@ mod tests {
 
         let sealed_to: Vec<_> = outputs
             .iter()
-            .map(|(_, _, output)| match output.recipient {
+            .map(|(_, output)| match output.recipient {
                 MintRecipient::User { epk, .. } => epk,
                 MintRecipient::Contract(_) => panic!("both coins go to a user"),
             })
