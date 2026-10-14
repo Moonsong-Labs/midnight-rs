@@ -501,11 +501,8 @@ impl Wallet {
                     None => Ok(()),
                 }
             }
-            (state, commit) => Err(WalletError::LedgerMismatch {
-                expected: match state {
-                    State::Ledger8(_) => LedgerVersion::V8,
-                    State::Ledger9(_) => LedgerVersion::V9,
-                },
+            (_, commit) => Err(WalletError::LedgerMismatch {
+                expected: self.ledger_version(),
                 found: match commit {
                     ResyncCommitKind::Ledger9(_) => LedgerVersion::V9,
                     ResyncCommitKind::Ledger8(_) | ResyncCommitKind::Crossed(_) => {
