@@ -1,32 +1,21 @@
 //! Integration tests against a running Midnight devnet.
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
 
+mod common;
+
 use midnight_indexer_client::{BlockOffset, IndexerClient};
 use midnight_provider::{LedgerVersion, MidnightProvider, NodeBlockHash, Provider};
 
 fn provider() -> Option<MidnightProvider> {
-    let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
-    let node_url = std::env::var("MIDNIGHT_NODE_URL").ok()?;
-    Some(MidnightProvider::new(&node_url, &indexer_url))
-}
-
-macro_rules! require_provider {
-    () => {
-        match provider() {
-            Some(p) => p,
-            None => {
-                eprintln!("skipping: MIDNIGHT_INDEXER_URL or MIDNIGHT_NODE_URL not set");
-                return;
-            }
-        }
-    };
+    let (node, indexer) = common::devnet_urls()?;
+    Some(MidnightProvider::new(&node, &indexer))
 }
 
 /// Each CI leg names the ledger generation its devnet runs. A leg whose
 /// devnet ran another one would pass while testing nothing it claims to.
 #[tokio::test]
 async fn the_devnet_runs_the_ledger_its_leg_names() {
-    let p = require_provider!();
+    let Some(p) = provider() else { return };
     let Ok(expected) = std::env::var("MIDNIGHT_LEDGER") else {
         if std::env::var_os("MIDNIGHT_E2E").is_some() {
             panic!("MIDNIGHT_LEDGER is missing under make test-e2e");
@@ -44,7 +33,7 @@ async fn the_devnet_runs_the_ledger_its_leg_names() {
 
 #[tokio::test]
 async fn health_check() {
-    let p = require_provider!();
+    let Some(p) = provider() else { return };
     let health = p.health().await.unwrap();
     assert!(health.node_connected);
     assert!(health.block_height.unwrap() > 0);
@@ -53,7 +42,7 @@ async fn health_check() {
 
 #[tokio::test]
 async fn finalized_height_trails_the_best_head() {
-    let p = require_provider!();
+    let Some(p) = provider() else { return };
     let finalized = p.get_finalized_block_height().await.unwrap();
     // Read best after finalized: finalized(t1) <= best(t1) <= best(t2).
     let best = p.get_block_number().await.unwrap();
@@ -66,7 +55,7 @@ async fn finalized_height_trails_the_best_head() {
 
 #[tokio::test]
 async fn hash_by_height_is_unique_when_finalized_and_empty_past_the_chain() {
-    let p = require_provider!();
+    let Some(p) = provider() else { return };
     let finalized = p.get_finalized_block_height().await.unwrap();
     let hashes = p.get_block_hashes_by_height(finalized).await.unwrap();
     assert_eq!(
@@ -85,7 +74,7 @@ async fn hash_by_height_is_unique_when_finalized_and_empty_past_the_chain() {
 
 #[tokio::test]
 async fn header_round_trips_the_finalized_height_and_nulls_unknown_hashes() {
-    let p = require_provider!();
+    let Some(p) = provider() else { return };
     let finalized = p.get_finalized_block_height().await.unwrap();
     let hash = p.get_block_hashes_by_height(finalized).await.unwrap()[0];
     let header = p
@@ -111,7 +100,7 @@ async fn header_round_trips_the_finalized_height_and_nulls_unknown_hashes() {
 /// error.
 #[tokio::test]
 async fn an_address_with_no_contract_reads_as_none() {
-    let p = require_provider!();
+    let Some(p) = provider() else { return };
     let address = "5a".repeat(32);
     let best = p.best_block_hash().await.unwrap();
     assert_eq!(p.get_contract_state(&address, None).await.unwrap(), None);
@@ -124,7 +113,7 @@ async fn an_address_with_no_contract_reads_as_none() {
 /// Block 1 lies behind the tip, so a read that ignored `hash` would disagree.
 #[tokio::test]
 async fn block_timestamp_matches_the_indexer_at_a_past_block() {
-    let p = require_provider!();
+    let Some(p) = provider() else { return };
     let hash = p.get_block_hashes_by_height(1).await.unwrap()[0];
     let timestamp = p.get_block_timestamp(hash).await.unwrap();
     let indexed = IndexerClient::new(p.indexer_url())
@@ -151,7 +140,7 @@ async fn block_timestamp_matches_the_indexer_at_a_past_block() {
 #[tokio::test]
 #[ignore = "restarts the devnet node; run alone with MIDNIGHT_NODE_CONTAINER set"]
 async fn survives_a_node_restart() {
-    let p = require_provider!();
+    let Some(p) = provider() else { return };
     let Ok(container) = std::env::var("MIDNIGHT_NODE_CONTAINER") else {
         if std::env::var_os("MIDNIGHT_E2E").is_some() {
             panic!("MIDNIGHT_NODE_CONTAINER is missing under make test-e2e-node-restart");

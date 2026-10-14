@@ -9,31 +9,18 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
-use midnight_wallet::Wallet;
+mod common;
 
-use midnight_provider::{MidnightProvider, NIGHT, Network, NodeBlockHash};
-
-const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+use midnight_provider::{NIGHT, Network, NodeBlockHash};
 
 #[tokio::test]
 async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
 
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .expect("dev seed")
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("sync");
-    let recipient = wallet.unshielded_address();
-    let provider = provider.with_wallet(wallet);
+    let provider = common::synced_provider(&node_url, &indexer_url, common::dev_seed()).await;
+    let recipient = common::dev_seed().unshielded_address(Network::Undeployed);
 
     // A self-transfer is the cheapest transaction that reaches a block.
     let pending = provider

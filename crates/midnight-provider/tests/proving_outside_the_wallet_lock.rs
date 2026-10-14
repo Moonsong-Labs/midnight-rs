@@ -18,6 +18,8 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,35 +28,8 @@ use midnight_provider::{
     LedgerVersion, MidnightProvider, NIGHT, Network, ProviderError, ShieldedTokenType,
     TransferKind, TransferRequest, WalletError, WalletFacade,
 };
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::{LocalWallet, WalletBuilder};
 use tokio::sync::Notify;
-
-const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-
-macro_rules! devnet_or_skip {
-    () => {{
-        let (Ok(node), Ok(indexer)) = (
-            std::env::var("MIDNIGHT_NODE_URL"),
-            std::env::var("MIDNIGHT_INDEXER_URL"),
-        ) else {
-            eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
-            return;
-        };
-        (node, indexer)
-    }};
-}
-
-async fn synced_provider(node: &str, indexer: &str) -> (MidnightProvider, String) {
-    let provider = MidnightProvider::new(node, indexer);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .expect("dev seed")
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("sync");
-    let shielded_address = wallet.shielded_address();
-    (provider.with_wallet(wallet), shielded_address)
-}
 
 fn night() -> ShieldedTokenType {
     ShieldedTokenType(midnight_provider::HashOutput([0u8; 32]))
@@ -115,9 +90,12 @@ test_provers!(ledger_9);
 /// readable. Before the split this read queued behind the whole proof.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_wallet_is_readable_while_a_build_proves() {
-    let (node, indexer) = devnet_or_skip!();
+    let Some((node, indexer)) = common::devnet_urls() else {
+        return;
+    };
     let prover = Arc::new(ParkedProver::default());
-    let (provider, recipient) = synced_provider(&node, &indexer).await;
+    let provider = common::synced_provider(&node, &indexer, common::dev_seed()).await;
+    let recipient = common::dev_seed().shielded_address(Network::Undeployed);
     let provider = Arc::new(provider.with_proof_provider(prover.clone()));
 
     let building = {
@@ -172,10 +150,11 @@ async fn the_wallet_is_readable_while_a_build_proves() {
 /// Neither preparation proves or submits. Both release what they reserved.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_preparations_at_once_draw_different_inputs() {
-    let (node, indexer) = devnet_or_skip!();
+    let Some((node, indexer)) = common::devnet_urls() else {
+        return;
+    };
     let source = MidnightProvider::new(&node, &indexer);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .expect("dev seed")
+    let wallet = WalletBuilder::new(common::dev_seed())
         .with_network(Network::Undeployed)
         .sync(&source)
         .await
@@ -276,8 +255,11 @@ async fn two_preparations_at_once_draw_different_inputs() {
 /// inputs back itself.
 #[tokio::test]
 async fn a_failed_proof_hands_the_reserved_coins_back() {
-    let (node, indexer) = devnet_or_skip!();
-    let (provider, recipient) = synced_provider(&node, &indexer).await;
+    let Some((node, indexer)) = common::devnet_urls() else {
+        return;
+    };
+    let provider = common::synced_provider(&node, &indexer, common::dev_seed()).await;
+    let recipient = common::dev_seed().shielded_address(Network::Undeployed);
 
     let spendable_before = provider
         .spendable_shielded_coins()
