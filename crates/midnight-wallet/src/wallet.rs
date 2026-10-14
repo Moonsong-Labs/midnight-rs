@@ -1260,33 +1260,6 @@ mod tests {
         }
     }
 
-    /// The hex of `$ledger`'s event for an output of `$coin` to `seed()`'s
-    /// wallet that carries no ciphertext, so only a registration claims it.
-    macro_rules! output_event {
-        ($ledger:ident, $coin:expr, $mt_index:expr) => {{
-            use midnight_helpers::$ledger as l;
-            use midnight_types::$ledger::convert::IntoLedger;
-            let keys = crate::$ledger::state::zswap_keys(&seed());
-            let coin: l::CoinInfo = $coin.into_ledger();
-            let event: l::Event<DefaultDB> = l::Event {
-                source: l::mn_ledger::events::EventSource {
-                    transaction_hash: l::TransactionHash(l::HashOutput([0; 32])),
-                    logical_segment: 0,
-                    physical_segment: 0,
-                },
-                content: l::mn_ledger::events::EventDetails::ZswapOutput {
-                    commitment: coin.commitment(&l::Recipient::User(keys.coin_public_key())),
-                    preimage_evidence: l::mn_ledger::events::ZswapPreimageEvidence::None,
-                    contract: None,
-                    mt_index: $mt_index,
-                },
-            };
-            let mut raw = Vec::new();
-            midnight_helpers::midnight_serialize::tagged_serialize(&event, &mut raw).unwrap();
-            hex::encode(raw)
-        }};
-    }
-
     /// A chain that crossed the fork serves ledger 8 events, then ledger 9
     /// ones, in one stream. A replay that stopped at the boundary, or lost the
     /// state it built before it, would lose the coins of one half. The second
@@ -1296,8 +1269,14 @@ mod tests {
     async fn a_zswap_replay_crosses_the_fork_with_the_coins_of_both_halves() {
         let (listener, url) = bind().await;
         let events = [
-            (1, output_event!(ledger_8, coin(1), 0)),
-            (2, output_event!(ledger_9, coin(2), 1)),
+            (
+                1,
+                crate::ledger_8::state::test_support::ciphertextless_output(&seed(), &coin(1), 0),
+            ),
+            (
+                2,
+                crate::ledger_9::state::test_support::ciphertextless_output(&seed(), &coin(2), 1),
+            ),
         ];
         let server = tokio::spawn(async move {
             // One subscription per generation the replay passes through.

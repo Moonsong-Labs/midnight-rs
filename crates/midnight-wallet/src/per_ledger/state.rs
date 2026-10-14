@@ -1598,18 +1598,62 @@ fn tracked_to_ledger_utxo(
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use helpers::TransactionHash;
+    use helpers::midnight_serialize::tagged_serialize;
+    use helpers::mn_ledger::events::{EventSource, ZswapPreimageEvidence};
+
+    use super::*;
+
+    /// An event with an all-zero source, for tests that read only its content.
+    pub(super) fn zero_source_event(content: EventDetails<DefaultDB>) -> Event<DefaultDB> {
+        Event {
+            source: EventSource {
+                transaction_hash: TransactionHash(HashOutput([0u8; 32])),
+                logical_segment: 0,
+                physical_segment: 0,
+            },
+            content,
+        }
+    }
+
+    /// The hex of this generation's event for an output of `coin` to `seed`'s
+    /// wallet that carries no discovery ciphertext. The commitment lands in
+    /// the Merkle tree and nothing else identifies the coin, so only a
+    /// registration claims it.
+    pub(crate) fn ciphertextless_output(
+        seed: &Seed,
+        coin: &crate::CoinInfo,
+        mt_index: u64,
+    ) -> String {
+        let commitment = coin
+            .into_ledger()
+            .commitment(&Recipient::User(zswap_keys(seed).coin_public_key()));
+        let event = zero_source_event(EventDetails::ZswapOutput {
+            commitment,
+            preimage_evidence: ZswapPreimageEvidence::None,
+            contract: None,
+            mt_index,
+        });
+        let mut raw = Vec::new();
+        tagged_serialize(&event, &mut raw).unwrap();
+        hex::encode(raw)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use helpers::coin_structure::coin::Commitment;
     use helpers::midnight_serialize::tagged_serialize;
     use helpers::mn_ledger::dust::DustCommitment;
-    use helpers::mn_ledger::events::EventSource;
     use helpers::{
         DustLocalState, DustNullifier, DustSpend, Fr, HashOutput, INITIAL_PARAMETERS, KeyLocation,
         Nonce, Nullifier, ProofPreimage, ProofPreimageMarker, QualifiedInfo, Recipient,
-        ShieldedTokenType, TransactionHash,
+        ShieldedTokenType,
     };
 
     use super::super::types::DustSpendBatch;
+    use super::test_support::{ciphertextless_output, zero_source_event};
     use super::*;
 
     #[test]
@@ -1661,21 +1705,10 @@ mod tests {
         }
     }
 
-    fn dust_event(content: EventDetails<DefaultDB>) -> Event<DefaultDB> {
-        Event {
-            source: EventSource {
-                transaction_hash: TransactionHash(HashOutput([0u8; 32])),
-                logical_segment: 0,
-                physical_segment: 0,
-            },
-            content,
-        }
-    }
-
     #[test]
     fn event_spend_nullifier_matches_dust_spend_processed_only() {
         let nullifier = DustNullifier(Fr::from(7u64));
-        let spend = dust_event(EventDetails::DustSpendProcessed {
+        let spend = zero_source_event(EventDetails::DustSpendProcessed {
             commitment: DustCommitment(Fr::from(8u64)),
             commitment_index: 0,
             nullifier,
@@ -1685,7 +1718,7 @@ mod tests {
         });
         assert_eq!(event_spend_nullifier(&spend), Some(nullifier));
 
-        let other = dust_event(EventDetails::ZswapInput {
+        let other = zero_source_event(EventDetails::ZswapInput {
             nullifier: Nullifier(HashOutput([1u8; 32])),
             contract: None,
         });
@@ -2455,33 +2488,10 @@ mod tests {
     /// no ciphertext this wallet can read, driven through the shielded
     /// rescan. The mock server lives in `midnight_indexer_client::testutil`.
     mod shielded_rescan_ws {
-        use helpers::mn_ledger::events::ZswapPreimageEvidence;
         use midnight_indexer_client::testutil::{accept_subscriber, bind, next_json, send_next};
         use serde_json::json;
 
         use super::*;
-
-        /// The chain's event for an output whose recipient gets no discovery
-        /// ciphertext: the commitment lands in the Merkle tree and nothing
-        /// else identifies the coin.
-        fn ciphertextless_output(commitment: Commitment, mt_index: u64) -> String {
-            let event: Event<DefaultDB> = Event {
-                source: EventSource {
-                    transaction_hash: TransactionHash(HashOutput([0u8; 32])),
-                    logical_segment: 0,
-                    physical_segment: 0,
-                },
-                content: EventDetails::ZswapOutput {
-                    commitment,
-                    preimage_evidence: ZswapPreimageEvidence::None,
-                    contract: None,
-                    mt_index,
-                },
-            };
-            let mut raw = Vec::new();
-            tagged_serialize(&event, &mut raw).unwrap();
-            hex::encode(raw)
-        }
 
         fn zswap_message(id: i64, raw: &str, max_id: i64) -> serde_json::Value {
             json!({"zswapLedgerEvents": {"id": id, "raw": raw, "maxId": max_id}})
@@ -2507,7 +2517,7 @@ mod tests {
             let (listener, url) = bind().await;
             let mut wallet = test_wallet(None);
             let coin = unreachable_coin(9, 42);
-            let raw = ciphertextless_output(commitment_of(&wallet, &coin), 0);
+            let raw = ciphertextless_output(&wallet.seed, &coin, 0);
 
             let server = tokio::spawn(async move {
                 // The same one-event stream twice: once for the replay that
@@ -2577,8 +2587,8 @@ mod tests {
             let first = unreachable_coin(9, 42);
             let second = unreachable_coin(8, 77);
             let stream = [
-                ciphertextless_output(commitment_of(&wallet, &first), 0),
-                ciphertextless_output(commitment_of(&wallet, &second), 1),
+                ciphertextless_output(&wallet.seed, &first, 0),
+                ciphertextless_output(&wallet.seed, &second, 1),
             ];
 
             let server = tokio::spawn(async move {
