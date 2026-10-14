@@ -308,8 +308,8 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         let ext_hex = hex::encode(extrinsic_hash);
         self.ensure_address_marker(address)?;
         // Reject duplicates so we never write two files for the same tx id.
-        // `find_snapshot_path` is the same lookup `confirm` / `mark_failed`
-        // use, so this guarantees those operations remain unambiguous.
+        // `find_snapshot_path` is the same lookup `confirm` uses, so this
+        // guarantees that `confirm` and `mark_failed` remain unambiguous.
         if self.find_snapshot_path(address, &ext_hex)?.is_some() {
             return Err(PrivateStateError::SnapshotAlreadyExists {
                 address: address.to_string(),
@@ -416,20 +416,8 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         address: &str,
         extrinsic_hash: [u8; 32],
     ) -> Result<(), PrivateStateError> {
-        let _journal_guard = self.lock_address(address).await;
-        let ext_hex = hex::encode(extrinsic_hash);
-        // Surface SnapshotNotFound for unknown hashes so callers see a
-        // consistent error variant across confirm / mark_failed /
-        // rollback_from. cascade_drop's own early-return semantics aren't
-        // load-bearing here.
-        if self.find_snapshot_path(address, &ext_hex)?.is_none() {
-            return Err(PrivateStateError::SnapshotNotFound {
-                address: address.to_string(),
-                extrinsic_hash: ext_hex,
-            });
-        }
-        cascade_drop(self, address, &ext_hex)?;
-        debug!(address, extrinsic_hash = %ext_hex, "marked snapshot failed");
+        self.rollback_from(address, extrinsic_hash).await?;
+        debug!(address, extrinsic_hash = %hex::encode(extrinsic_hash), "marked snapshot failed");
         Ok(())
     }
 
@@ -450,15 +438,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         extrinsic_hash: [u8; 32],
     ) -> Result<(), PrivateStateError> {
         let _journal_guard = self.lock_address(address).await;
-        let ext_hex = hex::encode(extrinsic_hash);
-        if self.find_snapshot_path(address, &ext_hex)?.is_none() {
-            return Err(PrivateStateError::SnapshotNotFound {
-                address: address.to_string(),
-                extrinsic_hash: ext_hex,
-            });
-        }
-        cascade_drop(self, address, &ext_hex)?;
-        Ok(())
+        cascade_drop(self, address, &hex::encode(extrinsic_hash))
     }
 
     /// Both fields come from a single `head_snapshot` call so a concurrent
@@ -774,7 +754,8 @@ fn walk_children<'a>(
 /// Cascade-drop a snapshot and every snapshot that transitively depends on
 /// it. Walks the dependency graph (`depends_on` edges) starting from
 /// `start_hash`, collects every reachable extrinsic_hash, then deletes the
-/// corresponding files. A no-op if `start_hash` is not present.
+/// corresponding files. Errors with [`PrivateStateError::SnapshotNotFound`]
+/// if `start_hash` is not present.
 fn cascade_drop(
     provider: &FsPrivateStateProvider,
     address: &str,
@@ -785,7 +766,10 @@ fn cascade_drop(
         .iter()
         .any(|(_, s)| s.extrinsic_hash == start_hash)
     {
-        return Ok(());
+        return Err(PrivateStateError::SnapshotNotFound {
+            address: address.to_string(),
+            extrinsic_hash: start_hash.to_string(),
+        });
     }
     let path_by_hash: HashMap<&str, &Path> = snapshots
         .iter()
@@ -1297,22 +1281,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rollback_from_drops_snapshot_and_descendants() {
-        let (_dir, p) = provider();
-        p.append_pending("0200aa", ext(1), None, b"s1")
-            .await
-            .unwrap();
-        p.append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
-            .await
-            .unwrap();
-        p.append_pending("0200aa", ext(3), Some(ext(2)), b"s3")
-            .await
-            .unwrap();
-        p.rollback_from("0200aa", ext(2)).await.unwrap();
-        assert_eq!(p.head_extrinsic("0200aa").await.unwrap(), Some(ext(1)));
-    }
-
-    #[tokio::test]
     async fn forget_drops_everything_for_address() {
         let (_dir, p) = provider();
         p.append_pending("0200aa", ext(1), None, b"s1")
@@ -1720,11 +1688,6 @@ mod tests {
             .await
             .unwrap();
         let err = p.mark_failed("0200aa", ext(42)).await.unwrap_err();
-        assert!(
-            matches!(err, PrivateStateError::SnapshotNotFound { .. }),
-            "expected SnapshotNotFound, got {err:?}"
-        );
-        let err = p.rollback_from("0200aa", ext(42)).await.unwrap_err();
         assert!(
             matches!(err, PrivateStateError::SnapshotNotFound { .. }),
             "expected SnapshotNotFound, got {err:?}"
