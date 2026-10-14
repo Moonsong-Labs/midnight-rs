@@ -174,12 +174,11 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     }
 
     panic!(
-        "recipient wallet did not discover the minted coin (type {}, value {mint_value}); \
-         shielded coins seen: {:?}",
-        hex::encode(expected_tt.0.0),
+        "recipient wallet did not discover the minted coin (type {expected_tt}, \
+         value {mint_value}); shielded coins seen: {:?}",
         coins
             .iter()
-            .map(|c| (hex::encode(c.token_type.0.0), c.value))
+            .map(|c| (c.token_type_hex(), c.value))
             .collect::<Vec<_>>()
     );
 }

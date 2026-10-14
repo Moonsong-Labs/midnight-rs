@@ -36,10 +36,10 @@ pub struct UnshieldedUtxoInfo {
 }
 
 impl UnshieldedUtxoInfo {
-    /// 64-char hex representation of the token id (no `0x` prefix), suitable
-    /// for human-readable logs / debug output.
+    /// The token id as [`UnshieldedTokenType`]'s `Display` writes it, for
+    /// human-readable logs / debug output.
     pub fn token_type_hex(&self) -> String {
-        hex::encode(self.token_type.0.0)
+        self.token_type.to_string()
     }
 }
 
@@ -53,8 +53,7 @@ impl fmt::Display for UnshieldedUtxoInfo {
         if self.token_type == NIGHT {
             write!(f, "NIGHT: {}", self.value)
         } else {
-            let hex = self.token_type_hex();
-            write!(f, "{}…: {}", &hex[..8], self.value)
+            write!(f, "{:.8}…: {}", self.token_type, self.value)
         }
     }
 }
@@ -69,10 +68,10 @@ pub struct ShieldedCoinBalance {
 }
 
 impl ShieldedCoinBalance {
-    /// 64-char hex representation of the token id (no `0x` prefix), suitable
-    /// for human-readable logs / debug output.
+    /// The token id as [`ShieldedTokenType`]'s `Display` writes it, for
+    /// human-readable logs / debug output.
     pub fn token_type_hex(&self) -> String {
-        hex::encode(self.token_type.0.0)
+        self.token_type.to_string()
     }
 }
 
@@ -80,8 +79,7 @@ impl fmt::Display for ShieldedCoinBalance {
     /// Render as `<8-char-hex-prefix>…: <value>`. There is no shielded NIGHT;
     /// all shielded token ids are treated as opaque.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hex = self.token_type_hex();
-        write!(f, "{}…: {}", &hex[..8], self.value)
+        write!(f, "{:.8}…: {}", self.token_type, self.value)
     }
 }
 
@@ -116,9 +114,10 @@ pub struct SpendableShieldedCoin {
 }
 
 impl SpendableShieldedCoin {
-    /// 64-char hex of the token id (no `0x` prefix), for logs / debug output.
+    /// The token id as [`ShieldedTokenType`]'s `Display` writes it, for logs /
+    /// debug output.
     pub fn token_type_hex(&self) -> String {
-        hex::encode(self.token_type.0.0)
+        self.token_type.to_string()
     }
 }
 

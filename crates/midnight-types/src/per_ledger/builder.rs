@@ -1417,7 +1417,7 @@ mod tests {
     fn night_utxo(value: u128, ctime: Option<i64>, registered: bool) -> TrackedUtxo {
         TrackedUtxo {
             owner: "owner".into(),
-            token_type: hex::encode(NIGHT.0.0),
+            token_type: crate::sync::NIGHT_TOKEN_HEX.clone(),
             value,
             intent_hash: None,
             output_index: None,

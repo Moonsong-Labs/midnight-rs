@@ -157,7 +157,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let seen = |coins: &[midnight_provider::SpendableShieldedCoin]| {
         coins
             .iter()
-            .map(|c| (hex::encode(c.token_type.0.0), c.value))
+            .map(|c| (c.token_type_hex(), c.value))
             .collect::<Vec<_>>()
     };
 
@@ -193,8 +193,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
             assert!(
                 holds(&after, recovered_nonce, recovered_value),
                 "registering the rebuilt coin must recover it and keep the ones before it \
-                 (token {}, value {recovered_value}); coins seen: {:?}",
-                hex::encode(token_type.0.0),
+                 (token {token_type}, value {recovered_value}); coins seen: {:?}",
                 seen(&after)
             );
         }

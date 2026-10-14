@@ -116,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
         Some(coin) => {
             println!(
                 "   discovered minted coin: token_type={}, value={}",
-                hex::encode(coin.token_type.0.0),
+                coin.token_type_hex(),
                 coin.value
             );
             println!("\n=== Done: recipient found the coin through normal sync ===");
@@ -128,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
                     .shielded
                     .coins
                     .iter()
-                    .map(|c| (hex::encode(c.token_type.0.0), c.value))
+                    .map(|c| (c.token_type_hex(), c.value))
                     .collect::<Vec<_>>()
             );
         }

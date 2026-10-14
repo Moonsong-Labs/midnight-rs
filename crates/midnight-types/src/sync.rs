@@ -38,8 +38,8 @@ pub struct TrackedUtxo {
 }
 
 /// The NIGHT token id in the 64-char hex form the indexer reports.
-static NIGHT_TOKEN_HEX: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| hex::encode(NIGHT.0.0));
+pub(crate) static NIGHT_TOKEN_HEX: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| NIGHT.to_string());
 
 impl TrackedUtxo {
     /// Whether this UTXO holds the native NIGHT token.

@@ -12,12 +12,30 @@ use midnight_helpers::HashOutput;
 /// The type of a shielded token, its "color".
 ///
 /// Treat shielded token ids as opaque: the zero id is not NIGHT.
+///
+/// [`Display`](fmt::Display) writes the id as 64-char lowercase hex, with no
+/// `0x` prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShieldedTokenType(pub HashOutput);
 
+impl fmt::Display for ShieldedTokenType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(&hex::encode(self.0.0))
+    }
+}
+
 /// The type of an unshielded token.
+///
+/// [`Display`](fmt::Display) writes the id as 64-char lowercase hex, with no
+/// `0x` prefix, which is the form the indexer reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UnshieldedTokenType(pub HashOutput);
+
+impl fmt::Display for UnshieldedTokenType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(&hex::encode(self.0.0))
+    }
+}
 
 /// NIGHT, the native unshielded token.
 pub const NIGHT: UnshieldedTokenType = UnshieldedTokenType(HashOutput([0; 32]));
@@ -116,6 +134,14 @@ mod tests {
 
     use crate::ledger_8::convert::IntoSdk as _;
     use crate::ledger_9::convert::IntoLedger as _;
+
+    /// `TrackedUtxo::is_night` compares the indexer's token string with
+    /// `NIGHT`'s `Display`, so a prefix, an upper case or a cut breaks it.
+    #[test]
+    fn a_token_type_displays_as_the_indexer_hex() {
+        let token = super::UnshieldedTokenType(super::HashOutput([0xab; 32]));
+        assert_eq!(token.to_string(), "ab".repeat(32));
+    }
 
     /// A field element's own serialization is variable-length, so a nullifier
     /// that went through it would not fit the SDK's 32 bytes, or would come
