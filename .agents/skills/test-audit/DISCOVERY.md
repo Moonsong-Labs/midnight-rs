@@ -34,9 +34,10 @@ The log shows only the output of the two E2E targets and the example steps. `mak
 git grep -l -E 'MIDNIGHT_(NODE|INDEXER)_URL|MIDNIGHT_E2E|ws://(127\.0\.0\.1|localhost):9944' -- '*/tests/*.rs' 'tests/*/src/*.rs'
 make -n test-e2e test-e2e-node-restart | grep 'cargo test'
 
-# Every skip site. A skip on anything other than an absent node or indexer URL is a candidate,
-# even when CI meets its precondition today. Check that a MIDNIGHT_E2E panic comes before it.
-git grep -n 'skipping:' -- '*.rs'
+# Every skip site: a skip line, or a call to a crate's skip helper. A skip on anything other than an
+# absent node or indexer URL is a candidate, even when CI meets its precondition today. Check that a
+# MIDNIGHT_E2E panic comes before an inline skip line.
+git grep -n -E 'skipping:|[^.]skip\(' -- '*.rs'
 
 # Ignored tests, and the targets that run them with --ignored
 git grep -n -A2 -E '^[[:space:]]*#\[ignore' -- '*.rs'

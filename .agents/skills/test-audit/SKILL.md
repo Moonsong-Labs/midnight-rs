@@ -86,11 +86,11 @@ These rules apply to every new devnet test. In an audit, an existing devnet test
 - The test creates the wallet state and the fixtures that it needs. A skip on wallet state, or on a fixture that CI does not build, lets the test pass in CI with no proof.
 - The test gets a line in `make test-e2e` in the same change, with `-p <crate>`. A test in `<crate>/tests/` uses `--test <file>`. A test in a test module of `tests/*/src/` uses `--lib`.
 
-Put the guard just before the skip:
+To skip, call the skip helper of the crate: `return common::skip("<precondition>");` in midnight-provider (`tests/common/mod.rs`), and `return skip("<precondition>");` in midnight-wallet (`tests/integration.rs`). The helper panics when `MIDNIGHT_E2E` is set, and prints the skip line otherwise. In a crate with no helper, put the guard just before the skip:
 
 ```rust
 if std::env::var_os("MIDNIGHT_E2E").is_some() {
-    panic!("<precondition> is missing under make test-e2e");
+    panic!("<precondition> is missing while MIDNIGHT_E2E is set");
 }
 eprintln!("skipping: <precondition> is missing");
 return;

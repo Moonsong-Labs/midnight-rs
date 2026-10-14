@@ -2,7 +2,7 @@
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
 
-#[expect(dead_code, reason = "this test needs only the devnet URLs")]
+#[expect(dead_code, reason = "this test needs only the devnet gate")]
 mod common;
 
 use midnight_indexer_client::{BlockOffset, IndexerClient};
@@ -19,11 +19,7 @@ fn provider() -> Option<MidnightProvider> {
 async fn the_devnet_runs_the_ledger_its_leg_names() {
     let Some(p) = provider() else { return };
     let Ok(expected) = std::env::var("MIDNIGHT_LEDGER") else {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("MIDNIGHT_LEDGER is missing under make test-e2e");
-        }
-        eprintln!("skipping: MIDNIGHT_LEDGER not set");
-        return;
+        return common::skip("MIDNIGHT_LEDGER");
     };
     let expected = match expected.as_str() {
         "8" => LedgerVersion::V8,
@@ -144,11 +140,7 @@ async fn block_timestamp_matches_the_indexer_at_a_past_block() {
 async fn survives_a_node_restart() {
     let Some(p) = provider() else { return };
     let Ok(container) = std::env::var("MIDNIGHT_NODE_CONTAINER") else {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("MIDNIGHT_NODE_CONTAINER is missing under make test-e2e-node-restart");
-        }
-        eprintln!("skipping: MIDNIGHT_NODE_CONTAINER not set");
-        return;
+        return common::skip("MIDNIGHT_NODE_CONTAINER");
     };
 
     let before = p.get_finalized_block_height().await.unwrap();

@@ -170,17 +170,10 @@ async fn two_preparations_at_once_draw_different_inputs() {
         .filter(|u| u.is_night())
         .count();
     if spendable_dust < 2 || night < 2 {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!(
-                "2 spendable Dust UTXOs and 2 tNIGHT UTXOs are missing under make test-e2e: \
-                 this wallet has {spendable_dust} and {night}"
-            );
-        }
-        eprintln!(
-            "skipping: needs 2 spendable Dust UTXOs and 2 tNIGHT UTXOs, \
-             this wallet has {spendable_dust} and {night}"
-        );
-        return;
+        return common::skip(&format!(
+            "a wallet with 2 spendable Dust UTXOs and 2 tNIGHT UTXOs \
+             (this one has {spendable_dust} and {night})"
+        ));
     }
 
     let ledger = wallet.ledger_version();
@@ -267,11 +260,7 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
         .expect("wallet attached")
         .len();
     if spendable_before == 0 {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("spendable shielded coins are missing under make test-e2e");
-        }
-        eprintln!("skipping: this wallet holds no spendable shielded coins");
-        return;
+        return common::skip("a spendable shielded coin");
     }
 
     let broken = provider.with_proof_provider(Arc::new(BrokenProver));

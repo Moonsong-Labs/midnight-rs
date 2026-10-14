@@ -76,14 +76,9 @@ async fn a_second_registration_is_refused_before_proving() {
     let (total, unregistered) = night_counts(&provider).await;
     assert!(total > 0, "the wallet needs tNIGHT for this test");
     if unregistered > 0 {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!(
-                "a wallet whose every tNIGHT UTXO generates dust is missing under make test-e2e: \
-                 {unregistered} are unregistered"
-            );
-        }
-        eprintln!("skipping: this wallet still has {unregistered} unregistered tNIGHT UTXOs");
-        return;
+        return common::skip(&format!(
+            "a wallet whose every tNIGHT UTXO generates dust ({unregistered} are unregistered)"
+        ));
     }
 
     let Err(err) = provider.register_dust(None).build().await else {
