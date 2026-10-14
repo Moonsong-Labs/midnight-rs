@@ -36,12 +36,7 @@ pub type Sig = midnight_helpers::ledger_9::Signature;
 
 /// Type alias for the unproven transaction object [`build_unproven_call_tx`]
 /// builds: a ledger 9 transaction over the Compact side's own types.
-pub type UnprovenTransaction = mn_ledger::structure::Transaction<
-    Sig,
-    mn_ledger::structure::ProofPreimageMarker,
-    midnight_transient_crypto::commitment::PedersenRandomness,
-    InMemoryDB,
->;
+pub type UnprovenTransaction = midnight_helpers::ledger_9::UnprovenTransaction<InMemoryDB>;
 
 /// Result of building an unproven circuit call transaction.
 pub struct UnprovenCallTx {
