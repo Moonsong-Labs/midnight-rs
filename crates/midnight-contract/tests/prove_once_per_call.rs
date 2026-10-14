@@ -120,10 +120,6 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(&zk_keys_dir)
         .with_maintenance_authority(vec![authority.verifying_key()], 1)
-        .send()
-        .await
-        .expect("submit deploy")
-        .into_contract()
         .await
         .expect("deploy");
 
