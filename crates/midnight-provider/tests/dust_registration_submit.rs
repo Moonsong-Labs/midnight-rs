@@ -17,16 +17,14 @@ use midnight_wallet::NIGHT;
 /// Enough tNIGHT that the coin carries real generationless dust.
 const SEND: u128 = 5_000_000_000_000;
 
-/// A seed no earlier run has used, because a registration is permanent and the
-/// devnet keeps its chain between runs.
-fn unused_seed() -> Seed {
+/// The hex of a seed no earlier run has used, because a registration is
+/// permanent and the devnet keeps its chain between runs.
+fn unused_seed() -> String {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    let mut bytes = [0u8; 32];
-    bytes[16..].copy_from_slice(&nonce.to_be_bytes());
-    Seed::from_bytes(&bytes).expect("a 32-byte seed")
+    format!("{nonce:064x}")
 }
 
 /// Two unregistered tNIGHT UTXOs is the case that fails when a registration
@@ -38,9 +36,11 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     };
 
     let seed = unused_seed();
-    let address = seed.unshielded_address(Network::Undeployed);
+    let address = Seed::from_hex(&seed)
+        .expect("hex seed")
+        .unshielded_address(Network::Undeployed);
 
-    let funder = common::synced_provider(&node_url, &indexer_url, common::dev_seed()).await;
+    let funder = common::synced_provider(&node_url, &indexer_url, common::DEV_WALLET_SEED).await;
 
     for _ in 0..2 {
         funder
@@ -52,7 +52,7 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
             .expect("funding finalized");
     }
 
-    let fresh = common::synced_provider(&node_url, &indexer_url, seed).await;
+    let fresh = common::synced_provider(&node_url, &indexer_url, &seed).await;
 
     // Finalized on chain is not yet visible through the indexer, which the
     // fresh wallet syncs from. Poll rather than assume, as below.

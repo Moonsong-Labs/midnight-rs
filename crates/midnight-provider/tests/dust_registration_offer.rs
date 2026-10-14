@@ -69,7 +69,7 @@ async fn a_second_registration_is_refused_before_proving() {
         return;
     };
     let recorder = Arc::new(ProofRecorder::default());
-    let provider = common::synced_provider(&node, &indexer, common::dev_seed())
+    let provider = common::synced_provider(&node, &indexer, common::DEV_WALLET_SEED)
         .await
         .with_proof_provider(recorder.clone());
 

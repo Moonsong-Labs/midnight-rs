@@ -9,9 +9,10 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
+#[expect(dead_code, reason = "this test needs no synced_provider")]
 mod common;
 
-use midnight_provider::{NIGHT, Network, NodeBlockHash};
+use midnight_provider::{MidnightProvider, NIGHT, NodeBlockHash};
 
 #[tokio::test]
 async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
@@ -19,8 +20,10 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
         return;
     };
 
-    let provider = common::synced_provider(&node_url, &indexer_url, common::dev_seed()).await;
-    let recipient = common::dev_seed().unshielded_address(Network::Undeployed);
+    let provider = MidnightProvider::new(&node_url, &indexer_url);
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let recipient = wallet.unshielded_address();
+    let provider = provider.with_wallet(wallet);
 
     // A self-transfer is the cheapest transaction that reaches a block.
     let pending = provider

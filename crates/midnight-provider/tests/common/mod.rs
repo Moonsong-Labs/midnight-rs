@@ -1,14 +1,12 @@
 //! Devnet setup for the devnet tests of this crate.
 
-use midnight_provider::{MidnightProvider, Network, Seed};
-use midnight_wallet::{Wallet, WalletBuilder};
+use midnight_provider::{MidnightProvider, Network};
+use midnight_wallet::Wallet;
 
 /// The seed of the devnet genesis wallet, which holds tNIGHT, dust and
 /// shielded coins.
-pub(crate) fn dev_seed() -> Seed {
-    Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-        .expect("dev seed")
-}
+pub(crate) const DEV_WALLET_SEED: &str =
+    "0000000000000000000000000000000000000000000000000000000000000001";
 
 /// Prints a skip line on stderr for the precondition `missing`. The caller
 /// then returns without running the test.
@@ -37,9 +35,11 @@ pub(crate) fn devnet_urls() -> Option<(String, String)> {
     Some((node, indexer))
 }
 
-/// The wallet of `seed` on the undeployed network, synced through `provider`.
-pub(crate) async fn synced_wallet(provider: &MidnightProvider, seed: Seed) -> Wallet {
-    WalletBuilder::new(seed)
+/// The wallet of the hex seed `seed` on the undeployed network, synced
+/// through `provider`.
+pub(crate) async fn synced_wallet(provider: &MidnightProvider, seed: &str) -> Wallet {
+    Wallet::from_seed(seed)
+        .expect("hex seed")
         .with_network(Network::Undeployed)
         .sync(provider)
         .await
@@ -47,7 +47,7 @@ pub(crate) async fn synced_wallet(provider: &MidnightProvider, seed: Seed) -> Wa
 }
 
 /// A provider for the devnet, with the wallet of `seed` synced and attached.
-pub(crate) async fn synced_provider(node: &str, indexer: &str, seed: Seed) -> MidnightProvider {
+pub(crate) async fn synced_provider(node: &str, indexer: &str, seed: &str) -> MidnightProvider {
     let provider = MidnightProvider::new(node, indexer);
     let wallet = synced_wallet(&provider, seed).await;
     provider.with_wallet(wallet)
