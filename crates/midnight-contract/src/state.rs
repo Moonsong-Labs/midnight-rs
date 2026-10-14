@@ -201,9 +201,6 @@ pub(crate) fn verifier_keys(
             let bytes = zk_config
                 .verifier_key(&circuit)
                 .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))?;
-            verifier_key_version(&bytes).map_err(|e| {
-                ContractError::Construction(format!("deserialize {circuit}.verifier: {e}"))
-            })?;
             Ok((circuit, bytes))
         })
         .collect()
