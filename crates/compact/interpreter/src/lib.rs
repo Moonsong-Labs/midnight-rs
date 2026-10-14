@@ -699,7 +699,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                 .map(|a| eval_expr(ctx, a))
                 .collect::<Result<_, _>>()?;
             match program.callee(name) {
-                Callee::Circuit(circuit) => call_circuit(ctx, circuit, &values),
+                Callee::Circuit(c) => call_circuit(ctx, &c.arguments, &c.body, &values),
                 Callee::Witness => eval_witness_call(ctx, name, values),
                 Callee::Pure => eval_pure_call(ctx, name, values),
             }
@@ -1152,27 +1152,38 @@ fn eval_cast(val: Value, from: &Type, to: &Type) -> Result<Value, InterpreterErr
     Ok(val)
 }
 
-/// Run a circuit's body as a pure call: parameters bound positionally, the
-/// body's value returned.
+/// Run a circuit body or an inline loop callee as a pure call: parameters
+/// bound positionally, the body's value returned.
 ///
-/// The parameters shadow the caller's bindings rather than replacing them;
-/// identifiers are unique program-wide, so nothing else is reachable anyway.
+/// The parameters shadow the caller's locals rather than replacing them. An
+/// inline callee closes over the enclosing scope: a loop body reads the
+/// circuit's own arguments, and the generated TypeScript passes a closure that
+/// captures them. A circuit body reaches nothing else, because identifiers are
+/// unique program-wide.
 fn call_circuit(
     ctx: &mut ExecContext,
-    circuit: &ir::Circuit,
+    params: &[ir::Argument],
+    body: &ir::Expr,
     args: &[Value],
 ) -> Result<Value, InterpreterError> {
-    for param in &circuit.arguments {
+    if params.len() != args.len() {
+        return Err(InterpreterError::TypeError(format!(
+            "callee takes {} parameters but got {} arguments",
+            params.len(),
+            args.len()
+        )));
+    }
+    for param in params {
         check_type(&param.ty)?;
     }
     let saved_locals = ctx.locals.clone();
     let saved_types = ctx.local_types.clone();
-    for (param, val) in circuit.arguments.iter().zip(args.iter()) {
+    for (param, val) in params.iter().zip(args.iter()) {
         ctx.locals.insert(param.name.0.clone(), val.clone());
         ctx.local_types
             .insert(param.name.0.clone(), param.ty.clone());
     }
-    let result = eval_expr(ctx, &circuit.body);
+    let result = eval_expr(ctx, body);
     ctx.locals = saved_locals;
     ctx.local_types = saved_types;
     result
@@ -1548,7 +1559,7 @@ fn apply_fun(
 ) -> Result<Value, InterpreterError> {
     match fun {
         ir::Fun::Ref(id) => match ctx.program.circuits.get(id.0.as_str()).copied() {
-            Some(circuit) => call_circuit(ctx, circuit, args),
+            Some(c) => call_circuit(ctx, &c.arguments, &c.body, args),
             None => Err(InterpreterError::TypeError(format!(
                 "loop calls `{}`, which is not a circuit in the program",
                 id.0
@@ -1556,33 +1567,7 @@ fn apply_fun(
         },
         ir::Fun::Circuit {
             arguments, body, ..
-        } => {
-            if arguments.len() != args.len() {
-                return Err(InterpreterError::TypeError(format!(
-                    "loop callee takes {} parameters but got {} arguments",
-                    arguments.len(),
-                    args.len()
-                )));
-            }
-            for param in arguments {
-                check_type(&param.ty)?;
-            }
-            // An inline callee closes over the enclosing scope: a loop body
-            // reads the circuit's own arguments, and the generated TypeScript
-            // passes a closure that captures them. So the parameters shadow
-            // the caller's locals rather than replacing them.
-            let saved_locals = ctx.locals.clone();
-            let saved_types = ctx.local_types.clone();
-            for (param, val) in arguments.iter().zip(args.iter()) {
-                ctx.locals.insert(param.name.0.clone(), val.clone());
-                ctx.local_types
-                    .insert(param.name.0.clone(), param.ty.clone());
-            }
-            let result = eval_expr(ctx, body);
-            ctx.locals = saved_locals;
-            ctx.local_types = saved_types;
-            result
-        }
+        } => call_circuit(ctx, arguments, body, args),
     }
 }
 
