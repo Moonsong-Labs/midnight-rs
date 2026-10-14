@@ -401,26 +401,22 @@ impl SubscriptionClient {
                                 else {
                                     continue;
                                 };
-                                // Read `errors` first: a partial result carries both,
-                                // and any error ends the stream.
                                 let envelope = serde_json::from_value::<
                                     GraphQLResponse<serde_json::Value>,
                                 >(payload);
-                                let item = match envelope {
-                                    Ok(GraphQLResponse { errors: Some(errors), .. })
-                                        if !errors.is_empty() =>
-                                    {
-                                        let _ = tx.send(Err(IndexerError::GraphQL(errors))).await;
+                                let item = match envelope.map(GraphQLResponse::into_result) {
+                                    Ok(Err(e)) => {
+                                        let _ = tx.send(Err(e)).await;
                                         break;
                                     }
-                                    Ok(GraphQLResponse { data: Some(data), .. }) => {
+                                    Ok(Ok(Some(data))) => {
                                         serde_json::from_value::<T>(data).map_err(|e| {
                                             IndexerError::Deserialization(format!(
                                                 "subscription event: {e}"
                                             ))
                                         })
                                     }
-                                    Ok(_) => continue,
+                                    Ok(Ok(None)) => continue,
                                     Err(e) => Err(IndexerError::Deserialization(format!(
                                         "subscription payload: {e}"
                                     ))),

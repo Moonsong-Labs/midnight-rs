@@ -88,11 +88,7 @@ impl IndexerClient {
             IndexerError::Deserialization(e.to_string())
         })?;
 
-        if let Some(errors) = gql_resp.errors.filter(|e| !e.is_empty()) {
-            return Err(IndexerError::GraphQL(errors));
-        }
-
-        gql_resp.data.ok_or(IndexerError::MissingData)
+        gql_resp.into_result()?.ok_or(IndexerError::MissingData)
     }
 
     // -- Blocks --
