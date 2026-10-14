@@ -377,7 +377,7 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     );
 
     let mut intents = StorageHashMap::new();
-    intents = intents.insert(0u16, intent);
+    intents = intents.insert(crate::ledger_9::call::INTENT_SEGMENT, intent);
 
     let tx: UnprovenTransaction = Transaction::from_intents(network_id, intents);
 

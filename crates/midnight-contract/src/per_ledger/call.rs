@@ -33,7 +33,7 @@ use crate::runtime;
 
 /// The segment of the intent that a call, a deploy or a maintenance update
 /// adds. A call's fallible offers and fallible transients ride in it too.
-pub(super) const INTENT_SEGMENT: helpers::SegmentId =
+pub(crate) const INTENT_SEGMENT: helpers::SegmentId =
     helpers::Segment::Fallible as helpers::SegmentId;
 
 /// An unshielded payout to an address the call's transcript names.
