@@ -33,6 +33,9 @@ impl StructLayout {
 /// Compute the number of FAB atoms a type occupies in an `AlignedValue`
 /// encoding. Used to build struct layouts so `Expr::Field` can slice
 /// `Value::AlignedValue` receivers by offset/length.
+///
+/// Returns `None` for a type with no fixed width, or when the count does not
+/// fit a `usize`.
 pub fn atom_count_for_type(ty: &Type) -> Option<usize> {
     match ty {
         Type::Boolean | Type::Unsigned(_) | Type::Field(_) | Type::Bytes(_) => Some(1),
@@ -43,27 +46,14 @@ pub fn atom_count_for_type(ty: &Type) -> Option<usize> {
             "Scalar<BLS12-381>" => Some(1),
             _ => Some(1),
         },
-        Type::Tuple(types) => {
-            let mut total = 0;
-            for t in types {
-                total += atom_count_for_type(t)?;
-            }
-            Some(total)
-        }
+        Type::Tuple(types) => atoms_of(types),
         Type::Vector { len, ty } => {
-            let per = atom_count_for_type(ty)?;
-            Some(per * (*len as usize))
+            atom_count_for_type(ty)?.checked_mul(usize::try_from(*len).ok()?)
         }
         // Prefer the field list the type carries: it is exact per
         // instantiation, where a name is not. Two instantiations of one
         // generic struct share a name but not a layout.
-        Type::Struct { fields, .. } => {
-            let mut total = 0;
-            for (_, t) in fields {
-                total += atom_count_for_type(t)?;
-            }
-            Some(total)
-        }
+        Type::Struct { fields, .. } => atoms_of(fields.iter().map(|(_, t)| t)),
         Type::Enum { .. } => Some(1),
         Type::Alias { ty, .. } => atom_count_for_type(ty),
         // A contract handle is a single address atom on the wire.
@@ -71,6 +61,12 @@ pub fn atom_count_for_type(ty: &Type) -> Option<usize> {
         // Rejected at load by `artifact::check_type`.
         Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => None,
     }
+}
+
+fn atoms_of<'a>(types: impl IntoIterator<Item = &'a Type>) -> Option<usize> {
+    types.into_iter().try_fold(0usize, |total, t| {
+        total.checked_add(atom_count_for_type(t)?)
+    })
 }
 
 /// Compute a layout straight from a field list, for a type that carries its
@@ -82,7 +78,7 @@ pub fn layout_from_fields(fields: &[(String, Type)]) -> Option<StructLayout> {
     for (name, ty) in fields {
         let len = atom_count_for_type(ty)?;
         out.push((name.clone(), offset, len));
-        offset += len;
+        offset = offset.checked_add(len)?;
     }
     Some(StructLayout { fields: out })
 }
@@ -126,10 +122,7 @@ pub fn element_atom_range(ty: &Type, i: usize) -> Option<Range<usize>> {
             Some(start..start.checked_add(stride)?)
         }
         Type::Tuple(types) => {
-            let mut start = 0usize;
-            for t in types.get(..i)? {
-                start = start.checked_add(atom_count_for_type(t)?)?;
-            }
+            let start = atoms_of(types.get(..i)?)?;
             let width = atom_count_for_type(types.get(i)?)?;
             Some(start..start.checked_add(width)?)
         }
