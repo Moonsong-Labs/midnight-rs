@@ -311,36 +311,12 @@ pub fn execute(
     })
 }
 
-/// Refuse a type the interpreter cannot execute, naming it.
-///
-/// The compiler's language is wider than what runs off-chain: a foreign-curve
-/// field or point has no value representation here, and an ADT or a type
-/// variable is not a value type at all. Refusing them by name beats reading
-/// one as if it were a native field.
+/// Refuse a type the interpreter cannot execute, naming it (see
+/// `compact_codegen::artifact::unsupported_type`). Refusing it by name beats
+/// reading it as if it were a native field.
 fn check_type(ty: &Type) -> Result<(), InterpreterError> {
-    let unsupported = |what: String| Err(InterpreterError::Unsupported(what));
-    match ty {
-        Type::Field(field_type) if !is_native_field_type(field_type) => {
-            unsupported("a secp256k1 field type".to_string())
-        }
-        Type::Point(ir::Curve::Secp256k1) => unsupported("a secp256k1 point type".to_string()),
-        Type::Adt { name, .. } => unsupported(format!("ADT type {name} in a value position")),
-        Type::TypeVar(v) => unsupported(format!("type variable {v}")),
-        Type::Vector { ty, .. } | Type::Alias { ty, .. } => check_type(ty),
-        Type::Tuple(types) => types.iter().try_for_each(check_type),
-        Type::Struct { fields, .. } => fields.iter().try_for_each(|(_, t)| check_type(t)),
-        _ => Ok(()),
-    }
-}
-
-/// Whether values of this field compute in the native scalar field. The
-/// compiler distinguishes the Jubjub scalar field from the native one, but
-/// they share a modulus, so both compute identically.
-fn is_native_field_type(field_type: &ir::FieldType) -> bool {
-    matches!(
-        field_type,
-        ir::FieldType::Native | ir::FieldType::Scalar(ir::Curve::Jubjub)
-    )
+    compact_codegen::artifact::unsupported_type(ty)
+        .map_or(Ok(()), |what| Err(InterpreterError::Unsupported(what)))
 }
 
 /// FAB-encode a circuit's argument list into the single input value the
@@ -804,7 +780,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             from,
             expr,
         } => {
-            if !is_native_field_type(field_type) {
+            if !field_type.is_native() {
                 return Err(InterpreterError::Unsupported(
                     "a cast to a secp256k1 field".to_string(),
                 ));
@@ -819,7 +795,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             field_type,
             expr,
         } => {
-            if !is_native_field_type(field_type) {
+            if !field_type.is_native() {
                 return Err(InterpreterError::Unsupported(
                     "a cast from a secp256k1 field".to_string(),
                 ));
@@ -915,7 +891,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             field_type,
             expr,
         } => {
-            if !is_native_field_type(field_type) {
+            if !field_type.is_native() {
                 return Err(InterpreterError::Unsupported(
                     "field-to-bytes on a secp256k1 field".to_string(),
                 ));

@@ -236,27 +236,34 @@ impl<'a> Context<'a> {
 
 // -- free helpers -------------------------------------------------------
 
-/// Refuse a type no consumer can handle, naming it. Keeping this at load
-/// time is what lets the interpreter assume every type it meets is one it
-/// can execute.
+/// Refuse a type no consumer can handle, naming it, so that a bad artifact
+/// fails at load and not mid-execution.
 fn check_type(t: &ir::Type) -> Result<(), ArtifactError> {
+    unsupported_type(t).map_or(Ok(()), |what| unsupported(&what))
+}
+
+/// The construct in `t` that the interpreter cannot execute, or `None` when
+/// it can execute every part of `t`.
+///
+/// The compiler's language is wider than what runs off-chain: a foreign-curve
+/// field or point has no value representation in the interpreter, and an ADT
+/// or a type variable is not a value type at all. The search goes through
+/// vectors, aliases, tuples and struct fields, and the description names the
+/// first such construct that it finds.
+///
+/// [`load`] refuses an artifact that holds such a type. The interpreter
+/// checks each type again when it runs, because it also runs circuits that
+/// no artifact supplied.
+pub fn unsupported_type(t: &ir::Type) -> Option<String> {
     match t {
-        ir::Type::Field(ft)
-            if !matches!(
-                ft,
-                ir::FieldType::Native | ir::FieldType::Scalar(ir::Curve::Jubjub)
-            ) =>
-        {
-            unsupported("a secp256k1 field type")
-        }
-        ir::Type::Point(ir::Curve::Secp256k1) => unsupported("a secp256k1 point type"),
-        ir::Type::Adt { name, .. } => unsupported(&format!("ADT type {name} in a value position")),
-        ir::Type::TypeVar(v) => unsupported(&format!("type variable {v}")),
-        ir::Type::Vector { ty, .. } => check_type(ty),
-        ir::Type::Alias { ty, .. } => check_type(ty),
-        ir::Type::Tuple(types) => types.iter().try_for_each(check_type),
-        ir::Type::Struct { fields, .. } => fields.iter().try_for_each(|(_, t)| check_type(t)),
-        _ => Ok(()),
+        ir::Type::Field(ft) if !ft.is_native() => Some("a secp256k1 field type".to_string()),
+        ir::Type::Point(ir::Curve::Secp256k1) => Some("a secp256k1 point type".to_string()),
+        ir::Type::Adt { name, .. } => Some(format!("ADT type {name} in a value position")),
+        ir::Type::TypeVar(v) => Some(format!("type variable {v}")),
+        ir::Type::Vector { ty, .. } | ir::Type::Alias { ty, .. } => unsupported_type(ty),
+        ir::Type::Tuple(types) => types.iter().find_map(unsupported_type),
+        ir::Type::Struct { fields, .. } => fields.iter().find_map(|(_, t)| unsupported_type(t)),
+        _ => None,
     }
 }
 
