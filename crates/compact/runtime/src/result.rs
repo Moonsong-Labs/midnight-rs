@@ -18,7 +18,8 @@ pub struct ExecutionResult {
     pub gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
     /// The circuit's return value, if any (non-void circuits).
     pub result: Option<Value>,
-    /// Values disclosed via `disclose()` calls (communication outputs).
+    /// The communication outputs: the circuit's result encoded at its declared
+    /// result type, or empty for a circuit that returns `Void`.
     pub communication_outputs: Vec<AlignedValue>,
     /// The results of the witness calls and of the witness-class natives such
     /// as `ownPublicKey`, in call order. They are the prover's private

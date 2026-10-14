@@ -267,7 +267,6 @@ pub fn execute(
         local_types,
         reads: Vec::new(),
         gather_ops: Vec::new(),
-        communication_outputs: Vec::new(),
         private_transcript_outputs: Vec::new(),
         zswap_outputs: Vec::new(),
         zswap_inputs: Vec::new(),
@@ -280,31 +279,24 @@ pub fn execute(
 
     // The circuit's value is its body's value (the compiler lowers `return
     // disclose(x)` into the body's final expression).
-    let result_value = Some(eval_expr(&mut ctx, &circuit.body)?);
+    let result = eval_expr(&mut ctx, &circuit.body)?;
 
-    // If no explicit disclose() calls were recorded, but the circuit has
-    // an implicit return value, use that as the communication output.
-    // This handles the case where the compiler lowers `return disclose(x)`
-    // into the body without a separate disclose() call.
-    //
     // The encoding must match the circuit's declared result type: the
     // canonical runtime encodes the output through the result descriptor, so
     // a `Field`-returning circuit binds a field-aligned output even when the
     // value is small.
-    let mut comm_outputs = ctx.communication_outputs;
-    if comm_outputs.is_empty()
-        && let Some(ref val) = result_value
-        && !matches!(val, Value::Void)
-    {
-        comm_outputs.push(encode_typed(val, &circuit.result_type)?);
-    }
+    let communication_outputs = if matches!(result, Value::Void) {
+        Vec::new()
+    } else {
+        vec![encode_typed(&result, &circuit.result_type)?]
+    };
 
     Ok(ExecutionResult {
         state: ctx.state,
         reads: ctx.reads,
         gather_ops: ctx.gather_ops,
-        result: result_value,
-        communication_outputs: comm_outputs,
+        result: Some(result),
+        communication_outputs,
         private_transcript_outputs: ctx.private_transcript_outputs,
         zswap_outputs: ctx.zswap_outputs,
         zswap_inputs: ctx.zswap_inputs,
@@ -355,8 +347,6 @@ struct ExecContext<'a> {
     local_types: HashMap<String, Type>,
     reads: Vec<AlignedValue>,
     gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
-    /// Values disclosed via `disclose()` — corresponds to ZKIR `Output` instructions.
-    communication_outputs: Vec<AlignedValue>,
     /// The results of the witness calls and of the witness-class natives, in
     /// call order. Surfaced as `ExecutionResult::private_transcript_outputs`.
     private_transcript_outputs: Vec<AlignedValue>,
@@ -3462,7 +3452,6 @@ mod tests {
             local_types,
             reads: Vec::new(),
             gather_ops: Vec::new(),
-            communication_outputs: Vec::new(),
             private_transcript_outputs: Vec::new(),
             zswap_outputs: Vec::new(),
             zswap_inputs: Vec::new(),

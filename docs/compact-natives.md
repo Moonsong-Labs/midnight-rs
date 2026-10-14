@@ -88,7 +88,7 @@ The missing natives all need foreign field and point values, which the interpret
 
 ### Interpreter intrinsics outside the native table
 
-`try_builtin` also implements a few names that are not `declare-native-entry` primitives (for example `leafHash`, `pad`) and the compiler keyword `disclose` is special-cased separately. These come from the compiler's intrinsics and Merkle helpers rather than the native table, so they are intentionally not in the list above. When auditing coverage, audit against the native table plus these known extras, not the table alone.
+`try_builtin` also implements a few names that are not `declare-native-entry` primitives (for example `leafHash`, `pad`). These come from the compiler's intrinsics and Merkle helpers rather than the native table, so they are intentionally not in the list above. When auditing coverage, audit against the native table plus these known extras, not the table alone.
 
 ## Keeping this in sync
 
