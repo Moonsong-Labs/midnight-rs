@@ -1247,6 +1247,29 @@ mod tests {
         p.write_json_atomic(&path, snap).unwrap();
     }
 
+    // Seal and open by hand, not with `crypto::seal` and `crypto::open`, so
+    // that these fixtures check the aad == format rule on their own.
+    fn envelope(format: &str, payload: &impl Serialize) -> EncryptedExport {
+        let bytes = serde_json::to_vec(payload).unwrap();
+        let (salt, ciphertext) = crypto::encrypt(PW, format.as_bytes(), &bytes).unwrap();
+        EncryptedExport {
+            format: format.to_string(),
+            salt,
+            ciphertext,
+        }
+    }
+
+    fn entries_of(export: &EncryptedExport) -> Vec<ExportEntry> {
+        let payload = crypto::decrypt(
+            PW,
+            FORMAT_STATES.as_bytes(),
+            &export.salt,
+            &export.ciphertext,
+        )
+        .unwrap();
+        serde_json::from_slice(&payload).unwrap()
+    }
+
     #[tokio::test]
     async fn head_returns_latest_pending_snapshot() {
         let (_dir, p) = provider();
@@ -1400,18 +1423,9 @@ mod tests {
             .export_private_states(&ExportOptions::new(PW))
             .await
             .unwrap();
-        let payload =
-            crypto::decrypt(PW, FORMAT_STATES.as_bytes(), &exp.salt, &exp.ciphertext).unwrap();
-        let mut entries: Vec<ExportEntry> = serde_json::from_slice(&payload).unwrap();
+        let mut entries = entries_of(&exp);
         entries.sort_by(|a, b| a.snapshot.extrinsic_hash.cmp(&b.snapshot.extrinsic_hash));
-        let leaf_first_payload = serde_json::to_vec(&entries).unwrap();
-        let (salt, ct) =
-            crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &leaf_first_payload).unwrap();
-        let leaf_first = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let leaf_first = envelope(FORMAT_STATES, &entries);
 
         let (_dst_dir, dst) = provider();
         dst.import_private_states(&leaf_first, &ImportOptions::new(PW))
@@ -1441,17 +1455,9 @@ mod tests {
             .unwrap();
 
         // Decrypt, duplicate the entry, re-encrypt, then try to import.
-        let payload =
-            crypto::decrypt(PW, FORMAT_STATES.as_bytes(), &exp.salt, &exp.ciphertext).unwrap();
-        let mut entries: Vec<ExportEntry> = serde_json::from_slice(&payload).unwrap();
+        let mut entries = entries_of(&exp);
         entries.push(entries[0].clone());
-        let dup_payload = serde_json::to_vec(&entries).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &dup_payload).unwrap();
-        let dup = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let dup = envelope(FORMAT_STATES, &entries);
 
         let (_dst_dir, dst) = provider();
         let err = dst
@@ -1478,13 +1484,7 @@ mod tests {
                 ..pending(0, None, b"bytes")
             },
         }];
-        let payload = serde_json::to_vec(&bad).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_STATES, &bad);
 
         let (_dir, dst) = provider();
         let err = dst
@@ -1720,13 +1720,7 @@ mod tests {
         // A payload that decrypts cleanly but isn't a valid `Vec<KeyRecord>`
         // (e.g., wrong shape) should surface as `InvalidFormat`, matching
         // the snapshot-import error variant.
-        let bad_payload = serde_json::to_vec(&serde_json::json!({"not": "an array"})).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_KEYS.as_bytes(), &bad_payload).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_KEYS.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_KEYS, &serde_json::json!({"not": "an array"}));
 
         let (_dir, dst) = provider();
         let err = dst
@@ -1864,13 +1858,7 @@ mod tests {
                 ..pending(0, None, b"x")
             },
         }];
-        let payload = serde_json::to_vec(&bad).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_STATES, &bad);
         let (_dir, dst) = provider();
         let err = dst
             .import_private_states(&exp, &ImportOptions::new(PW))
@@ -1978,13 +1966,7 @@ mod tests {
             address: "0200aa".into(),
             snapshot: pending(3, Some(1), b"s3"),
         }];
-        let payload = serde_json::to_vec(&bad).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_STATES, &bad);
         let err = dst
             .import_private_states(&exp, &ImportOptions::new(PW))
             .await
@@ -2014,13 +1996,7 @@ mod tests {
             address: "0200aa".into(),
             snapshot: pending(1, None, b"s1"),
         }];
-        let bytes = serde_json::to_vec(&payload).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &bytes).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_STATES, &payload);
         let err = dst
             .import_private_states(
                 &exp,
@@ -2060,13 +2036,7 @@ mod tests {
             address: "0200aa".into(),
             snapshot: pending(1, None, b"x"),
         }];
-        let bytes = serde_json::to_vec(&payload).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &bytes).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_STATES, &payload);
         let err = dst
             .import_private_states(
                 &exp,
