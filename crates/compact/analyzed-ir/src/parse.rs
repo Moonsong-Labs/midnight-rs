@@ -78,6 +78,14 @@ fn keyed<'a>(s: &'a Sexp, key: &str, context: &str) -> R<&'a Sexp> {
     }
 }
 
+/// `(head ...)` with a known head, as the elements after the head.
+fn tagged<'a>(s: &'a Sexp, head: &str, context: &str) -> R<&'a [Sexp]> {
+    match list(s, context)? {
+        [h, rest @ ..] if h.as_sym() == Some(head) => Ok(rest),
+        _ => err(context, s),
+    }
+}
+
 // ---------------------------------------------------------------------
 // Types.
 // ---------------------------------------------------------------------
@@ -265,11 +273,10 @@ fn instruction(s: &Sexp) -> R<Instruction> {
 }
 
 fn instructions(s: &Sexp) -> R<Vec<Instruction>> {
-    let l = list(s, "instructions")?;
-    if l.first().and_then(Sexp::as_sym) != Some("instructions") {
-        return err("instructions", s);
-    }
-    l[1..].iter().map(instruction).collect()
+    tagged(s, "instructions", "instructions")?
+        .iter()
+        .map(instruction)
+        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -608,11 +615,7 @@ fn ledger_binding(s: &Sexp) -> R<LedgerBinding> {
 }
 
 fn flatten_pl_array(s: &Sexp, out: &mut Vec<LedgerBinding>) -> R<()> {
-    let l = list(s, "public-ledger-array")?;
-    if l.first().and_then(Sexp::as_sym) != Some("public-ledger-array") {
-        return err("public-ledger-array", s);
-    }
-    for e in &l[1..] {
+    for e in tagged(s, "public-ledger-array", "public-ledger-array")? {
         if e.head() == Some("public-ledger-array") {
             flatten_pl_array(e, out)?;
         } else {
@@ -639,15 +642,12 @@ fn program_element(s: &Sexp) -> R<ProgramElement> {
             if tag.as_sym() != Some("entry") {
                 return err("native entry", &l[2]);
             }
-            let type_args = list(&l[3], "native type arguments")?;
-            if type_args.first().and_then(Sexp::as_sym) != Some("type-arguments") {
-                return err("native type arguments", &l[3]);
-            }
+            let type_args = tagged(&l[3], "type-arguments", "native type arguments")?;
             Ok(ProgramElement::Native(Native {
                 name: ident(&l[1], "native name")?,
                 entry: string(entry_fn, "native entry fn")?,
                 class: sym(class, "native entry class")?,
-                type_arguments: type_args[1..].iter().map(ty).collect::<R<_>>()?,
+                type_arguments: type_args.iter().map(ty).collect::<R<_>>()?,
                 arguments: arguments(&l[4])?,
                 result_type: ty(&l[5])?,
             }))
@@ -690,17 +690,14 @@ fn version(s: &Sexp, key: &str) -> R<String> {
 }
 
 pub fn parse(s: &Sexp) -> R<AnalyzedIr> {
-    let l = list(s, "analyzed-ir")?;
-    if l.first().and_then(Sexp::as_sym) != Some("analyzed-ir") {
-        return err("analyzed-ir", s);
-    }
+    let rest = tagged(s, "analyzed-ir", "analyzed-ir")?;
     let mut compiler_version = None;
     let mut language_version = None;
     let mut runtime_version = None;
     let mut exports = Vec::new();
     let mut contract_types = Vec::new();
     let mut elements = Vec::new();
-    for e in &l[1..] {
+    for e in rest {
         match e.head() {
             Some("compiler-version") => compiler_version = Some(version(e, "compiler-version")?),
             Some("language-version") => language_version = Some(version(e, "language-version")?),
