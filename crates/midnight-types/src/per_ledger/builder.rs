@@ -361,84 +361,14 @@ impl<'a> TransferBuilder<'a> {
         recipient: &str,
         pay_fees: bool,
     ) -> Result<PreparedTransfer, WalletError> {
-        let seed = self.state.seed();
-        let from_seed = seed.into_ledger();
         let recipient_wallet = shielded_destination(recipient, self.state.network())?;
-
-        // Select the coins here rather than leaving `nullifier: None` for the
-        // build to resolve: that path binds the single smallest coin covering
-        // `amount` and then substitutes the coin's own value for the requested
-        // one, which caps a payment at the largest single coin and drops
-        // whatever that coin holds beyond `amount` with no output to claim it.
-        let (inputs, change) = InputInfo::coins_to_cover_value(
-            self.context.clone(),
-            from_seed.clone(),
-            amount,
+        let payment = OutputInfo {
+            destination: recipient_wallet,
             token_type,
-            self.coin_selection,
-        )
-        .map_err(|e| WalletError::Transfer(format!("shielded coin selection: {e}")))?;
-
-        // Every input from `coins_to_cover_value` carries a pinned nullifier;
-        // error rather than drop one silently, since a missing nullifier would
-        // leave the coin unreserved and defeat the double-spend protection.
-        let spent_shielded_inputs: Vec<Nullifier> = inputs
-            .iter()
-            .map(|i| {
-                i.nullifier.ok_or_else(|| {
-                    WalletError::Transfer(
-                        "selected shielded coin has no nullifier to reserve".into(),
-                    )
-                })
-            })
-            .collect::<Result<_, _>>()?;
-
-        let mut outputs: Vec<Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>> =
-            vec![Box::new(OutputInfo {
-                destination: recipient_wallet,
-                token_type,
-                value: amount,
-            })];
-
-        // Change back to this wallet, only if any.
-        if change > 0 {
-            outputs.push(Box::new(OutputInfo {
-                destination: from_seed.clone(),
-                token_type,
-                value: change,
-            }));
-        }
-
-        // The wallet performs the spends, so the offer holds finished inputs
-        // rather than a seed it would resolve during `build`.
-        let context = self.context.clone();
-        let mut tx_info =
-            StandardTransactionInfo::new_from_context(self.context, self.proof_provider, None);
-        let prepared = super::inputs::prepare_shielded_inputs(
-            &context,
-            seed,
-            &spent_shielded_inputs,
-            &mut tx_info.rng.split(),
-        )?;
-
-        tx_info.set_guaranteed_offer(OfferInfo {
-            inputs: prepared
-                .into_iter()
-                .map(|i| Box::new(i) as Box<dyn helpers::BuildInput<DefaultDB, BuildContext>>)
-                .collect(),
-            outputs,
-            transients: vec![],
-        });
-        // Fund the Dust fee from our own seed unless this is a Dustless build
-        // (another wallet will sponsor the fees).
-        if pay_fees {
-            tx_info.set_funding_seeds(vec![from_seed]);
-        }
-        tx_info.use_mock_proofs_for_fees(true);
-
-        let mut prepared = prepare_no_validate(tx_info).await?;
-        prepared.set_spent_shielded_inputs(spent_shielded_inputs);
-        Ok(prepared)
+            value: amount,
+        };
+        self.prepare_shielded_offer(token_type, amount, Box::new(payment), pay_fees)
+            .await
     }
 
     /// Build one half of a native two-party shielded token swap: a proven,
@@ -472,16 +402,42 @@ impl<'a> TransferBuilder<'a> {
         receive_token: ShieldedTokenType,
         receive_amount: u128,
     ) -> Result<PreparedTransfer, WalletError> {
-        let seed = self.state.seed();
-        let ledger_seed = seed.into_ledger();
+        // Destination is our own seed so the build's `watch_for` tracks the
+        // incoming coin.
+        let payment = OutputInfo {
+            destination: self.state.seed().into_ledger(),
+            token_type: receive_token,
+            value: receive_amount,
+        };
+        // No funding seed: an unbalanced half can't self-fund its Dust.
+        self.prepare_shielded_offer(give_token, give_amount, Box::new(payment), false)
+            .await
+    }
 
-        // Select give-side coins covering `give_amount`; `change` is the
-        // remainder handed back to this wallet below.
-        let (give_inputs, change) = InputInfo::coins_to_cover_value(
+    /// Spend this wallet's coins to cover `spend_amount` of `spend_token`, and
+    /// put `payment` first in the offer, followed by the change (if any) back
+    /// to this wallet.
+    async fn prepare_shielded_offer(
+        self,
+        spend_token: ShieldedTokenType,
+        spend_amount: u128,
+        payment: Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>,
+        pay_fees: bool,
+    ) -> Result<PreparedTransfer, WalletError> {
+        let seed = self.state.seed();
+        let from_seed = seed.into_ledger();
+
+        // Select the coins here rather than leaving `nullifier: None` for the
+        // build to resolve: that path binds the single smallest coin covering
+        // `spend_amount` and then substitutes the coin's own value for the
+        // requested one, which caps a payment at the largest single coin and
+        // drops whatever that coin holds beyond `spend_amount` with no output
+        // to claim it.
+        let (inputs, change) = InputInfo::coins_to_cover_value(
             self.context.clone(),
-            ledger_seed.clone(),
-            give_amount,
-            give_token,
+            from_seed.clone(),
+            spend_amount,
+            spend_token,
             self.coin_selection,
         )
         .map_err(|e| WalletError::Transfer(format!("shielded coin selection: {e}")))?;
@@ -489,7 +445,7 @@ impl<'a> TransferBuilder<'a> {
         // Every input from `coins_to_cover_value` carries a pinned nullifier;
         // error rather than drop one silently, since a missing nullifier would
         // leave the coin unreserved and defeat the double-spend protection.
-        let spent_shielded_inputs: Vec<Nullifier> = give_inputs
+        let spent_shielded_inputs: Vec<Nullifier> = inputs
             .iter()
             .map(|i| {
                 i.nullifier.ok_or_else(|| {
@@ -500,20 +456,12 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect::<Result<_, _>>()?;
 
-        // Output 1: the received token, to this wallet. Destination is our own
-        // seed so the build's `watch_for` tracks the incoming coin.
-        let mut outputs: Vec<Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>> =
-            vec![Box::new(OutputInfo {
-                destination: ledger_seed.clone(),
-                token_type: receive_token,
-                value: receive_amount,
-            })];
-
-        // Output 2: the give-side change back to this wallet, only if any.
+        let mut outputs = vec![payment];
+        // Change back to this wallet, only if any.
         if change > 0 {
             outputs.push(Box::new(OutputInfo {
-                destination: ledger_seed,
-                token_type: give_token,
+                destination: from_seed.clone(),
+                token_type: spend_token,
                 value: change,
             }));
         }
@@ -538,9 +486,13 @@ impl<'a> TransferBuilder<'a> {
             outputs,
             transients: vec![],
         });
-        // No funding seed: an unbalanced half can't self-fund its Dust, so this
-        // is inherently fee-less. `build_no_validate` proves the offer directly
-        // (no token or Dust balancing) precisely because no funding seed is set.
+        // Fund the Dust fee from our own seed unless this is a Dustless build
+        // (another wallet will sponsor the fees).
+        if pay_fees {
+            tx_info.set_funding_seeds(vec![from_seed]);
+        }
+        tx_info.use_mock_proofs_for_fees(true);
+
         let mut prepared = prepare_no_validate(tx_info).await?;
         prepared.set_spent_shielded_inputs(spent_shielded_inputs);
         Ok(prepared)
