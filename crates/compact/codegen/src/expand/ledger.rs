@@ -1065,6 +1065,15 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     // `IntoFuture` impl.
     let mut constructors = Vec::new();
     let mut call_items = Vec::new();
+    let send_bounds = quote! {
+        P: midnight_contract::AsMidnightProvider
+            + midnight_contract::Provider
+            + ::core::marker::Send
+            + ::core::marker::Sync,
+        Wp: midnight_contract::runtime::WitnessProvider
+            + ::core::marker::Send
+            + ::core::marker::Sync,
+    };
 
     for circuit in &info.circuits {
         // A pure circuit is evaluated off-chain and has no call path.
@@ -1099,12 +1108,15 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // Submit path (`.await` via `IntoFuture`): call + return the circuit's
         // typed result. `__circuits` is destructured from `self` at the call
         // site below; `ir`, `program` and `__args` come from the shared `setup`.
+        let call_args = quote! {
+            ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)
+        };
         let ret_type = quote! {
             ::core::result::Result<midnight_contract::CallOutcome<#value_ty>, midnight_contract::ContractError>
         };
         let submit_tail = quote! {
             #decode
-            let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+            let __outcome = __circuits.contract.call_with(#call_args).await?;
             ::core::result::Result::Ok(midnight_contract::CallOutcome {
                 value: __decode(__outcome.value)?,
                 extrinsic_hash: __outcome.extrinsic_hash,
@@ -1124,6 +1136,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let params = quote! { #(, #param_list)* };
         let field_idents = quote! { #(, #ident_list)* };
         let setup = circuit_setup(ledger_name, circuit);
+        let open = quote! {
+            let #call_ty { circuits: __circuits #field_idents } = self;
+            #setup
+        };
 
         // Constructor on `Circuits`: returns the call builder holding a `&mut`
         // to this `Circuits` (so the next call's shielded inputs / witnesses are
@@ -1159,9 +1175,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
                     // Boxed for the same reason `without_dust` below is.
                     ::std::boxed::Box::pin(async move {
-                        let #call_ty { circuits: __circuits #field_idents } = self;
-                        #setup
-                        let __bytes = __circuits.contract.build_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), true).await?;
+                        #open
+                        let __bytes = __circuits.contract.build_call_with(#call_args, true).await?;
                         ::core::result::Result::Ok(__bytes)
                     })
                     .await
@@ -1183,8 +1198,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 > {
                     // Boxed for the same reason `without_dust` below is.
                     ::std::boxed::Box::pin(async move {
-                        let #call_ty { circuits: __circuits #field_idents } = self;
-                        #setup
+                        #open
                         #decode
                         let __simulated = __circuits.contract.simulate_with(ir, &program, &__args, &__circuits.witnesses).await?;
                         ::core::result::Result::Ok(midnight_contract::Simulated {
@@ -1203,13 +1217,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             // to sponsor via `MidnightProvider::balance_transaction`.
             impl<'c, 'a, P, Wp> midnight_contract::DustlessBuilder for #call_ty<'c, 'a, P, Wp>
             where
-                P: midnight_contract::AsMidnightProvider
-                    + midnight_contract::Provider
-                    + ::core::marker::Send
-                    + ::core::marker::Sync,
-                Wp: midnight_contract::runtime::WitnessProvider
-                    + ::core::marker::Send
-                    + ::core::marker::Sync,
+                #send_bounds
             {
                 type Error = midnight_contract::ContractError;
                 // Boxed for the same reason the `IntoFuture` impl below is: the
@@ -1225,9 +1233,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     >,
                 > + ::core::marker::Send {
                     ::std::boxed::Box::pin(async move {
-                        let #call_ty { circuits: __circuits #field_idents } = self;
-                        #setup
-                        let __bytes = __circuits.contract.build_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), false).await?;
+                        #open
+                        let __bytes = __circuits.contract.build_call_with(#call_args, false).await?;
                         ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_proven_bytes(__bytes))
                     })
                 }
@@ -1235,13 +1242,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
             impl<'c, 'a, P, Wp> ::core::future::IntoFuture for #call_ty<'c, 'a, P, Wp>
             where
-                P: midnight_contract::AsMidnightProvider
-                    + midnight_contract::Provider
-                    + ::core::marker::Send
-                    + ::core::marker::Sync,
-                Wp: midnight_contract::runtime::WitnessProvider
-                    + ::core::marker::Send
-                    + ::core::marker::Sync,
+                #send_bounds
             {
                 type Output = #ret_type;
                 type IntoFuture = ::core::pin::Pin<
@@ -1251,8 +1252,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 >;
                 fn into_future(self) -> Self::IntoFuture {
                     ::std::boxed::Box::pin(async move {
-                        let #call_ty { circuits: __circuits #field_idents } = self;
-                        #setup
+                        #open
                         #submit_tail
                     })
                 }
