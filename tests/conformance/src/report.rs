@@ -14,8 +14,7 @@ use crate::state_json::{aligned_value_to_json, state_value_to_json};
 
 /// [`ExecutionResult::public_transcript`] as canonical JSON.
 ///
-/// It keeps every op, as the TS runtime does. The ops that `call.rs` drops
-/// before it partitions the transcripts stay in.
+/// The ops that `call.rs` drops before it partitions the transcripts stay in.
 pub fn public_transcript_json(result: &ExecutionResult) -> Json {
     Json::Array(result.public_transcript().iter().map(op_to_json).collect())
 }
