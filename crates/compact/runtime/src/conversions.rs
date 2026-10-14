@@ -45,15 +45,12 @@ pub fn value_to_hash_output(
     let atom = av.value.0.first().ok_or_else(|| {
         InterpreterError::TypeError("expected a 32-byte value, got an empty AlignedValue".into())
     })?;
-    if atom.0.len() > 32 {
-        return Err(InterpreterError::TypeError(format!(
+    midnight_base_crypto::hash::HashOutput::try_from(atom).map_err(|_| {
+        InterpreterError::TypeError(format!(
             "expected a 32-byte value, got a {}-byte atom",
             atom.0.len()
-        )));
-    }
-    let mut bytes = [0u8; 32];
-    bytes[..atom.0.len()].copy_from_slice(&atom.0);
-    Ok(midnight_base_crypto::hash::HashOutput(bytes))
+        ))
+    })
 }
 
 /// Coerce a `Value` into a `u128`, accepting:
@@ -78,11 +75,5 @@ pub fn value_to_u128(val: &Value) -> Option<u128> {
 /// The alignment is ignored because the prover already enforces shape.
 /// Returns `None` for a zero-atom value or an atom wider than 16 bytes.
 pub fn aligned_atom_to_u128(av: &AlignedValue) -> Option<u128> {
-    let atom = av.value.0.first()?;
-    if atom.0.len() > 16 {
-        return None;
-    }
-    let mut buf = [0u8; 16];
-    buf[..atom.0.len()].copy_from_slice(&atom.0);
-    Some(u128::from_le_bytes(buf))
+    u128::try_from(av.value.0.first()?).ok()
 }

@@ -235,25 +235,14 @@ fn builtin(
             // 32nd byte is non-zero, and the on-chain circuit computes the former.
             use midnight_base_crypto::hash::HashOutput;
             use midnight_transient_crypto::hash::degrade_to_transient;
-            let bytes = match arg(args, 0, name)? {
-                Value::AlignedValue(av) => {
-                    // Concatenate all atoms; for Bytes<N> this is a single atom.
-                    let mut buf = Vec::new();
-                    for atom in &av.value.0 {
-                        buf.extend_from_slice(&atom.0);
-                    }
-                    buf
-                }
-                _ => {
-                    return Err(InterpreterError::TypeError(
-                        "degradeToTransient: argument is not Bytes".to_string(),
-                    ));
-                }
-            };
-            let mut buf = [0u8; 32];
-            let n = bytes.len().min(32);
-            buf[..n].copy_from_slice(&bytes[..n]);
-            AlignedValue::from(degrade_to_transient(HashOutput(buf)))
+            let hash = match arg(args, 0, name)? {
+                Value::AlignedValue(av) => HashOutput::try_from(&*av.value).ok(),
+                _ => None,
+            }
+            .ok_or_else(|| {
+                InterpreterError::TypeError("degradeToTransient: argument is not Bytes".to_string())
+            })?;
+            AlignedValue::from(degrade_to_transient(hash))
         }
         "upgradeFromTransient" => {
             // Field -> Bytes<32>: the inverse-direction companion of
