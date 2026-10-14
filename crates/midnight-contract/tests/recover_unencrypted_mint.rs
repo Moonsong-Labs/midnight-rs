@@ -68,8 +68,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         .with_zk_config(ZK_KEYS_DIR)
         .await
         .expect("deploy mint contract");
-    let address = contract.address().to_string();
-    eprintln!("deployed mint contract at {address}");
+    eprintln!("deployed mint contract at {}", contract.address());
 
     // --- Call mint(domain_sep, value, nonce, coinPK) with no encryption keys,
     //     once per coin. See `mint_external_recipient` for why the recipient
@@ -95,17 +94,9 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
 
     // The coin the recipient has to rebuild: the nonce and value the call
     // used, and the token type the contract mints, `tokenType(domain_sep,
-    // contract_addr)`. The contract address is a 32-byte hex string.
-    let addr_bytes = {
-        let hex = address.strip_prefix("0x").unwrap_or(&address);
-        let v = hex::decode(hex).expect("address hex");
-        let mut a = [0u8; 32];
-        a.copy_from_slice(&v);
-        a
-    };
-    let contract_addr =
-        midnight_contract::ContractAddress(midnight_base_crypto::hash::HashOutput(addr_bytes));
-    let token_type = contract_addr
+    // contract_addr)`.
+    let token_type = midnight_contract::parse_address(contract.address())
+        .expect("contract address")
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
     // --- The recipient syncs and cannot see either coin ---

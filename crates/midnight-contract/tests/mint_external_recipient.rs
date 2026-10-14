@@ -58,8 +58,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         .with_zk_config(ZK_KEYS_DIR)
         .await
         .expect("deploy mint contract");
-    let address = contract.address().to_string();
-    eprintln!("deployed mint contract at {address}");
+    eprintln!("deployed mint contract at {}", contract.address());
 
     // --- Call mint(domain_sep, value, nonce, coinPK) ---
     //
@@ -93,17 +92,8 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     eprintln!("mint call submitted");
 
     // Expected custom shielded token type = tokenType(domain_sep, contract_addr).
-    // The contract address is a 32-byte hex string.
-    let addr_bytes = {
-        let hex = address.strip_prefix("0x").unwrap_or(&address);
-        let v = hex::decode(hex).expect("address hex");
-        let mut a = [0u8; 32];
-        a.copy_from_slice(&v);
-        a
-    };
-    let contract_addr =
-        midnight_contract::ContractAddress(midnight_base_crypto::hash::HashOutput(addr_bytes));
-    let expected_tt = contract_addr
+    let expected_tt = midnight_contract::parse_address(contract.address())
+        .expect("contract address")
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
     // --- Recipient syncs normally and must discover the minted coin ---
