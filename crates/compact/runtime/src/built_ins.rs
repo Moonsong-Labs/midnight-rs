@@ -1,13 +1,14 @@
 //! Compact runtime builtin circuits: hashes, commitments, elliptic-curve
 //! operations, and field/bytes casts invoked by name during interpretation.
 
+use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
 use midnight_typed_state::AlignedValue;
 
-use crate::compact_types::encode_typed;
+use crate::compact_types::{encode_typed, merkle_leaf_hash};
 use crate::conversions::{value_to_embedded_group, value_to_fr, value_to_hash_output};
 use crate::error::InterpreterError;
 use crate::value::Value;
-use compact_codegen::ir::Type;
+use compact_codegen::ir::{FieldType, Type};
 
 /// Encode argument `i` for hashing or committing: at its declared parameter
 /// type, or with the type-free encoding when no type is declared.
@@ -34,18 +35,48 @@ fn encode_argument(
 /// here.
 fn hash_preimage(args: &[Value], arg_types: &[Type]) -> Result<Vec<u8>, InterpreterError> {
     use midnight_base_crypto::repr::BinaryHashRepr;
-    use midnight_transient_crypto::curve::Fr;
     use midnight_transient_crypto::fab::ValueReprAlignedValue;
 
     let mut bytes = Vec::new();
-    for (i, arg) in args.iter().enumerate() {
-        let av = match arg {
-            Value::Integer(n) if arg_types.get(i).is_none() => AlignedValue::from(Fr::from(*n)),
-            other => encode_argument(arg_types, i, other)?,
+    for (i, value) in args.iter().enumerate() {
+        let av = match (value, arg_types.get(i)) {
+            (Value::Integer(_), None) => encode_typed(value, &Type::Field(FieldType::Native))?,
+            _ => encode_argument(arg_types, i, value)?,
         };
         ValueReprAlignedValue(av).binary_repr(&mut bytes);
     }
     Ok(bytes)
+}
+
+fn arg<'a>(args: &'a [Value], i: usize, native: &str) -> Result<&'a Value, InterpreterError> {
+    args.get(i)
+        .ok_or_else(|| InterpreterError::TypeError(format!("{native}: missing argument {}", i + 1)))
+}
+
+fn field_arg(args: &[Value], i: usize, native: &str) -> Result<Fr, InterpreterError> {
+    value_to_fr(arg(args, i, native)?).ok_or_else(|| {
+        InterpreterError::TypeError(format!("{native}: argument {} is not a Field", i + 1))
+    })
+}
+
+fn point_arg(
+    args: &[Value],
+    i: usize,
+    native: &str,
+) -> Result<EmbeddedGroupAffine, InterpreterError> {
+    value_to_embedded_group(arg(args, i, native)?).ok_or_else(|| {
+        InterpreterError::TypeError(format!("{native}: argument {} is not a JubjubPoint", i + 1))
+    })
+}
+
+fn arity(args: &[Value], n: usize, native: &str) -> Result<(), InterpreterError> {
+    if args.len() != n {
+        return Err(InterpreterError::TypeError(format!(
+            "{native} expects {n} arguments, got {}",
+            args.len()
+        )));
+    }
+    Ok(())
 }
 
 /// Try to execute a Compact runtime builtin function.
@@ -68,8 +99,16 @@ pub fn try_builtin_typed(
     args: &[Value],
     arg_types: &[Type],
 ) -> Option<Result<Value, InterpreterError>> {
+    builtin(name, args, arg_types).transpose()
+}
+
+fn builtin(
+    name: &str,
+    args: &[Value],
+    arg_types: &[Type],
+) -> Result<Option<Value>, InterpreterError> {
     let encode_arg = |i: usize, v: &Value| encode_argument(arg_types, i, v);
-    match name {
+    let av = match name {
         "persistentCommit" => {
             // persistentCommit(value, opening) = persistent_commit(value, opening):
             // a domain-separated commitment. The opening is written to the
@@ -82,273 +121,89 @@ pub fn try_builtin_typed(
             use midnight_base_crypto::hash::{HashOutput, persistent_commit};
             use midnight_transient_crypto::fab::ValueReprAlignedValue;
 
-            let value = match args.first() {
-                Some(v) => v,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "persistentCommit expects (value, opening)".to_string(),
-                    )));
-                }
-            };
-            let opening = match args.get(1).map(value_to_hash_output) {
-                Some(Ok(h)) => h,
-                Some(Err(e)) => return Some(Err(e)),
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "persistentCommit expects an opening (domain separator) argument"
-                            .to_string(),
-                    )));
-                }
-            };
+            let value = arg(args, 0, name)?;
+            let opening = value_to_hash_output(arg(args, 1, name)?)?;
             // Flatten the value into a single AlignedValue and commit. A
             // `Value::Tuple` concatenates its elements in order; a struct is
             // encoded field-by-field at its declared widths when its type is in
             // scope, and is an error when it is not.
-            let av = match encode_arg(0, value) {
-                Ok(av) => av,
-                Err(e) => return Some(Err(e)),
-            };
-            let wrapped = ValueReprAlignedValue(av);
+            let wrapped = ValueReprAlignedValue(encode_arg(0, value)?);
             let hash: HashOutput = persistent_commit(&wrapped, opening);
-            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
+            AlignedValue::from(hash.0)
         }
         "transientCommit" => {
             // transientCommit(value, opening): the Poseidon (transient-field)
             // counterpart of persistentCommit. Binds to transient-crypto's
             // `transient_commit`, so the value matches what the zkir/prover
             // computes rather than being reimplemented here.
-            use midnight_transient_crypto::curve::Fr;
             use midnight_transient_crypto::fab::ValueReprAlignedValue;
             use midnight_transient_crypto::hash::transient_commit;
 
-            let value = match args.first() {
-                Some(v) => v,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "transientCommit expects (value, opening)".to_string(),
-                    )));
-                }
-            };
-            let opening = match args.get(1).and_then(value_to_fr) {
-                Some(fr) => fr,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "transientCommit expects a Field opening argument".to_string(),
-                    )));
-                }
-            };
-            let av = match encode_arg(0, value) {
-                Ok(av) => av,
-                Err(e) => return Some(Err(e)),
-            };
-            let wrapped = ValueReprAlignedValue(av);
-            let fr: Fr = transient_commit(&wrapped, opening);
-            Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
+            let value = arg(args, 0, name)?;
+            let opening = field_arg(args, 1, name)?;
+            let wrapped = ValueReprAlignedValue(encode_arg(0, value)?);
+            AlignedValue::from(transient_commit(&wrapped, opening))
         }
         "persistentHash" => {
             use midnight_base_crypto::hash::persistent_hash;
-            Some(hash_preimage(args, arg_types).map(|bytes| {
-                let hash = persistent_hash(&bytes).0;
-                Value::AlignedValue(AlignedValue::from(hash))
-            }))
+            AlignedValue::from(persistent_hash(&hash_preimage(args, arg_types)?).0)
         }
         "keccak256" => {
             use sha3::{Digest, Keccak256};
-            Some(hash_preimage(args, arg_types).map(|bytes| {
-                let hash: [u8; 32] = Keccak256::digest(&bytes).into();
-                Value::AlignedValue(AlignedValue::from(hash))
-            }))
+            let hash: [u8; 32] = Keccak256::digest(hash_preimage(args, arg_types)?).into();
+            AlignedValue::from(hash)
         }
         "sha512" => {
             use sha2::{Digest, Sha512};
-            Some(hash_preimage(args, arg_types).map(|bytes| {
-                let hash: [u8; 64] = Sha512::digest(&bytes).into();
-                Value::AlignedValue(AlignedValue::from(hash))
-            }))
+            let hash: [u8; 64] = Sha512::digest(hash_preimage(args, arg_types)?).into();
+            AlignedValue::from(hash)
         }
-        "leafHash" => {
-            let av = match args.first() {
-                Some(Value::AlignedValue(av)) => av.clone(),
-                Some(Value::Integer(n)) => {
-                    use midnight_transient_crypto::curve::Fr;
-                    // Exact u128 conversion — see `value_to_fr`.
-                    AlignedValue::from(Fr::from(*n))
-                }
-                _ => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "leafHash requires an AlignedValue or Integer argument".to_string(),
-                    )));
-                }
-            };
-            Some(Ok(Value::AlignedValue(crate::merkle_leaf_hash(av))))
-        }
+        "leafHash" => merkle_leaf_hash(encode_typed(
+            arg(args, 0, name)?,
+            &Type::Field(FieldType::Native),
+        )?),
+        // EC scalar multiplication: G * scalar
         "ecMulGenerator" | "__builtin_ec_mul_generator" => {
-            // EC scalar multiplication: G * scalar
-            use midnight_transient_crypto::curve::EmbeddedGroupAffine;
-            if let Some(scalar) = args.first() {
-                let fr_val = match value_to_fr(scalar) {
-                    Some(fr) => fr,
-                    None => {
-                        return Some(Err(InterpreterError::TypeError(
-                            "ecMulGenerator: scalar argument is not a Field/Integer".to_string(),
-                        )));
-                    }
-                };
-                let generator = EmbeddedGroupAffine::generator();
-                let result = generator * fr_val;
-                Some(Ok(Value::AlignedValue(AlignedValue::from(result))))
-            } else {
-                Some(Err(InterpreterError::TypeError(
-                    "ecMulGenerator requires a scalar argument".to_string(),
-                )))
-            }
+            AlignedValue::from(EmbeddedGroupAffine::generator() * field_arg(args, 0, name)?)
         }
+        // EC scalar multiplication: point * scalar
         "ecMul" => {
-            // EC scalar multiplication: point * scalar
-            if args.len() != 2 {
-                return Some(Err(InterpreterError::TypeError(format!(
-                    "ecMul expects 2 arguments, got {}",
-                    args.len()
-                ))));
-            }
-            let point = match value_to_embedded_group(&args[0]) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "ecMul: first argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            let scalar = match value_to_fr(&args[1]) {
-                Some(s) => s,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "ecMul: second argument is not a Field/Integer".to_string(),
-                    )));
-                }
-            };
-            let result = point * scalar;
-            Some(Ok(Value::AlignedValue(AlignedValue::from(result))))
+            arity(args, 2, name)?;
+            AlignedValue::from(point_arg(args, 0, name)? * field_arg(args, 1, name)?)
         }
+        // EC point addition: p1 + p2
         "ecAdd" => {
-            // EC point addition: p1 + p2
-            if args.len() != 2 {
-                return Some(Err(InterpreterError::TypeError(format!(
-                    "ecAdd expects 2 arguments, got {}",
-                    args.len()
-                ))));
-            }
-            let p1 = match value_to_embedded_group(&args[0]) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "ecAdd: first argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            let p2 = match value_to_embedded_group(&args[1]) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "ecAdd: second argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            Some(Ok(Value::AlignedValue(AlignedValue::from(p1 + p2))))
+            arity(args, 2, name)?;
+            AlignedValue::from(point_arg(args, 0, name)? + point_arg(args, 1, name)?)
         }
-        "ecNeg" => {
-            let point = match args.first().and_then(value_to_embedded_group) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "ecNeg: argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            Some(Ok(Value::AlignedValue(AlignedValue::from(-point))))
-        }
+        "ecNeg" => AlignedValue::from(-point_arg(args, 0, name)?),
         "hashToCurve" => {
             // hashToCurve(value) -> JubjubPoint. Binds to transient-crypto's
             // `hash_to_curve` so the embedded-curve point matches the prover.
             use midnight_transient_crypto::fab::ValueReprAlignedValue;
             use midnight_transient_crypto::hash::hash_to_curve;
-            let value = match args.first() {
-                Some(v) => v,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "hashToCurve requires an argument".to_string(),
-                    )));
-                }
-            };
-            let av = match encode_arg(0, value) {
-                Ok(av) => av,
-                Err(e) => return Some(Err(e)),
-            };
-            let wrapped = ValueReprAlignedValue(av);
-            let point = hash_to_curve(&wrapped);
-            Some(Ok(Value::AlignedValue(AlignedValue::from(point))))
+            let value = arg(args, 0, name)?;
+            AlignedValue::from(hash_to_curve(&ValueReprAlignedValue(encode_arg(0, value)?)))
         }
         "jubjubPointX" => {
-            // JubjubPoint -> Field (x coordinate)
-            let point = match args.first().and_then(value_to_embedded_group) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "jubjubPointX: argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            use midnight_transient_crypto::curve::Fr;
-            let x = point.x().unwrap_or(Fr::from(0u64));
-            Some(Ok(Value::AlignedValue(AlignedValue::from(x))))
+            AlignedValue::from(point_arg(args, 0, name)?.x().unwrap_or(Fr::from(0u64)))
         }
         "jubjubPointY" => {
-            // JubjubPoint -> Field (y coordinate)
-            let point = match args.first().and_then(value_to_embedded_group) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "jubjubPointY: argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            use midnight_transient_crypto::curve::Fr;
-            let y = point.y().unwrap_or(Fr::from(0u64));
-            Some(Ok(Value::AlignedValue(AlignedValue::from(y))))
+            AlignedValue::from(point_arg(args, 0, name)?.y().unwrap_or(Fr::from(0u64)))
         }
         "constructJubjubPoint" => {
             // constructJubjubPoint(x, y) -> JubjubPoint. Binds to
             // EmbeddedGroupAffine::new, which returns None for an off-curve
             // (x, y) pair.
-            use midnight_transient_crypto::curve::EmbeddedGroupAffine;
-            if args.len() != 2 {
-                return Some(Err(InterpreterError::TypeError(format!(
-                    "constructJubjubPoint expects 2 arguments, got {}",
-                    args.len()
-                ))));
-            }
-            let x = match value_to_fr(&args[0]) {
-                Some(fr) => fr,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "constructJubjubPoint: x is not a Field".to_string(),
-                    )));
-                }
-            };
-            let y = match value_to_fr(&args[1]) {
-                Some(fr) => fr,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "constructJubjubPoint: y is not a Field".to_string(),
-                    )));
-                }
-            };
-            match EmbeddedGroupAffine::new(x, y) {
-                Some(point) => Some(Ok(Value::AlignedValue(AlignedValue::from(point)))),
-                None => Some(Err(InterpreterError::TypeError(
+            arity(args, 2, name)?;
+            let x = field_arg(args, 0, name)?;
+            let y = field_arg(args, 1, name)?;
+            let point = EmbeddedGroupAffine::new(x, y).ok_or_else(|| {
+                InterpreterError::TypeError(
                     "constructJubjubPoint: (x, y) is not on the embedded curve".to_string(),
-                ))),
-            }
+                )
+            })?;
+            AlignedValue::from(point)
         }
         "transientHash" => {
             // transientHash(value): Poseidon over the value's field elements.
@@ -358,24 +213,18 @@ pub fn try_builtin_typed(
             // matters for anything wider than one field element: a struct
             // literal arrives as one multi-atom value, and a `Bytes<N>` atom
             // splits every 31 bytes.
-            use midnight_transient_crypto::curve::Fr;
             use midnight_transient_crypto::fab::ValueReprAlignedValue;
             use midnight_transient_crypto::hash::transient_hash;
             use midnight_transient_crypto::repr::FieldRepr;
 
             let mut field_inputs: Vec<Fr> = Vec::with_capacity(args.len());
-            for (i, arg) in args.iter().enumerate() {
+            for (i, value) in args.iter().enumerate() {
                 // Each argument is encoded whole: a Tuple concatenates its
                 // elements, and a declared Vector or Struct type recurses into
                 // them, so a struct nested in either keeps its own type.
-                let av = match encode_arg(i, arg) {
-                    Ok(av) => av,
-                    Err(e) => return Some(Err(e)),
-                };
-                field_inputs.extend(ValueReprAlignedValue(av).field_vec());
+                field_inputs.extend(ValueReprAlignedValue(encode_arg(i, value)?).field_vec());
             }
-            let hash = transient_hash(&field_inputs);
-            Some(Ok(Value::AlignedValue(AlignedValue::from(hash))))
+            AlignedValue::from(transient_hash(&field_inputs))
         }
         "degradeToTransient" => {
             // Maps a persistent-field value (a 32-byte hash / Field) into the
@@ -386,15 +235,7 @@ pub fn try_builtin_typed(
             // 32nd byte is non-zero, and the on-chain circuit computes the former.
             use midnight_base_crypto::hash::HashOutput;
             use midnight_transient_crypto::hash::degrade_to_transient;
-            let arg = match args.first() {
-                Some(a) => a,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "degradeToTransient requires an argument".to_string(),
-                    )));
-                }
-            };
-            let bytes = match arg {
+            let bytes = match arg(args, 0, name)? {
                 Value::AlignedValue(av) => {
                     // Concatenate all atoms; for Bytes<N> this is a single atom.
                     let mut buf = Vec::new();
@@ -404,56 +245,37 @@ pub fn try_builtin_typed(
                     buf
                 }
                 _ => {
-                    return Some(Err(InterpreterError::TypeError(
+                    return Err(InterpreterError::TypeError(
                         "degradeToTransient: argument is not Bytes".to_string(),
-                    )));
+                    ));
                 }
             };
             let mut buf = [0u8; 32];
             let n = bytes.len().min(32);
             buf[..n].copy_from_slice(&bytes[..n]);
-            let fr = degrade_to_transient(HashOutput(buf));
-            Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
+            AlignedValue::from(degrade_to_transient(HashOutput(buf)))
         }
         "upgradeFromTransient" => {
             // Field -> Bytes<32>: the inverse-direction companion of
             // degradeToTransient. Binds to transient-crypto's
             // `upgrade_from_transient`.
             use midnight_transient_crypto::hash::upgrade_from_transient;
-            let fr = match args.first().and_then(value_to_fr) {
-                Some(fr) => fr,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "upgradeFromTransient expects a Field argument".to_string(),
-                    )));
-                }
-            };
-            let hash = upgrade_from_transient(fr);
-            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
+            AlignedValue::from(upgrade_from_transient(field_arg(args, 0, name)?).0)
         }
         "pad" => {
             // pad(len, string) — pad a string to `len` bytes
             // Return as-is for now
-            if args.len() >= 2 {
-                Some(Ok(args[1].clone()))
-            } else {
-                Some(Ok(Value::Void))
-            }
+            return Ok(Some(args.get(1).cloned().unwrap_or(Value::Void)));
         }
         // Note: "disclose" is handled directly in eval_expr for CallWitness
         // and CallPure (before try_builtin is called) so that the disclosed
         // value is recorded in ctx.communication_outputs. This case is
         // unreachable from those paths but kept as a safety fallback for any
         // other call path that might invoke try_builtin with "disclose".
-        "disclose" => {
-            if let Some(arg) = args.first() {
-                Some(Ok(arg.clone()))
-            } else {
-                Some(Ok(Value::Void))
-            }
-        }
-        _ => None, // Not a builtin
-    }
+        "disclose" => return Ok(Some(args.first().cloned().unwrap_or(Value::Void))),
+        _ => return Ok(None), // Not a builtin
+    };
+    Ok(Some(Value::AlignedValue(av)))
 }
 
 #[cfg(test)]
