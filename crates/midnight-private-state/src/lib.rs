@@ -10,19 +10,8 @@
 //! block it landed in (`block_height` + `block_hash`). Snapshots progress
 //! through a small lifecycle:
 //!
-//! - **Pending**. The SDK has submitted the transaction; finality is not yet
-//!   established. The snapshot is the SDK's best guess at the post-call
-//!   state. Subsequent calls can chain off it (using its bytes as the next
-//!   witness baseline); a later failure cascade-rolls the chain back.
-//! - **Confirmed**. The transaction is finalized on the chain AND the
-//!   `Midnight` pallet reported `TxApplied` (full success) for the
-//!   extrinsic. `Contract::call_with` reads the pallet's outcome events
-//!   from the finalized block, so a tx that finalized with `PartialSuccess`
-//!   or `Failure` is never promoted to `Confirmed`: the contract path
-//!   cascade-drops the pending snapshot via `mark_failed` and surfaces
-//!   `ContractError::TransactionFailed` to the caller. Callers who later
-//!   learn out of band that a confirmed snapshot should be reverted can
-//!   still invoke `mark_failed` manually.
+//! - [`SnapshotStatus::Pending`]: submitted, not yet finalized.
+//! - [`SnapshotStatus::Confirmed`]: finalized and applied by the chain.
 //!
 //! See `docs/private-state.md` for the call flow and recovery semantics.
 
@@ -108,7 +97,8 @@ pub enum PrivateStateError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SnapshotStatus {
-    /// The transaction has been submitted but has not yet finalized.
+    /// The transaction has been submitted but has not yet finalized. The
+    /// snapshot is the SDK's best guess at the post-call state.
     /// Subsequent calls may chain off this snapshot's bytes; a later
     /// `mark_failed` will cascade-roll back this and any descendants.
     Pending,
@@ -124,34 +114,28 @@ pub enum SnapshotStatus {
     Confirmed,
 }
 
-/// One recorded snapshot.
-///
-/// `data` is the opaque post-call state bytes the witness layer would replay
-/// for the next call. `extrinsic_hash` is the unique identifier (subxt's
-/// extrinsic hash) of the transaction the snapshot was recorded against.
-/// The SDK does not verify on-chain execution succeeded when promoting to
-/// `Confirmed` (see [`SnapshotStatus::Confirmed`]). `block_height` /
-/// `block_hash` are filled in by [`PrivateStateProvider::confirm`] once the
-/// tx finalizes. `depends_on` is the `extrinsic_hash` of the previous
-/// snapshot the new state was built on top of (or `None` if this was the
-/// first snapshot at this address), used to cascade rollbacks.
+/// One recorded snapshot of a contract's private state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Snapshot {
     pub status: SnapshotStatus,
-    /// Hex of the 32-byte extrinsic hash.
+    /// Hex of the 32-byte extrinsic hash (subxt's) of the transaction that
+    /// recorded the snapshot. It identifies the snapshot.
     pub extrinsic_hash: String,
-    /// Hex of the 32-byte block hash, set once the tx is finalized.
+    /// Hex of the 32-byte block hash. [`PrivateStateProvider::confirm`] sets
+    /// it once the tx is finalized.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_hash: Option<String>,
-    /// Set once the tx is finalized.
+    /// [`PrivateStateProvider::confirm`] sets it once the tx is finalized.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_height: Option<u64>,
-    /// Extrinsic hash of the previous snapshot at this address, or `None` for
-    /// the first snapshot.
+    /// Extrinsic hash of the previous snapshot at this address, which the
+    /// new state was built on, or `None` for the first snapshot. Rollbacks
+    /// cascade along it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depends_on: Option<String>,
-    /// Opaque post-call state bytes.
+    /// Opaque post-call state bytes, which the witness layer replays for the
+    /// next call.
     #[serde(with = "base64_bytes")]
     pub data: Vec<u8>,
 }
