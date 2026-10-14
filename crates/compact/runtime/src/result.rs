@@ -2,7 +2,7 @@
 //! and proving inputs the transaction-construction layer needs.
 
 use midnight_onchain_runtime::ops::Op;
-use midnight_onchain_runtime::result_mode::ResultModeGather;
+use midnight_onchain_runtime::result_mode::{ResultModeGather, ResultModeVerify};
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 
 use crate::value::Value;
@@ -52,5 +52,26 @@ impl ExecutionResult {
         } else {
             AlignedValue::concat(&self.communication_outputs)
         }
+    }
+
+    /// The public transcript: the [`gather_ops`](Self::gather_ops) with each
+    /// `popeq` result filled from the [`reads`](Self::reads), in order, and
+    /// with the empty value once the reads run out.
+    ///
+    /// Every gathered op is kept, as in the TS runtime's
+    /// `ProofData.publicTranscript`.
+    pub fn public_transcript(&self) -> Vec<Op<ResultModeVerify, InMemoryDB>> {
+        let mut reads = self.reads.iter();
+        self.gather_ops
+            .iter()
+            .map(|op| {
+                op.clone().translate(|()| {
+                    reads
+                        .next()
+                        .cloned()
+                        .unwrap_or_else(|| AlignedValue::from(()))
+                })
+            })
+            .collect()
     }
 }

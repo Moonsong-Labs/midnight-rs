@@ -234,22 +234,14 @@ pub(crate) fn compact_address(
 }
 
 /// The circuit's public state program, as the transcript replays it: the
-/// ops the interpreter gathered, with the values it read filled in.
+/// [public transcript](runtime::ExecutionResult::public_transcript) without
+/// its `idx` ops of an empty path and its `ins` ops of no levels.
 pub(crate) fn verify_ops(
     exec_result: &runtime::ExecutionResult,
 ) -> Vec<Op<ResultModeVerify, InMemoryDB>> {
-    let mut read_iter = exec_result.reads.iter();
     exec_result
-        .gather_ops
-        .iter()
-        .map(|op| {
-            op.clone().translate(|()| {
-                read_iter
-                    .next()
-                    .cloned()
-                    .unwrap_or_else(|| AlignedValue::from(()))
-            })
-        })
+        .public_transcript()
+        .into_iter()
         .filter(|op| match op {
             Op::Idx { path, .. } => !path.is_empty(),
             Op::Ins { n, .. } => *n != 0,
