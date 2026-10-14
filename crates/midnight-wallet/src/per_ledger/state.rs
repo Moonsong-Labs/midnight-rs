@@ -219,6 +219,19 @@ fn dust_anchor(
     }
 }
 
+/// Refuse `found` with [`WalletError::LedgerMismatch`] unless it is this
+/// generation.
+pub(super) fn expect_ledger(found: crate::LedgerVersion) -> Result<(), WalletError> {
+    if found == super::LEDGER {
+        Ok(())
+    } else {
+        Err(WalletError::LedgerMismatch {
+            expected: super::LEDGER,
+            found,
+        })
+    }
+}
+
 /// Tagged-deserialize an event of this generation.
 fn decode_event(raw: &[u8], kind: &str) -> Result<Event<DefaultDB>, WalletError> {
     tagged_deserialize(raw).map_err(|e| WalletError::Sync(format!("deserialize {kind} event: {e}")))
@@ -370,17 +383,12 @@ impl ResyncPlan {
         let block = block_res?;
         // A chain that moved to a later generation since the plan was taken
         // needs the wallet to cross, which is not this generation's to do.
-        let chain = crate::LedgerVersion::of_block(&block)?;
-        if let Some(found) = [Some(chain), zswap.later_ledger.map(|(_, l)| l)]
-            .into_iter()
-            .chain([dust.later_ledger.map(|(_, l)| l)])
-            .flatten()
-            .find(|l| *l != super::LEDGER)
-        {
-            return Err(WalletError::LedgerMismatch {
-                expected: super::LEDGER,
-                found,
-            });
+        expect_ledger(crate::LedgerVersion::of_block(&block)?)?;
+        if let Some((_, found)) = zswap.later_ledger {
+            expect_ledger(found)?;
+        }
+        if let Some((_, found)) = dust.later_ledger {
+            expect_ledger(found)?;
         }
         let DustReplay {
             wallet: dust_wallet,
@@ -466,10 +474,7 @@ impl ShieldedRescanPlan {
         )
         .await?;
         if let Some((_, found)) = replay.later_ledger {
-            return Err(WalletError::LedgerMismatch {
-                expected: super::LEDGER,
-                found,
-            });
+            expect_ledger(found)?;
         }
         Ok(ShieldedRescanCommit {
             zswap_state: replay.state,
@@ -619,10 +624,7 @@ impl Wallet {
         )
         .await?;
         if let Some((_, found)) = dust.later_ledger {
-            return Err(WalletError::LedgerMismatch {
-                expected: super::LEDGER,
-                found,
-            });
+            expect_ledger(found)?;
         }
         let DustReplay {
             wallet: dust_wallet,
@@ -1432,12 +1434,7 @@ pub(crate) async fn replay_zswap_events(
         resuming,
         progress,
         |id, raw, ledger| {
-            if ledger < super::LEDGER {
-                return Err(WalletError::LedgerMismatch {
-                    expected: super::LEDGER,
-                    found: ledger,
-                });
-            }
+            expect_ledger(ledger)?;
             let ev = decode_event(raw, "zswap")?;
             state = state
                 .replay_events(secret_keys, [&ev])

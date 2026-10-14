@@ -36,12 +36,7 @@ pub(crate) fn load(
     let Some(metadata) = read_metadata(&dir)? else {
         return Ok(None);
     };
-    if metadata.ledger_version != super::LEDGER {
-        return Err(WalletError::LedgerMismatch {
-            expected: super::LEDGER,
-            found: metadata.ledger_version,
-        });
-    }
+    super::state::expect_ledger(metadata.ledger_version)?;
 
     let zswap_state = tagged_from_file(&dir, &zswap_file(metadata.generation))?;
     let dust_wallet = tagged_from_file(&dir, &dust_wallet_file(metadata.generation))?;
