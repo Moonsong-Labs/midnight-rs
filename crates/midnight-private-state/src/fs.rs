@@ -310,9 +310,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         let _journal_guard = self.lock_address(address).await;
         let ext_hex = hex::encode(extrinsic_hash);
         self.ensure_address_marker(address)?;
-        // Reject duplicates so we never write two files for the same tx id.
-        // `find_snapshot_path` is the same lookup `confirm` uses, so this
-        // guarantees that `confirm` and `mark_failed` remain unambiguous.
+        // Reject duplicates: every lookup by tx id assumes one file per id.
         if self.find_snapshot_path(address, &ext_hex)?.is_some() {
             return Err(PrivateStateError::SnapshotAlreadyExists {
                 address: address.to_string(),
@@ -1389,10 +1387,9 @@ mod tests {
 
     #[tokio::test]
     async fn append_pending_rejects_duplicate_extrinsic_hash() {
-        // Two calls to `append_pending` with the same extrinsic_hash would
-        // otherwise leave two files in the directory both claiming the same
-        // tx id, which makes `confirm` / `mark_failed` operate on whichever
-        // one `find_snapshot_path` happens to return first.
+        // A second append with the same extrinsic_hash would leave two files
+        // that claim one tx id, and each lookup by id would then pick one of
+        // them arbitrarily.
         let (_dir, p) = provider();
         p.append_pending("0200aa", ext(1), None, b"s1")
             .await
