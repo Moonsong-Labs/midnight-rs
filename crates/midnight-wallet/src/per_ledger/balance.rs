@@ -1,6 +1,6 @@
 use midnight_types::{
-    DustBalance, HashOutput, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin,
-    UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
+    DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, UnshieldedUtxoInfo,
+    WalletBalance,
 };
 
 use super::helpers;
@@ -51,9 +51,8 @@ impl Wallet {
         self.unshielded_utxos()
             .iter()
             .filter_map(|utxo| {
-                let bytes: [u8; 32] = hex::decode(&utxo.token_type).ok()?.try_into().ok()?;
                 Some(UnshieldedUtxoInfo {
-                    token_type: UnshieldedTokenType(HashOutput(bytes)),
+                    token_type: utxo.unshielded_token_type()?,
                     value: utxo.value,
                 })
             })

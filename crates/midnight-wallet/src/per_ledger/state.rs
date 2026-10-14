@@ -8,10 +8,9 @@ use helpers::mn_ledger::events::EventDetails;
 use helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use helpers::{
-    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, HashOutput, IntoWalletAddress,
-    LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, Recipient, SecretKeys,
-    ShieldedWallet, Sp, Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet,
-    WalletState as ZswapLocalState,
+    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, IntoWalletAddress, LedgerContext,
+    LedgerParameters, LedgerState, MAX_SUPPLY, Recipient, SecretKeys, ShieldedWallet, Sp,
+    Timestamp, UnshieldedWallet, Wallet as ContextWallet, WalletState as ZswapLocalState,
 };
 use midnight_indexer_client::SubscriptionClient;
 use midnight_types::{SyncCursors, TrackedUtxo};
@@ -1544,27 +1543,19 @@ fn event_spend_nullifier(event: &Event<DefaultDB>) -> Option<DustNullifier> {
     }
 }
 
-/// Decode a hex string into a 32-byte array. Returns `None` on hex decode
-/// error or wrong length. Used to build typed hash wrappers
-/// (`IntentHash`, `UnshieldedTokenType`, ...).
-fn parse_hex_32(hex: &str) -> Option<[u8; 32]> {
-    hex::decode(hex).ok()?.try_into().ok()
-}
-
-fn parse_token_type_hex(hex: &str) -> Option<UnshieldedTokenType> {
-    parse_hex_32(hex).map(|arr| UnshieldedTokenType(HashOutput(arr)))
-}
-
 fn tracked_to_ledger_utxo(
     tracked: &TrackedUtxo,
     owner: helpers::UserAddress,
 ) -> Result<LedgerUtxo, WalletError> {
-    let type_ = parse_token_type_hex(&tracked.token_type).ok_or_else(|| {
-        WalletError::Sync(format!(
-            "tracked UTXO has malformed token_type {}",
-            tracked.token_type
-        ))
-    })?;
+    let type_ = tracked
+        .unshielded_token_type()
+        .map(IntoLedger::into_ledger)
+        .ok_or_else(|| {
+            WalletError::Sync(format!(
+                "tracked UTXO has malformed token_type {}",
+                tracked.token_type
+            ))
+        })?;
     let intent_hash_hex = tracked
         .intent_hash
         .as_deref()
@@ -1592,9 +1583,9 @@ fn tracked_to_ledger_utxo(
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    use helpers::TransactionHash;
     use helpers::midnight_serialize::tagged_serialize;
     use helpers::mn_ledger::events::{EventSource, ZswapPreimageEvidence};
+    use helpers::{HashOutput, TransactionHash};
 
     use super::*;
 

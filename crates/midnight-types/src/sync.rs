@@ -1,7 +1,9 @@
 //! What a wallet's sync maintains, as its consumers read it: the unshielded
 //! UTXOs it tracks and the cursors that say how far it has reached.
 
-use crate::{NIGHT, SpentUtxoKey};
+use midnight_helpers::HashOutput;
+
+use crate::{NIGHT, SpentUtxoKey, UnshieldedTokenType};
 
 /// How far a wallet's sync has reached. See `WalletFacade::sync_cursors`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +49,12 @@ impl TrackedUtxo {
         self.token_type == *NIGHT_TOKEN_HEX
     }
 
+    /// The token this UTXO holds, parsed from its `token_type` hex. `None` on
+    /// a decode error or wrong length.
+    pub fn unshielded_token_type(&self) -> Option<UnshieldedTokenType> {
+        hash_from_hex(&self.token_type).map(UnshieldedTokenType)
+    }
+
     /// Whether this UTXO already generates dust.
     ///
     /// An absent flag reads as not registered, which is what makes a
@@ -72,9 +80,12 @@ impl TrackedUtxo {
 
 /// Parse the 64-char hex form of an intent hash, as [`TrackedUtxo`] carries
 /// it. `None` on a decode error or wrong length.
-pub fn parse_intent_hash_hex(hex: &str) -> Option<midnight_helpers::HashOutput> {
-    let arr: [u8; 32] = hex::decode(hex).ok()?.try_into().ok()?;
-    Some(midnight_helpers::HashOutput(arr))
+pub fn parse_intent_hash_hex(hex: &str) -> Option<HashOutput> {
+    hash_from_hex(hex)
+}
+
+fn hash_from_hex(hex: &str) -> Option<HashOutput> {
+    Some(HashOutput(hex::decode(hex).ok()?.try_into().ok()?))
 }
 
 #[cfg(test)]
