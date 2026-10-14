@@ -59,6 +59,19 @@ pub(crate) struct PendingDustBatch {
     pub reserved_at: Timestamp,
 }
 
+impl PendingDustBatch {
+    /// Whether a spend of this batch has one of `nullifiers`.
+    ///
+    /// ANY, not ALL: one match stands for the whole batch, because a
+    /// transaction applies atomically. The other spends landed with the
+    /// matched one, or none did.
+    fn spends_any_of(&self, nullifiers: &[DustNullifier]) -> bool {
+        self.spends
+            .iter()
+            .any(|s| nullifiers.contains(&s.old_nullifier))
+    }
+}
+
 /// One pending unshielded UTXO reservation.
 #[derive(Clone)]
 pub(crate) struct PendingUnshieldedSpend {
@@ -142,11 +155,9 @@ impl PendingReservations {
     /// spent unshielded UTXOs, `dust_nullifiers` the nullifiers of
     /// `DustSpendProcessed` events. An unshielded reservation is removed
     /// when its exact key was spent. A dust batch is removed when ANY of
-    /// its spends' nullifiers was observed, and this must stay ANY, not
-    /// ALL: either the reserved tx landed (atomic, so every other spend in
-    /// the batch landed with it) or a conflicting tx consumed that input,
-    /// in which case the reserved tx can never apply and the whole batch
-    /// is dead either way.
+    /// its spends' nullifiers was observed ([`PendingDustBatch::spends_any_of`]).
+    /// This also holds when a conflicting tx consumed that input: the
+    /// reserved tx can then never apply, so the whole batch is dead.
     ///
     /// Returns true when it removed a reservation.
     pub(crate) fn clear_confirmed(
@@ -160,11 +171,7 @@ impl PendingReservations {
                 .retain(|p| !spent_unshielded.contains(&p.key));
         }
         if !dust_nullifiers.is_empty() {
-            self.dust.retain(|b| {
-                !b.spends
-                    .iter()
-                    .any(|s| dust_nullifiers.contains(&s.old_nullifier))
-            });
+            self.dust.retain(|b| !b.spends_any_of(dust_nullifiers));
         }
         (self.unshielded.len(), self.dust.len()) != before
     }
@@ -178,8 +185,8 @@ impl PendingReservations {
     /// know the transaction is dead hand back what the build reported spending.
     ///
     /// Matching mirrors [`Self::clear_confirmed`]: an unshielded entry goes by
-    /// its exact key, a shielded entry by its nullifier, and a dust batch when
-    /// ANY of its spends' nullifiers matches, since a batch is atomic.
+    /// its exact key, a shielded entry by its nullifier, and a dust batch by
+    /// [`PendingDustBatch::spends_any_of`].
     ///
     /// An entry must also carry `reserved_at`, so a build hands back only what
     /// it reserved. Two builds cannot hold one input at the same `reserved_at`,
@@ -199,13 +206,8 @@ impl PendingReservations {
         reserved_at: Timestamp,
     ) {
         if !dust_nullifiers.is_empty() {
-            self.dust.retain(|b| {
-                b.reserved_at != reserved_at
-                    || !b
-                        .spends
-                        .iter()
-                        .any(|s| dust_nullifiers.contains(&s.old_nullifier))
-            });
+            self.dust
+                .retain(|b| b.reserved_at != reserved_at || !b.spends_any_of(dust_nullifiers));
         }
         if !unshielded.is_empty() {
             self.unshielded
