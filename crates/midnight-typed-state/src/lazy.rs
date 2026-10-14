@@ -108,10 +108,7 @@ pub fn index_to_query_key(index: usize) -> String {
     let av: midnight_base_crypto::fab::AlignedValue = u8::try_from(index)
         .expect("field index must fit in u8")
         .into();
-    let mut buf = Vec::with_capacity(av.serialized_size());
-    av.serialize(&mut buf)
-        .expect("AlignedValue serialization to Vec never fails");
-    hex::encode(buf)
+    value_to_query_key(&av)
 }
 
 /// Convert any value that can be turned into an `AlignedValue` to a
