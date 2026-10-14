@@ -1338,7 +1338,6 @@ fn splice_spread(
     expected: usize,
     out: &mut Vec<Value>,
 ) -> Result<(), InterpreterError> {
-    use midnight_base_crypto::fab;
     match inner {
         Value::Tuple(els) => {
             if els.len() != expected {
@@ -1351,35 +1350,21 @@ fn splice_spread(
             Ok(())
         }
         Value::AlignedValue(av) => {
-            let atoms = &av.value.0;
-            let segments = &av.alignment.0;
-            if atoms.len() != expected || segments.len() != expected {
+            let atoms = av.value.0.len();
+            if atoms != expected {
                 return Err(InterpreterError::TypeError(format!(
-                    "spread of length {expected} got an AlignedValue with {} atoms \
-                     ({} alignment segments); only flat one-atom-per-element \
-                     vectors can be spliced",
-                    atoms.len(),
-                    segments.len()
+                    "spread of length {expected} got an AlignedValue with {atoms} atoms"
                 )));
             }
-            for (atom, segment) in atoms.iter().zip(segments.iter()) {
-                let fab::AlignmentSegment::Atom(a) = segment else {
-                    return Err(InterpreterError::TypeError(
-                        "spread over an AlignedValue with non-atom alignment \
-                         (e.g. Maybe) is not supported"
-                            .to_string(),
-                    ));
-                };
-                let single = fab::AlignedValue::new(
-                    fab::Value(vec![atom.clone()]),
-                    fab::Alignment::singleton(*a),
-                )
-                .ok_or_else(|| {
+            for i in 0..expected {
+                let element = slice_atoms(&av, i..i + 1).ok_or_else(|| {
                     InterpreterError::TypeError(
-                        "spread element does not satisfy its alignment".to_string(),
+                        "spread over an AlignedValue that does not carry one alignment atom \
+                         per value atom (e.g. Maybe) is not supported"
+                            .to_string(),
                     )
                 })?;
-                out.push(Value::AlignedValue(single));
+                out.push(Value::AlignedValue(element));
             }
             Ok(())
         }
@@ -1745,13 +1730,7 @@ fn either_variant_field_slice(
         let (left_off, _) = layout.field_slice("left")?;
         let (right_off, _) = layout.field_slice("right")?;
 
-        let mut disc = av.clone();
-        disc.value = midnight_base_crypto::fab::Value(
-            av.value.0.get(disc_off..disc_off + disc_len)?.to_vec(),
-        );
-        disc.alignment = midnight_base_crypto::fab::Alignment(
-            av.alignment.0.get(disc_off..disc_off + disc_len)?.to_vec(),
-        );
+        let disc = slice_atoms(av, disc_off..disc_off + disc_len)?;
         let is_left = is_truthy(&Value::AlignedValue(disc));
 
         let (variant_field, variant_off) = if is_left {
