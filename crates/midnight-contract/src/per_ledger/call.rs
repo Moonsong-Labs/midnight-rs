@@ -14,10 +14,10 @@ use helpers::coin_structure::coin::{
 };
 use helpers::coin_structure::transfer::Recipient;
 use helpers::{
-    AlignedValue, BuildContext, BuildContractAction, BuildInput, BuildOutput, BuildTransient,
-    BuildUtxoOutput, BuilderContext, ContractAddress, ContractCallPrototype, DefaultDB,
-    EntryPointBuf, FromContext, IntentInfo, KeyLocation, OfferInfo, ProofPreimage, SplittableRng,
-    StandardTransactionInfo, TokenInfo, Transcript, UnshieldedOfferInfo, UtxoOutput,
+    AlignedValue, BuildContext, BuildContractAction, BuildUtxoOutput, BuilderContext,
+    ContractAddress, ContractCallPrototype, DefaultDB, EntryPointBuf, FromContext, IntentInfo,
+    KeyLocation, OfferInfo, ProofPreimage, SplittableRng, StandardTransactionInfo, TokenInfo,
+    Transcript, UnshieldedOfferInfo, UtxoOutput,
 };
 use midnight_base_crypto::fab::{InvalidBuiltinDecode, ValueSlice};
 use midnight_base_crypto::time::Timestamp;
@@ -333,11 +333,7 @@ pub(crate) async fn call_transaction(
         pending_input_coins.push((coin.commitment(&self_recipient), coin));
     }
 
-    let mut guaranteed_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuildContext>>> = Vec::new();
-    let mut fallible_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuildContext>>> = Vec::new();
-    let mut guaranteed_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>> =
-        Vec::new();
-    let mut fallible_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>> = Vec::new();
+    let mut offers = SegmentOffers::new();
     // Routing table for caller-provided shielded inputs: for each circuit
     // output, its token type and the segment it landed in (`true` = fallible,
     // at `INTENT_SEGMENT`). A caller coin funds the receive/output of the same
@@ -369,27 +365,21 @@ pub(crate) async fn call_transaction(
         };
         if let Some((idx, contract)) = paired {
             pending_input_coins.remove(idx);
-            let transient = Box::new(ContractOwnedTransient {
-                coin: decoded.coin,
-                contract,
-                segment: if is_fallible {
-                    INTENT_SEGMENT
-                } else {
-                    helpers::Segment::Guaranteed.into()
-                },
-            }) as Box<dyn BuildTransient<DefaultDB, BuildContext>>;
-            if is_fallible {
-                fallible_transients.push(transient);
-            } else {
-                guaranteed_transients.push(transient);
-            }
+            offers
+                .at(is_fallible)
+                .transients
+                .push(Box::new(ContractOwnedTransient {
+                    coin: decoded.coin,
+                    contract,
+                    segment: if is_fallible {
+                        INTENT_SEGMENT
+                    } else {
+                        helpers::Segment::Guaranteed.into()
+                    },
+                }));
         } else {
             drawn.push(((decoded.coin.type_, is_fallible), decoded.coin.value));
-            if is_fallible {
-                fallible_outputs.push(Box::new(output));
-            } else {
-                guaranteed_outputs.push(Box::new(output));
-            }
+            offers.at(is_fallible).outputs.push(Box::new(output));
         }
     }
     let circuit_output_value = total_by_key(drawn)?;
@@ -416,10 +406,7 @@ pub(crate) async fn call_transaction(
         .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
         .await?;
     let circuit_offers = CircuitOffers {
-        guaranteed_outputs,
-        fallible_outputs,
-        guaranteed_transients,
-        fallible_transients,
+        offers,
         output_segments,
         circuit_output_value,
         minted_value,
@@ -442,13 +429,39 @@ pub(crate) async fn call_transaction(
 /// `output_segments` routes those coins, and the two value maps size their
 /// change.
 struct CircuitOffers {
-    guaranteed_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuildContext>>>,
-    fallible_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuildContext>>>,
-    guaranteed_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>>,
-    fallible_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>>,
+    offers: SegmentOffers,
     output_segments: Vec<(ShieldedTokenType, bool)>,
     circuit_output_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
     minted_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
+}
+
+/// A call's two Zswap offers: the guaranteed one, and the fallible one at
+/// [`INTENT_SEGMENT`].
+struct SegmentOffers {
+    guaranteed: OfferInfo<DefaultDB, BuildContext>,
+    fallible: OfferInfo<DefaultDB, BuildContext>,
+}
+
+impl SegmentOffers {
+    fn new() -> Self {
+        let empty = || OfferInfo {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            transients: Vec::new(),
+        };
+        Self {
+            guaranteed: empty(),
+            fallible: empty(),
+        }
+    }
+
+    fn at(&mut self, fallible: bool) -> &mut OfferInfo<DefaultDB, BuildContext> {
+        if fallible {
+            &mut self.fallible
+        } else {
+            &mut self.guaranteed
+        }
+    }
 }
 
 /// Attach the reserved `prepared` coins to the circuit's offers, then prove the
@@ -465,25 +478,16 @@ async fn attach_and_prove(
     pay_fees: bool,
 ) -> Result<Vec<u8>, ContractError> {
     let CircuitOffers {
-        mut guaranteed_outputs,
-        mut fallible_outputs,
-        guaranteed_transients,
-        fallible_transients,
+        mut offers,
         output_segments,
         circuit_output_value,
         minted_value,
     } = circuit_offers;
-    let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB, BuildContext>>> = Vec::new();
-    let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB, BuildContext>>> = Vec::new();
     let mut attached = Vec::new();
     for input in prepared {
         let to_fallible = shielded_input_to_fallible(input.token_type(), &output_segments)?;
         attached.push(((input.token_type(), to_fallible), input.value()));
-        if to_fallible {
-            fallible_inputs.push(Box::new(input));
-        } else {
-            guaranteed_inputs.push(Box::new(input));
-        }
+        offers.at(to_fallible).inputs.push(Box::new(input));
     }
     let attached_value = total_by_key(attached)?;
 
@@ -496,36 +500,24 @@ async fn attach_and_prove(
     for ((token_type, is_fallible), change) in
         change_due(&attached_value, &circuit_output_value, &minted_value)
     {
-        let output = Box::new(KeyedOutput {
+        offers.at(is_fallible).outputs.push(Box::new(KeyedOutput {
             coin_public_key: change_cpk,
             enc_public_key: change_epk,
             token_type,
             value: change,
-        }) as Box<dyn BuildOutput<DefaultDB, BuildContext>>;
-        if is_fallible {
-            fallible_outputs.push(output);
-        } else {
-            guaranteed_outputs.push(output);
-        }
+        }));
     }
 
-    tx_info.set_guaranteed_offer(OfferInfo {
-        inputs: guaranteed_inputs,
-        outputs: guaranteed_outputs,
-        transients: guaranteed_transients,
-    });
-    if !fallible_outputs.is_empty()
-        || !fallible_inputs.is_empty()
-        || !fallible_transients.is_empty()
+    let SegmentOffers {
+        guaranteed,
+        fallible,
+    } = offers;
+    tx_info.set_guaranteed_offer(guaranteed);
+    if !fallible.outputs.is_empty()
+        || !fallible.inputs.is_empty()
+        || !fallible.transients.is_empty()
     {
-        tx_info.fallible_offers.insert(
-            INTENT_SEGMENT,
-            OfferInfo {
-                inputs: fallible_inputs,
-                outputs: fallible_outputs,
-                transients: fallible_transients,
-            },
-        );
+        tx_info.fallible_offers.insert(INTENT_SEGMENT, fallible);
     }
     // Build fee-less, even when this call pays for itself.
     //
