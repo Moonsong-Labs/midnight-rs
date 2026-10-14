@@ -74,19 +74,27 @@ impl<'a> Program<'a> {
         self.circuits.get(id).copied()
     }
 
-    /// What a `call` name resolves to.
+    /// The declaration that a `call` name refers to.
     ///
     /// A circuit wins over everything else: a circuit that shadows a native's
     /// name is a distinct identifier, and the call site names it directly.
-    fn callee(&self, id: &ir::Ident) -> Callee<'a> {
-        if let Some(c) = self.circuits.get(id.0.as_str()).copied() {
-            return Callee::Circuit(c);
+    fn declaration(&self, id: &ir::Ident) -> Option<Decl<'a>> {
+        if let Some(c) = self.circuit(&id.0) {
+            return Some(Decl::Circuit(c));
         }
-        match self.natives.get(id.0.as_str()) {
-            Some(n) if n.class == "witness" => Callee::Witness,
-            Some(_) => Callee::Pure,
-            None if self.witnesses.contains_key(id.name()) => Callee::Witness,
-            None => Callee::Pure,
+        if let Some(n) = self.natives.get(id.0.as_str()).copied() {
+            return Some(Decl::Native(n));
+        }
+        self.witnesses.get(id.name()).copied().map(Decl::Witness)
+    }
+
+    /// What a `call` name resolves to.
+    fn callee(&self, id: &ir::Ident) -> Callee<'a> {
+        match self.declaration(id) {
+            Some(Decl::Circuit(c)) => Callee::Circuit(c),
+            Some(Decl::Native(n)) if n.class == "witness" => Callee::Witness,
+            Some(Decl::Witness(_)) => Callee::Witness,
+            Some(Decl::Native(_)) | None => Callee::Pure,
         }
     }
 
@@ -99,9 +107,9 @@ impl<'a> Program<'a> {
     where
         'a: 'b,
     {
-        match self.natives.get(id.0.as_str()) {
-            Some(n) => n.entry.strip_prefix(RUNTIME_MODULE).unwrap_or(&n.entry),
-            None => id.name(),
+        match self.declaration(id) {
+            Some(Decl::Native(n)) => n.entry.strip_prefix(RUNTIME_MODULE).unwrap_or(&n.entry),
+            _ => id.name(),
         }
     }
 
@@ -109,29 +117,28 @@ impl<'a> Program<'a> {
     /// argument order, which a builtin encodes its arguments at. An undeclared
     /// callee has none.
     fn argument_types(&self, id: &ir::Ident) -> Vec<Type> {
-        let arguments = match self.natives.get(id.0.as_str()) {
-            Some(n) => &n.arguments,
-            None => match self.witnesses.get(id.name()) {
-                Some(w) => &w.arguments,
-                None => return Vec::new(),
-            },
+        let arguments = match self.declaration(id) {
+            Some(Decl::Native(n)) => &n.arguments,
+            Some(Decl::Witness(w)) => &w.arguments,
+            Some(Decl::Circuit(_)) | None => return Vec::new(),
         };
         arguments.iter().map(|a| a.ty.clone()).collect()
     }
 
     /// The callee's declared result type, which the call site's static type is.
     fn result_type(&self, id: &ir::Ident) -> Option<&'a Type> {
-        if let Some(c) = self.circuits.get(id.0.as_str()).copied() {
-            return Some(&c.result_type);
-        }
-        if let Some(n) = self.natives.get(id.0.as_str()).copied() {
-            return Some(&n.result_type);
-        }
-        self.witnesses
-            .get(id.name())
-            .copied()
-            .map(|w| &w.result_type)
+        Some(match self.declaration(id)? {
+            Decl::Circuit(c) => &c.result_type,
+            Decl::Native(n) => &n.result_type,
+            Decl::Witness(w) => &w.result_type,
+        })
     }
+}
+
+enum Decl<'a> {
+    Circuit(&'a ir::Circuit),
+    Native(&'a ir::Native),
+    Witness(&'a ir::Witness),
 }
 
 /// What a `call` name resolves to.
@@ -1536,7 +1543,7 @@ fn apply_fun(
     args: &[Value],
 ) -> Result<Value, InterpreterError> {
     match fun {
-        ir::Fun::Ref(id) => match ctx.program.circuits.get(id.0.as_str()).copied() {
+        ir::Fun::Ref(id) => match ctx.program.circuit(&id.0) {
             Some(c) => call_circuit(ctx, &c.arguments, &c.body, args),
             None => Err(InterpreterError::TypeError(format!(
                 "loop calls `{}`, which is not a circuit in the program",
