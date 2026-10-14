@@ -196,7 +196,7 @@ pub fn list_element_path(field: &[usize], index: usize) -> ListElementPath {
 
 /// Decode the hex-encoded state value from a query result into a `StateValue`.
 ///
-/// Generated lazy accessors call this, then use `cell_value` + `TryFrom<&ValueSlice>`
+/// Generated lazy accessors call this, then use [`cell_as`](crate::cell_as)
 /// to convert to the target type while the `StateValue` is still alive.
 pub fn decode_state_value(
     result: &StateQueryResult,

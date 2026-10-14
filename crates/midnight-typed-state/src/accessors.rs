@@ -55,12 +55,7 @@ where
     /// key is present but the value cannot be converted.
     pub fn get(&self, key: K) -> Option<Result<V, StateError>> {
         let sp = self.map.get(&key.into())?;
-        let sv: &StateValue<InMemoryDB> = &sp;
-        let av = match crate::nav::cell_value(sv) {
-            Ok(av) => av,
-            Err(e) => return Some(Err(e)),
-        };
-        Some(V::try_from(&*av.value).map_err(StateError::Conversion))
+        Some(crate::nav::cell_as(&sp))
     }
 }
 
@@ -75,11 +70,7 @@ where
             let (key_sp, val_sp) = &*pair;
             let key_av: &AlignedValue = key_sp;
             let k = K::try_from(&*key_av.value).map_err(StateError::Conversion)?;
-
-            let sv: &StateValue<InMemoryDB> = val_sp;
-            let av = crate::nav::cell_value(sv)?;
-            let v = V::try_from(&*av.value).map_err(StateError::Conversion)?;
-
+            let v = crate::nav::cell_as(val_sp)?;
             Ok((k, v))
         })
     }
@@ -169,8 +160,7 @@ impl<'a, T> ListAccessor<'a, T> {
     ///
     /// Returns an error if `sv` is not an `Array` with a `Cell(u64)` length slot.
     pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
-        let len = crate::nav::cell_value(crate::nav::get_field(sv, LIST_LENGTH)?)?;
-        let len = u64::try_from(&*len.value).map_err(StateError::Conversion)?;
+        let len: u64 = crate::nav::cell_as(crate::nav::get_field(sv, LIST_LENGTH)?)?;
         let len = usize::try_from(len)
             .map_err(|_| StateError::Conversion(InvalidBuiltinDecode("usize")))?;
         Ok(Self {
@@ -230,8 +220,7 @@ fn list_head<T>(node: &StateValue<InMemoryDB>) -> Result<T, StateError>
 where
     for<'vs> T: TryFrom<&'vs ValueSlice, Error = InvalidBuiltinDecode>,
 {
-    let av = crate::nav::cell_value(crate::nav::get_field(node, LIST_HEAD)?)?;
-    T::try_from(&*av.value).map_err(StateError::Conversion)
+    crate::nav::cell_as(crate::nav::get_field(node, LIST_HEAD)?)
 }
 
 /// Structural accessor for a Midnight contract merkle tree field.
@@ -291,11 +280,7 @@ impl<'a> MerkleTreeAccessor<'a> {
         };
 
         // Element [1]: Cell containing u64 (first_free counter)
-        let first_free = {
-            let sv = arr.get(1).ok_or(StateError::IndexOutOfBounds(1))?;
-            let av = crate::nav::cell_value(sv)?;
-            u64::try_from(&*av.value).map_err(StateError::Conversion)?
-        };
+        let first_free = crate::nav::cell_as(arr.get(1).ok_or(StateError::IndexOutOfBounds(1))?)?;
 
         Ok(Self { tree, first_free })
     }

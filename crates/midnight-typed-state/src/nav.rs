@@ -1,4 +1,4 @@
-use midnight_base_crypto::fab::AlignedValue;
+use midnight_base_crypto::fab::{AlignedValue, InvalidBuiltinDecode, ValueSlice};
 use midnight_onchain_state::state::StateValue;
 use midnight_storage::db::InMemoryDB;
 
@@ -27,6 +27,19 @@ pub fn cell_value(sv: &StateValue<InMemoryDB>) -> Result<&AlignedValue, StateErr
             actual: variant_name(other),
         }),
     }
+}
+
+/// Converts the value of a `StateValue::Cell` to `T`.
+///
+/// # Errors
+///
+/// Returns an error if `sv` is not a `Cell`, or if its value does not convert
+/// to `T`.
+pub fn cell_as<T>(sv: &StateValue<InMemoryDB>) -> Result<T, StateError>
+where
+    for<'vs> T: TryFrom<&'vs ValueSlice, Error = InvalidBuiltinDecode>,
+{
+    T::try_from(&*cell_value(sv)?.value).map_err(StateError::Conversion)
 }
 
 /// Retrieves a field by index from a `StateValue::Array`.

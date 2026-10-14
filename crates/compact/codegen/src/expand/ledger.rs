@@ -434,7 +434,7 @@ fn emit_field_accessor(
         StorageKind::Cell => {
             emit_cell_accessor(&method_name, &doc, &nav, field.element_type.as_ref())
         }
-        StorageKind::Counter => emit_counter_accessor(&method_name, &doc, &nav),
+        StorageKind::Counter => emit_typed_cell_accessor(&method_name, &doc, &nav, &quote! { u64 }),
         StorageKind::Map => emit_map_accessor(&method_name, &doc, &nav, field),
         StorageKind::Set => emit_set_accessor(&method_name, &doc, &nav, field),
         StorageKind::List => emit_list_accessor(&method_name, &doc, &nav, field),
@@ -450,30 +450,27 @@ fn emit_cell_accessor(
     nav: &TokenStream,
     cell_type: Option<&Type>,
 ) -> TokenStream {
-    if let Some(ty) = cell_type {
-        let (ret_type, body) = cell_accessor(ty, nav);
-        quote! {
-            #[doc = #doc]
-            pub fn #method_name(&self) -> Result<#ret_type, StateError> {
-                #body
-            }
-        }
-    } else {
-        quote! {
+    match cell_type {
+        Some(ty) => emit_typed_cell_accessor(method_name, doc, nav, &type_to_tokens(ty)),
+        None => quote! {
             #[doc = #doc]
             pub fn #method_name(&self) -> Result<&StateValue<InMemoryDB>, StateError> {
                 #nav
             }
-        }
+        },
     }
 }
 
-fn emit_counter_accessor(method_name: &Ident, doc: &str, nav: &TokenStream) -> TokenStream {
-    let body = cell_value_body(&quote! { u64 }, nav);
+fn emit_typed_cell_accessor(
+    method_name: &Ident,
+    doc: &str,
+    nav: &TokenStream,
+    ret_type: &TokenStream,
+) -> TokenStream {
     quote! {
         #[doc = #doc]
-        pub fn #method_name(&self) -> Result<u64, StateError> {
-            #body
+        pub fn #method_name(&self) -> Result<#ret_type, StateError> {
+            cell_as::<#ret_type>(#nav?)
         }
     }
 }
@@ -900,7 +897,12 @@ fn emit_lazy_field_accessor(
             &path_expr,
             field.element_type.as_ref(),
         )),
-        StorageKind::Counter => Some(emit_lazy_counter_accessor(&method_name, &doc, &path_expr)),
+        StorageKind::Counter => Some(emit_lazy_typed_cell_accessor(
+            &method_name,
+            &doc,
+            &path_expr,
+            &quote! { u64 },
+        )),
         StorageKind::Map => Some(emit_lazy_map_accessor(
             &method_name,
             &doc,
@@ -925,41 +927,33 @@ fn emit_lazy_cell_accessor(
     path_expr: &TokenStream,
     cell_type: Option<&Type>,
 ) -> TokenStream {
-    if let Some(ty) = cell_type {
-        let ret_type = lazy_cell_return_type(ty);
-        let query_body = lazy_query_body(path_expr);
-        quote! {
-            #[doc = #doc]
-            pub async fn #method_name(&self) -> Result<#ret_type, lazy::ContractError> {
-                #query_body
-                let av = cell_value(&sv)?;
-                Ok(<#ret_type>::try_from(&*av.value).map_err(StateError::Conversion)?)
-            }
-        }
-    } else {
-        let query_body = lazy_query_body(path_expr);
-        quote! {
-            #[doc = #doc]
-            pub async fn #method_name(&self) -> Result<StateValue<InMemoryDB>, lazy::ContractError> {
-                #query_body
-                Ok(sv)
+    match cell_type {
+        Some(ty) => emit_lazy_typed_cell_accessor(method_name, doc, path_expr, &type_to_tokens(ty)),
+        None => {
+            let query_body = lazy_query_body(path_expr);
+            quote! {
+                #[doc = #doc]
+                pub async fn #method_name(&self) -> Result<StateValue<InMemoryDB>, lazy::ContractError> {
+                    #query_body
+                    Ok(sv)
+                }
             }
         }
     }
 }
 
-fn emit_lazy_counter_accessor(
+fn emit_lazy_typed_cell_accessor(
     method_name: &Ident,
     doc: &str,
     path_expr: &TokenStream,
+    ret_type: &TokenStream,
 ) -> TokenStream {
     let query_body = lazy_query_body(path_expr);
     quote! {
         #[doc = #doc]
-        pub async fn #method_name(&self) -> Result<u64, lazy::ContractError> {
+        pub async fn #method_name(&self) -> Result<#ret_type, lazy::ContractError> {
             #query_body
-            let av = cell_value(&sv)?;
-            Ok(<u64>::try_from(&*av.value).map_err(StateError::Conversion)?)
+            Ok(cell_as::<#ret_type>(&sv)?)
         }
     }
 }
@@ -992,8 +986,7 @@ fn emit_lazy_map_accessor(
                 return Ok(None);
             }
             let sv = lazy::decode_state_value(result)?;
-            let av = cell_value(&sv)?;
-            Ok(Some(<#val_ty>::try_from(&*av.value).map_err(StateError::Conversion)?))
+            Ok(Some(cell_as::<#val_ty>(&sv)?))
         }
     }
 }
@@ -1070,13 +1063,13 @@ fn emit_lazy_list_accessor(
                 return Err(lazy::ContractError::NoValue);
             };
             let sv = lazy::decode_state_value(length)?;
-            let len = <u64>::try_from(&*cell_value(&sv)?.value).map_err(StateError::Conversion)?;
+            let len = cell_as::<u64>(&sv)?;
             if index as u64 >= len {
                 return Ok(None);
             }
             let sv = lazy::decode_state_value(element)?;
             let value = match tails_left {
-                None => <#elem_ty>::try_from(&*cell_value(&sv)?.value).map_err(StateError::Conversion)?,
+                None => cell_as::<#elem_ty>(&sv)?,
                 Some(n) => ListAccessor::<#elem_ty>::from_state(&sv)?
                     .get(n)
                     .ok_or(StateError::IndexOutOfBounds(n))??,
@@ -1104,15 +1097,6 @@ fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
         // not a panic.
         let result = results.first().ok_or(lazy::ContractError::NoValue)?;
         let sv = lazy::decode_state_value(result)?;
-    }
-}
-
-/// Resolve the return type for a lazy cell accessor, unwrapping aliases.
-fn lazy_cell_return_type(ty: &Type) -> TokenStream {
-    if let Type::Alias { ty: inner, .. } = ty {
-        lazy_cell_return_type(inner)
-    } else {
-        type_to_tokens(ty)
     }
 }
 
@@ -1673,25 +1657,6 @@ pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
         }
     };
     (value_ty, decode)
-}
-
-fn cell_accessor(ty: &Type, nav: &TokenStream) -> (TokenStream, TokenStream) {
-    if let Type::Alias { ty: inner, .. } = ty {
-        cell_accessor(inner, nav)
-    } else {
-        let ret_type = type_to_tokens(ty);
-        let body = cell_value_body(&ret_type, nav);
-        (ret_type, body)
-    }
-}
-
-/// Generate the body for a cell accessor that uses `cell_value` + `TryFrom<&ValueSlice>`.
-fn cell_value_body(ret_type: &TokenStream, nav: &TokenStream) -> TokenStream {
-    quote! {
-        let sv = #nav?;
-        let av = cell_value(sv)?;
-        <#ret_type>::try_from(&*av.value).map_err(StateError::Conversion)
-    }
 }
 
 #[cfg(test)]
