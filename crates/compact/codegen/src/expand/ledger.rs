@@ -949,10 +949,11 @@ fn emit_lazy_set_accessor(
 /// that encodes `key` at the layout of `ty`.
 fn lazy_key(ty: Option<&Type>) -> (TokenStream, TokenStream) {
     let key = quote! { key };
-    match ty {
-        Some(ty) => (type_to_tokens(ty), encode_to_aligned_value(&key, ty)),
-        None => (quote! { Vec<u8> }, quote! { AlignedValue::from(#key) }),
-    }
+    let encode = ty.map_or_else(
+        || quote! { AlignedValue::from(#key) },
+        |ty| encode_to_aligned_value(&key, ty),
+    );
+    (storage_arg_tokens(ty), encode)
 }
 
 fn emit_lazy_list_accessor(
