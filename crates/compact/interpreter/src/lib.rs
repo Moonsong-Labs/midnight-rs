@@ -2583,17 +2583,10 @@ mod tests {
         let via_builtin = try_builtin("persistentCommit", &[value, opening])
             .expect("persistentCommit is a known builtin")
             .expect("persistentCommit succeeds");
-        let got = match via_builtin {
-            Value::AlignedValue(av) => {
-                let atom = &av.value.0[0];
-                let mut b = [0u8; 32];
-                b[..atom.0.len()].copy_from_slice(&atom.0);
-                b
-            }
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
+        let got =
+            compact_runtime::value_to_hash_output(&via_builtin).expect("a 32-byte commitment");
         assert_eq!(
-            got, expected.0,
+            got, expected,
             "persistentCommit must match ContractAddress::custom_shielded_token_type"
         );
     }

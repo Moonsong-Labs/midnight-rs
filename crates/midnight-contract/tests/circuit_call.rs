@@ -574,15 +574,11 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
     .expect("kernel.self() circuit executes");
 
     match result.result {
-        Some(Value::AlignedValue(av)) => {
-            let atom = &av.value.0[0];
-            let mut b = [0u8; 32];
-            b[..atom.0.len()].copy_from_slice(&atom.0);
-            assert_eq!(
-                b, [0x5Au8; 32],
-                "kernel.self() must return the supplied address"
-            );
-        }
+        Some(Value::AlignedValue(av)) => assert_eq!(
+            ContractAddress::try_from(&*av.value).expect("one address atom"),
+            address,
+            "kernel.self() must return the supplied address"
+        ),
         other => panic!("expected the contract address, got {other:?}"),
     }
 }
@@ -602,10 +598,9 @@ fn interpreter_runs_mint_shielded_token_circuit() {
         // coin AlignedValue atoms: [nonce(32), color(32), value]. Color is
         // atom 1, FAB-trimmed of trailing zeros.
         let av = out.coin.try_to_aligned_value().unwrap();
-        let atom = &av.value.0[1];
-        let mut c = [0u8; 32];
-        c[..atom.0.len()].copy_from_slice(&atom.0);
-        c
+        midnight_base_crypto::hash::HashOutput::try_from(&av.value.0[1])
+            .expect("a 32-byte color atom")
+            .0
     }
 
     let domain = [1u8; 32];
