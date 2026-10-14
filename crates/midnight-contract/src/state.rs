@@ -109,11 +109,7 @@ pub(crate) fn populate_verifier_keys(
     for (circuit, key) in verifier_keys(zk_config, declared)? {
         // The Compact side's view is ledger 9's state, whose operation holds
         // either key version.
-        let op = midnight_helpers::ledger_9::contract_operation_new(
-            Some(midnight_helpers::ContractVerifyingKeyBytes(key)),
-            None,
-        )
-        .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))?;
+        let op = crate::ledger_9::state::operation(&circuit, &key)?;
         state.operations = state.operations.insert(circuit.as_bytes().into(), op);
     }
     Ok(state)
