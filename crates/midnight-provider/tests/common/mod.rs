@@ -1,7 +1,7 @@
 //! Devnet setup for the devnet tests of this crate.
 
 use midnight_provider::{MidnightProvider, Network, Seed};
-use midnight_wallet::WalletBuilder;
+use midnight_wallet::{Wallet, WalletBuilder};
 
 /// The seed of the devnet genesis wallet, which holds tNIGHT, dust and
 /// shielded coins.
@@ -37,13 +37,18 @@ pub(crate) fn devnet_urls() -> Option<(String, String)> {
     Some((node, indexer))
 }
 
+/// The wallet of `seed` on the undeployed network, synced through `provider`.
+pub(crate) async fn synced_wallet(provider: &MidnightProvider, seed: Seed) -> Wallet {
+    WalletBuilder::new(seed)
+        .with_network(Network::Undeployed)
+        .sync(provider)
+        .await
+        .expect("sync")
+}
+
 /// A provider for the devnet, with the wallet of `seed` synced and attached.
 pub(crate) async fn synced_provider(node: &str, indexer: &str, seed: Seed) -> MidnightProvider {
     let provider = MidnightProvider::new(node, indexer);
-    let wallet = WalletBuilder::new(seed)
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("sync");
+    let wallet = synced_wallet(&provider, seed).await;
     provider.with_wallet(wallet)
 }

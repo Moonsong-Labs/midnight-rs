@@ -28,7 +28,7 @@ use midnight_provider::{
     LedgerVersion, MidnightProvider, NIGHT, Network, ProviderError, ShieldedTokenType,
     TransferKind, TransferRequest, WalletError, WalletFacade,
 };
-use midnight_wallet::{LocalWallet, WalletBuilder};
+use midnight_wallet::LocalWallet;
 use tokio::sync::Notify;
 
 fn night() -> ShieldedTokenType {
@@ -154,11 +154,7 @@ async fn two_preparations_at_once_draw_different_inputs() {
         return;
     };
     let source = MidnightProvider::new(&node, &indexer);
-    let wallet = WalletBuilder::new(common::dev_seed())
-        .with_network(Network::Undeployed)
-        .sync(&source)
-        .await
-        .expect("sync");
+    let wallet = common::synced_wallet(&source, common::dev_seed()).await;
     let address = wallet.unshielded_address();
 
     // Each preparation spends one tNIGHT UTXO and draws Dust for its fee, so
