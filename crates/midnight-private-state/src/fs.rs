@@ -1372,6 +1372,29 @@ mod tests {
         [seed; 32]
     }
 
+    fn pending(hash: u8, parent: Option<u8>, data: &[u8]) -> Snapshot {
+        Snapshot {
+            status: SnapshotStatus::Pending,
+            extrinsic_hash: hex::encode(ext(hash)),
+            block_hash: None,
+            block_height: None,
+            depends_on: parent.map(|p| hex::encode(ext(p))),
+            data: data.to_vec(),
+        }
+    }
+
+    /// Write `snap` into the journal of `address` in the layout of
+    /// `append_pending`, but without its checks.
+    fn write_raw(p: &FsPrivateStateProvider, address: &str, snap: &Snapshot) {
+        p.ensure_address_marker(address).unwrap();
+        let path = p
+            .address_dir(address)
+            .join(FsPrivateStateProvider::snapshot_filename(
+                &snap.extrinsic_hash,
+            ));
+        p.write_json_atomic(&path, snap).unwrap();
+    }
+
     #[tokio::test]
     async fn head_returns_latest_pending_snapshot() {
         let (_dir, p) = provider();
@@ -1599,12 +1622,8 @@ mod tests {
         let bad = vec![ExportEntry {
             address: "0200aa".into(),
             snapshot: Snapshot {
-                status: SnapshotStatus::Pending,
                 extrinsic_hash: "not-hex".into(),
-                block_hash: None,
-                block_height: None,
-                depends_on: None,
-                data: b"bytes".to_vec(),
+                ..pending(0, None, b"bytes")
             },
         }];
         let payload = serde_json::to_vec(&bad).unwrap();
@@ -1718,19 +1737,11 @@ mod tests {
 
     #[test]
     fn a_cascade_removes_children_before_parents() {
-        let snapshot = |hash: u8, parent: Option<u8>| Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: hex::encode(ext(hash)),
-            block_hash: None,
-            block_height: None,
-            depends_on: parent.map(|p| hex::encode(ext(p))),
-            data: Vec::new(),
-        };
         // The chain is 1 <- 2 <- 3, given out of order.
         let doomed = vec![
-            snapshot(2, Some(1)),
-            snapshot(3, Some(2)),
-            snapshot(1, None),
+            pending(2, Some(1), b""),
+            pending(3, Some(2), b""),
+            pending(1, None, b""),
         ];
         let order: Vec<String> = child_first(doomed)
             .into_iter()
@@ -1819,22 +1830,7 @@ mod tests {
         // disk to exercise `find_leaf`'s defense against an already-branched
         // journal (one produced by import, manual editing, or a pre-fix
         // version of the SDK).
-        let sibling = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: hex::encode(ext(3)),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(hex::encode(ext(1))),
-            data: b"b".to_vec(),
-        };
-        let dir = p.address_dir("0200aa");
-        p.write_json_atomic(
-            &dir.join(FsPrivateStateProvider::snapshot_filename(&hex::encode(
-                ext(3),
-            ))),
-            &sibling,
-        )
-        .unwrap();
+        write_raw(&p, "0200aa", &pending(3, Some(1), b"b"));
 
         let err = p.head("0200aa").await.unwrap_err();
         assert!(
@@ -1855,40 +1851,8 @@ mod tests {
         // public API (it would require a future child to predate its parent),
         // but a corrupted directory could.
         let (_dir, p) = provider();
-        let addr_dir = p.address_dir("0200aa");
-        fs::create_dir_all(&addr_dir).unwrap();
-        // The address marker is normally written by `append_pending`; write
-        // it explicitly here so the path doesn't reject the address on read.
-        fs::write(addr_dir.join(ADDRESS_MARKER), "0200aa").unwrap();
-
-        let a_hex = hex::encode(ext(0xAA));
-        let b_hex = hex::encode(ext(0xBB));
-        let a = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: a_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(b_hex.clone()),
-            data: b"a".to_vec(),
-        };
-        let b = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: b_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(a_hex.clone()),
-            data: b"b".to_vec(),
-        };
-        p.write_json_atomic(
-            &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&a_hex)),
-            &a,
-        )
-        .unwrap();
-        p.write_json_atomic(
-            &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&b_hex)),
-            &b,
-        )
-        .unwrap();
+        write_raw(&p, "0200aa", &pending(0xAA, Some(0xBB), b"a"));
+        write_raw(&p, "0200aa", &pending(0xBB, Some(0xAA), b"b"));
 
         let err = p.head("0200aa").await.unwrap_err();
         assert!(
@@ -2001,42 +1965,12 @@ mod tests {
         // that {B, C} are unreachable from any root via depends_on and
         // surface InvalidFormat.
         let (_dir, p) = provider();
-        let addr_dir = p.address_dir("0200aa");
-        fs::create_dir_all(&addr_dir).unwrap();
-        fs::write(addr_dir.join(ADDRESS_MARKER), "0200aa").unwrap();
-        let a_hex = hex::encode(ext(0xAA));
-        let b_hex = hex::encode(ext(0xBB));
-        let c_hex = hex::encode(ext(0xCC));
-        let a = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: a_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: None,
-            data: b"a".to_vec(),
-        };
-        let b = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: b_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(c_hex.clone()),
-            data: b"b".to_vec(),
-        };
-        let c = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: c_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(b_hex.clone()),
-            data: b"c".to_vec(),
-        };
-        for (h, s) in [(&a_hex, &a), (&b_hex, &b), (&c_hex, &c)] {
-            p.write_json_atomic(
-                &addr_dir.join(FsPrivateStateProvider::snapshot_filename(h)),
-                s,
-            )
-            .unwrap();
+        for s in [
+            pending(0xAA, None, b"a"),
+            pending(0xBB, Some(0xCC), b"b"),
+            pending(0xCC, Some(0xBB), b"c"),
+        ] {
+            write_raw(&p, "0200aa", &s);
         }
         let err = p.head("0200aa").await.unwrap_err();
         assert!(
@@ -2055,24 +1989,7 @@ mod tests {
         // journal. The cycle case (all parents present) is covered by
         // `find_leaf_detects_isolated_cycle_alongside_root_leaf`.
         let (_dir, p) = provider();
-        let addr_dir = p.address_dir("0200aa");
-        fs::create_dir_all(&addr_dir).unwrap();
-        fs::write(addr_dir.join(ADDRESS_MARKER), "0200aa").unwrap();
-        let c_hex = hex::encode(ext(0xCC));
-        let missing_hex = hex::encode(ext(0xFF));
-        let c = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: c_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(missing_hex),
-            data: b"c".to_vec(),
-        };
-        p.write_json_atomic(
-            &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&c_hex)),
-            &c,
-        )
-        .unwrap();
+        write_raw(&p, "0200aa", &pending(0xCC, Some(0xFF), b"c"));
         let err = p.head("0200aa").await.unwrap_err();
         assert!(
             matches!(err, PrivateStateError::InvalidFormat(ref m)
@@ -2086,15 +2003,11 @@ mod tests {
         let bad = vec![ExportEntry {
             address: "0200aa".into(),
             snapshot: Snapshot {
-                status: SnapshotStatus::Pending,
                 // 64 chars, valid hex content, but uppercase: would not be
                 // byte-equal to an internally produced lowercase encoding
                 // of the same bytes.
                 extrinsic_hash: "AA".repeat(32),
-                block_hash: None,
-                block_height: None,
-                depends_on: None,
-                data: b"x".to_vec(),
+                ..pending(0, None, b"x")
             },
         }];
         let payload = serde_json::to_vec(&bad).unwrap();
@@ -2209,14 +2122,7 @@ mod tests {
         // Now build an external payload with C<-ext(1) (a second child of A).
         let bad = vec![ExportEntry {
             address: "0200aa".into(),
-            snapshot: Snapshot {
-                status: SnapshotStatus::Pending,
-                extrinsic_hash: hex::encode(ext(3)),
-                block_hash: None,
-                block_height: None,
-                depends_on: Some(hex::encode(ext(1))),
-                data: b"s3".to_vec(),
-            },
+            snapshot: pending(3, Some(1), b"s3"),
         }];
         let payload = serde_json::to_vec(&bad).unwrap();
         let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
@@ -2252,14 +2158,7 @@ mod tests {
 
         let payload = vec![ExportEntry {
             address: "0200aa".into(),
-            snapshot: Snapshot {
-                status: SnapshotStatus::Pending,
-                extrinsic_hash: hex::encode(ext(1)),
-                block_hash: None,
-                block_height: None,
-                depends_on: None,
-                data: b"s1".to_vec(),
-            },
+            snapshot: pending(1, None, b"s1"),
         }];
         let bytes = serde_json::to_vec(&payload).unwrap();
         let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &bytes).unwrap();
@@ -2296,42 +2195,16 @@ mod tests {
         // the breakage at the import call site instead of at the next
         // call_with.
         let (_dir, dst) = provider();
-        let addr_dir = dst.address_dir("0200aa");
-        fs::create_dir_all(&addr_dir).unwrap();
-        fs::write(addr_dir.join(ADDRESS_MARKER), "0200aa").unwrap();
         // A is the shared root; B and C are siblings under A.
-        for (h, parent) in [
-            (ext(1), None),
-            (ext(2), Some(ext(1))),
-            (ext(3), Some(ext(1))),
-        ] {
-            let s = Snapshot {
-                status: SnapshotStatus::Pending,
-                extrinsic_hash: hex::encode(h),
-                block_hash: None,
-                block_height: None,
-                depends_on: parent.map(hex::encode),
-                data: b"x".to_vec(),
-            };
-            dst.write_json_atomic(
-                &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&hex::encode(h))),
-                &s,
-            )
-            .unwrap();
+        for (h, parent) in [(1, None), (2, Some(1)), (3, Some(1))] {
+            write_raw(&dst, "0200aa", &pending(h, parent, b"x"));
         }
 
         // Skip-strategy import containing only an entry that already
         // exists (ext(1)). Every iteration takes the Skip arm.
         let payload = vec![ExportEntry {
             address: "0200aa".into(),
-            snapshot: Snapshot {
-                status: SnapshotStatus::Pending,
-                extrinsic_hash: hex::encode(ext(1)),
-                block_hash: None,
-                block_height: None,
-                depends_on: None,
-                data: b"x".to_vec(),
-            },
+            snapshot: pending(1, None, b"x"),
         }];
         let bytes = serde_json::to_vec(&payload).unwrap();
         let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &bytes).unwrap();
