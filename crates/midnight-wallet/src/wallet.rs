@@ -17,6 +17,7 @@ use tracing::{info, warn};
 
 use crate::replay::{latest_block, progress_cancelled, replay_unshielded_events, send_progress};
 use crate::storage::wallet_storage_id;
+use crate::sync::SyncPlan;
 use crate::{SyncProgress, ledger_8, ledger_9};
 
 /// A Midnight wallet: identity (seed, addresses) and synced ledger state.
@@ -118,40 +119,32 @@ impl Wallet {
     /// Dust progress to disk periodically, so an interrupted sync resumes
     /// where it left off.
     pub(crate) async fn sync_inner(
-        indexer_url: &str,
-        seed: Seed,
-        address: &str,
-        network: impl Into<Network>,
-        storage_dir: Option<&Path>,
-        // The finalized block the node reports now, persisted so a later
-        // resume can ask whether it is still on this chain. `None` when the
-        // sync is unpinned or the node could not answer.
-        chain_pin: Option<ChainPin>,
+        plan: SyncPlan,
         progress: Option<mpsc::Sender<SyncProgress>>,
     ) -> Result<Self, WalletError> {
-        let network = network.into();
-        let sync = |progress| {
-            sync_once(
-                indexer_url,
-                &seed,
-                address,
-                network.as_str(),
-                storage_dir,
-                chain_pin.clone(),
-                progress,
-            )
+        let sync = ChainSync {
+            indexer_url: &plan.indexer_url,
+            seed: &plan.seed,
+            address: &plan.address,
+            network_id: plan.network.as_str(),
+            storage_dir: plan.storage_dir.as_deref(),
+            save: true,
+            chain_pin: plan.chain_pin,
         };
         // A chain can fork between the read of its latest block and the
         // replay of its events. The replay then meets the later generation,
         // and a second attempt reads the block again and starts from there.
-        let state = match sync(progress.clone()).await {
+        let state = match sync_once(sync.clone(), progress.clone()).await {
             Err(WalletError::LedgerMismatch { expected, found }) if found > expected => {
                 info!(%found, "the chain moved to a later ledger during the sync; syncing again");
-                sync(progress).await?
+                sync_once(sync, progress).await?
             }
             result => result?,
         };
-        Ok(Self { seed, state })
+        Ok(Self {
+            seed: plan.seed,
+            state,
+        })
     }
 
     /// Whether the dust state has been synced (required for transaction
@@ -966,6 +959,7 @@ struct Resume {
 }
 
 /// Who a sync is for, and where it keeps what it learns.
+#[derive(Clone)]
 pub(crate) struct ChainSync<'a> {
     pub(crate) indexer_url: &'a str,
     pub(crate) seed: &'a Seed,
@@ -985,24 +979,19 @@ pub(crate) struct ChainSync<'a> {
 /// One sync attempt: read the chain's generation, load the snapshot in its
 /// own generation, and sync on the chain.
 async fn sync_once(
-    indexer_url: &str,
-    seed: &Seed,
-    address: &str,
-    network_id: &str,
-    storage_dir: Option<&Path>,
-    chain_pin: Option<ChainPin>,
+    sync: ChainSync<'_>,
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<State, WalletError> {
-    let block = latest_block(indexer_url).await?;
+    let block = latest_block(sync.indexer_url).await?;
     let chain = LedgerVersion::of_block(&block)?;
-    let wallet_id = wallet_storage_id(address);
+    let wallet_id = wallet_storage_id(sync.address);
 
     info!("loading cached state from disk");
-    let snapshot = match storage_dir {
-        Some(dir) => load_snapshot(dir, network_id, &wallet_id, chain)?,
+    let snapshot = match sync.storage_dir {
+        Some(dir) => load_snapshot(dir, sync.network_id, &wallet_id, chain)?,
         None => None,
     };
-    let (resume, chain_pin) = match snapshot {
+    let (resume, sync) = match snapshot {
         Some((resume, stored_pin)) => {
             info!(
                 zswap_event_id = resume.zswap_event_id,
@@ -1023,25 +1012,12 @@ async fn sync_once(
             // Keep the snapshot's own pin when this sync has no fresher one.
             // A node that could not answer must not cost the wallet the mark
             // that lets the next resume check itself.
-            (Some(resume), chain_pin.or(stored_pin))
+            let chain_pin = sync.chain_pin.or(stored_pin);
+            (Some(resume), ChainSync { chain_pin, ..sync })
         }
-        None => (None, chain_pin),
+        None => (None, sync),
     };
-    sync_on_chain(
-        ChainSync {
-            indexer_url,
-            seed,
-            address,
-            network_id,
-            storage_dir,
-            save: true,
-            chain_pin,
-        },
-        &block,
-        resume,
-        progress,
-    )
-    .await
+    sync_on_chain(sync, &block, resume, progress).await
 }
 
 /// A snapshot, in the generation that wrote it, and the chain pin it

@@ -234,31 +234,16 @@ pub struct WalletBuilder {
 
 /// The owned inputs a sync runs on, once the chain work is done. Holding no
 /// borrow is what lets [`WalletBuilder::sync_with_progress`] spawn.
-struct SyncPlan {
-    indexer_url: String,
-    seed: Seed,
-    address: String,
-    network: Network,
-    storage_dir: Option<PathBuf>,
-    chain_pin: Option<ChainPin>,
-}
-
-impl SyncPlan {
-    async fn run(
-        self,
-        progress: Option<mpsc::Sender<SyncProgress>>,
-    ) -> Result<Wallet, WalletError> {
-        Wallet::sync_inner(
-            &self.indexer_url,
-            self.seed,
-            &self.address,
-            self.network,
-            self.storage_dir.as_deref(),
-            self.chain_pin,
-            progress,
-        )
-        .await
-    }
+pub(crate) struct SyncPlan {
+    pub(crate) indexer_url: String,
+    pub(crate) seed: Seed,
+    pub(crate) address: String,
+    pub(crate) network: Network,
+    pub(crate) storage_dir: Option<PathBuf>,
+    /// The finalized block the node reports now, persisted so a later
+    /// resume can ask whether it is still on this chain. `None` when the
+    /// sync is unpinned or the node could not answer.
+    pub(crate) chain_pin: Option<ChainPin>,
 }
 
 impl WalletBuilder {
@@ -347,7 +332,7 @@ impl WalletBuilder {
     ///   as above.
     /// - The [`WalletError`] of a replay that fails.
     pub async fn sync(self, source: &dyn SyncSource) -> Result<Wallet, WalletError> {
-        self.prepare(source).await?.run(None).await
+        Wallet::sync_inner(self.prepare(source).await?, None).await
     }
 
     /// Run the sync in a background task and stream progress events.
@@ -385,7 +370,7 @@ impl WalletBuilder {
             // A clone of the progress sender watches for receiver drop; the
             // original is consumed by the sync itself.
             let receiver_gone = tx.clone();
-            let sync = plan.run(Some(tx));
+            let sync = Wallet::sync_inner(plan, Some(tx));
             tokio::select! {
                 // Biased with the cancellation arm first: when the receiver
                 // drop and a sync-side "receiver dropped" error become ready
