@@ -843,18 +843,8 @@ fn emit_lazy_field_accessor(field: &LedgerField, const_name: &Ident) -> Option<T
             &path_expr,
             &quote! { u64 },
         )),
-        StorageKind::Map => Some(emit_lazy_map_accessor(
-            &method_name,
-            &doc,
-            &path_expr,
-            field,
-        )),
-        StorageKind::Set => Some(emit_lazy_set_accessor(
-            &method_name,
-            &doc,
-            &path_expr,
-            field,
-        )),
+        StorageKind::Map => Some(emit_lazy_map_accessor(&method_name, &path_expr, field)),
+        StorageKind::Set => Some(emit_lazy_set_accessor(&method_name, &path_expr, field)),
         StorageKind::List => Some(emit_lazy_list_accessor(&method_name, &field_indices, field)),
         // Merkle trees don't support single-value lookup via the RPC.
         StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => None,
@@ -900,24 +890,19 @@ fn emit_lazy_typed_cell_accessor(
 
 fn emit_lazy_map_accessor(
     method_name: &Ident,
-    _doc: &str,
     path_expr: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
     let (key_ty, key_av) = lazy_key(field.key.as_ref());
     let val_ty = storage_arg_tokens(field.value.as_ref());
     let doc = format!("Look up a value by key in the `{}` map (map).", field.name);
+    let query = lazy_query_result(&quote! { key_path });
     quote! {
         #[doc = #doc]
         pub async fn #method_name(&self, key: #key_ty) -> Result<Option<#val_ty>, lazy::ContractError> {
-            let mut path = #path_expr;
-            path.push(lazy::value_to_query_key(&#key_av));
-            let results = self.provider.query_contract_state(
-                &self.address,
-                vec![lazy::StateQuery { path }],
-                self.at_block_hash,
-            ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
-            let result = results.first().ok_or(lazy::ContractError::NoValue)?;
+            let mut key_path = #path_expr;
+            key_path.push(lazy::value_to_query_key(&#key_av));
+            #query
             // No value and no error means key not found
             if result.value.is_none() && result.error.is_none() {
                 return Ok(None);
@@ -930,23 +915,18 @@ fn emit_lazy_map_accessor(
 
 fn emit_lazy_set_accessor(
     method_name: &Ident,
-    _doc: &str,
     path_expr: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
     let (key_ty, key_av) = lazy_key(field.element_type.as_ref());
     let doc = format!("Check if a key exists in the `{}` set (set).", field.name);
+    let query = lazy_query_result(&quote! { key_path });
     quote! {
         #[doc = #doc]
         pub async fn #method_name(&self, key: #key_ty) -> Result<bool, lazy::ContractError> {
-            let mut path = #path_expr;
-            path.push(lazy::value_to_query_key(&#key_av));
-            let results = self.provider.query_contract_state(
-                &self.address,
-                vec![lazy::StateQuery { path }],
-                self.at_block_hash,
-            ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
-            let result = results.first().ok_or(lazy::ContractError::NoValue)?;
+            let mut key_path = #path_expr;
+            key_path.push(lazy::value_to_query_key(&#key_av));
+            #query
             // Sets store Null for present keys; absent keys have no value
             if result.value.is_none() && result.error.is_none() {
                 return Ok(false);
@@ -1013,23 +993,27 @@ fn emit_lazy_list_accessor(
     }
 }
 
-/// The common query + decode preamble shared by all lazy accessors.
-///
-/// Emits code that:
-/// 1. Builds the query path
-/// 2. Calls `provider.query_contract_state`
-/// 3. Decodes the first result into a `StateValue`
-fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
+/// Statements that send one `provider.query_contract_state` call for the path
+/// `path_expr` and bind its single result as `result`.
+fn lazy_query_result(path_expr: &TokenStream) -> TokenStream {
     quote! {
-        let path = #path_expr;
         let results = self.provider.query_contract_state(
             &self.address,
-            vec![lazy::StateQuery { path }],
+            vec![lazy::StateQuery { path: #path_expr }],
             self.at_block_hash,
         ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
         // One query was sent; a missing result is a malformed RPC response,
         // not a panic.
         let result = results.first().ok_or(lazy::ContractError::NoValue)?;
+    }
+}
+
+/// Statements that query the path `path_expr` and bind the decoded
+/// `StateValue` as `sv`.
+fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
+    let query = lazy_query_result(path_expr);
+    quote! {
+        #query
         let sv = lazy::decode_state_value(result)?;
     }
 }
