@@ -21,12 +21,13 @@ use std::time::Duration;
 use midnight_helpers::ledger_8::INITIAL_PARAMETERS;
 use midnight_helpers::midnight_serialize::tagged_serialize;
 use midnight_indexer_client::testutil::{
-    ServerWs, next_json, read_http_request, send_next, subscriber_handshake, write_json_response,
+    ServerWs, bind, next_json, read_http_request, send_next, subscriber_handshake,
+    write_json_response,
 };
 use midnight_provider::MidnightProvider;
 use midnight_wallet::{LocalWallet, Network, Wallet, WalletBuilder, WalletError, WalletFacade};
 use serde_json::json;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 
 // ---------------------------------------------------------------------------
 // Mock indexer
@@ -49,8 +50,7 @@ struct MockState {
 }
 
 async fn spawn_mock() -> (String, Arc<MockState>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (listener, url) = bind().await;
     let state = Arc::new(MockState::default());
     let conn_state = Arc::clone(&state);
     tokio::spawn(async move {
