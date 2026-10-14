@@ -8,7 +8,7 @@
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
 use midnight_provider::{Builds, MidnightProvider};
-use midnight_wallet::{LedgerVersion, Seed, Wallet};
+use midnight_wallet::{LedgerVersion, Wallet};
 
 const DEFAULT_SHIELDED_TOKEN: midnight_wallet::ShieldedTokenType =
     midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0; 32]));
@@ -218,17 +218,16 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
         return;
     };
 
-    let recipient = Seed::from_hex(RECIPIENT_SEED)
-        .unwrap()
-        .shielded_address(midnight_wallet::Network::Undeployed);
-
     let provider = synced_provider(&node, &indexer, DEV_SEED).await;
 
     // Distinctive enough that a coin of this value is unambiguous, and far
     // below any single dev coin so the sender must return change.
     const AMOUNT: u128 = 7;
 
-    let payee = synced_provider(&node, &indexer, RECIPIENT_SEED).await;
+    let payee = MidnightProvider::new(&node, &indexer);
+    let wallet = synced_wallet(&payee, RECIPIENT_SEED).await;
+    let recipient = wallet.shielded_address();
+    let payee = payee.with_wallet(wallet);
     let before: std::collections::HashSet<_> = payee
         .spendable_shielded_coins()
         .await
