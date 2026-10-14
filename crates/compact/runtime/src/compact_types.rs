@@ -230,6 +230,9 @@ pub fn merkle_leaf_hash(av: AlignedValue) -> AlignedValue {
 /// `Idx` path variables all route through here, so a new type variant only
 /// needs handling in one place.
 ///
+/// A struct accepts a `Value::Struct`, which names its fields, or a
+/// `Value::Tuple`, which gives them in declaration order.
+///
 /// # Why the width matters
 ///
 /// FAB atoms are zero-trimmed little-endian bytes, so the atom for a given
@@ -373,12 +376,20 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
         // zero-pads each atom to its declared width, so a wrong width is a wrong
         // digest.
         Type::Struct { name, fields } => {
-            // Already flat: `Expr::New` encodes struct literals eagerly, so a
-            // struct-typed value usually arrives pre-encoded.
-            if let Value::AlignedValue(av) = val {
-                return Ok(av.clone());
-            }
-            match val {
+            let field_count = |n: usize| {
+                if n == fields.len() {
+                    Ok(())
+                } else {
+                    Err(InterpreterError::TypeError(format!(
+                        "struct {name} expects {} fields, got {n}",
+                        fields.len()
+                    )))
+                }
+            };
+            let values: Vec<&Value> = match val {
+                // Already flat: `Expr::New` encodes struct literals eagerly, so a
+                // struct-typed value usually arrives pre-encoded.
+                Value::AlignedValue(av) => return Ok(av.clone()),
                 // Named fields. The map has no inherent order, so declaration
                 // order comes from `fields`; the value only supplies the
                 // per-field contents. Field identity cannot be inferred from the
@@ -386,37 +397,36 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
                 // identical field names and different payload types), which is
                 // why the type has to drive this.
                 Value::Struct(supplied) => {
-                    if supplied.len() != fields.len() {
-                        return Err(InterpreterError::TypeError(format!(
-                            "struct {name} expects {} fields, got {}",
-                            fields.len(),
-                            supplied.len()
-                        )));
-                    }
-                    let parts: Vec<AlignedValue> = fields
+                    field_count(supplied.len())?;
+                    fields
                         .iter()
-                        .map(|(field_name, field_ty)| {
-                            let v = supplied.get(field_name).ok_or_else(|| {
+                        .map(|(field_name, _)| {
+                            supplied.get(field_name).ok_or_else(|| {
                                 InterpreterError::TypeError(format!(
                                     "struct {name} is missing field '{field_name}'"
                                 ))
-                            })?;
-                            encode_typed(v, field_ty)
+                            })
                         })
-                        .collect::<Result<_, _>>()?;
-                    Ok(AlignedValue::concat(parts.iter()))
+                        .collect::<Result<_, _>>()?
                 }
-                // Positional spelling of the same struct.
-                Value::Tuple(elements) if elements.len() == fields.len() => {
-                    let parts: Vec<AlignedValue> = fields
-                        .iter()
-                        .zip(elements)
-                        .map(|((_, field_ty), e)| encode_typed(e, field_ty))
-                        .collect::<Result<_, _>>()?;
-                    Ok(AlignedValue::concat(parts.iter()))
+                Value::Tuple(elements) => {
+                    field_count(elements.len())?;
+                    elements.iter().collect()
                 }
-                _ => Err(unsupported()),
-            }
+                _ => return Err(unsupported()),
+            };
+            let parts: Vec<AlignedValue> = fields
+                .iter()
+                .zip(values)
+                .map(|((field_name, field_ty), v)| {
+                    encode_typed(v, field_ty).map_err(|e| {
+                        InterpreterError::TypeError(format!(
+                            "cannot encode field `{field_name}` of `{name}`: {e}"
+                        ))
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(AlignedValue::concat(parts.iter()))
         }
         // An enum encodes as its declaration index in a single byte. The
         // compiler derives the width from the highest index, so this holds for
@@ -488,20 +498,12 @@ pub fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
         .ok_or_else(|| {
             InterpreterError::TypeError("empty opaque default is unrepresentable".into())
         }),
-        // Mirrors `ir::Expr::New`: each field's default encoded at its
-        // declared type, concatenated into the struct's flat FAB encoding.
-        Type::Struct { name, fields } => {
-            let mut parts = Vec::with_capacity(fields.len());
-            for (field_name, field_ty) in fields {
-                let val = default_value(field_ty)?;
-                let av = encode_typed(&val, field_ty).map_err(|e| {
-                    InterpreterError::TypeError(format!(
-                        "cannot encode default field `{field_name}` of `{name}`: {e}"
-                    ))
-                })?;
-                parts.push(av);
-            }
-            Ok(Value::AlignedValue(fab::AlignedValue::concat(parts.iter())))
+        Type::Struct { fields, .. } => {
+            let defaults = fields
+                .iter()
+                .map(|(_, field_ty)| default_value(field_ty))
+                .collect::<Result<Vec<_>, _>>()?;
+            encode_typed(&Value::Tuple(defaults), ty).map(Value::AlignedValue)
         }
         Type::Tuple(types) if types.is_empty() => Ok(Value::Void),
         Type::Tuple(types) => Ok(Value::Tuple(

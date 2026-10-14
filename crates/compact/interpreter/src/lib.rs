@@ -798,50 +798,23 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
 
         E::New { ty, elements } => {
             check_type(ty)?;
-            // Struct literal: encode each element with the alignment
-            // declared by the corresponding field type, then concatenate
-            // all field encodings into a single flat AlignedValue. The
-            // result has the same FAB layout the on-chain
-            // `persistent_hash` circuit produces for `<StructName>(...)`.
-            let struct_name = match ty {
-                Type::Struct { name, .. } => name.clone(),
-                other => {
-                    return Err(InterpreterError::TypeError(format!(
-                        "`new` op with non-struct type {other:?}"
-                    )));
-                }
-            };
-            // The type carries its own field list, which is exact per
-            // instantiation where a name is not: two instantiations of one
-            // generic struct share a name and differ in layout.
-            let fields: Vec<(String, Type)> = match ty {
-                Type::Struct { fields, .. } => fields.clone(),
-                other => {
-                    return Err(InterpreterError::TypeError(format!(
-                        "`new` op with non-struct type {other:?}"
-                    )));
-                }
+            let Type::Struct { name, fields } = ty else {
+                return Err(InterpreterError::TypeError(format!(
+                    "`new` op with non-struct type {ty:?}"
+                )));
             };
             if fields.len() != elements.len() {
                 return Err(InterpreterError::TypeError(format!(
-                    "`new {struct_name}` expects {} fields, got {}",
+                    "`new {name}` expects {} fields, got {}",
                     fields.len(),
                     elements.len()
                 )));
             }
-            let mut parts: Vec<midnight_base_crypto::fab::AlignedValue> =
-                Vec::with_capacity(elements.len());
-            for ((field_name, field_ty), element) in fields.iter().zip(elements.iter()) {
-                let val = eval_expr(ctx, element)?;
-                let av = encode_typed(&val, field_ty).map_err(|e| {
-                    InterpreterError::TypeError(format!(
-                        "cannot encode field `{field_name}` of `{struct_name}`: {e}"
-                    ))
-                })?;
-                parts.push(av);
-            }
-            let combined = midnight_base_crypto::fab::AlignedValue::concat(parts.iter());
-            Ok(Value::AlignedValue(combined))
+            let values = elements
+                .iter()
+                .map(|element| eval_expr(ctx, element))
+                .collect::<Result<Vec<_>, _>>()?;
+            encode_typed(&Value::Tuple(values), ty).map(Value::AlignedValue)
         }
 
         E::CastFromBytes { ty, len, expr } => {
