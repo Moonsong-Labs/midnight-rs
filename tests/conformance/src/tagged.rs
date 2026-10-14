@@ -13,7 +13,7 @@
 //!
 //! The TS driver has the mirror converter in `ts-driver/driver.mjs`.
 
-use midnight_contract::runtime::Value;
+use midnight_contract::runtime::{Value, bytes_aligned_value};
 use midnight_typed_state::AlignedValue;
 use serde_json::Value as Json;
 
@@ -65,7 +65,10 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
                 .as_str()
                 .ok_or_else(|| format!("bytes body must be a hex string: {body}"))?;
             let bytes = hex::decode(hex_str).map_err(|e| format!("bytes hex: {e}"))?;
-            Ok(Value::AlignedValue(bytes_aligned(bytes)?))
+            let len = bytes.len();
+            Ok(Value::AlignedValue(
+                bytes_aligned_value(bytes, len).map_err(|e| e.to_string())?,
+            ))
         }
         "vector" => {
             let items = body
@@ -144,22 +147,4 @@ fn parse_decimal_le_bytes(body: &Json) -> Result<Vec<u8>, String> {
         le.pop();
     }
     Ok(le)
-}
-
-/// Single-atom `Bytes<N>` aligned value from raw bytes, with the FAB
-/// normal-form trailing-zero trim.
-fn bytes_aligned(bytes: Vec<u8>) -> Result<AlignedValue, String> {
-    use midnight_base_crypto::fab;
-    let length = bytes.len();
-    let mut atom = bytes;
-    while matches!(atom.last(), Some(0)) {
-        atom.pop();
-    }
-    fab::AlignedValue::new(
-        fab::Value(vec![fab::ValueAtom(atom)]),
-        fab::Alignment::singleton(fab::AlignmentAtom::Bytes {
-            length: length as u32,
-        }),
-    )
-    .ok_or_else(|| format!("bytes do not fit a Bytes<{length}> alignment"))
 }
