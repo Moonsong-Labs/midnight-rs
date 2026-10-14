@@ -178,6 +178,47 @@ fn anchor_window(
     }
 }
 
+/// The `tblock` that a wallet anchors its block context at, after a replay
+/// whose last Dust event carried `last_dust_block_time`.
+///
+/// `tblock` sets both the proof's `DustActions.ctime` and the intent's
+/// `ttl = tblock + global_ttl`. The chain checks two things:
+///
+/// 1. `root_history.get(ctime)` matches the wallet's Dust root.
+/// 2. `ttl >= chain.current_tblock` when it applies the transaction.
+///
+/// Check 1 wants the most recent time that the chain resolves to the wallet's
+/// root: `last_dust_block_time + 1s`. The root history changes only on a Dust
+/// event, so every time in the gap after the last one resolves to it. Check 2
+/// wants a `tblock` near the chain's current time `chain_now`. On devnet the
+/// genesis is hardcoded months before wall clock while the chain runs in real
+/// time, so a Dust time from a genesis event is too old for it.
+///
+/// So the anchor is the newest race-safe candidate while [`anchor_window`]
+/// still covers it: `last_dust_block_time + 1s`, or `previous` when the replay
+/// saw no Dust event. Otherwise it is `chain_now`. That fallback accepts a
+/// small race (a Dust event indexed between the replay's tip and the latest
+/// block query), but a chain whose time moved past the candidate's window
+/// needs it.
+///
+/// `previous` is race-safe only when no Dust event changed the wallet's state
+/// after it was taken.
+fn dust_anchor(
+    last_dust_block_time: Option<Timestamp>,
+    previous: Option<Timestamp>,
+    chain_now: Timestamp,
+    parameters: &LedgerParameters,
+) -> Timestamp {
+    let window = anchor_window(parameters.global_ttl, parameters.dust.dust_grace_period);
+    match last_dust_block_time
+        .map(|t| t + helpers::Duration::from_secs(1))
+        .or(previous)
+    {
+        Some(t) if t + window >= chain_now => t,
+        _ => chain_now,
+    }
+}
+
 /// Tagged-deserialize an event of this generation.
 fn decode_event(raw: &[u8], kind: &str) -> Result<Event<DefaultDB>, WalletError> {
     tagged_deserialize(raw).map_err(|e| WalletError::Sync(format!("deserialize {kind} event: {e}")))
@@ -199,6 +240,14 @@ fn decode_ledger_parameters(
         .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))?;
     validate_ledger_parameters(&parameters)?;
     Ok(parameters)
+}
+
+/// The time of an indexer block, which the indexer gives in milliseconds.
+fn block_time(block: &midnight_indexer_client::Block) -> Result<Timestamp, WalletError> {
+    let ms = block
+        .timestamp
+        .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
+    Ok(Timestamp::from_secs((ms / 1000) as u64))
 }
 
 /// Reject decoded ledger parameters the wallet's own math cannot sensibly
@@ -345,10 +394,7 @@ impl ResyncPlan {
             last_id: zswap_event_id,
             ..
         } = zswap;
-        let tblock_ms = block
-            .timestamp
-            .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
-        let chain_tblock = Timestamp::from_secs((tblock_ms / 1000) as u64);
+        let chain_tblock = block_time(&block)?;
         let parameters = decode_ledger_parameters(&block)?;
 
         Ok(ResyncCommit {
@@ -538,10 +584,7 @@ impl Wallet {
         let secret_keys = zswap_keys(seed);
 
         let parameters = decode_ledger_parameters(block)?;
-        let block_timestamp = block
-            .timestamp
-            .map(|ms| Timestamp::from_secs((ms / 1000) as u64))
-            .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
+        let block_timestamp = block_time(block)?;
 
         let (dust_wallet, start_dust_id) = match dust {
             DustStart::Resume { wallet, next_id } => (*wallet, next_id),
@@ -589,17 +632,12 @@ impl Wallet {
             ..
         } = dust;
 
-        // See `resync` for the full discussion of the anchor selection. Prefer
-        // `last_dust_block_time + 1s` (race-safe) while it is still inside the
-        // dust validity window relative to the chain's current time, falling
-        // back to `block_timestamp` for devnet's hardcoded-genesis case.
-        let window = anchor_window(parameters.global_ttl, parameters.dust.dust_grace_period);
-        let candidate = last_dust_block_time.map(|t| t + helpers::Duration::from_secs(1));
-        let block_tblock = match candidate {
-            Some(t) if t + window >= block_timestamp => t,
-            _ => block_timestamp,
-        };
-        let block_context = Some(block_context_at(block_tblock));
+        let block_context = Some(block_context_at(dust_anchor(
+            last_dust_block_time,
+            None,
+            block_timestamp,
+            &parameters,
+        )));
 
         info!(
             zswap_event_id,
@@ -1157,51 +1195,13 @@ impl Wallet {
         // read below so the anchor math uses the fresh value.
         self.parameters = parameters;
 
-        // `block_context.tblock` drives both the proof's `DustActions.ctime`
-        // and the intent's `ttl = tblock + global_ttl`. The chain checks:
-        //
-        //   1. `root_history.get(ctime)` matches our DustLocalState root, and
-        //   2. `ttl >= chain.current_tblock` at apply time.
-        //
-        // Constraint (1) wants the most recent block_time we know matches the
-        // chain's root: `last_dust_block_time + 1s` (root_history only changes
-        // on dust events, so any time in the gap returns the entry at our
-        // last seen event).
-        //
-        // Constraint (2) wants `tblock` close to the chain's current time. On
-        // devnet, where genesis is hardcoded months before wall clock but the
-        // chain runs in real time, `last_dust_block_time` from a genesis event
-        // is too old: `last_dust + global_ttl` is already in the past.
-        //
-        // Prefer the most recent race-safe candidate that still has a valid
-        // TTL window: `last_dust_block_time + 1s` if we observed new events,
-        // else the previous block_context anchor (still race-safe because our
-        // state hasn't changed since then). Fall back to `chain_tblock` only
-        // when neither has a TTL window that covers the chain's current time;
-        // that fallback accepts a small race window (a dust event indexed
-        // between our replay's tip and `get_block`) but is required when chain
-        // time has advanced past `candidate + global_ttl` — e.g. on devnet
-        // where genesis is hardcoded months before wall clock.
-        // The candidate is only safe to use if it still falls inside the
-        // chain's *dust* validity window: the node checks
-        // `ctime + dust_grace_period >= tblock` against the current block time.
-        // `global_ttl` (the intent TTL, often days) is the wrong bound here —
-        // it can be far larger than `dust_grace_period` (e.g. 14d vs 3h on
-        // devnet), which would keep a stale candidate that the node's 3h dust
-        // window then rejects with `OutOfDustValidityWindow`. Clamp to the
-        // tighter of the two so a candidate older than the dust grace period
-        // falls back to `chain_tblock`.
-        let window = anchor_window(
-            self.parameters.global_ttl,
-            self.parameters.dust.dust_grace_period,
+        let previous = self.block_context.as_ref().map(|bc| bc.tblock);
+        let tblock = dust_anchor(
+            last_dust_block_time,
+            previous,
+            chain_tblock,
+            &self.parameters,
         );
-        let candidate = last_dust_block_time
-            .map(|t| t + helpers::Duration::from_secs(1))
-            .or_else(|| self.block_context.as_ref().map(|bc| bc.tblock));
-        let tblock = match candidate {
-            Some(t) if t + window >= chain_tblock => t,
-            _ => chain_tblock,
-        };
         self.block_context = Some(block_context_at(tblock));
 
         // Reservations whose spends this replay just observed confirmed are
@@ -1489,7 +1489,7 @@ pub(crate) async fn replay_dust_events(
     // The closure owns `checkpoint` and borrows the rest through these
     // bindings. The sync's checkpoint is `Send` but not `Sync`, so a borrow of
     // it would make the replay future lose `Send`.
-    let (wallet, block_time, nullifiers) = (
+    let (wallet, last_time, nullifiers) = (
         &mut dust_wallet,
         &mut last_block_time,
         &mut spend_nullifiers,
@@ -1508,7 +1508,7 @@ pub(crate) async fn replay_dust_events(
                     .replay_events([&ev])
                     .map_err(|e| WalletError::Sync(format!("apply dust event id={id}: {e}")))?;
                 if let Some(t) = event_block_time(&ev) {
-                    *block_time = Some(t);
+                    *last_time = Some(t);
                 }
                 if let Some(n) = event_spend_nullifier(&ev) {
                     nullifiers.push(n);
@@ -1630,6 +1630,38 @@ mod tests {
             anchor_window(dust_grace, global_ttl).as_seconds(),
             3 * 60 * 60
         );
+    }
+
+    /// The anchor sets the `ctime` that the node checks, so a wrong one fails
+    /// no sync. Only the node rejects the transaction later.
+    #[test]
+    fn dust_anchor_keeps_the_newest_race_safe_time_inside_the_dust_window() {
+        const HOUR: u64 = 60 * 60;
+        let parameters = params_with(|p| {
+            p.global_ttl = helpers::Duration::from_secs(14 * 24 * 60 * 60);
+            p.dust.dust_grace_period = helpers::Duration::from_secs(3 * 60 * 60);
+        });
+        let now = 100 * HOUR;
+        let at = Timestamp::from_secs;
+        let cases = [
+            // The last Dust event wins over an older anchor.
+            (
+                Some(at(now - HOUR)),
+                Some(at(now - 2 * HOUR)),
+                at(now - HOUR + 1),
+            ),
+            // A replay that saw no Dust event keeps the previous anchor.
+            (None, Some(at(now - HOUR)), at(now - HOUR)),
+            // Inside `global_ttl` but older than the Dust grace period.
+            (Some(at(now - 4 * HOUR)), None, at(now)),
+        ];
+        for (last_dust, previous, expected) in cases {
+            assert_eq!(
+                dust_anchor(last_dust, previous, at(now), &parameters),
+                expected,
+                "last Dust event {last_dust:?}, previous anchor {previous:?}"
+            );
+        }
     }
 
     fn dust_event(content: EventDetails<DefaultDB>) -> Event<DefaultDB> {
