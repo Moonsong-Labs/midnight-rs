@@ -612,36 +612,6 @@ fn emit_initial_state(fields: &[LedgerField], name: &str, has_constructor: bool)
     let ledger_name = format_ident!("{}", name);
     let doc = initial_state_doc(has_constructor);
 
-    if fields.is_empty() {
-        return quote! {
-            #doc
-            #[derive(Debug, Clone, Default)]
-            pub struct #struct_name;
-
-            impl #struct_name {
-                /// Build the `ContractState` for deployment.
-                pub fn build(self) -> ContractState<InMemoryDB> {
-                    ContractState::new(
-                        StateValue::Array(vec![].into()),
-                        StorageHashMap::new(),
-                        ContractMaintenanceAuthority::default(),
-                    )
-                }
-
-                /// Build and wrap in the typed Ledger.
-                pub fn into_ledger(self) -> #ledger_name {
-                    #ledger_name::new(self.build())
-                }
-            }
-
-            impl From<#struct_name> for ContractState<InMemoryDB> {
-                fn from(state: #struct_name) -> Self {
-                    state.build()
-                }
-            }
-        };
-    }
-
     let mut field_defs = Vec::new();
     let mut field_defaults = Vec::new();
     let mut field_conversions: Vec<(Vec<usize>, TokenStream)> = Vec::new();
@@ -719,23 +689,33 @@ fn emit_initial_state(fields: &[LedgerField], name: &str, has_constructor: bool)
     }
 
     let state_expr = state_array_expr(field_conversions);
-    let model_imports = super::circuit_calls::model_imports();
-
-    quote! {
-        #doc
-        #[derive(Debug, Clone)]
-        pub struct #struct_name {
-            #(#field_defs),*
+    let definition = if fields.is_empty() {
+        quote! {
+            #[derive(Debug, Clone, Default)]
+            pub struct #struct_name;
         }
+    } else {
+        let model_imports = super::circuit_calls::model_imports();
+        quote! {
+            #[derive(Debug, Clone)]
+            pub struct #struct_name {
+                #(#field_defs),*
+            }
 
-        impl Default for #struct_name {
-            fn default() -> Self {
-                #model_imports
-                Self {
-                    #(#field_defaults),*
+            impl Default for #struct_name {
+                fn default() -> Self {
+                    #model_imports
+                    Self {
+                        #(#field_defaults),*
+                    }
                 }
             }
         }
+    };
+
+    quote! {
+        #doc
+        #definition
 
         impl #struct_name {
             /// Build the `ContractState` for deployment.
@@ -1661,6 +1641,11 @@ mod tests {
             .and_then(|tail| tail.split(",StorageHashMap::new()").next())
             .expect("build() constructs a ContractState")
             .to_string()
+    }
+
+    #[test]
+    fn an_empty_ledger_builds_an_empty_array() {
+        assert_eq!(built_state(&[]), "StateValue::Array(vec![].into())");
     }
 
     /// A ledger that fits one array keeps the array it always built — the
