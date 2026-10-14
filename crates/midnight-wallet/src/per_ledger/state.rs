@@ -746,19 +746,7 @@ impl Wallet {
             shielded_spends,
             reserved_at,
         );
-
-        // Persist only the pending file: a full `save` would rewrite the
-        // multi-MB confirmed-state files on every transfer. The write is
-        // best-effort because erroring here would strand a transaction that
-        // was already built; the in-memory reservation still protects the
-        // running process, and the same disk fault will fail loudly at the
-        // next resync's hard `save`. Crash-safety is degraded until then,
-        // hence the error-level log.
-        if let Some(dir) = self.storage_dir.as_deref()
-            && let Err(err) = self.pending.save(dir, &self.network_id, &self.storage_id())
-        {
-            error!(error = %err, "failed to persist pending reservations; reservation held in memory only");
-        }
+        self.persist_pending();
     }
 
     /// Hand back the inputs a build reserved. See [`crate::Wallet::release`].
@@ -766,6 +754,9 @@ impl Wallet {
     /// Dust is named by nullifier rather than by batch so that a path which
     /// never produced a [`TransferResult`](crate::TransferResult), such as
     /// sponsoring or a deploy, can still hand its reservation back.
+    ///
+    /// The updated pending set is persisted as [`Self::reserve_pending`]
+    /// persists it.
     pub fn release_pending(
         &mut self,
         dust_nullifiers: &[helpers::DustNullifier],
@@ -779,12 +770,7 @@ impl Wallet {
             shielded_spends,
             reserved_at,
         );
-
-        if let Some(dir) = self.storage_dir.as_deref()
-            && let Err(err) = self.pending.save(dir, &self.network_id, &self.storage_id())
-        {
-            error!(error = %err, "failed to persist released reservations; release held in memory only");
-        }
+        self.persist_pending();
     }
 
     /// [`Self::release_pending`] for what a build reported spending.
@@ -798,6 +784,24 @@ impl Wallet {
     /// This wallet's on-disk identity; see [`wallet_storage_id`].
     fn storage_id(&self) -> String {
         wallet_storage_id(&self.unshielded_address)
+    }
+
+    /// Write the pending set to `pending.json`, when the wallet has a storage
+    /// directory.
+    ///
+    /// It writes only the pending file, because a full `save` rewrites the
+    /// multi-MB confirmed-state files. The write is best-effort, because the
+    /// caller changes the in-memory set for a build that already exists, and
+    /// an error cannot undo that build. The in-memory set still protects the
+    /// running process, and the same disk fault fails loudly at the next
+    /// resync's hard `save`. Crash-safety is degraded until then, hence the
+    /// error-level log.
+    fn persist_pending(&self) {
+        if let Some(dir) = self.storage_dir.as_deref()
+            && let Err(err) = self.pending.save(dir, &self.network_id, &self.storage_id())
+        {
+            error!(error = %err, "failed to persist pending reservations; in-memory set is ahead of pending.json");
+        }
     }
 
     /// Nullifiers of shielded coins reserved by recent, still-pending builds,
