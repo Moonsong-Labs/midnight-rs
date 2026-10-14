@@ -73,15 +73,23 @@ impl TrackedUtxo {
     pub fn spent_key(&self) -> Option<SpentUtxoKey> {
         Some(SpentUtxoKey {
             intent_hash: self.intent_hash.clone()?,
-            output_index: u32::try_from(self.output_index?).ok()?,
+            output_index: self.output_number()?,
         })
     }
-}
 
-/// Parse the 64-char hex form of an intent hash, as [`TrackedUtxo`] carries
-/// it. `None` on a decode error or wrong length.
-pub fn parse_intent_hash_hex(hex: &str) -> Option<HashOutput> {
-    hash_from_hex(hex)
+    /// The intent hash of the transaction that created this UTXO, parsed
+    /// from its 64-char `intent_hash` hex. `None` when the hash is missing,
+    /// or on a decode error or wrong length.
+    pub fn parsed_intent_hash(&self) -> Option<HashOutput> {
+        hash_from_hex(self.intent_hash.as_deref()?)
+    }
+
+    /// The number of this UTXO among its transaction's outputs, as the ledger
+    /// counts it. `None` when the index is missing or outside `u32`, because
+    /// a truncated index names another output.
+    pub fn output_number(&self) -> Option<u32> {
+        u32::try_from(self.output_index?).ok()
+    }
 }
 
 fn hash_from_hex(hex: &str) -> Option<HashOutput> {

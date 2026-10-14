@@ -1556,22 +1556,21 @@ fn tracked_to_ledger_utxo(
                 tracked.token_type
             ))
         })?;
-    let intent_hash_hex = tracked
-        .intent_hash
-        .as_deref()
-        .ok_or_else(|| WalletError::Sync("tracked UTXO has no intent_hash".into()))?;
-    let intent_hash = midnight_types::parse_intent_hash_hex(intent_hash_hex)
+    let intent_hash = tracked
+        .parsed_intent_hash()
         .map(helpers::IntentHash)
         .ok_or_else(|| {
             WalletError::Sync(format!(
-                "tracked UTXO has malformed intent_hash {intent_hash_hex}"
+                "tracked UTXO has missing or malformed intent_hash {:?}",
+                tracked.intent_hash
             ))
         })?;
-    let idx = tracked
-        .output_index
-        .ok_or_else(|| WalletError::Sync("tracked UTXO has no output_index".into()))?;
-    let output_no = u32::try_from(idx)
-        .map_err(|_| WalletError::Sync(format!("tracked UTXO output_index {idx} out of range")))?;
+    let output_no = tracked.output_number().ok_or_else(|| {
+        WalletError::Sync(format!(
+            "tracked UTXO has missing or out-of-range output_index {:?}",
+            tracked.output_index
+        ))
+    })?;
     Ok(LedgerUtxo {
         value: tracked.value,
         owner,

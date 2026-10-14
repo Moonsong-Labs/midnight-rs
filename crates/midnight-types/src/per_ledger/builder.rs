@@ -684,12 +684,8 @@ impl<'a> TransferBuilder<'a> {
                     value: utxo.value,
                     owner: seed.clone(),
                     token_type: NIGHT,
-                    intent_hash: utxo
-                        .intent_hash
-                        .as_deref()
-                        .and_then(crate::parse_intent_hash_hex)
-                        .map(helpers::IntentHash),
-                    output_number: utxo.output_index.map(|i| i as u32),
+                    intent_hash: utxo.parsed_intent_hash().map(helpers::IntentHash),
+                    output_number: utxo.output_number(),
                 };
                 Box::new(info) as Box<dyn BuildUtxoSpend<DefaultDB, BuildContext>>
             })

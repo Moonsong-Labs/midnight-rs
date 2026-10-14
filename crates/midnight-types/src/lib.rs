@@ -49,7 +49,7 @@ pub use ledger_version::{LedgerVersion, UnknownLedger};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::Network;
 pub use parameters::{ChainParameters, DustParameters};
-pub use sync::{SyncCursors, TrackedUtxo, parse_intent_hash_hex};
+pub use sync::{SyncCursors, TrackedUtxo};
 pub use transfer::{
     SpentInputs, SpentUtxoKey, TransferKind, TransferRequest, TransferResult, panic_message,
 };
