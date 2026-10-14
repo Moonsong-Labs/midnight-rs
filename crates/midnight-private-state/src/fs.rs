@@ -549,21 +549,9 @@ impl PrivateStateProvider for FsPrivateStateProvider {
 
         let mut result = ImportResult::default();
         for (path, rec) in &resolved {
-            if path.exists() {
-                match opts.conflict {
-                    ConflictStrategy::Skip => {
-                        result.skipped += 1;
-                        continue;
-                    }
-                    ConflictStrategy::Overwrite => result.overwritten += 1,
-                    ConflictStrategy::Error => {
-                        return Err(PrivateStateError::ImportConflict(rec.address.clone()));
-                    }
-                }
-            } else {
-                result.imported += 1;
+            if result.admit(path.exists(), opts.conflict, || rec.address.clone())? {
+                self.write_json_atomic(path, rec)?;
             }
-            self.write_json_atomic(path, rec)?;
         }
         Ok(result)
     }
@@ -889,58 +877,41 @@ fn apply_import_entries(
         per_address.insert(address.clone(), by_hash);
     }
 
-    // Pass 4: detect-before-mutate. For each entry, classify the action
-    // against the destination (using the cached HashMap) and stage the
-    // resulting (path, snapshot) write. No on-disk changes yet.
-    enum Action {
-        Insert(PathBuf),
-        Overwrite(PathBuf),
-        Skip,
-    }
-    let mut staged: Vec<(String, ExportEntry, Action)> = Vec::with_capacity(entries.len());
+    // Pass 4: detect-before-mutate. For each entry, decide against the
+    // destination (using the cached HashMap) whether to write it, and stage
+    // the target path of the write. No on-disk changes yet.
+    let mut staged: Vec<(ExportEntry, Option<PathBuf>)> = Vec::with_capacity(entries.len());
     let mut result = ImportResult::default();
     for entry in entries {
-        let dir = provider.address_dir(&entry.address);
         let by_hash = per_address.get(&entry.address).expect("populated above");
         let existing = by_hash.get(&entry.snapshot.extrinsic_hash);
-        let action = match (existing, conflict) {
-            (Some(_), ConflictStrategy::Skip) => {
-                result.skipped += 1;
-                Action::Skip
-            }
-            (Some((p, existing_snap)), ConflictStrategy::Overwrite) => {
-                // Status monotonicity: don't let an Overwrite import
-                // silently downgrade a Confirmed snapshot back to
-                // Pending and drop its `block_hash` / `block_height`.
-                if existing_snap.status == SnapshotStatus::Confirmed
-                    && entry.snapshot.status == SnapshotStatus::Pending
-                {
-                    return Err(PrivateStateError::InvalidFormat(format!(
-                        "import would downgrade a Confirmed snapshot to \
-                         Pending at {} / {}; refusing to discard the \
-                         existing block_hash / block_height",
-                        entry.address, entry.snapshot.extrinsic_hash
-                    )));
-                }
-                result.overwritten += 1;
-                Action::Overwrite(p.clone())
-            }
-            (Some(_), ConflictStrategy::Error) => {
-                return Err(PrivateStateError::ImportConflict(format!(
-                    "{} / {}",
-                    entry.address, entry.snapshot.extrinsic_hash
-                )));
-            }
-            (None, _) => {
-                result.imported += 1;
-                Action::Insert(dir.join(FsPrivateStateProvider::snapshot_filename(
-                    &entry.snapshot.extrinsic_hash,
-                )))
-            }
-        };
+        // Status monotonicity: don't let an Overwrite import
+        // silently downgrade a Confirmed snapshot back to
+        // Pending and drop its `block_hash` / `block_height`.
+        if conflict == ConflictStrategy::Overwrite
+            && let Some((_, existing_snap)) = existing
+            && existing_snap.status == SnapshotStatus::Confirmed
+            && entry.snapshot.status == SnapshotStatus::Pending
+        {
+            return Err(PrivateStateError::InvalidFormat(format!(
+                "import would downgrade a Confirmed snapshot to \
+                 Pending at {} / {}; refusing to discard the \
+                 existing block_hash / block_height",
+                entry.address, entry.snapshot.extrinsic_hash
+            )));
+        }
+        let write = result.admit(existing.is_some(), conflict, || {
+            format!("{} / {}", entry.address, entry.snapshot.extrinsic_hash)
+        })?;
+        let target = write.then(|| match existing {
+            Some((path, _)) => path.clone(),
+            None => provider.address_dir(&entry.address).join(
+                FsPrivateStateProvider::snapshot_filename(&entry.snapshot.extrinsic_hash),
+            ),
+        });
         // Update the in-memory view so Pass 5 can validate the merged
         // journal without touching disk.
-        if !matches!(action, Action::Skip) {
+        if target.is_some() {
             per_address
                 .get_mut(&entry.address)
                 .expect("populated above")
@@ -949,7 +920,7 @@ fn apply_import_entries(
                     (PathBuf::new(), entry.snapshot.clone()),
                 );
         }
-        staged.push((entry.address.clone(), entry, action));
+        staged.push((entry, target));
     }
 
     // Pass 5: run `find_leaf` on every address in the payload (even ones
@@ -972,13 +943,10 @@ fn apply_import_entries(
     // Pass 6: commit. Every prior pass ran on borrowed data; the only IO
     // failures left are filesystem-level (ENOSPC etc.), which we surface
     // as `Io` like any other write.
-    for (address, entry, action) in staged {
-        provider.ensure_address_marker(&address)?;
-        match action {
-            Action::Skip => continue,
-            Action::Overwrite(p) | Action::Insert(p) => {
-                provider.write_json_atomic(&p, &entry.snapshot)?;
-            }
+    for (entry, target) in staged {
+        provider.ensure_address_marker(&entry.address)?;
+        if let Some(path) = target {
+            provider.write_json_atomic(&path, &entry.snapshot)?;
         }
     }
     Ok(result)

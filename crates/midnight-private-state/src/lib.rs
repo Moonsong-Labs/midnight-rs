@@ -234,6 +234,38 @@ pub struct ImportResult {
     pub overwritten: usize,
 }
 
+impl ImportResult {
+    /// Count one imported entry under `strategy` and decide whether to write
+    /// it.
+    ///
+    /// Returns `true` when the entry is new, or when it `exists` and
+    /// `strategy` is [`ConflictStrategy::Overwrite`]. Errors with
+    /// [`PrivateStateError::ImportConflict`], which names the entry with
+    /// `label`, when it `exists` and `strategy` is [`ConflictStrategy::Error`].
+    pub(crate) fn admit(
+        &mut self,
+        exists: bool,
+        strategy: ConflictStrategy,
+        label: impl FnOnce() -> String,
+    ) -> Result<bool, PrivateStateError> {
+        match (exists, strategy) {
+            (false, _) => {
+                self.imported += 1;
+                Ok(true)
+            }
+            (true, ConflictStrategy::Skip) => {
+                self.skipped += 1;
+                Ok(false)
+            }
+            (true, ConflictStrategy::Overwrite) => {
+                self.overwritten += 1;
+                Ok(true)
+            }
+            (true, ConflictStrategy::Error) => Err(PrivateStateError::ImportConflict(label())),
+        }
+    }
+}
+
 /// Encrypted, JSON-serializable envelope shared between private-state and
 /// signing-key exports. The `format` tag distinguishes the two.
 #[derive(Debug, Clone, Serialize, Deserialize)]
