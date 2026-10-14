@@ -31,6 +31,11 @@ use crate::change::change_due;
 use crate::error::ContractError;
 use crate::runtime;
 
+/// The segment of the intent that a call, a deploy or a maintenance update
+/// adds. A call's fallible offers and fallible transients ride in it too.
+pub(super) const INTENT_SEGMENT: helpers::SegmentId =
+    helpers::Segment::Fallible as helpers::SegmentId;
+
 /// An unshielded payout to an address the call's transcript names.
 ///
 /// The upstream `UtxoOutputInfo` builders derive the owner from a seed, which
@@ -316,7 +321,7 @@ pub(crate) async fn call_transaction(
     let build_context = context.clone();
     let mut tx_info =
         StandardTransactionInfo::new_from_context(context, builds.proof_provider(), None);
-    tx_info.add_intent(1, Box::new(intent_info));
+    tx_info.add_intent(INTENT_SEGMENT, Box::new(intent_info));
     // Attach a Zswap output for every coin the circuit created via
     // `createZswapOutput` (shielded mints/sends). Each carries the circuit's
     // exact coin, and a discovery ciphertext when `build_shielded_offer_outputs`
@@ -324,8 +329,8 @@ pub(crate) async fn call_transaction(
     //
     // Route each coin to the offer for the segment its creating op was
     // partitioned into (see `fallible_commitments`): guaranteed coins stay in
-    // the guaranteed offer, fallible coins ride at the intent's segment (1, set
-    // via `add_intent` above). Segment must match or the tx fails
+    // the guaranteed offer, fallible coins ride at the intent's segment
+    // (`INTENT_SEGMENT`). Segment must match or the tx fails
     // `AllCommitmentsSubsetCheckFailure`.
     // Coins the circuit asked to spend via `createZswapInput` (issue #122 gap 3
     // / the `sendShielded` path). Each is spent against `kernel.self()`, so
@@ -345,9 +350,10 @@ pub(crate) async fn call_transaction(
         Vec::new();
     let mut fallible_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>> = Vec::new();
     // Routing table for caller-provided shielded inputs: for each circuit
-    // output, its token type and the segment it landed in (`true` = fallible /
-    // segment 1). A caller coin funds the receive/output of the same token, so
-    // its input must ride in that output's segment to balance per-segment.
+    // output, its token type and the segment it landed in (`true` = fallible,
+    // at `INTENT_SEGMENT`). A caller coin funds the receive/output of the same
+    // token, so its input must ride in that output's segment to balance
+    // per-segment.
     let mut output_segments: Vec<(ShieldedTokenType, bool)> = Vec::new();
     // Value the circuit's own outputs draw per (token, segment), against which
     // the attached coins are reconciled below. Transients are excluded: their
@@ -378,7 +384,11 @@ pub(crate) async fn call_transaction(
             let transient = Box::new(ContractOwnedTransient {
                 coin: decoded.coin,
                 contract,
-                segment: if is_fallible { 1 } else { 0 },
+                segment: if is_fallible {
+                    INTENT_SEGMENT
+                } else {
+                    helpers::Segment::Guaranteed.into()
+                },
             }) as Box<dyn BuildTransient<DefaultDB, BuildContext>>;
             if is_fallible {
                 fallible_transients.push(transient);
@@ -534,7 +544,7 @@ async fn attach_and_prove(
         || !fallible_transients.is_empty()
     {
         tx_info.fallible_offers.insert(
-            1,
+            INTENT_SEGMENT,
             OfferInfo {
                 inputs: fallible_inputs,
                 outputs: fallible_outputs,
@@ -551,9 +561,8 @@ async fn attach_and_prove(
     // the most expensive operation in the SDK, so the circuit's proof is paid
     // for once per iteration rather than once per call. Dust is attached below,
     // after proving, in its own intent segment, which leaves the circuit proof
-    // untouched. A deploy with no shielded offer and a maintenance update are
-    // unaffected: they mock-prove while balancing, which a user circuit cannot
-    // do (upstream `MockProver::check` rejects non-builtin circuits).
+    // untouched. A transaction with no user circuit takes
+    // `super::deploy::build_with_mock_fee_proofs` instead.
     let mut bytes = prove_without_fee(tx_info).await?;
 
     // Fund the already-proven transaction the same way a sponsor funds someone
@@ -591,7 +600,7 @@ pub(super) async fn prove_without_fee(
 ///
 /// `output_segments` pairs each circuit-created output's token type with whether
 /// it was partitioned into the fallible segment. Returns `Ok(true)` for fallible
-/// (segment 1), `Ok(false)` for guaranteed (segment 0); defaults to guaranteed
+/// (`INTENT_SEGMENT`), `Ok(false)` for guaranteed; defaults to guaranteed
 /// when no circuit output matches the token (nothing to co-locate with).
 ///
 /// Errors when the circuit creates outputs of this token in *both* segments:
@@ -770,8 +779,9 @@ struct ContractOwnedTransient {
     /// The owning contract (`kernel.self()`): recipient of the created output
     /// and origin of the spend.
     contract: ContractAddress,
-    /// The segment the coin's create/spend ops partitioned into (0 = guaranteed,
-    /// 1 = the call's fallible segment). The input and output halves share it.
+    /// The segment the coin's create/spend ops partitioned into: the
+    /// guaranteed segment, or `INTENT_SEGMENT` when fallible. The input and
+    /// output halves share it.
     segment: u16,
 }
 
