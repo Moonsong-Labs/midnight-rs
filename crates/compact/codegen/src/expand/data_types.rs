@@ -174,23 +174,28 @@ fn emit_maybe_into_option(ident: &Ident, elements: &[(String, Type)]) -> TokenSt
     }
 }
 
-fn emit_enum(ident: &Ident, elements: &[String]) -> TokenStream {
-    let variants: Vec<_> = elements
+/// The variant idents of an enum and their `u8` discriminants. The
+/// discriminant is the declaration index: the enum definition, its decoder
+/// and the `as u8` of [`emit_enum_into_aligned_value`] all depend on it.
+fn enum_variants(elements: &[String]) -> (Vec<Ident>, Vec<Literal>) {
+    elements
         .iter()
         .enumerate()
         .map(|(i, v)| {
-            let variant = format_ident!("{}", to_pascal_case(v));
             #[allow(clippy::cast_possible_truncation)]
             let idx = Literal::u8_unsuffixed(i as u8);
-            quote! { #variant = #idx }
+            (format_ident!("{}", to_pascal_case(v)), idx)
         })
-        .collect();
+        .unzip()
+}
 
+fn emit_enum(ident: &Ident, elements: &[String]) -> TokenStream {
+    let (variants, idxs) = enum_variants(elements);
     quote! {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         #[repr(u8)]
         pub enum #ident {
-            #(#variants),*
+            #(#variants = #idxs),*
         }
     }
 }
@@ -245,17 +250,7 @@ fn emit_enum_try_from_value_slice(
     name_str: &str,
     elements: &[String],
 ) -> TokenStream {
-    let match_arms: Vec<_> = elements
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            let variant = format_ident!("{}", to_pascal_case(v));
-            #[allow(clippy::cast_possible_truncation)]
-            let idx = Literal::u8_unsuffixed(i as u8);
-            quote! { #idx => Ok(#ident::#variant) }
-        })
-        .collect();
-
+    let (variants, idxs) = enum_variants(elements);
     let err_msg = format!("invalid {name_str} variant");
 
     quote! {
@@ -265,7 +260,7 @@ fn emit_enum_try_from_value_slice(
             fn try_from(vs: &'a ValueSlice) -> Result<Self, Self::Error> {
                 let v: u8 = vs.try_into()?;
                 match v {
-                    #(#match_arms,)*
+                    #(#idxs => Ok(#ident::#variants),)*
                     _ => Err(InvalidBuiltinDecode(#err_msg)),
                 }
             }
