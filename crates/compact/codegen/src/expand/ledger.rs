@@ -475,20 +475,19 @@ fn emit_typed_cell_accessor(
     }
 }
 
+/// The Rust type of a storage type argument, or `Vec<u8>` for an absent one.
+fn storage_arg_tokens(ty: Option<&Type>) -> TokenStream {
+    ty.map_or_else(|| quote! { Vec<u8> }, type_to_tokens)
+}
+
 fn emit_map_accessor(
     method_name: &Ident,
     doc: &str,
     nav: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
-    let key_ty = field
-        .key
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
-    let val_ty = field
-        .value
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
+    let key_ty = storage_arg_tokens(field.key.as_ref());
+    let val_ty = storage_arg_tokens(field.value.as_ref());
     quote! {
         #[doc = #doc]
         pub fn #method_name(&self) -> Result<MapAccessor<'_, #key_ty, #val_ty>, StateError> {
@@ -504,10 +503,7 @@ fn emit_set_accessor(
     nav: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
-    let elem_ty = field
-        .element_type
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
+    let elem_ty = storage_arg_tokens(field.element_type.as_ref());
     quote! {
         #[doc = #doc]
         pub fn #method_name(&self) -> Result<SetAccessor<'_, #elem_ty>, StateError> {
@@ -523,10 +519,7 @@ fn emit_list_accessor(
     nav: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
-    let elem_ty = field
-        .element_type
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
+    let elem_ty = storage_arg_tokens(field.element_type.as_ref());
     quote! {
         #[doc = #doc]
         pub fn #method_name(&self) -> Result<ListAccessor<'_, #elem_ty>, StateError> {
@@ -953,10 +946,7 @@ fn emit_lazy_map_accessor(
     field: &LedgerField,
 ) -> TokenStream {
     let (key_ty, key_av) = lazy_key(field.key.as_ref());
-    let val_ty = field
-        .value
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
+    let val_ty = storage_arg_tokens(field.value.as_ref());
     let doc = format!("Look up a value by key in the `{}` map (map).", field.name);
     quote! {
         #[doc = #doc]
@@ -1023,10 +1013,7 @@ fn emit_lazy_list_accessor(
     field_indices: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
-    let elem_ty = field
-        .element_type
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
+    let elem_ty = storage_arg_tokens(field.element_type.as_ref());
     let doc = format!(
         "Get an element by index from the `{}` list (list), counted from the front.\n\n\
          Returns `Ok(None)` if `index` is not less than the list's length. For a large \
