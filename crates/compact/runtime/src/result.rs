@@ -19,8 +19,6 @@ pub struct ExecutionResult {
     /// The circuit's return value, if any (non-void circuits).
     pub result: Option<Value>,
     /// Values disclosed via `disclose()` calls (communication outputs).
-    /// These must be included in `ContractCallPrototype.output` for the
-    /// communication commitment to match the ZKIR's `Output` instructions.
     pub communication_outputs: Vec<AlignedValue>,
     /// The results of the witness calls and of the witness-class natives such
     /// as `ownPublicKey`, in call order. They are the prover's private
@@ -40,4 +38,19 @@ pub struct ExecutionResult {
     /// `Transient`) in the Zswap offer. Empty for circuits that don't spend
     /// shielded coins.
     pub zswap_inputs: Vec<CircuitZswapInput>,
+}
+
+impl ExecutionResult {
+    /// The call's output: the [`communication_outputs`](Self::communication_outputs)
+    /// concatenated, or the empty value when there are none.
+    ///
+    /// It must be `ContractCallPrototype.output` for the communication
+    /// commitment to match the ZKIR's `Output` instructions.
+    pub fn output(&self) -> AlignedValue {
+        if self.communication_outputs.is_empty() {
+            AlignedValue::from(())
+        } else {
+            AlignedValue::concat(&self.communication_outputs)
+        }
+    }
 }

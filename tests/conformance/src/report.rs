@@ -106,12 +106,7 @@ pub fn input_json(
 /// Concatenated communication outputs, as `call.rs` builds
 /// `ContractCallPrototype::output`.
 pub fn output_json(result: &ExecutionResult) -> Json {
-    let output: AlignedValue = if result.communication_outputs.is_empty() {
-        AlignedValue::from(())
-    } else {
-        AlignedValue::concat(result.communication_outputs.iter())
-    };
-    aligned_value_to_json(&output)
+    aligned_value_to_json(&result.output())
 }
 
 /// Canonical state channel: the post-execution `StateValue` both as readable

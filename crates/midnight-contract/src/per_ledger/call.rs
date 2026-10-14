@@ -85,7 +85,7 @@ impl<D: helpers::DB + Clone, C: helpers::BuilderContext<D>> BuildUtxoOutput<D, C
 ///
 /// The partition checks each read that the ops recorded, so a clock or
 /// balance check that reads another value here fails the build.
-fn partition_context(
+pub(crate) fn partition_context(
     state: &helpers::ContractState<DefaultDB>,
     address: ContractAddress,
     block_time: Timestamp,
@@ -223,17 +223,8 @@ pub(crate) async fn call_transaction(
     //    prototype's private transcript outputs (the ZKIR's private inputs).
     //    Without these, proving a witness-using circuit fails with "ran out of
     //    private transcript outputs".
-    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
-        .arguments
-        .iter()
-        .map(|a| (a.name.name(), a.ty.clone()))
-        .collect();
-    let input: AlignedValue = crate::interpreter::encode_circuit_input(args, &arg_types)?;
-    let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
-        ().into()
-    } else {
-        AlignedValue::concat(&exec_result.communication_outputs)
-    };
+    let input = crate::call::call_input(circuit, args)?;
+    let output = exec_result.output();
     let private_transcript_outputs = exec_result.private_transcript_outputs.clone();
 
     // 5. Build the call action holding only typed values; `build` is infallible.

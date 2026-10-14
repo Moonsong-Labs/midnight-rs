@@ -258,6 +258,20 @@ pub(crate) fn verify_ops(
         .collect()
 }
 
+/// The call's input: `args` encoded at the types that `circuit` declares for
+/// them.
+pub(crate) fn call_input(
+    circuit: &compact_codegen::ir::Circuit,
+    args: &[(&str, runtime::Value)],
+) -> Result<AlignedValue, ContractError> {
+    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
+        .arguments
+        .iter()
+        .map(|a| (a.name.name(), a.ty.clone()))
+        .collect();
+    Ok(interpreter::encode_circuit_input(args, &arg_types)?)
+}
+
 /// `value` in another type of the same encoding: another storage backend,
 /// or another generation's type that encodes it alike.
 pub(crate) fn reencode<A, B>(value: &A, what: &str) -> Result<B, ContractError>
@@ -315,33 +329,24 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let mut rng = rand::thread_rng();
 
-    let exec_result = interpreter::execute(
+    let exec_result = run_call(
         circuit,
         program,
-        state.clone(),
+        state,
+        block_time,
+        contract_address,
         args,
-        interpreter::Env {
-            witnesses,
-            private_state,
-            address: compact_address(contract_address),
-            ..interpreter::Env::new(block_time)
-        },
+        witnesses,
+        private_state,
+        None,
     )?;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
 
-    let verify_ops = verify_ops(&exec_result);
-
     let address_for_ctx = compact_address(contract_address);
-    let mut context =
-        midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), address_for_ctx);
-    // Replay at the interpreter's time and balance: the partition checks each
-    // read that the ops recorded.
-    context.call_context.tblock = block_time;
-    context.call_context.balance = state.balance.clone();
     let pre_transcript = mn_ledger::construct::PreTranscript {
-        context,
-        program: verify_ops,
+        context: crate::ledger_9::call::partition_context(state, address_for_ctx, block_time),
+        program: verify_ops(&exec_result),
         comm_comm: None,
     };
 
@@ -353,17 +358,8 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
-    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
-        .arguments
-        .iter()
-        .map(|a| (a.name.name(), a.ty.clone()))
-        .collect();
-    let input: AlignedValue = interpreter::encode_circuit_input(args, &arg_types)?;
-    let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
-        ().into()
-    } else {
-        AlignedValue::concat(&exec_result.communication_outputs)
-    };
+    let input = call_input(circuit, args)?;
+    let output = exec_result.output();
 
     let op = state
         .operations
