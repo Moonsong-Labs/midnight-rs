@@ -24,7 +24,7 @@ use num_bigint::{BigInt, BigUint};
 // through `midnight_contract::runtime` (see lib.rs), not this module.
 use compact_runtime::{
     CircuitZswapInput, CircuitZswapOutput, ExecutionResult, InterpreterError, NoWitnesses, Value,
-    WitnessContext, WitnessNative, WitnessOutcome, WitnessProvider, integer_fallback_aligned,
+    WitnessContext, WitnessNative, WitnessOutcome, WitnessProvider,
 };
 // Value/builtin helpers used internally by the tree-walk (arithmetic,
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
@@ -2124,7 +2124,12 @@ fn operand_aligned(
                 (Value::Integer(_) | Value::Struct(_) | Value::Tuple(_), Some(ty)) => {
                     encode_typed(&val, ty)
                 }
-                _ => value_aligned(&val),
+                // The type-free encoding would concatenate the elements at
+                // guessed integer widths.
+                (Value::Tuple(_), None) => Err(InterpreterError::Unsupported(format!(
+                    "aligned encoding of {val:?} without a declared type"
+                ))),
+                _ => val.try_to_aligned_value(),
             }
         }
         VmArg::Literal { value, bytes } => literal_key(value, bytes),
@@ -2156,28 +2161,6 @@ fn operand_aligned(
         other => Err(InterpreterError::Unsupported(format!(
             "push of a {} operand",
             other.kind()
-        ))),
-    }
-}
-
-/// The type-free [`AlignedValue`] of an evaluated [`Value`].
-fn value_aligned(val: &Value) -> Result<AlignedValue, InterpreterError> {
-    match val {
-        Value::AlignedValue(av) => Ok(av.clone()),
-        Value::Integer(n) => Ok(integer_fallback_aligned(*n)),
-        Value::Bool(b) => Ok(AlignedValue::from(*b)),
-        Value::Void => Ok(AlignedValue::from(())),
-        // A `Cell` wraps exactly one aligned value, so unwrapping it is the
-        // encoding. The other state variants are containers in the state tree
-        // with no aligned form at all.
-        Value::StateValue(sv) => compact_runtime::cell_aligned_value(sv).ok_or_else(|| {
-            InterpreterError::Unsupported("aligned encoding of a non-Cell state value".to_string())
-        }),
-        // A struct or tuple needs its declared type to encode, which the
-        // caller has only for an expression operand. `encode_typed` handles
-        // those; reaching here means none was inferred.
-        other => Err(InterpreterError::Unsupported(format!(
-            "aligned encoding of {other:?} without a declared type"
         ))),
     }
 }
@@ -2287,7 +2270,7 @@ fn max_for_bytes(bytes: u64) -> BigUint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compact_runtime::try_builtin;
+    use compact_runtime::{integer_fallback_aligned, try_builtin};
     use ir::FieldType;
     use midnight_typed_state::{ContractMaintenanceAuthority, StorageHashMap};
 
