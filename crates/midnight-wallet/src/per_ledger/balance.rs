@@ -1,6 +1,6 @@
 use midnight_types::{
-    DustBalance, HashOutput, ShieldedBalance, ShieldedCoinBalance, ShieldedTokenType,
-    SpendableShieldedCoin, UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
+    DustBalance, HashOutput, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin,
+    UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
 };
 
 use super::helpers;
@@ -66,7 +66,7 @@ impl Wallet {
             .coins
             .iter()
             .map(|(_nullifier, coin)| ShieldedCoinBalance {
-                token_type: ShieldedTokenType(coin.type_.into_inner()),
+                token_type: coin.type_.into_sdk(),
                 value: coin.value,
             })
             .collect();
@@ -86,7 +86,7 @@ impl Wallet {
             .iter()
             .filter(|(nullifier, _)| !reserved.contains(nullifier))
             .map(|(nullifier, coin)| SpendableShieldedCoin {
-                token_type: ShieldedTokenType(coin.type_.into_inner()),
+                token_type: coin.type_.into_sdk(),
                 value: coin.value,
                 nonce: coin.nonce.0.0,
                 nullifier: nullifier.into_sdk(),
