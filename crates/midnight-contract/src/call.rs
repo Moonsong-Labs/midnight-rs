@@ -24,6 +24,7 @@ use midnight_provider::Builds;
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
+use midnight_types::ledger_9::convert::IntoLedger;
 
 use crate::error::ContractError;
 use crate::interpreter;
@@ -135,10 +136,9 @@ pub(crate) fn run_call(
         interpreter::Env {
             witnesses,
             private_state,
-            address: compact_address(contract_address),
+            address: contract_address.into_ledger(),
             block_time,
-            coin_public_key: coin_public_key
-                .map(|key| midnight_coin_structure::coin::PublicKey(key.0)),
+            coin_public_key: coin_public_key.map(IntoLedger::into_ledger),
         },
     )?)
 }
@@ -224,13 +224,6 @@ pub(crate) async fn call_funded_with(
         }
     };
     Ok((tx_bytes, exec_result.state, exec_result.result))
-}
-
-/// The address as the Compact side names it.
-pub(crate) fn compact_address(
-    address: midnight_types::ContractAddress,
-) -> midnight_coin_structure::contract::ContractAddress {
-    midnight_coin_structure::contract::ContractAddress(address.0)
 }
 
 /// The circuit's public state program, as the transcript replays it: the
@@ -344,7 +337,7 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
 
-    let address_for_ctx = compact_address(contract_address);
+    let address_for_ctx = contract_address.into_ledger();
     let pre_transcript = mn_ledger::construct::PreTranscript {
         context: crate::ledger_9::call::partition_context(state, address_for_ctx, block_time),
         program: verify_ops(&exec_result),
