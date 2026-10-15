@@ -114,11 +114,10 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
     let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
-    let zk_keys_dir = common::compiled_dir("counter");
     let authority = midnight_contract::SigningKey::sample(rand::thread_rng());
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(&zk_keys_dir)
+        .with_zk_config(counter::ZK_CONFIG_DIR)
         .with_maintenance_authority(vec![authority.verifying_key()], 1)
         .await
         .expect("deploy");
@@ -174,7 +173,7 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         "a deploy",
         counter::Contract::deploy(&provider)
             .with_initial_state(counter::LedgerInitialState::default())
-            .with_zk_config(&zk_keys_dir)
+            .with_zk_config(counter::ZK_CONFIG_DIR)
             .send()
             .await,
     );

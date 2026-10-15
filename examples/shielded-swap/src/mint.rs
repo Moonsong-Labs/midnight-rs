@@ -17,11 +17,6 @@ mod contract {
     );
 }
 
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/shielded-mint/compiled"
-);
-
 /// Mint `amount` units of a fresh shielded token to `recipient` and wait for
 /// `recipient_provider` to discover the coin through normal sync, returning the
 /// minted token's type. `minter` deploys the contract and pays the fees.
@@ -40,7 +35,7 @@ pub async fn mint_token_to(
 
     let mint = contract::Contract::deploy(minter)
         .with_initial_state(contract::LedgerInitialState)
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(contract::ZK_CONFIG_DIR)
         .await?;
 
     let shielded = recipient.shielded_recipient();

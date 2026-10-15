@@ -38,7 +38,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
 
     let contract = shielded_mint::Contract::deploy(provider)
         .with_initial_state(shielded_mint::LedgerInitialState)
-        .with_zk_config(common::compiled_dir("shielded-mint"))
+        .with_zk_config(shielded_mint::ZK_CONFIG_DIR)
         .await
         .expect("deploy mint contract");
     eprintln!("deployed mint contract at {}", contract.address());

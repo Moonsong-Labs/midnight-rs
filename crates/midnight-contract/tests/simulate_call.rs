@@ -29,7 +29,7 @@ async fn a_simulated_call_returns_the_value_and_the_next_ledger_with_no_wallet()
     // suite is another process on the same seed, so the test waits for it.
     let (_, deployed) = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(common::compiled_dir("counter"))
+        .with_zk_config(counter::ZK_CONFIG_DIR)
         .send()
         .await
         .expect("submit deploy")

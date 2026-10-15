@@ -45,11 +45,6 @@ fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/counter/compiled"
-);
-
 /// Genesis-funded dev wallet (NIGHT + Dust + shielded test tokens).
 const SEED_A: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 /// Second wallet, holds no Dust — it only ever builds Dustless transactions.
@@ -80,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
     println!("1. A deploys the counter...");
     let contract = counter::Contract::deploy(&provider_a)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(counter::ZK_CONFIG_DIR)
         .await?;
     let address = contract.address().to_string();
     // Baseline the counter before B's increment lands, so the final assertion
@@ -111,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
     // --- B builds its two Dustless transactions (it pays nothing) ---
     println!("3. B builds a Dustless contract call (increment)...");
     let contract_b = counter::Contract::at(&provider_b, address.as_str())
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(counter::ZK_CONFIG_DIR)
         .build();
     let call_tx = contract_b.circuits().increment().without_dust().await?;
     println!(

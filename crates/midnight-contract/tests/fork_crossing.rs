@@ -52,7 +52,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     let provider = provider.with_wallet(wallet);
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(common::compiled_dir("counter"))
+        .with_zk_config(counter::ZK_CONFIG_DIR)
         .await
         .expect("deploy on ledger 8");
     contract

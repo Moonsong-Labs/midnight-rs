@@ -29,10 +29,12 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
     let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
-    let zk_keys_dir = common::compiled_dir("call-context");
     assert!(
-        std::path::Path::new(&zk_keys_dir).join("keys").is_dir(),
-        "{zk_keys_dir}/keys is missing; run `make compile-contracts CONTRACTS=call-context`"
+        std::path::Path::new(call_context::ZK_CONFIG_DIR)
+            .join("keys")
+            .is_dir(),
+        "{}/keys is missing; run `make compile-contracts CONTRACTS=call-context`",
+        call_context::ZK_CONFIG_DIR
     );
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
@@ -41,7 +43,7 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
 
     let contract = call_context::Contract::deploy(&provider)
         .with_initial_state(call_context::LedgerInitialState::default())
-        .with_zk_config(&zk_keys_dir)
+        .with_zk_config(call_context::ZK_CONFIG_DIR)
         .await
         .expect("deploy");
 
@@ -79,7 +81,7 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
     // The unlock above landed after `hash`, so the best block's time is past
     // `now + 1`. Only a call that runs at the time of its pin passes `before`.
     call_context::Contract::at(&provider, contract.address())
-        .with_zk_config(&zk_keys_dir)
+        .with_zk_config(call_context::ZK_CONFIG_DIR)
         .at_block(hash)
         .build()
         .circuits()

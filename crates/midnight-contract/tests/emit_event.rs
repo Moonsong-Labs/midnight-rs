@@ -31,10 +31,12 @@ async fn a_call_that_emits_an_event_applies_on_chain() {
         }
         "unset".into()
     });
-    let zk_keys_dir = common::compiled_dir("events");
     assert!(
-        std::path::Path::new(&zk_keys_dir).join("keys").is_dir(),
-        "{zk_keys_dir}/keys is missing; run `make compile-contracts CONTRACTS=events`"
+        std::path::Path::new(events::ZK_CONFIG_DIR)
+            .join("keys")
+            .is_dir(),
+        "{}/keys is missing; run `make compile-contracts CONTRACTS=events`",
+        events::ZK_CONFIG_DIR
     );
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
@@ -43,7 +45,7 @@ async fn a_call_that_emits_an_event_applies_on_chain() {
 
     let contract = events::Contract::deploy(&provider)
         .with_initial_state(events::LedgerInitialState::default())
-        .with_zk_config(&zk_keys_dir)
+        .with_zk_config(events::ZK_CONFIG_DIR)
         .await
         .unwrap_or_else(|e| panic!("the deploy must apply on ledger {ledger}: {e:?}"));
 

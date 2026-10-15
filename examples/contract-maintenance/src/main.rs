@@ -32,10 +32,6 @@ mod counter {
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/counter/compiled"
-);
 
 /// Dev node genesis wallet seed (funded with NIGHT tokens at genesis).
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -75,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     println!("1. Deploying a governable contract (2-of-3 committee)...");
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(counter::ZK_CONFIG_DIR)
         .with_maintenance_authority(committee, 2)
         .await?;
     println!("   address: {}", contract.address());
@@ -85,7 +81,10 @@ async fn main() -> anyhow::Result<()> {
     //    atomic update (insert never replaces, so it must follow a remove).
     //    Members 0 and 2 sign; member 1 is offline — 2 of 3 still clears.
     println!("\n2. Rotating the `increment` verifier key (members 0 and 2 sign)...");
-    let vk_bytes = std::fs::read(format!("{ZK_KEYS_DIR}/keys/increment.verifier"))?;
+    let vk_bytes = std::fs::read(format!(
+        "{}/keys/increment.verifier",
+        counter::ZK_CONFIG_DIR
+    ))?;
     let prepared = contract
         .maintenance()
         .remove_verifier_key("increment")

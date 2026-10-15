@@ -31,7 +31,7 @@ async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
 
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(common::compiled_dir("counter"))
+        .with_zk_config(counter::ZK_CONFIG_DIR)
         .await
         .expect("deploy");
 

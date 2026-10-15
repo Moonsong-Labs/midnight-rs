@@ -27,11 +27,6 @@ fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/shielded-mint/compiled"
-);
-
 /// Dev node genesis wallet seed (funded with NIGHT at genesis) — pays fees and
 /// deploys the contract.
 const MINTER_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -71,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
     println!("2. Deploying mint contract...");
     let contract = shielded_mint::Contract::deploy(provider)
         .with_initial_state(shielded_mint::LedgerInitialState)
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(shielded_mint::ZK_CONFIG_DIR)
         .await?;
     let address = contract.address().to_string();
     println!("   address: {address}\n");
