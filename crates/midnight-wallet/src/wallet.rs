@@ -17,6 +17,7 @@ use tracing::{info, warn};
 
 use crate::replay::{latest_block, progress_cancelled, replay_unshielded_events, send_progress};
 use crate::storage::wallet_storage_id;
+use crate::sync::SyncPlan;
 use crate::{SyncProgress, ledger_8, ledger_9};
 
 /// A Midnight wallet: identity (seed, addresses) and synced ledger state.
@@ -53,12 +54,6 @@ macro_rules! each {
     };
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 impl Wallet {
     pub(crate) fn state(&self) -> &State {
         &self.state
@@ -70,7 +65,7 @@ impl Wallet {
 
     /// Default storage directory: `~/.midnight/wallets/`
     pub fn default_storage_dir() -> Option<PathBuf> {
-        home_dir().map(|h| h.join(".midnight").join("wallets"))
+        std::env::home_dir().map(|h| h.join(".midnight").join("wallets"))
     }
 
     /// The ledger generation this wallet's state is in.
@@ -118,40 +113,32 @@ impl Wallet {
     /// Dust progress to disk periodically, so an interrupted sync resumes
     /// where it left off.
     pub(crate) async fn sync_inner(
-        indexer_url: &str,
-        seed: Seed,
-        address: &str,
-        network: impl Into<Network>,
-        storage_dir: Option<&Path>,
-        // The finalized block the node reports now, persisted so a later
-        // resume can ask whether it is still on this chain. `None` when the
-        // sync is unpinned or the node could not answer.
-        chain_pin: Option<ChainPin>,
+        plan: SyncPlan,
         progress: Option<mpsc::Sender<SyncProgress>>,
     ) -> Result<Self, WalletError> {
-        let network = network.into();
-        let sync = |progress| {
-            sync_once(
-                indexer_url,
-                &seed,
-                address,
-                network.as_str(),
-                storage_dir,
-                chain_pin.clone(),
-                progress,
-            )
+        let sync = ChainSync {
+            indexer_url: &plan.indexer_url,
+            seed: &plan.seed,
+            address: &plan.address,
+            network_id: plan.network.as_str(),
+            storage_dir: plan.storage_dir.as_deref(),
+            save: true,
+            chain_pin: plan.chain_pin,
         };
         // A chain can fork between the read of its latest block and the
         // replay of its events. The replay then meets the later generation,
         // and a second attempt reads the block again and starts from there.
-        let state = match sync(progress.clone()).await {
+        let state = match sync_once(sync.clone(), progress.clone()).await {
             Err(WalletError::LedgerMismatch { expected, found }) if found > expected => {
                 info!(%found, "the chain moved to a later ledger during the sync; syncing again");
-                sync(progress).await?
+                sync_once(sync, progress).await?
             }
             result => result?,
         };
-        Ok(Self { seed, state })
+        Ok(Self {
+            seed: plan.seed,
+            state,
+        })
     }
 
     /// Whether the dust state has been synced (required for transaction
@@ -282,7 +269,7 @@ impl Wallet {
 
     /// The wallet's shielded receiving address, e.g. `mn_shield-addr_undeployed1...`.
     pub fn shielded_address(&self) -> String {
-        each!(&self.state, w => w.shielded_address())
+        self.seed.shielded_address(self.network())
     }
 
     /// The unshielded UTXOs this wallet tracks.
@@ -501,11 +488,8 @@ impl Wallet {
                     None => Ok(()),
                 }
             }
-            (state, commit) => Err(WalletError::LedgerMismatch {
-                expected: match state {
-                    State::Ledger8(_) => LedgerVersion::V8,
-                    State::Ledger9(_) => LedgerVersion::V9,
-                },
+            (_, commit) => Err(WalletError::LedgerMismatch {
+                expected: self.ledger_version(),
                 found: match commit {
                     ResyncCommitKind::Ledger9(_) => LedgerVersion::V9,
                     ResyncCommitKind::Ledger8(_) | ResyncCommitKind::Crossed(_) => {
@@ -969,39 +953,39 @@ struct Resume {
 }
 
 /// Who a sync is for, and where it keeps what it learns.
-struct ChainSync<'a> {
-    indexer_url: &'a str,
-    seed: &'a Seed,
-    address: &'a str,
-    network_id: &'a str,
-    storage_dir: Option<&'a Path>,
-    /// Whether the sync saves its state under `storage_dir` as it goes, or
-    /// leaves that to a commit.
-    save: bool,
-    chain_pin: Option<ChainPin>,
+#[derive(Clone)]
+pub(crate) struct ChainSync<'a> {
+    pub(crate) indexer_url: &'a str,
+    pub(crate) seed: &'a Seed,
+    pub(crate) address: &'a str,
+    pub(crate) network_id: &'a str,
+    pub(crate) storage_dir: Option<&'a Path>,
+    /// Whether the sync writes its state under `storage_dir` as it goes:
+    /// Dust checkpoints, the pending reservations it loads, and the synced
+    /// state. A sync whose state waits for a commit writes nothing, and the
+    /// commit saves it.
+    pub(crate) save: bool,
+    /// The pin this sync persists, so a later resume can ask whether it is
+    /// still on this chain.
+    pub(crate) chain_pin: Option<ChainPin>,
 }
 
 /// One sync attempt: read the chain's generation, load the snapshot in its
 /// own generation, and sync on the chain.
 async fn sync_once(
-    indexer_url: &str,
-    seed: &Seed,
-    address: &str,
-    network_id: &str,
-    storage_dir: Option<&Path>,
-    chain_pin: Option<ChainPin>,
+    sync: ChainSync<'_>,
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<State, WalletError> {
-    let block = latest_block(indexer_url).await?;
+    let block = latest_block(sync.indexer_url).await?;
     let chain = LedgerVersion::of_block(&block)?;
-    let wallet_id = wallet_storage_id(address);
+    let wallet_id = wallet_storage_id(sync.address);
 
     info!("loading cached state from disk");
-    let snapshot = match storage_dir {
-        Some(dir) => load_snapshot(dir, network_id, &wallet_id, chain)?,
+    let snapshot = match sync.storage_dir {
+        Some(dir) => load_snapshot(dir, sync.network_id, &wallet_id, chain)?,
         None => None,
     };
-    let (resume, chain_pin) = match snapshot {
+    let (resume, sync) = match snapshot {
         Some((resume, stored_pin)) => {
             info!(
                 zswap_event_id = resume.zswap_event_id,
@@ -1022,25 +1006,12 @@ async fn sync_once(
             // Keep the snapshot's own pin when this sync has no fresher one.
             // A node that could not answer must not cost the wallet the mark
             // that lets the next resume check itself.
-            (Some(resume), chain_pin.or(stored_pin))
+            let chain_pin = sync.chain_pin.or(stored_pin);
+            (Some(resume), ChainSync { chain_pin, ..sync })
         }
-        None => (None, chain_pin),
+        None => (None, sync),
     };
-    sync_on_chain(
-        ChainSync {
-            indexer_url,
-            seed,
-            address,
-            network_id,
-            storage_dir,
-            save: true,
-            chain_pin,
-        },
-        &block,
-        resume,
-        progress,
-    )
-    .await
+    sync_on_chain(sync, &block, resume, progress).await
 }
 
 /// A snapshot, in the generation that wrote it, and the chain pin it
@@ -1182,15 +1153,7 @@ async fn sync_on_chain(
                 },
             };
             let wallet = ledger_8::Wallet::finish_sync(
-                ledger_8::state::SyncIdentity {
-                    indexer_url: sync.indexer_url,
-                    seed: sync.seed.clone(),
-                    address: sync.address,
-                    network_id: sync.network_id,
-                    storage_dir: sync.storage_dir,
-                    save: sync.save,
-                    chain_pin: sync.chain_pin,
-                },
+                sync,
                 block,
                 ledger_8::state::SyncStart {
                     zswap_state,
@@ -1225,15 +1188,7 @@ async fn sync_on_chain(
                 },
             };
             let wallet = ledger_9::Wallet::finish_sync(
-                ledger_9::state::SyncIdentity {
-                    indexer_url: sync.indexer_url,
-                    seed: sync.seed.clone(),
-                    address: sync.address,
-                    network_id: sync.network_id,
-                    storage_dir: sync.storage_dir,
-                    save: sync.save,
-                    chain_pin: sync.chain_pin,
-                },
+                sync,
                 block,
                 ledger_9::state::SyncStart {
                     zswap_state,
@@ -1253,51 +1208,34 @@ async fn sync_on_chain(
 }
 
 #[cfg(test)]
-mod tests {
-    use midnight_helpers::{Tagged, ledger_8, ledger_9};
-    use midnight_indexer_client::testutil::{accept_subscriber, bind, next_json, send_next};
-    use serde_json::json;
+pub(crate) mod test_support {
+    use midnight_types::hd::Seed;
+    use midnight_types::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
 
-    use super::*;
-
-    fn seed() -> Seed {
+    pub(crate) fn test_seed() -> Seed {
         Seed::from_bytes(&[0x22; 32]).unwrap()
     }
 
-    fn coin(nonce: u8) -> CoinInfo {
+    /// A coin the wallet owns and can rebuild, but whose output carries
+    /// nothing it can decrypt.
+    pub(crate) fn unreachable_coin(byte: u8, value: u128) -> CoinInfo {
         CoinInfo {
-            nonce: midnight_types::Nonce(midnight_types::HashOutput([nonce; 32])),
-            type_: midnight_types::ShieldedTokenType(midnight_types::HashOutput([3; 32])),
-            value: 42,
+            nonce: Nonce(HashOutput([byte; 32])),
+            type_: ShieldedTokenType(HashOutput([3u8; 32])),
+            value,
         }
     }
+}
 
-    /// The hex of `$ledger`'s event for an output of `$coin` to `seed()`'s
-    /// wallet that carries no ciphertext, so only a registration claims it.
-    macro_rules! output_event {
-        ($ledger:ident, $coin:expr, $mt_index:expr) => {{
-            use midnight_helpers::$ledger as l;
-            use midnight_types::$ledger::convert::IntoLedger;
-            let keys = crate::$ledger::state::zswap_keys(&seed());
-            let coin: l::CoinInfo = $coin.into_ledger();
-            let event: l::Event<DefaultDB> = l::Event {
-                source: l::mn_ledger::events::EventSource {
-                    transaction_hash: l::TransactionHash(l::HashOutput([0; 32])),
-                    logical_segment: 0,
-                    physical_segment: 0,
-                },
-                content: l::mn_ledger::events::EventDetails::ZswapOutput {
-                    commitment: coin.commitment(&l::Recipient::User(keys.coin_public_key())),
-                    preimage_evidence: l::mn_ledger::events::ZswapPreimageEvidence::None,
-                    contract: None,
-                    mt_index: $mt_index,
-                },
-            };
-            let mut raw = Vec::new();
-            midnight_helpers::midnight_serialize::tagged_serialize(&event, &mut raw).unwrap();
-            hex::encode(raw)
-        }};
-    }
+#[cfg(test)]
+mod tests {
+    use midnight_helpers::{Tagged, ledger_8, ledger_9};
+    use midnight_indexer_client::testutil::{
+        accept_subscriber, bind, ledger_event, next_json, send_next, subscription_variable,
+    };
+
+    use super::test_support::{test_seed, unreachable_coin};
+    use super::*;
 
     /// A chain that crossed the fork serves ledger 8 events, then ledger 9
     /// ones, in one stream. A replay that stopped at the boundary, or lost the
@@ -1308,27 +1246,43 @@ mod tests {
     async fn a_zswap_replay_crosses_the_fork_with_the_coins_of_both_halves() {
         let (listener, url) = bind().await;
         let events = [
-            (1, output_event!(ledger_8, coin(1), 0)),
-            (2, output_event!(ledger_9, coin(2), 1)),
+            (
+                1,
+                crate::ledger_8::state::test_support::ciphertextless_output(
+                    &test_seed(),
+                    &unreachable_coin(1, 42),
+                    0,
+                ),
+            ),
+            (
+                2,
+                crate::ledger_9::state::test_support::ciphertextless_output(
+                    &test_seed(),
+                    &unreachable_coin(2, 42),
+                    1,
+                ),
+            ),
         ];
         let server = tokio::spawn(async move {
             // One subscription per generation the replay passes through.
             for _ in 0..2 {
                 let (mut ws, sub) = accept_subscriber(&listener).await;
-                let from = sub["payload"]["variables"]["id"].as_i64().unwrap();
+                let from = subscription_variable(&sub, "id");
                 for (id, raw) in events.iter().filter(|(id, _)| *id >= from) {
-                    let message = json!({"zswapLedgerEvents": {"id": id, "raw": raw, "maxId": 2}});
+                    let message = ledger_event("zswapLedgerEvents", *id, raw, 2);
                     send_next(&mut ws, &sub, message).await;
                 }
                 while next_json(&mut ws).await.is_some() {}
             }
         });
 
-        let registered =
-            crate::ledger_8::state::ShieldedRescanPlan::new(&seed(), &[coin(1), coin(2)]);
+        let registered = crate::ledger_8::state::ShieldedRescanPlan::new(
+            &test_seed(),
+            &[unreachable_coin(1, 42), unreachable_coin(2, 42)],
+        );
         let replayed = replay_zswap(
             &SubscriptionClient::new(&url),
-            &seed(),
+            &test_seed(),
             ZswapState::Ledger8(registered.initial_state),
             0,
             false,
@@ -1365,14 +1319,14 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut ws, sub) = accept_subscriber(&listener).await;
             for id in 1..=3 {
-                let message = json!({"dustLedgerEvents": {"id": id, "raw": raw, "maxId": 3}});
+                let message = ledger_event("dustLedgerEvents", id, &raw, 3);
                 send_next(&mut ws, &sub, message).await;
             }
             while next_json(&mut ws).await.is_some() {}
         });
 
         let wallet = ledger_9::DustWallet::default(
-            midnight_types::ledger_9::convert::IntoLedger::into_ledger(&seed()),
+            midnight_types::ledger_9::convert::IntoLedger::into_ledger(&test_seed()),
             Some(&ledger_9::INITIAL_PARAMETERS),
         );
         let replay = crate::ledger_9::state::replay_dust_events(

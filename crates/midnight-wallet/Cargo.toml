@@ -11,7 +11,7 @@ midnight-indexer-client = { workspace = true }
 midnight-types = { workspace = true }
 midnight-wallet-facade = { workspace = true }
 midnight-helpers = { workspace = true }
-midnight-serialize = { workspace = true }
+midnight-owner-only = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }

@@ -2,7 +2,7 @@
 //! and proving inputs the transaction-construction layer needs.
 
 use midnight_onchain_runtime::ops::Op;
-use midnight_onchain_runtime::result_mode::ResultModeGather;
+use midnight_onchain_runtime::result_mode::{ResultModeGather, ResultModeVerify};
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 
 use crate::value::Value;
@@ -18,9 +18,8 @@ pub struct ExecutionResult {
     pub gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
     /// The circuit's return value, if any (non-void circuits).
     pub result: Option<Value>,
-    /// Values disclosed via `disclose()` calls (communication outputs).
-    /// These must be included in `ContractCallPrototype.output` for the
-    /// communication commitment to match the ZKIR's `Output` instructions.
+    /// The communication outputs: the circuit's result encoded at its declared
+    /// result type, or empty for a circuit that returns `Void`.
     pub communication_outputs: Vec<AlignedValue>,
     /// The results of the witness calls and of the witness-class natives such
     /// as `ownPublicKey`, in call order. They are the prover's private
@@ -40,4 +39,40 @@ pub struct ExecutionResult {
     /// `Transient`) in the Zswap offer. Empty for circuits that don't spend
     /// shielded coins.
     pub zswap_inputs: Vec<CircuitZswapInput>,
+}
+
+impl ExecutionResult {
+    /// The call's output: the [`communication_outputs`](Self::communication_outputs)
+    /// concatenated, or the empty value when there are none.
+    ///
+    /// It must be `ContractCallPrototype.output` for the communication
+    /// commitment to match the ZKIR's `Output` instructions.
+    pub fn output(&self) -> AlignedValue {
+        if self.communication_outputs.is_empty() {
+            AlignedValue::from(())
+        } else {
+            AlignedValue::concat(&self.communication_outputs)
+        }
+    }
+
+    /// The public transcript: the [`gather_ops`](Self::gather_ops) with each
+    /// `popeq` result filled from the [`reads`](Self::reads), in order, and
+    /// with the empty value once the reads run out.
+    ///
+    /// Every gathered op is kept, as in the TS runtime's
+    /// `ProofData.publicTranscript`.
+    pub fn public_transcript(&self) -> Vec<Op<ResultModeVerify, InMemoryDB>> {
+        let mut reads = self.reads.iter();
+        self.gather_ops
+            .iter()
+            .map(|op| {
+                op.clone().translate(|()| {
+                    reads
+                        .next()
+                        .cloned()
+                        .unwrap_or_else(|| AlignedValue::from(()))
+                })
+            })
+            .collect()
+    }
 }

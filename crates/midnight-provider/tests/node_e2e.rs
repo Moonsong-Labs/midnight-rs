@@ -3,23 +3,17 @@
 //! These tests require MIDNIGHT_NODE_URL to be set.
 //! Run: MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 cargo test --test node_e2e -- --show-output
 
-use midnight_provider::{MidnightProvider, Network, Provider, StateQuery, StorageKey};
+#[expect(dead_code, reason = "this test needs only the skip")]
+mod common;
+
+use midnight_provider::{MidnightProvider, Network, Provider, StateQuery};
 
 fn node_only_provider() -> Option<MidnightProvider> {
-    let node_url = std::env::var("MIDNIGHT_NODE_URL").ok()?;
-    Some(MidnightProvider::new(&node_url, "http://127.0.0.1:1"))
-}
-
-macro_rules! require_node {
-    () => {
-        match node_only_provider() {
-            Some(p) => p,
-            None => {
-                eprintln!("skipping: MIDNIGHT_NODE_URL not set");
-                return;
-            }
-        }
+    let Ok(node_url) = std::env::var("MIDNIGHT_NODE_URL") else {
+        common::skip("MIDNIGHT_NODE_URL");
+        return None;
     };
+    Some(MidnightProvider::new(&node_url, "http://127.0.0.1:1"))
 }
 
 // ---------------------------------------------------------------------------
@@ -28,7 +22,9 @@ macro_rules! require_node {
 
 #[tokio::test]
 async fn node_chain_label() {
-    let p = require_node!();
+    let Some(p) = node_only_provider() else {
+        return;
+    };
     let chain = p.system_chain().await.unwrap();
     assert!(!chain.is_empty());
     eprintln!("chain label: {chain}");
@@ -37,7 +33,9 @@ async fn node_chain_label() {
 /// The provider has no wallet, so only the node's runtime can answer.
 #[tokio::test]
 async fn the_node_runs_the_network_the_tests_sync_as() {
-    let p = require_node!();
+    let Some(p) = node_only_provider() else {
+        return;
+    };
     let network = p.ledger_network_id().await.unwrap();
     assert_eq!(network, Some(Network::Undeployed));
 }
@@ -56,25 +54,23 @@ async fn the_node_runs_the_network_the_tests_sync_as() {
 
 mod contract_deployed {
     use super::*;
-    use compact_bindgen::{InMemoryDB, StateValue, cell_value, hex, lazy, tagged_deserialize};
+    use compact_bindgen::{cell_as, lazy};
 
     fn contract_address() -> Option<String> {
-        std::env::var("MIDNIGHT_CONTRACT_ADDRESS").ok()
-    }
-
-    fn field_key(index: usize) -> StorageKey {
-        StorageKey(hex::decode(lazy::index_to_query_key(index)).unwrap())
+        let Ok(address) = std::env::var("MIDNIGHT_CONTRACT_ADDRESS") else {
+            eprintln!("skipping: MIDNIGHT_CONTRACT_ADDRESS not set");
+            return None;
+        };
+        Some(address)
     }
 
     #[tokio::test]
     async fn query_counter_field() {
-        let p = require_node!();
-        let address = match contract_address() {
-            Some(a) => a,
-            None => {
-                eprintln!("skipping: MIDNIGHT_CONTRACT_ADDRESS not set");
-                return;
-            }
+        let Some(p) = node_only_provider() else {
+            return;
+        };
+        let Some(address) = contract_address() else {
+            return;
         };
 
         // State: Array(1) [ Array(3) [ MerkleTree(10), Cell(counter), Map{...} ] ]
@@ -83,7 +79,7 @@ mod contract_deployed {
             .query_contract_state(
                 &address,
                 vec![StateQuery {
-                    path: vec![field_key(0), field_key(1)],
+                    path: vec![lazy::index_to_query_key(0), lazy::index_to_query_key(1)],
                 }],
             )
             .await
@@ -96,25 +92,20 @@ mod contract_deployed {
             results[0].error
         );
 
-        let hex_value = results[0].value.as_ref().expect("expected a value");
-        let bytes = hex::decode(hex_value).expect("valid hex");
-        let sv: StateValue<InMemoryDB> =
-            tagged_deserialize(&mut &bytes[..]).expect("deserialize StateValue");
-        let av = cell_value(&sv).expect("expected Cell");
-        let counter = u64::try_from(&*av.value).expect("u64 from AlignedValue");
+        let counter: u64 =
+            cell_as(&lazy::decode_state_value(&results[0]).expect("decode the state value"))
+                .expect("u64 Cell");
 
         eprintln!("counter value: {counter}");
     }
 
     #[tokio::test]
     async fn query_batch_with_error() {
-        let p = require_node!();
-        let address = match contract_address() {
-            Some(a) => a,
-            None => {
-                eprintln!("skipping: MIDNIGHT_CONTRACT_ADDRESS not set");
-                return;
-            }
+        let Some(p) = node_only_provider() else {
+            return;
+        };
+        let Some(address) = contract_address() else {
+            return;
         };
 
         let results = p
@@ -122,10 +113,10 @@ mod contract_deployed {
                 &address,
                 vec![
                     StateQuery {
-                        path: vec![field_key(0), field_key(1)],
+                        path: vec![lazy::index_to_query_key(0), lazy::index_to_query_key(1)],
                     },
                     StateQuery {
-                        path: vec![field_key(0), field_key(99)],
+                        path: vec![lazy::index_to_query_key(0), lazy::index_to_query_key(99)],
                     },
                 ],
             )

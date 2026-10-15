@@ -3,33 +3,21 @@
 //! Tests against the egress_jobs contract: Map<Field, EgressJob> where
 //! EgressJob { id, destination, token_ref, amount, status }
 //!
-//! Each query path is a list of hex-encoded serialized AlignedValue keys.
+//! Each query path is a list of serialized AlignedValue keys.
 //! The node interprets each key based on the StateValue variant at that level.
 //!
 //! Run: cargo test --test lazy_query -- --ignored --show-output
 
 use compact_bindgen::{
-    AlignedValue, InMemoryDB, InvalidBuiltinDecode, StateValue, ValueSlice, cell_value, hex,
-    tagged_deserialize,
+    AlignedValue, InvalidBuiltinDecode, TransientFr, ValueSlice, cell_value, hex, lazy,
 };
-use midnight_provider::{MidnightProvider, Provider, StateQuery, StorageKey};
+use midnight_provider::{MidnightProvider, Provider, StateQuery, StateQueryResult};
 
 // egress_jobs contract deployed on the forked devnet.
 // State tree: Array[ Map(egress_jobs), Cell(job_count) ]
 const CONTRACT: &str = "48dc1515c712548673df8b99cf5f0677b52c46bfa5131cc4b189abf500911088";
-
-// Serialized AlignedValue keys for path navigation:
-// u8(0) = "4001" (array index 0 → egress_jobs map)
-// u8(1) = "0101" (array index 1 → job_count counter)
-const IDX_0: &str = "4001";
-const IDX_1: &str = "0101";
-
-// Fr key encoding for map lookups:
-// Fr(1) = "0141", Fr(2) = "0241", Fr(3) = "0341"
-const KEY_1: &str = "0141";
-const KEY_2: &str = "0241";
-const KEY_3: &str = "0341";
-const KEY_999: &str = "42e70741";
+const EGRESS_JOBS: usize = 0;
+const JOB_COUNT: usize = 1;
 
 /// EgressJob struct matching the Compact contract definition.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,30 +58,42 @@ impl<'a> TryFrom<&'a ValueSlice> for EgressJob {
     }
 }
 
-fn decode_cell(hex_value: &str) -> AlignedValue {
-    let bytes = hex::decode(hex_value).unwrap();
-    let sv: StateValue<InMemoryDB> = tagged_deserialize(&mut &bytes[..]).unwrap();
-    cell_value(&sv).unwrap().clone()
+impl EgressJob {
+    fn status_label(&self) -> &'static str {
+        if self.status == 0 {
+            "pending"
+        } else {
+            "completed"
+        }
+    }
 }
 
-fn decode_job(hex_value: &str) -> EgressJob {
-    let bytes = hex::decode(hex_value).unwrap();
-    let sv: StateValue<InMemoryDB> = tagged_deserialize(&mut &bytes[..]).unwrap();
-    let av = cell_value(&sv).unwrap();
-    EgressJob::try_from(&*av.value).unwrap()
+fn decode_cell(result: &StateQueryResult) -> AlignedValue {
+    cell_value(&lazy::decode_state_value(result).unwrap())
+        .unwrap()
+        .clone()
+}
+
+fn decode_job(result: &StateQueryResult) -> EgressJob {
+    EgressJob::try_from(&*decode_cell(result).value).unwrap()
 }
 
 fn provider() -> MidnightProvider {
     MidnightProvider::new("ws://127.0.0.1:9944", "http://127.0.0.1:8088")
 }
 
-/// Helper: build a query from hex-encoded path steps.
-fn q(steps: &[&str]) -> StateQuery {
+fn job_count_query() -> StateQuery {
     StateQuery {
-        path: steps
-            .iter()
-            .map(|s| StorageKey(hex::decode(s).unwrap()))
-            .collect(),
+        path: vec![lazy::index_to_query_key(JOB_COUNT)],
+    }
+}
+
+fn job_query(id: u64) -> StateQuery {
+    StateQuery {
+        path: vec![
+            lazy::index_to_query_key(EGRESS_JOBS),
+            lazy::value_to_query_key(&AlignedValue::from(TransientFr::from(id))),
+        ],
     }
 }
 
@@ -102,12 +102,12 @@ fn q(steps: &[&str]) -> StateQuery {
 async fn query_counter() {
     let p = provider();
     let r = p
-        .query_contract_state(CONTRACT, vec![q(&[IDX_1])])
+        .query_contract_state(CONTRACT, vec![job_count_query()])
         .await
         .unwrap();
 
     assert!(r[0].value.is_some());
-    let counter = u64::try_from(&*decode_cell(r[0].value.as_deref().unwrap()).value).unwrap();
+    let counter = u64::try_from(&*decode_cell(&r[0]).value).unwrap();
     eprintln!("job_count = {counter}");
     assert_eq!(counter, 3);
 }
@@ -117,21 +117,17 @@ async fn query_counter() {
 async fn query_single_job_and_deserialize() {
     let p = provider();
     let r = p
-        .query_contract_state(CONTRACT, vec![q(&[IDX_0, KEY_1])])
+        .query_contract_state(CONTRACT, vec![job_query(1)])
         .await
         .unwrap();
 
     assert!(r[0].value.is_some());
-    let job = decode_job(r[0].value.as_deref().unwrap());
+    let job = decode_job(&r[0]);
     eprintln!(
         "Job 1: id={}, amount={}, status={}",
         job.id,
         job.amount,
-        if job.status == 0 {
-            "pending"
-        } else {
-            "completed"
-        }
+        job.status_label()
     );
 
     assert_eq!(job.id, 1001);
@@ -146,50 +142,35 @@ async fn query_single_job_and_deserialize() {
 async fn query_multiple_jobs_and_compare() {
     let p = provider();
     let r = p
-        .query_contract_state(
-            CONTRACT,
-            vec![q(&[IDX_0, KEY_1]), q(&[IDX_0, KEY_2]), q(&[IDX_0, KEY_3])],
-        )
+        .query_contract_state(CONTRACT, vec![job_query(1), job_query(2), job_query(3)])
         .await
         .unwrap();
 
     assert_eq!(r.len(), 3);
-    let job1 = decode_job(r[0].value.as_deref().unwrap());
-    let job2 = decode_job(r[1].value.as_deref().unwrap());
-    let job3 = decode_job(r[2].value.as_deref().unwrap());
+    let job1 = decode_job(&r[0]);
+    let job2 = decode_job(&r[1]);
+    let job3 = decode_job(&r[2]);
 
     eprintln!(
         "Job 1: id={}, dest=0x{}, amount={}, status={}",
         job1.id,
         hex::encode(&job1.destination[..4]),
         job1.amount,
-        if job1.status == 0 {
-            "pending"
-        } else {
-            "completed"
-        }
+        job1.status_label()
     );
     eprintln!(
         "Job 2: id={}, dest=0x{}, amount={}, status={}",
         job2.id,
         hex::encode(&job2.destination[..4]),
         job2.amount,
-        if job2.status == 0 {
-            "pending"
-        } else {
-            "completed"
-        }
+        job2.status_label()
     );
     eprintln!(
         "Job 3: id={}, dest=0x{}, amount={}, status={}",
         job3.id,
         hex::encode(&job3.destination[..4]),
         job3.amount,
-        if job3.status == 0 {
-            "pending"
-        } else {
-            "completed"
-        }
+        job3.status_label()
     );
 
     assert_eq!(
@@ -229,7 +210,7 @@ async fn query_multiple_jobs_and_compare() {
 async fn query_nonexistent_key() {
     let p = provider();
     let r = p
-        .query_contract_state(CONTRACT, vec![q(&[IDX_0, KEY_999])])
+        .query_contract_state(CONTRACT, vec![job_query(999)])
         .await
         .unwrap();
 
@@ -246,11 +227,11 @@ async fn query_batch_counter_and_jobs() {
         .query_contract_state(
             CONTRACT,
             vec![
-                q(&[IDX_1]),          // counter
-                q(&[IDX_0, KEY_1]),   // job 1
-                q(&[IDX_0, KEY_2]),   // job 2
-                q(&[IDX_0, KEY_3]),   // job 3
-                q(&[IDX_0, KEY_999]), // not found
+                job_count_query(),
+                job_query(1),
+                job_query(2),
+                job_query(3),
+                job_query(999),
             ],
         )
         .await
@@ -258,12 +239,12 @@ async fn query_batch_counter_and_jobs() {
 
     assert_eq!(r.len(), 5);
 
-    let counter = u64::try_from(&*decode_cell(r[0].value.as_deref().unwrap()).value).unwrap();
+    let counter = u64::try_from(&*decode_cell(&r[0]).value).unwrap();
     assert_eq!(counter, 3);
 
-    let job1 = decode_job(r[1].value.as_deref().unwrap());
-    let job2 = decode_job(r[2].value.as_deref().unwrap());
-    let job3 = decode_job(r[3].value.as_deref().unwrap());
+    let job1 = decode_job(&r[1]);
+    let job2 = decode_job(&r[2]);
+    let job3 = decode_job(&r[3]);
     assert_eq!(job1.id, 1001);
     assert_eq!(job2.id, 1002);
     assert_eq!(job3.id, 1003);

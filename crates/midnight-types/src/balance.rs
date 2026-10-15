@@ -36,10 +36,10 @@ pub struct UnshieldedUtxoInfo {
 }
 
 impl UnshieldedUtxoInfo {
-    /// 64-char hex representation of the token id (no `0x` prefix), suitable
-    /// for human-readable logs / debug output.
+    /// The token id as [`UnshieldedTokenType`]'s `Display` writes it, for
+    /// human-readable logs / debug output.
     pub fn token_type_hex(&self) -> String {
-        hex::encode(self.token_type.0.0)
+        self.token_type.to_string()
     }
 }
 
@@ -53,8 +53,7 @@ impl fmt::Display for UnshieldedUtxoInfo {
         if self.token_type == NIGHT {
             write!(f, "NIGHT: {}", self.value)
         } else {
-            let hex = self.token_type_hex();
-            write!(f, "{}…: {}", &hex[..8], self.value)
+            write!(f, "{:.8}…: {}", self.token_type, self.value)
         }
     }
 }
@@ -69,10 +68,10 @@ pub struct ShieldedCoinBalance {
 }
 
 impl ShieldedCoinBalance {
-    /// 64-char hex representation of the token id (no `0x` prefix), suitable
-    /// for human-readable logs / debug output.
+    /// The token id as [`ShieldedTokenType`]'s `Display` writes it, for
+    /// human-readable logs / debug output.
     pub fn token_type_hex(&self) -> String {
-        hex::encode(self.token_type.0.0)
+        self.token_type.to_string()
     }
 }
 
@@ -80,8 +79,7 @@ impl fmt::Display for ShieldedCoinBalance {
     /// Render as `<8-char-hex-prefix>…: <value>`. There is no shielded NIGHT;
     /// all shielded token ids are treated as opaque.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hex = self.token_type_hex();
-        write!(f, "{}…: {}", &hex[..8], self.value)
+        write!(f, "{:.8}…: {}", self.token_type, self.value)
     }
 }
 
@@ -93,8 +91,8 @@ pub struct ShieldedBalance {
 
 /// A single spendable shielded coin, addressed by its full coin info.
 ///
-/// Unlike [`ShieldedCoinBalance`] (which aggregates by token type and carries no
-/// nonce), this names one concrete coin: the `nonce`, `token_type`, and `value`
+/// Unlike [`ShieldedCoinBalance`], which carries no nonce, this names one
+/// concrete coin: the `nonce`, `token_type`, and `value`
 /// are exactly the `ShieldedCoinInfo { nonce, color, value }` a circuit argument
 /// needs, and `nullifier` pins this exact coin when it is spent as a shielded
 /// input. A circuit like `receiveShielded(coin)` re-commits the coin's exact
@@ -116,9 +114,10 @@ pub struct SpendableShieldedCoin {
 }
 
 impl SpendableShieldedCoin {
-    /// 64-char hex of the token id (no `0x` prefix), for logs / debug output.
+    /// The token id as [`ShieldedTokenType`]'s `Display` writes it, for logs /
+    /// debug output.
     pub fn token_type_hex(&self) -> String {
-        hex::encode(self.token_type.0.0)
+        self.token_type.to_string()
     }
 }
 
@@ -127,4 +126,90 @@ pub struct WalletBalance {
     pub dust: DustBalance,
     pub unshielded: Vec<UnshieldedUtxoInfo>,
     pub shielded: ShieldedBalance,
+}
+
+impl WalletBalance {
+    /// The total value of every coin of `token` in [`Self::shielded`].
+    ///
+    /// The value is in the token's smallest unit. The sum counts every coin of
+    /// `token`, including the coins that a pending build reserves, so a new
+    /// build can draw on less. It is 0 when the wallet holds no coin of `token`,
+    /// and it saturates at `u128::MAX`.
+    pub fn shielded_value(&self, token: ShieldedTokenType) -> u128 {
+        self.shielded
+            .coins
+            .iter()
+            .filter(|coin| coin.token_type == token)
+            .fold(0, |sum, coin| sum.saturating_add(coin.value))
+    }
+
+    /// The total value of every UTXO of `token` in [`Self::unshielded`].
+    ///
+    /// The value is in the token's smallest unit, which is STAR for [`NIGHT`].
+    /// The sum counts every UTXO of `token`, including the UTXOs that a pending
+    /// build reserves, so a new build can draw on less. It is 0 when the wallet
+    /// holds no UTXO of `token`, and it saturates at `u128::MAX`.
+    pub fn unshielded_value(&self, token: UnshieldedTokenType) -> u128 {
+        self.unshielded
+            .iter()
+            .filter(|utxo| utxo.token_type == token)
+            .fold(0, |sum, utxo| sum.saturating_add(utxo.value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use midnight_helpers::HashOutput;
+
+    use super::{
+        ShieldedBalance, ShieldedCoinBalance, ShieldedTokenType, UnshieldedTokenType,
+        UnshieldedUtxoInfo, WalletBalance,
+    };
+
+    fn balance(entries: &[(u8, u128)]) -> WalletBalance {
+        let coins: Vec<_> = entries
+            .iter()
+            .map(|&(id, value)| ShieldedCoinBalance {
+                token_type: ShieldedTokenType(HashOutput([id; 32])),
+                value,
+            })
+            .collect();
+        WalletBalance {
+            unshielded: entries
+                .iter()
+                .map(|&(id, value)| UnshieldedUtxoInfo {
+                    token_type: UnshieldedTokenType(HashOutput([id; 32])),
+                    value,
+                })
+                .collect(),
+            shielded: ShieldedBalance {
+                total_count: coins.len(),
+                coins,
+            },
+            ..WalletBalance::default()
+        }
+    }
+
+    /// Each leg holds one entry per coin, so a sum that skips the filter, or
+    /// takes only the first or the last match, gives another number.
+    #[test]
+    fn a_token_value_sums_every_entry_of_that_token_only() {
+        let balance = balance(&[(1, 5), (2, 100), (1, 7)]);
+        let token = HashOutput([1; 32]);
+        assert_eq!(balance.shielded_value(ShieldedTokenType(token)), 12);
+        assert_eq!(balance.unshielded_value(UnshieldedTokenType(token)), 12);
+    }
+
+    /// The sums have no error channel, so an overflow must neither panic nor
+    /// wrap.
+    #[test]
+    fn a_token_value_saturates_on_overflow() {
+        let balance = balance(&[(1, u128::MAX), (1, 1)]);
+        let token = HashOutput([1; 32]);
+        assert_eq!(balance.shielded_value(ShieldedTokenType(token)), u128::MAX);
+        assert_eq!(
+            balance.unshielded_value(UnshieldedTokenType(token)),
+            u128::MAX
+        );
+    }
 }

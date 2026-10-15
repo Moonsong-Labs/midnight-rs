@@ -9,22 +9,39 @@ use crate::types::*;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
+const GRAPHQL_PATH: &str = "/api/v3/graphql";
+
+/// Returns the GraphQL endpoint for an indexer URL.
+///
+/// Keeps a URL whose path ends in `/graphql`, and drops a `/ws` that follows
+/// `/graphql`. Appends [`GRAPHQL_PATH`] to any other URL.
+pub(crate) fn graphql_url(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let base = match base.strip_suffix("/ws") {
+        Some(graphql) if graphql.ends_with("/graphql") => graphql,
+        _ => base,
+    };
+    if base.ends_with("/graphql") {
+        base.to_owned()
+    } else {
+        format!("{base}{GRAPHQL_PATH}")
+    }
+}
+
 pub struct IndexerClient {
     http: reqwest::Client,
     http_url: String,
 }
 
 impl IndexerClient {
-    /// Create a new client. Appends `/api/v3/graphql` if not present.
-    /// Returns an error if the HTTP client cannot be built.
+    /// Create a new client.
+    ///
+    /// `base_url` is the base indexer URL (e.g. `http://127.0.0.1:8088`), or
+    /// a URL whose path ends in `/graphql` or `/graphql/ws`. The client sends
+    /// queries to that `/graphql` path, or to `/api/v3/graphql` under a base
+    /// URL. Returns an error if the HTTP client cannot be built.
     pub fn new(base_url: &str) -> Result<Self, IndexerError> {
-        let base = base_url.trim_end_matches('/');
-
-        let http_url = if base.ends_with("/api/v3/graphql") {
-            base.to_string()
-        } else {
-            format!("{base}/api/v3/graphql")
-        };
+        let http_url = graphql_url(base_url);
 
         let http = reqwest::Client::builder()
             .timeout(DEFAULT_TIMEOUT)
@@ -71,11 +88,7 @@ impl IndexerClient {
             IndexerError::Deserialization(e.to_string())
         })?;
 
-        if let Some(errors) = gql_resp.errors.filter(|e| !e.is_empty()) {
-            return Err(IndexerError::GraphQL(errors));
-        }
-
-        gql_resp.data.ok_or(IndexerError::MissingData)
+        gql_resp.into_result()?.ok_or(IndexerError::MissingData)
     }
 
     // -- Blocks --
@@ -112,5 +125,17 @@ mod tests {
     fn url_construction_full_path() {
         let client = IndexerClient::new("http://localhost:8088/api/v3/graphql").unwrap();
         assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
+    }
+
+    #[test]
+    fn graphql_url_drops_ws_only_after_graphql() {
+        assert_eq!(
+            graphql_url("http://localhost:8088/graphql/ws"),
+            "http://localhost:8088/graphql"
+        );
+        assert_eq!(
+            graphql_url("http://localhost:8088/foo/ws"),
+            "http://localhost:8088/foo/ws/api/v3/graphql"
+        );
     }
 }

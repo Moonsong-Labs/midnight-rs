@@ -18,14 +18,13 @@
 //! this skips wherever compactc has not run. Override the directory with
 //! `PAYOUT_KEYED_DIR`.
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
-};
+mod common;
+
+use compact_bindgen::AlignedValue;
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
 use midnight_provider::UnshieldedTokenType;
-use midnight_wallet::Wallet;
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];
 const MINTED: u128 = 1_000;
@@ -33,54 +32,26 @@ const PAID: u128 = 10;
 
 #[tokio::test]
 async fn a_contract_pays_an_unshielded_token_to_a_user() {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
-    let keyed = std::env::var("PAYOUT_KEYED_DIR").unwrap_or_else(|_| {
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../devnet/contracts/unshielded-payout/compiled"
-        )
-        .to_string()
-    });
+    let keyed = common::env_dir("PAYOUT_KEYED_DIR")
+        .unwrap_or_else(|| common::compiled_dir("unshielded-payout"));
     let artifact = format!("{keyed}/compiler/analyzed-ir.sexp");
     if !std::path::Path::new(&artifact).exists() {
         eprintln!("skipping: {artifact} is missing; run `make compile-contracts` first");
         return;
     }
 
-    let info_json = std::fs::read_to_string(&artifact).expect("read contract-info");
-    let info: compact_codegen::types::ContractInfo =
-        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
-    let program =
-        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
-    let circuit = |name: &str| {
-        info.circuits
-            .iter()
-            .find(|c| c.name == name)
-            .unwrap_or_else(|| panic!("circuit {name}"))
-    };
+    let info = common::load_compiled(&keyed);
+    let program = common::program(&info);
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&provider)
-            .await
-            .expect("sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let contract = Contract::deploy(provider)
-        .with_initial_state(ContractState::new(
-            StateValue::Array(vec![].into()),
-            StorageHashMap::new(),
-            ContractMaintenanceAuthority::default(),
-        ))
+        .with_initial_state(common::contract_state(vec![]))
         .with_zk_config(&keyed)
         .await
         .expect("deploy");
@@ -95,7 +66,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     // Mint to the contract itself, so it has a balance to pay out of.
     contract
         .call_with(
-            &circuit("mintToSelf").def,
+            &common::exported_circuit(&info, "mintToSelf").def,
             &program,
             "mintToSelf",
             &[
@@ -115,13 +86,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     // A different wallet from the one that deploys and pays the fees, so an
     // output wrongly owned by the caller would fail this.
     let recipient_provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000002")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&recipient_provider)
-            .await
-            .expect("recipient sync");
+    let wallet = common::synced_wallet(&recipient_provider, common::RECIPIENT_SEED).await;
     let recipient = midnight_helpers::ledger_9::UnshieldedWallet::default(
         midnight_types::ledger_9::convert::IntoLedger::into_ledger(wallet.seed()),
     )
@@ -133,7 +98,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
 
     contract
         .call_with(
-            &circuit("payUser").def,
+            &common::exported_circuit(&info, "payUser").def,
             &program,
             "payUser",
             &[
@@ -169,11 +134,7 @@ async fn held(provider: &MidnightProvider, colour: UnshieldedTokenType) -> u128 
         .balance()
         .await
         .expect("balance")
-        .unshielded
-        .iter()
-        .filter(|u| u.token_type == colour)
-        .map(|u| u.value)
-        .sum()
+        .unshielded_value(colour)
 }
 
 /// [`held`], retried until it reaches `target` or two minutes elapse.

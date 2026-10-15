@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Per-contract private state and signing-key storage with password-encrypted export/import"
 
 [dependencies]
+midnight-owner-only = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 serde = { workspace = true }

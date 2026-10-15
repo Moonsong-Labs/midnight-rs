@@ -28,10 +28,7 @@
 //!
 //!     let contract = counter::Contract::deploy(&provider)
 //!         .with_initial_state(counter::LedgerInitialState::default())
-//!         .with_zk_config(concat!(
-//!             env!("CARGO_MANIFEST_DIR"),
-//!             "/../../devnet/contracts/counter/compiled"
-//!         ))
+//!         .with_zk_config(counter::ZK_CONFIG_DIR)
 //!         .await?;
 //!     let returned = contract.circuits().increment().await?.value;
 //!     println!("increment returned {returned}");
@@ -40,9 +37,9 @@
 //! # fn main() {}
 //! ```
 //!
-//! Both paths point into the compiler's output directory for the contract.
-//! [`contract!`] resolves its path against the root of the calling crate, and
-//! `env!("CARGO_MANIFEST_DIR")` gives the zk config path the same base.
+//! [`contract!`] also emits `ZK_CONFIG_DIR`, the compiler's output directory
+//! for the contract, which `with_zk_config` reads. [`compact_bindgen::contract!`]
+//! states when it emits the const.
 //!
 //! # Features
 //!

@@ -18,23 +18,19 @@
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
 
+mod common;
+
 mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
-use midnight_wallet::Wallet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use midnight_contract::ContractError;
 use midnight_helpers::{DefaultDB, StdRng};
-use midnight_provider::{MidnightProvider, Network, ProviderError, WalletError};
+use midnight_provider::{MidnightProvider, ProviderError, WalletError};
 
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/counter/compiled"
-);
-const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 /// The message of every proof that [`ProofCounter`] fails.
 const MARKER: &str = "the test prover fails on purpose";
 
@@ -76,21 +72,11 @@ macro_rules! proof_counter {
         impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ProofCounter {
             async fn prove(
                 &self,
-                tx: midnight_helpers::$ledger::Transaction<
-                    midnight_helpers::$ledger::Signature,
-                    midnight_helpers::$ledger::ProofPreimageMarker,
-                    midnight_helpers::$ledger::PedersenRandomness,
-                    DefaultDB,
-                >,
+                tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
                 rng: StdRng,
                 resolver: &'static midnight_helpers::$ledger::Resolver,
                 cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::Transaction<
-                midnight_helpers::$ledger::Signature,
-                midnight_helpers::$ledger::ProofMarker,
-                midnight_helpers::$ledger::PedersenRandomness,
-                DefaultDB,
-            > {
+            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
                 if self.fail.load(Ordering::Relaxed) {
                     // `resume_unwind`, not `panic!`: it skips the panic hook,
                     // so the log shows no panic for an expected failure.
@@ -118,37 +104,21 @@ proof_counter!(ledger_9);
 
 #[tokio::test]
 async fn a_funded_call_proves_its_circuit_exactly_once() {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL is missing under make test-e2e");
-        }
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
 
     let counter_proofs = Arc::new(ProofCounter::default());
     let provider =
         MidnightProvider::new(&node_url, &indexer_url).with_proof_provider(counter_proofs.clone());
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .unwrap()
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let authority = midnight_contract::SigningKey::sample(rand::thread_rng());
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(counter::ZK_CONFIG_DIR)
         .with_maintenance_authority(vec![authority.verifying_key()], 1)
-        .send()
-        .await
-        .expect("submit deploy")
-        .into_contract()
         .await
         .expect("deploy");
 
@@ -203,7 +173,7 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         "a deploy",
         counter::Contract::deploy(&provider)
             .with_initial_state(counter::LedgerInitialState::default())
-            .with_zk_config(ZK_KEYS_DIR)
+            .with_zk_config(counter::ZK_CONFIG_DIR)
             .send()
             .await,
     );

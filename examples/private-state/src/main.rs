@@ -45,10 +45,6 @@ mod secret_counter {
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/secret-counter/compiled"
-);
 
 /// Dev node genesis wallet seed (funded with NIGHT tokens at genesis).
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -97,13 +93,10 @@ async fn main() -> anyhow::Result<()> {
 
     // 1. Deploy the secret-counter contract.
     println!("1. Deploying secret-counter...");
-    let pending = secret_counter::Contract::deploy(&provider)
+    let contract = secret_counter::Contract::deploy(&provider)
         .with_initial_state(secret_counter::LedgerInitialState::default())
-        .with_zk_config(ZK_KEYS_DIR)
-        .send()
+        .with_zk_config(secret_counter::ZK_CONFIG_DIR)
         .await?;
-    let (_, pending) = pending.wait_best().await?;
-    let contract = pending.into_contract().await?;
     println!("   address: {}", contract.address());
     println!(
         "   on-chain total = {}\n",

@@ -1,6 +1,7 @@
-use midnight_base_crypto::fab::AlignedValue;
+use midnight_base_crypto::fab::{AlignedValue, InvalidBuiltinDecode, ValueSlice};
 use midnight_onchain_state::state::StateValue;
 use midnight_storage::db::InMemoryDB;
+use midnight_storage::storage::HashMap;
 
 use crate::StateError;
 
@@ -24,6 +25,34 @@ pub fn cell_value(sv: &StateValue<InMemoryDB>) -> Result<&AlignedValue, StateErr
         StateValue::Cell(sp) => Ok(&**sp),
         other => Err(StateError::UnexpectedVariant {
             expected: "Cell",
+            actual: variant_name(other),
+        }),
+    }
+}
+
+/// Converts the value of a `StateValue::Cell` to `T`.
+///
+/// # Errors
+///
+/// Returns an error if `sv` is not a `Cell`, or if its value does not convert
+/// to `T`.
+pub fn cell_as<T>(sv: &StateValue<InMemoryDB>) -> Result<T, StateError>
+where
+    for<'vs> T: TryFrom<&'vs ValueSlice, Error = InvalidBuiltinDecode>,
+{
+    T::try_from(&*cell_value(sv)?.value).map_err(StateError::Conversion)
+}
+
+/// Extracts the map from a `StateValue::Map`.
+///
+/// Returns an error if the value is not a `Map`.
+pub(crate) fn map_value(
+    sv: &StateValue<InMemoryDB>,
+) -> Result<&HashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>, StateError> {
+    match sv {
+        StateValue::Map(map) => Ok(map),
+        other => Err(StateError::UnexpectedVariant {
+            expected: "Map",
             actual: variant_name(other),
         }),
     }

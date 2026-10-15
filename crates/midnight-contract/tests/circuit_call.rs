@@ -5,10 +5,10 @@
 //! builder. They cover witness dispatch, private-state threading, captured
 //! Zswap outputs, `kernel.self()`, and struct arguments.
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
-    StorageHashMap,
-};
+mod common;
+
+use common::{epoch, with_witnesses};
+use compact_bindgen::AlignedValue;
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::call;
@@ -21,15 +21,6 @@ use compact_codegen::ir::{
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn counter_state(round: u64) -> ContractState<InMemoryDB> {
-    let root = StateValue::Array(vec![StateValue::from(round)].into());
-    ContractState::new(
-        root,
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    )
-}
 
 fn id(name: &str) -> Ident {
     Ident(name.to_string())
@@ -80,11 +71,6 @@ fn circuit(arguments: Vec<Argument>, result_type: Type, body: Expr) -> ir::Circu
 /// native.
 fn no_program() -> interpreter::Program<'static> {
     interpreter::Program::new(&[], &[], &[])
-}
-
-/// No witnesses, a scratch private state, the zero address, the epoch.
-fn epoch() -> interpreter::Env<'static> {
-    interpreter::Env::new(Timestamp::from_secs(0))
 }
 
 // ---------------------------------------------------------------------------
@@ -143,16 +129,13 @@ fn witness_failure_on_builtin_name_propagates() {
 
     let witnesses = vec![persistent_hash_witness()];
     let program = interpreter::Program::new(&[], &witnesses, &[]);
-    let state = counter_state(0);
+    let state = common::contract_state(vec![]);
     match interpreter::execute(
         &persistent_hash_witness_ir(),
         &program,
         state,
         &[],
-        interpreter::Env {
-            witnesses: &FailingHsm,
-            ..epoch()
-        },
+        with_witnesses(&FailingHsm),
     ) {
         Ok(_) => panic!("a witness-level failure must propagate, not fall through to the builtin"),
         Err(InterpreterError::Witness(msg)) => {
@@ -169,44 +152,19 @@ fn witness_failure_on_builtin_name_propagates() {
 fn unknown_witness_falls_through_to_builtin() {
     use compact_bindgen::AlignedValue;
     use midnight_contract::interpreter;
-    use midnight_contract::runtime::{InterpreterError, Value, WitnessOutcome, WitnessProvider};
-
-    struct KnowsNothing;
-    impl WitnessProvider for KnowsNothing {
-        fn call_witness(
-            &self,
-            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
-            _name: &str,
-            _args: &[Value],
-        ) -> Result<WitnessOutcome, InterpreterError> {
-            Ok(WitnessOutcome::Unknown)
-        }
-    }
+    use midnight_contract::runtime::Value;
 
     let witnesses = vec![persistent_hash_witness()];
     let program = interpreter::Program::new(&[], &witnesses, &[]);
-    let state = counter_state(0);
-    let result = interpreter::execute(
-        &persistent_hash_witness_ir(),
-        &program,
-        state,
-        &[],
-        interpreter::Env {
-            witnesses: &KnowsNothing,
-            ..epoch()
-        },
-    )
-    .expect("Unknown must fall through to the persistentHash builtin");
+    let state = common::contract_state(vec![]);
+    // `epoch()` carries `NoWitnesses`, which answers `Unknown` for every name.
+    let result = interpreter::execute(&persistent_hash_witness_ir(), &program, state, &[], epoch())
+        .expect("Unknown must fall through to the persistentHash builtin");
 
     // The builtin hashes the argument at the witness's declared type,
     // `Uint<0..65535>`, which is a two-byte atom. Recompute the expected digest
     // independently so a different code path (or no builtin at all) fails.
-    use midnight_base_crypto::hash::PersistentHashWriter;
-    use midnight_base_crypto::repr::BinaryHashRepr;
-    use midnight_transient_crypto::fab::ValueReprAlignedValue;
-    let mut hasher = PersistentHashWriter::default();
-    ValueReprAlignedValue(AlignedValue::from(7u16)).binary_repr(&mut hasher);
-    let expected = AlignedValue::from(hasher.finalize().0);
+    let expected = common::persistent_hash(AlignedValue::from(7u16));
 
     match result.result {
         Some(Value::AlignedValue(av)) => assert_eq!(av, expected, "builtin hash mismatch"),
@@ -265,7 +223,7 @@ fn witness_context_threads_private_state() {
         },
     );
 
-    let state = counter_state(0);
+    let state = common::contract_state(vec![]);
     let mut private_state = Vec::new();
 
     // First call: witness sees an empty (= 0) state and returns 0.
@@ -356,7 +314,7 @@ fn interpreter_captures_create_zswap_output() {
         },
     );
 
-    let state = counter_state(0);
+    let state = common::contract_state(vec![]);
     let coin = Value::AlignedValue(AlignedValue::from([7u8; 32]));
     let recipient = Value::AlignedValue(AlignedValue::from([9u8; 32]));
 
@@ -397,13 +355,6 @@ fn mint_probe_info() -> compact_codegen::types::ContractInfo {
     compact_codegen::artifact::load_str(text).unwrap()
 }
 
-fn mint_circuit(info: &compact_codegen::types::ContractInfo) -> &compact_codegen::types::Circuit {
-    info.circuits
-        .iter()
-        .find(|c| c.name == "mint")
-        .expect("mint circuit")
-}
-
 /// The `recipient` argument's declared type must carry the nested `Either` /
 /// `ZswapCoinPublicKey` / `ContractAddress` layout the interpreter needs to
 /// slice it. The type is the only source of that layout, so a compiler that
@@ -412,7 +363,7 @@ fn mint_circuit(info: &compact_codegen::types::ContractInfo) -> &compact_codegen
 #[test]
 fn the_recipient_argument_type_carries_its_nested_layout() {
     let info = mint_probe_info();
-    let mint = mint_circuit(&info);
+    let mint = common::exported_circuit(&info, "mint");
 
     let arg_types = compact_codegen::arg_types::circuit_arg_types(mint.arguments());
     let (_, recipient) = arg_types
@@ -481,18 +432,14 @@ fn run_mint(
     use midnight_contract::interpreter;
 
     let info = mint_probe_info();
-    let mint = mint_circuit(&info);
-    let program = interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
+    let mint = common::exported_circuit(&info, "mint");
+    let program = common::program(&info);
 
     // Harvest the inline `Either` / `ZswapCoinPublicKey` / `ContractAddress`
     // defs from the circuit arguments, exactly as the funded call path does.
 
     // Deployed mint contract has no user ledger fields: data is an empty array.
-    let state = ContractState::new(
-        StateValue::Array(vec![].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = common::contract_state(vec![]);
 
     let args = mint_args(domain_sep);
 
@@ -557,11 +504,7 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
         },
     );
 
-    let state = ContractState::new(
-        StateValue::Array(vec![].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = common::contract_state(vec![]);
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0x5Au8; 32]));
 
     let result = interpreter::execute(
@@ -574,15 +517,11 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
     .expect("kernel.self() circuit executes");
 
     match result.result {
-        Some(Value::AlignedValue(av)) => {
-            let atom = &av.value.0[0];
-            let mut b = [0u8; 32];
-            b[..atom.0.len()].copy_from_slice(&atom.0);
-            assert_eq!(
-                b, [0x5Au8; 32],
-                "kernel.self() must return the supplied address"
-            );
-        }
+        Some(Value::AlignedValue(av)) => assert_eq!(
+            ContractAddress::try_from(&*av.value).expect("one address atom"),
+            address,
+            "kernel.self() must return the supplied address"
+        ),
         other => panic!("expected the contract address, got {other:?}"),
     }
 }
@@ -602,10 +541,9 @@ fn interpreter_runs_mint_shielded_token_circuit() {
         // coin AlignedValue atoms: [nonce(32), color(32), value]. Color is
         // atom 1, FAB-trimmed of trailing zeros.
         let av = out.coin.try_to_aligned_value().unwrap();
-        let atom = &av.value.0[1];
-        let mut c = [0u8; 32];
-        c[..atom.0.len()].copy_from_slice(&atom.0);
-        c
+        midnight_base_crypto::hash::HashOutput::try_from(&av.value.0[1])
+            .expect("a 32-byte color atom")
+            .0
     }
 
     let domain = [1u8; 32];
@@ -623,25 +561,20 @@ fn interpreter_runs_mint_shielded_token_circuit() {
     );
 }
 
-/// Regression: the low-level `build_unproven_call_tx` builder must thread the
-/// circuit's declared argument types and struct layouts to the interpreter. The
-/// mint circuit destructures an `Either` recipient (`recipient.is_left`);
-/// without the argument's declared type and struct layout the field access
-/// fails with "unknown receiver type".
-#[test]
-fn build_unproven_call_tx_handles_struct_arguments() {
+/// The mint circuit's call, through the low-level `build_unproven_call_tx`.
+#[expect(
+    clippy::result_large_err,
+    reason = "it hands the tests the result of `build_unproven_call_tx` unchanged"
+)]
+fn build_unproven_mint_call() -> Result<call::UnprovenCallTx, midnight_contract::ContractError> {
     let info = mint_probe_info();
-    let mint = mint_circuit(&info);
-    let program = interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
+    let mint = common::exported_circuit(&info, "mint");
+    let program = common::program(&info);
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xCD; 32]));
-    let state = ContractState::new(
-        StateValue::Array(vec![].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = common::contract_state(vec![]);
     let args = mint_args([1u8; 32]);
 
-    let ok = call::build_unproven_call_tx(
+    call::build_unproven_call_tx(
         &mint.def,
         &program,
         &state,
@@ -652,10 +585,34 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         &args,
         &midnight_contract::runtime::NoWitnesses,
         None,
-    );
+    )
+}
+
+/// Regression: the low-level `build_unproven_call_tx` builder must thread the
+/// circuit's declared argument types and struct layouts to the interpreter. The
+/// mint circuit destructures an `Either` recipient (`recipient.is_left`);
+/// without the argument's declared type and struct layout the field access
+/// fails with "unknown receiver type".
+#[test]
+fn build_unproven_call_tx_handles_struct_arguments() {
+    let ok = build_unproven_mint_call();
     assert!(
         ok.is_ok(),
         "build_unproven_call_tx must handle struct arguments: {:?}",
         ok.err()
     );
+}
+
+/// The ledger refuses an intent at the guaranteed segment (0), so the call's
+/// intent must sit at another one.
+#[test]
+fn build_unproven_call_tx_keeps_its_intent_out_of_the_guaranteed_segment() {
+    let built = build_unproven_mint_call().expect("the mint call builds");
+    let segments: Vec<u16> = built
+        .transaction
+        .intents()
+        .map(|(segment, _)| segment)
+        .collect();
+    assert_eq!(segments.len(), 1, "the call adds one intent");
+    assert_ne!(segments[0], 0, "the intent is at the guaranteed segment");
 }

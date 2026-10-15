@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use subxt::OnlineClient;
 use subxt::config::RpcConfigFor;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
-use subxt::rpcs::client::{RpcClient, RpcParams};
+use subxt::rpcs::client::{RpcClient, RpcParams, rpc_params};
 use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
@@ -18,7 +18,7 @@ use crate::{
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
-    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
+    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
     TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
@@ -49,14 +49,7 @@ struct NodeConnection {
 pub struct MidnightProvider {
     indexer_url: String,
     node_url: String,
-    /// The wallet, reached only through its API.
-    ///
-    /// How its state is shared is the implementation's business: every method
-    /// on [`WalletFacade`] returns an owned value or covers one transition, so
-    /// nothing here holds a lock. Cloning the `Arc` is cheap and safe.
-    wallet: Option<Arc<dyn WalletFacade>>,
-    /// The same wallet, as each generation's builds.
-    builds: Option<WalletBuildsOf>,
+    wallet: Option<AttachedWallet>,
     /// Proof backends for transaction building, one per ledger generation.
     /// Defaults to the local provers on first use; override with
     /// [`Self::with_proof_provider`] to use a remote prover or a custom
@@ -100,7 +93,6 @@ impl MidnightProvider {
             indexer_url: indexer_url.to_string(),
             node_url: node_url.to_string(),
             wallet: None,
-            builds: None,
             proof_provider: None,
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
@@ -226,17 +218,22 @@ impl MidnightProvider {
     /// it, for example on a timer in a UI.
     pub fn with_wallet(mut self, wallet: impl IntoWalletFacade) -> Self {
         let wallet = Arc::new(wallet.into_facade());
-        self.builds = Some(WalletBuildsOf {
+        self.wallet = Some(AttachedWallet {
+            facade: wallet.clone(),
             ledger_8: wallet.clone(),
-            ledger_9: wallet.clone(),
+            ledger_9: wallet,
         });
-        self.wallet = Some(wallet);
         self
     }
 
     /// The attached wallet, as the API it implements.
     pub(crate) fn facade(&self) -> Option<Arc<dyn WalletFacade>> {
-        self.wallet.clone()
+        self.wallet.as_ref().map(|wallet| wallet.facade.clone())
+    }
+
+    /// The attached wallet, or [`ProviderError::NoWallet`] when there is none.
+    fn attached(&self) -> Result<&AttachedWallet, ProviderError> {
+        self.wallet.as_ref().ok_or(ProviderError::NoWallet)
     }
 
     /// The ledger generation the chain runs at the current finalized block.
@@ -251,22 +248,9 @@ impl MidnightProvider {
     /// returns an error, or when it returns parameters of a generation this
     /// build does not link.
     pub async fn ledger_version(&self) -> Result<LedgerVersion, ProviderError> {
-        let conn = self.get_or_connect().await?;
-
-        let payload = subxt::dynamic::runtime_api_call::<(), Result<Vec<u8>, subxt::dynamic::Value>>(
-            "MidnightRuntimeApi",
-            "get_ledger_parameters",
-            (),
-        );
-        let parameters = conn
-            .client
-            .at_current_block()
-            .await
-            .map_err(|e| ProviderError::Rpc(format!("reading the finalized block: {e}")))?
-            .runtime_apis()
-            .call(payload)
-            .await
-            .map_err(|e| ProviderError::Rpc(format!("calling get_ledger_parameters: {e}")))?
+        let parameters = self
+            .call_runtime_api::<Result<Vec<u8>, subxt::dynamic::Value>>("get_ledger_parameters")
+            .await?
             .map_err(|e| ProviderError::Rpc(format!("get_ledger_parameters failed: {e}")))?;
         LedgerVersion::of_ledger_parameters(&parameters)
             .map_err(|e| ProviderError::Rpc(format!("decoding the ledger parameters: {e}")))
@@ -281,18 +265,17 @@ impl MidnightProvider {
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn builds(&self) -> Result<Builds<'_>, ProviderError> {
         self.resync_wallet().await?;
-        let wallet = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let builds = self.builds.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = self.attached()?;
         let provers = self.proof_provider();
-        Ok(match wallet.ledger_version().await {
+        Ok(match wallet.facade.ledger_version().await {
             LedgerVersion::V8 => Builds::Ledger8(ledger_8::Builds::new(
                 self,
-                builds.ledger_8.clone(),
+                wallet.ledger_8.clone(),
                 provers.ledger_8(),
             )),
             LedgerVersion::V9 => Builds::Ledger9(ledger_9::Builds::new(
                 self,
-                builds.ledger_9.clone(),
+                wallet.ledger_9.clone(),
                 provers.ledger_9(),
             )),
         })
@@ -302,8 +285,7 @@ impl MidnightProvider {
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn balance(&self) -> Result<WalletBalance, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.balance().await)
+        Ok(self.attached()?.facade.balance().await)
     }
 
     /// Enumerate the wallet's spendable shielded coins with their full coin
@@ -317,24 +299,21 @@ impl MidnightProvider {
     pub async fn spendable_shielded_coins(
         &self,
     ) -> Result<Vec<SpendableShieldedCoin>, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.spendable_shielded_coins().await)
+        Ok(self.attached()?.facade.spendable_shielded_coins().await)
     }
 
     /// Whether the attached wallet has completed dust sync.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn dust_synced(&self) -> Result<bool, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.dust_synced().await)
+        Ok(self.attached()?.facade.dust_synced().await)
     }
 
     /// The unshielded UTXOs the attached wallet tracks.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn unshielded_utxos(&self) -> Result<Vec<TrackedUtxo>, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.unshielded_utxos().await)
+        Ok(self.attached()?.facade.unshielded_utxos().await)
     }
 
     /// The chain's Dust and TTL parameters, as the attached wallet last synced
@@ -342,8 +321,7 @@ impl MidnightProvider {
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn parameters(&self) -> Result<ChainParameters, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.parameters().await)
+        Ok(self.attached()?.facade.parameters().await)
     }
 
     /// How far the attached wallet's sync has reached. See
@@ -351,8 +329,7 @@ impl MidnightProvider {
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn sync_cursors(&self) -> Result<SyncCursors, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.sync_cursors().await)
+        Ok(self.attached()?.facade.sync_cursors().await)
     }
 
     /// Re-sync the wallet against the indexer.
@@ -378,7 +355,7 @@ impl MidnightProvider {
     }
 
     async fn resync_wallet_inner(&self) -> Result<(), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = &self.attached()?.facade;
 
         // Serialize resyncs across plan → replay → commit: the replay below
         // runs without the wallet lock, so without this guard two concurrent
@@ -391,7 +368,7 @@ impl MidnightProvider {
         //
         // The wallet resumes against its own indexer and checks its own chain
         // pin; this provider is only the node view those checks ask.
-        arc.resync(self).await?;
+        wallet.resync(self).await?;
         Ok(())
     }
 
@@ -461,13 +438,13 @@ impl MidnightProvider {
         coins: impl IntoIterator<Item = CoinInfo> + Send,
     ) -> Result<(), ProviderError> {
         let coins: Vec<CoinInfo> = coins.into_iter().collect();
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = &self.attached()?.facade;
         if coins.is_empty() {
             return Ok(());
         }
         let _resync_guard = self.resync_lock.lock().await;
-        arc.watch_for_coins(coins).await?;
-        self.rescan_shielded_serialized(arc).await
+        wallet.watch_for_coins(coins).await?;
+        self.rescan_shielded_serialized(wallet).await
     }
 
     /// Drop a registration [`Self::watch_for_coin`] made, for a coin that
@@ -485,12 +462,12 @@ impl MidnightProvider {
         &self,
         coins: impl IntoIterator<Item = CoinInfo> + Send,
     ) -> Result<(), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = &self.attached()?.facade;
         // Serialized against resyncs: a resync commits the state its plan
         // snapshotted, which still carries a registration dropped after that
         // snapshot, so an unserialized forget would come back.
         let _resync_guard = self.resync_lock.lock().await;
-        arc.forget_coins(coins.into_iter().collect()).await?;
+        wallet.forget_coins(coins.into_iter().collect()).await?;
         Ok(())
     }
 
@@ -502,9 +479,9 @@ impl MidnightProvider {
     /// repair because its cursor has moved past the events in question.
     /// Dust state, unshielded state, and their cursors are left alone.
     pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = &self.attached()?.facade;
         let _resync_guard = self.resync_lock.lock().await;
-        self.rescan_shielded_serialized(arc).await
+        self.rescan_shielded_serialized(wallet).await
     }
 
     /// The rescan's plan → run → commit sequence. The caller must already
@@ -623,88 +600,17 @@ impl MidnightProvider {
 
     // -- Internal build paths driven by the transfer/register builders. --
 
-    /// Build a shielded transfer. `pay_fees` false produces a Dustless
-    /// (fee-less) transaction for another wallet to sponsor via
-    /// [`Self::balance_transaction`]; the builder's `.without_dust()` path
-    /// passes false, every other path passes true.
-    pub(crate) async fn build_shielded_transfer(
-        &self,
-        token_type: ShieldedTokenType,
-        amount: u128,
-        recipient: &str,
-        pay_fees: bool,
-        coin_selection: midnight_types::CoinSelectionStrategy,
-    ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(
-            TransferRequest::new(TransferKind::Shielded {
-                token_type,
-                amount,
-                recipient: recipient.to_string(),
-                pay_fees,
-            })
-            .with_coin_selection(coin_selection),
-        )
-        .await
-    }
-
-    /// Build a shielded swap half. Always fee-less (an unbalanced half can't
-    /// self-fund), so there is no `pay_fees` flag. Reserves the spent give-side
-    /// coins so a later in-process build doesn't re-select them.
-    pub(crate) async fn build_shielded_swap(
-        &self,
-        give_token: ShieldedTokenType,
-        give_amount: u128,
-        receive_token: ShieldedTokenType,
-        receive_amount: u128,
-        coin_selection: midnight_types::CoinSelectionStrategy,
-    ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(
-            TransferRequest::new(TransferKind::ShieldedSwap {
-                give_token,
-                give_amount,
-                receive_token,
-                receive_amount,
-            })
-            .with_coin_selection(coin_selection),
-        )
-        .await
-    }
-
-    /// Build an unshielded transfer. See [`Self::build_shielded_transfer`] for
-    /// the `pay_fees` flag.
-    pub(crate) async fn build_unshielded_transfer(
-        &self,
-        token_type: UnshieldedTokenType,
-        amount: u128,
-        recipient: &str,
-        pay_fees: bool,
-        coin_selection: midnight_types::CoinSelectionStrategy,
-    ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(
-            TransferRequest::new(TransferKind::Unshielded {
-                token_type,
-                amount,
-                recipient: recipient.to_string(),
-                pay_fees,
-            })
-            .with_coin_selection(coin_selection),
-        )
-        .await
-    }
-
-    pub(crate) async fn build_register_dust(
-        &self,
-        utxo_ctime: Option<u64>,
-    ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(TransferRequest::new(TransferKind::DustRegistration {
-            utxo_ctime,
-        }))
-        .await
-    }
-
     /// Prepare a build under the attached wallet, then prove without it, on
     /// the generation the wallet's state is in.
-    async fn build_then_prove(
+    pub(crate) async fn build_then_prove(
+        &self,
+        request: TransferRequest,
+    ) -> Result<TransferResult, ProviderError> {
+        // Boxed; see the frame-size note on `resync_wallet`.
+        Box::pin(self.build_then_prove_inner(request)).await
+    }
+
+    async fn build_then_prove_inner(
         &self,
         request: TransferRequest,
     ) -> Result<TransferResult, ProviderError> {
@@ -843,8 +749,7 @@ impl MidnightProvider {
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn release(&self, spent: &SpentInputs) -> Result<(), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        arc.release(spent).await;
+        self.attached()?.facade.release(spent).await;
         Ok(())
     }
 
@@ -864,16 +769,16 @@ impl MidnightProvider {
         result: &TransferResult,
     ) -> Result<PendingTx, ProviderError> {
         match self.submit(&result.tx_bytes).await {
-            Ok(pending) => Ok(match self.wallet.as_ref() {
+            Ok(pending) => Ok(match self.facade() {
                 Some(wallet) => pending.with_reservation(crate::submit::Reservation::new(
-                    wallet.clone(),
-                    SpentInputs::from(result),
+                    wallet,
+                    result.spent.clone(),
                 )),
                 None => pending,
             }),
             Err(err) => {
                 if crate::submit::never_reached_the_node(&err)
-                    && let Err(release_err) = self.release(&SpentInputs::from(result)).await
+                    && let Err(release_err) = self.release(&result.spent).await
                 {
                     tracing::warn!(
                         error = %release_err,
@@ -893,8 +798,7 @@ impl MidnightProvider {
     pub async fn shielded_public_keys(
         &self,
     ) -> Result<(CoinPublicKey, EncryptionPublicKey), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.shielded_public_keys().await)
+        Ok(self.attached()?.facade.shielded_public_keys().await)
     }
 
     /// Get or create the node connection.
@@ -938,6 +842,22 @@ impl MidnightProvider {
             *guard = Some(NodeConnection { rpc, client });
         }
         Ok(guard.as_ref().unwrap().clone())
+    }
+
+    async fn call_runtime_api<R: subxt::ext::scale_decode::DecodeAsType>(
+        &self,
+        method: &str,
+    ) -> Result<R, ProviderError> {
+        let conn = self.get_or_connect().await?;
+        let payload = subxt::dynamic::runtime_api_call::<(), R>("MidnightRuntimeApi", method, ());
+        conn.client
+            .at_current_block()
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("reading the finalized block: {e}")))?
+            .runtime_apis()
+            .call(payload)
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("calling {method}: {e}")))
     }
 }
 
@@ -1068,28 +988,16 @@ impl MidnightProvider {
     pub async fn get_block_number(&self) -> Result<u64, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let header: serde_json::Value =
-            match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!(error = %e, "chain_getHeader failed");
-                    return Err(ProviderError::Rpc(e.to_string()));
-                }
-            };
+        let header = legacy_rpc(&conn)
+            .chain_get_header(None)
+            .await
+            .map_err(rpc_error("chain_getHeader"))?;
 
-        debug!(header = %header, "chain_getHeader response");
+        debug!(header = ?header, "chain_getHeader response");
 
-        let block_number = header
-            .get("number")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProviderError::Rpc("missing 'number' field in header".to_string()))
-            .and_then(|hex| {
-                let hex = hex.strip_prefix("0x").unwrap_or(hex);
-                u64::from_str_radix(hex, 16)
-                    .map_err(|e| ProviderError::Rpc(format!("invalid block number hex: {e}")))
-            })?;
-
-        Ok(block_number)
+        header
+            .map(|header| header.number)
+            .ok_or_else(|| ProviderError::Rpc("chain_getHeader returned no header".to_string()))
     }
 
     /// Get the hash of the node's best block (`chain_getBlockHash` with no
@@ -1102,17 +1010,13 @@ impl MidnightProvider {
     pub async fn best_block_hash(&self) -> Result<NodeBlockHash, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let rpc = LegacyRpcMethods::<RpcConfigFor<subxt::SubstrateConfig>>::new(conn.rpc.clone());
-        match rpc.chain_get_block_hash(None).await {
-            Ok(Some(hash)) => Ok(hash),
-            Ok(None) => Err(ProviderError::Rpc(
-                "chain_getBlockHash returned no best block".to_string(),
-            )),
-            Err(e) => {
-                warn!(error = %e, "chain_getBlockHash failed");
-                Err(ProviderError::Rpc(e.to_string()))
-            }
-        }
+        legacy_rpc(&conn)
+            .chain_get_block_hash(None)
+            .await
+            .map_err(rpc_error("chain_getBlockHash"))?
+            .ok_or_else(|| {
+                ProviderError::Rpc("chain_getBlockHash returned no best block".to_string())
+            })
     }
 
     /// Get the latest finalized block height (`archive_v1_finalizedHeight`).
@@ -1123,13 +1027,11 @@ impl MidnightProvider {
     pub async fn get_finalized_block_height(&self) -> Result<u64, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        match archive_rpc(&conn).archive_v1_finalized_height().await {
-            Ok(height) => Ok(height as u64),
-            Err(e) => {
-                warn!(error = %e, "archive_v1_finalizedHeight failed");
-                Err(ProviderError::Rpc(e.to_string()))
-            }
-        }
+        archive_rpc(&conn)
+            .archive_v1_finalized_height()
+            .await
+            .map(|height| height as u64)
+            .map_err(rpc_error("archive_v1_finalizedHeight"))
     }
 
     /// Get the hashes of the blocks at `height` (`archive_v1_hashByHeight`):
@@ -1147,13 +1049,10 @@ impl MidnightProvider {
 
         let height = usize::try_from(height)
             .map_err(|_| ProviderError::Rpc(format!("block height {height} overflows usize")))?;
-        match archive_rpc(&conn).archive_v1_hash_by_height(height).await {
-            Ok(hashes) => Ok(hashes),
-            Err(e) => {
-                warn!(error = %e, "archive_v1_hashByHeight failed");
-                Err(ProviderError::Rpc(e.to_string()))
-            }
-        }
+        archive_rpc(&conn)
+            .archive_v1_hash_by_height(height)
+            .await
+            .map_err(rpc_error("archive_v1_hashByHeight"))
     }
 
     /// Get the header of the block with `hash` (`archive_v1_header`), or
@@ -1165,13 +1064,10 @@ impl MidnightProvider {
     ) -> Result<Option<NodeHeader>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        match archive_rpc(&conn).archive_v1_header(hash).await {
-            Ok(header) => Ok(header),
-            Err(e) => {
-                warn!(error = %e, "archive_v1_header failed");
-                Err(ProviderError::Rpc(e.to_string()))
-            }
-        }
+        archive_rpc(&conn)
+            .archive_v1_header(hash)
+            .await
+            .map_err(rpc_error("archive_v1_header"))
     }
 
     /// Get the timestamp of the block with `hash`, as time since the Unix
@@ -1214,13 +1110,11 @@ impl MidnightProvider {
     pub async fn system_chain(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let chain: String = match conn.rpc.request("system_chain", RpcParams::new()).await {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(error = %e, "system_chain failed");
-                return Err(ProviderError::Rpc(e.to_string()));
-            }
-        };
+        let chain: String = conn
+            .rpc
+            .request("system_chain", RpcParams::new())
+            .await
+            .map_err(rpc_error("system_chain"))?;
 
         debug!(chain = %chain, "system_chain response");
 
@@ -1248,23 +1142,9 @@ impl MidnightProvider {
     /// cannot be reached, or when its metadata describes no such API or
     /// another return type.
     pub async fn ledger_network_id(&self) -> Result<Option<Network>, ProviderError> {
-        let conn = self.get_or_connect().await?;
-
-        let payload = subxt::dynamic::runtime_api_call::<(), String>(
-            "MidnightRuntimeApi",
-            "get_network_id",
-            (),
-        );
-        let id = conn
-            .client
-            .at_current_block()
+        self.call_runtime_api::<String>("get_network_id")
             .await
-            .map_err(|e| ProviderError::Rpc(format!("reading the finalized block: {e}")))?
-            .runtime_apis()
-            .call(payload)
-            .await
-            .map_err(|e| ProviderError::Rpc(format!("calling get_network_id: {e}")))?;
-        Ok(network_from_runtime_id(id))
+            .map(network_from_runtime_id)
     }
 
     /// The [`Network`] this provider's wallet derives addresses for.
@@ -1273,8 +1153,7 @@ impl MidnightProvider {
     /// [`MidnightProvider::ledger_network_id`]. Errors if no wallet is
     /// attached.
     pub async fn network(&self) -> Result<Network, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.network().await)
+        Ok(self.attached()?.facade.network().await)
     }
 
     /// Best-effort health status of the node.
@@ -1307,25 +1186,20 @@ impl MidnightProvider {
 
                 debug!(health = ?sys_health, "system_health response");
 
-                let header: Option<serde_json::Value> =
-                    match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
-                        Ok(v) => Some(v),
-                        Err(e) => {
-                            warn!(error = %e, "chain_getHeader RPC call failed");
-                            None
-                        }
-                    };
+                let header = match legacy_rpc(&conn).chain_get_header(None).await {
+                    Ok(header) => Some(header),
+                    Err(e) => {
+                        warn!(error = %e, "chain_getHeader RPC call failed");
+                        None
+                    }
+                };
 
                 debug!(header = ?header, "chain_getHeader response");
 
                 let block_height = header
                     .as_ref()
-                    .and_then(|v| v.get("number"))
-                    .and_then(|v| v.as_str())
-                    .and_then(|hex| {
-                        let hex = hex.strip_prefix("0x").unwrap_or(hex);
-                        u64::from_str_radix(hex, 16).ok()
-                    });
+                    .and_then(Option::as_ref)
+                    .map(|header| header.number);
 
                 let node_connected = sys_health.is_some() || header.is_some();
                 (node_connected, block_height, peers, is_syncing)
@@ -1358,16 +1232,12 @@ impl MidnightProvider {
         at_block_hash: Option<NodeBlockHash>,
     ) -> Result<Option<String>, ProviderError> {
         let conn = self.get_or_connect().await?;
-        let mut params = RpcParams::new();
-        params
-            .push(address)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        params
-            .push(at_block_hash.map(|hash| format!("{hash:#x}")))
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         match conn
             .rpc
-            .request::<String>("midnight_contractState", params)
+            .request::<String>(
+                "midnight_contractState",
+                rpc_params![address, at_block_hash],
+            )
             .await
         {
             Ok(hex_state) => Ok((!hex_state.is_empty()).then_some(hex_state)),
@@ -1387,18 +1257,11 @@ impl MidnightProvider {
         at_block_hash: Option<NodeBlockHash>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         let conn = self.get_or_connect().await?;
-        let mut params = RpcParams::new();
-        params
-            .push(address)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        params
-            .push(queries)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        params
-            .push(at_block_hash.map(|hash| format!("{hash:#x}")))
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         conn.rpc
-            .request("midnight_queryContractState", params)
+            .request(
+                "midnight_queryContractState",
+                rpc_params![address, queries, at_block_hash],
+            )
             .await
             .map_err(|e| ProviderError::Rpc(e.to_string()))
     }
@@ -1424,8 +1287,14 @@ impl Builds<'_> {
     }
 }
 
-/// One wallet, as the builds of each generation.
-struct WalletBuildsOf {
+/// The attached wallet, reached only through its API: as the facade, and as
+/// the builds of each generation.
+///
+/// How its state is shared is the implementation's business: every method
+/// on [`WalletFacade`] returns an owned value or covers one transition, so
+/// nothing here holds a lock. Cloning an `Arc` is cheap and safe.
+struct AttachedWallet {
+    facade: Arc<dyn WalletFacade>,
     ledger_8: Arc<dyn midnight_wallet_facade::ledger_8::WalletBuilds>,
     ledger_9: Arc<dyn midnight_wallet_facade::ledger_9::WalletBuilds>,
 }
@@ -1575,6 +1444,20 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
 /// derived from the chain's Substrate config.
 fn archive_rpc(conn: &NodeConnection) -> ChainHeadRpcMethods<RpcConfigFor<subxt::SubstrateConfig>> {
     ChainHeadRpcMethods::new(conn.rpc.clone())
+}
+
+/// Typed view over a connection's raw client for the legacy `chain_*` RPCs,
+/// with hash and header types derived from the chain's Substrate config.
+fn legacy_rpc(conn: &NodeConnection) -> LegacyRpcMethods<RpcConfigFor<subxt::SubstrateConfig>> {
+    LegacyRpcMethods::new(conn.rpc.clone())
+}
+
+/// Log a failed node RPC `method` and wrap its error as [`ProviderError::Rpc`].
+fn rpc_error(method: &'static str) -> impl FnOnce(subxt::rpcs::Error) -> ProviderError {
+    move |e| {
+        warn!(error = %e, "{method} failed");
+        ProviderError::Rpc(e.to_string())
+    }
 }
 
 #[cfg(test)]

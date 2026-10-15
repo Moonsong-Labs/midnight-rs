@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
 use midnight_types::LedgerVersion;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -128,66 +129,46 @@ impl TryFrom<StoredUtxo> for TrackedUtxo {
     }
 }
 
-/// A wallet's storage directory, keyed on a public `wallet_id` (see
+/// A wallet's snapshot directory, keyed on a public `wallet_id` (see
 /// [`wallet_storage_id`]) rather than the seed. The directory name
 /// is the identity, so nothing secret, and nothing else, needs to be persisted
 /// to tell one wallet's snapshot from another's.
-pub(crate) fn storage_dir(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
+pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
     base.join(network).join(wallet_id)
 }
 
-/// Create the wallet's storage directory, readable only by its owner on unix.
+/// [`midnight_owner_only::create_dir_all`] for the wallet's storage directory.
 ///
 /// The tree holds the wallet's UTXO set, spend history and reserved
 /// nullifiers. None of that is secret in the key sense, but it is a full
 /// picture of the wallet's activity and there is no reason for another local
-/// user to have it. `mode` applies only to directories this call creates, so
-/// an existing one is narrowed explicitly.
+/// user to have it.
 ///
 /// Only the wallet's own directory is narrowed. An ancestor an earlier version
 /// or another tool created keeps its mode, so the set of wallet ids under a
-/// network may stay listable. Permissions are unchanged on other platforms.
-fn create_private_dir(dir: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    #[cfg(not(unix))]
-    std::fs::create_dir_all(dir)?;
-    Ok(())
+/// network may stay listable.
+fn create_private_dir(dir: &Path) -> Result<(), WalletError> {
+    midnight_owner_only::create_dir_all(dir)
+        .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))
 }
 
-/// Write a file readable only by its owner on unix. See
-/// [`create_private_dir`] for why. Callers write to a temporary path and
-/// rename, and rename preserves the mode, so setting it here covers the final
-/// file too.
-///
-/// Permissions are unchanged on other platforms.
-fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        // `mode` applies only when this call creates the file, so a path left
-        // wider by an earlier version is still wide here. Narrow it before the
-        // contents land rather than after, or they are briefly readable.
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        file.write_all(contents)?;
-        Ok(())
+fn write_atomic(dir: &Path, filename: &str, contents: &[u8]) -> Result<(), WalletError> {
+    let tmp = dir.join(format!("{filename}.tmp"));
+    midnight_owner_only::write(&tmp, contents)
+        .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
+    std::fs::rename(&tmp, dir.join(filename))
+        .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))
+}
+
+fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, WalletError> {
+    if !path.exists() {
+        return Ok(None);
     }
-    #[cfg(not(unix))]
-    std::fs::write(path, contents)
+    let json = std::fs::read_to_string(path)
+        .map_err(|e| WalletError::Storage(format!("read {}: {e}", path.display())))?;
+    serde_json::from_str(&json)
+        .map(Some)
+        .map_err(|e| WalletError::Storage(format!("parse {}: {e}", path.display())))
 }
 
 pub(crate) fn tagged_to_file<
@@ -198,16 +179,10 @@ pub(crate) fn tagged_to_file<
     filename: &str,
     value: &T,
 ) -> Result<(), WalletError> {
-    let path = dir.join(filename);
-    let tmp = dir.join(format!("{filename}.tmp"));
     let mut buf = Vec::new();
     tagged_serialize(value, &mut buf)
         .map_err(|e| WalletError::Storage(format!("serialize {filename}: {e}")))?;
-    write_private(&tmp, &buf)
-        .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))?;
-    Ok(())
+    write_atomic(dir, filename, &buf)
 }
 
 pub(crate) fn tagged_from_file<
@@ -224,17 +199,37 @@ pub(crate) fn tagged_from_file<
         .map_err(|e| WalletError::Storage(format!("deserialize {filename}: {e}")))
 }
 
+/// `value`'s tagged serialization, hex-encoded. `what` names it in an error.
+pub(crate) fn tagged_to_hex<
+    T: midnight_helpers::midnight_serialize::Serializable
+        + midnight_helpers::midnight_serialize::Tagged,
+>(
+    value: &T,
+    what: &str,
+) -> Result<String, WalletError> {
+    let mut buf = Vec::new();
+    tagged_serialize(value, &mut buf)
+        .map_err(|e| WalletError::Storage(format!("serialize {what}: {e}")))?;
+    Ok(hex::encode(buf))
+}
+
+/// The value that [`tagged_to_hex`] encoded as `encoded`.
+pub(crate) fn tagged_from_hex<
+    T: midnight_helpers::midnight_serialize::Deserializable
+        + midnight_helpers::midnight_serialize::Tagged,
+>(
+    encoded: &str,
+    what: &str,
+) -> Result<T, WalletError> {
+    let bytes =
+        hex::decode(encoded).map_err(|e| WalletError::Storage(format!("decode {what}: {e}")))?;
+    tagged_deserialize(&bytes[..])
+        .map_err(|e| WalletError::Storage(format!("deserialize {what}: {e}")))
+}
+
 /// Read a snapshot's `metadata.json`, or `None` when there is no snapshot.
 pub(crate) fn read_metadata(dir: &Path) -> Result<Option<StoredMetadata>, WalletError> {
-    let meta_path = dir.join(METADATA_FILE);
-    if !meta_path.exists() {
-        return Ok(None);
-    }
-    let meta_json = std::fs::read_to_string(&meta_path)
-        .map_err(|e| WalletError::Storage(format!("read {}: {e}", meta_path.display())))?;
-    serde_json::from_str(&meta_json)
-        .map(Some)
-        .map_err(|e| WalletError::Storage(format!("parse metadata: {e}")))
+    read_json(&dir.join(METADATA_FILE))
 }
 
 /// Read only the chain pin from a snapshot, without loading the wallet state
@@ -246,14 +241,8 @@ pub(crate) fn load_chain_pin(
     network: &str,
     wallet_id: &str,
 ) -> Result<Option<ChainPin>, WalletError> {
-    let dir = storage_dir(base, network, wallet_id);
+    let dir = snapshot_path(base, network, wallet_id);
     Ok(read_metadata(&dir)?.and_then(|m| m.chain_pin))
-}
-
-/// Where a wallet's snapshot lives, for an error that tells a reader what to
-/// remove.
-pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
-    storage_dir(base, network, wallet_id)
 }
 
 /// The ledger generation of a snapshot's state files, or `None` when there
@@ -263,7 +252,7 @@ pub(crate) fn load_ledger_version(
     network: &str,
     wallet_id: &str,
 ) -> Result<Option<LedgerVersion>, WalletError> {
-    let dir = storage_dir(base, network, wallet_id);
+    let dir = snapshot_path(base, network, wallet_id);
     Ok(read_metadata(&dir)?.map(|m| m.ledger_version))
 }
 
@@ -277,17 +266,12 @@ pub(crate) fn save_snapshot(
     mut metadata: StoredMetadata,
     write_state: impl FnOnce(&Path, u64) -> Result<(), WalletError>,
 ) -> Result<(), WalletError> {
-    let dir = storage_dir(base, network, wallet_id);
-    create_private_dir(&dir)
-        .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))?;
+    let dir = snapshot_path(base, network, wallet_id);
+    create_private_dir(&dir)?;
 
     // Read the current metadata (if any) so we can bump the generation and
     // clean up the previous binary files only after the new metadata commit.
-    let meta_path = dir.join(METADATA_FILE);
-    let previous_generation: Option<u64> = std::fs::read_to_string(&meta_path)
-        .ok()
-        .and_then(|json| serde_json::from_str::<StoredMetadata>(&json).ok())
-        .map(|m| m.generation);
+    let previous_generation = read_metadata(&dir).ok().flatten().map(|m| m.generation);
     let generation = previous_generation.map(|g| g + 1).unwrap_or(1);
 
     // Write the new generation's binary files first. They are referenced only
@@ -296,14 +280,10 @@ pub(crate) fn save_snapshot(
     write_state(&dir, generation)?;
 
     metadata.generation = generation;
-    let meta_tmp = dir.join("metadata.json.tmp");
     let meta_json = serde_json::to_string_pretty(&metadata)
         .map_err(|e| WalletError::Storage(format!("serialize metadata: {e}")))?;
-    write_private(&meta_tmp, meta_json.as_bytes())
-        .map_err(|e| WalletError::Storage(format!("write {}: {e}", meta_tmp.display())))?;
     // Atomic commit: from this point on, the wallet sees the new state.
-    std::fs::rename(&meta_tmp, &meta_path)
-        .map_err(|e| WalletError::Storage(format!("rename metadata: {e}")))?;
+    write_atomic(&dir, METADATA_FILE, meta_json.as_bytes())?;
 
     // Best-effort: remove the previous generation's binary files. Failure
     // here is non-fatal (the next save will retry or overwrite).
@@ -388,9 +368,8 @@ pub(crate) fn save_pending(
     wallet_id: &str,
     pending: &StoredPending,
 ) -> Result<(), WalletError> {
-    let dir = storage_dir(base, network, wallet_id);
-    create_private_dir(&dir)
-        .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))?;
+    let dir = snapshot_path(base, network, wallet_id);
+    create_private_dir(&dir)?;
 
     let path = dir.join(PENDING_FILE);
 
@@ -411,11 +390,7 @@ pub(crate) fn save_pending(
     let json = serde_json::to_string(pending)
         .map_err(|e| WalletError::Storage(format!("serialize pending: {e}")))?;
 
-    let tmp = dir.join(format!("{PENDING_FILE}.tmp"));
-    write_private(&tmp, json.as_bytes())
-        .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| WalletError::Storage(format!("rename {PENDING_FILE}: {e}")))?;
+    write_atomic(&dir, PENDING_FILE, json.as_bytes())?;
 
     info!(path = %path.display(), "saved pending reservations");
     Ok(())
@@ -428,20 +403,12 @@ pub(crate) fn load_pending(
     network: &str,
     wallet_id: &str,
 ) -> Result<Option<StoredPending>, WalletError> {
-    let dir = storage_dir(base, network, wallet_id);
-    let path = dir.join(PENDING_FILE);
-
-    if !path.exists() {
-        return Ok(None);
+    let path = snapshot_path(base, network, wallet_id).join(PENDING_FILE);
+    let stored = read_json(&path)?;
+    if stored.is_some() {
+        info!(path = %path.display(), "loaded pending reservations");
     }
-
-    let json = std::fs::read_to_string(&path)
-        .map_err(|e| WalletError::Storage(format!("read {}: {e}", path.display())))?;
-    let stored: StoredPending = serde_json::from_str(&json)
-        .map_err(|e| WalletError::Storage(format!("parse pending: {e}")))?;
-
-    info!(path = %path.display(), "loaded pending reservations");
-    Ok(Some(stored))
+    Ok(stored)
 }
 
 #[cfg(all(test, unix))]
@@ -539,7 +506,7 @@ mod tests {
         let base = tempfile::TempDir::new().unwrap();
         save_pending(base.path(), "undeployed", "testwallet", &some_pending()).unwrap();
 
-        let dir = storage_dir(base.path(), "undeployed", "testwallet");
+        let dir = snapshot_path(base.path(), "undeployed", "testwallet");
         assert_eq!(mode_of(&dir), 0o700, "wallet directory must be owner-only");
         assert_eq!(
             mode_of(&dir.join(PENDING_FILE)),
@@ -553,7 +520,7 @@ mod tests {
     #[test]
     fn existing_permissions_are_narrowed() {
         let base = tempfile::TempDir::new().unwrap();
-        let dir = storage_dir(base.path(), "undeployed", "testwallet");
+        let dir = snapshot_path(base.path(), "undeployed", "testwallet");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         let path = dir.join(PENDING_FILE);

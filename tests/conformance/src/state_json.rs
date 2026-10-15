@@ -38,10 +38,9 @@ pub fn aligned_value_from_json(json: &Json) -> Result<AlignedValue, String> {
         .ok_or_else(|| format!("aligned value without value array: {json}"))?
         .iter()
         .map(|atom| {
-            atom.as_str()
-                .ok_or_else(|| format!("value atom is not a hex string: {atom}"))
-                .and_then(|s| hex::decode(s).map_err(|e| format!("value atom hex: {e}")))
+            hex_from_json(atom)
                 .map(fab::ValueAtom)
+                .map_err(|e| format!("value atom: {e}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let alignment: fab::Alignment = serde_json::from_value(
@@ -161,18 +160,27 @@ pub fn state_value_from_json(json: &Json) -> Result<StateValue<InMemoryDB>, Stri
                 let index = pair[0]
                     .as_u64()
                     .ok_or_else(|| format!("leaf index is not a number: {leaf}"))?;
-                let hash: [u8; 32] = pair[1]
-                    .as_str()
-                    .ok_or_else(|| format!("leaf hash is not a hex string: {leaf}"))
-                    .and_then(|s| hex::decode(s).map_err(|e| format!("leaf hash hex: {e}")))?
-                    .try_into()
-                    .map_err(|_| format!("leaf hash is not 32 bytes: {leaf}"))?;
+                let hash = hash_from_json(&pair[1]).map_err(|e| format!("leaf {leaf}: {e}"))?;
                 tree = tree
-                    .try_update_hash(index, HashOutput(hash), ())
+                    .try_update_hash(index, hash, ())
                     .map_err(|e| format!("leaf at index {index}: {e:?}"))?;
             }
             Ok(StateValue::BoundedMerkleTree(tree.rehash()))
         }
         other => Err(format!("cannot decode state value tag {other:?}")),
     }
+}
+
+pub(crate) fn hex_from_json(json: &Json) -> Result<Vec<u8>, String> {
+    let s = json
+        .as_str()
+        .ok_or_else(|| format!("expected a hex string: {json}"))?;
+    hex::decode(s).map_err(|e| format!("{e}: {json}"))
+}
+
+/// 32 bytes, given as a hex string.
+pub(crate) fn hash_from_json(json: &Json) -> Result<HashOutput, String> {
+    <[u8; 32]>::try_from(hex_from_json(json)?)
+        .map(HashOutput)
+        .map_err(|_| format!("expected 32 bytes: {json}"))
 }

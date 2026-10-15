@@ -2,6 +2,24 @@
 
 use std::collections::BTreeMap;
 
+use crate::error::ContractError;
+
+/// The total value under each key in `values`.
+///
+/// A key is what the ledger balances by: a token, or a token and a segment.
+pub(crate) fn total_by_key<K: Ord>(
+    values: impl IntoIterator<Item = (K, u128)>,
+) -> Result<BTreeMap<K, u128>, ContractError> {
+    let mut totals = BTreeMap::new();
+    for (key, value) in values {
+        let total: &mut u128 = totals.entry(key).or_default();
+        *total = total.checked_add(value).ok_or_else(|| {
+            ContractError::Construction("shielded values overflow a u128 total".into())
+        })?;
+    }
+    Ok(totals)
+}
+
 /// The attached value each key carries beyond what the outputs draw from it,
 /// as `(key, change)`.
 ///
@@ -43,6 +61,17 @@ mod tests {
 
     fn tt(byte: u8) -> ShieldedTokenType {
         ShieldedTokenType(HashOutput([byte; 32]))
+    }
+
+    /// A total that wraps or saturates would size the change from a value the
+    /// coins do not hold.
+    #[test]
+    fn a_total_past_u128_is_refused() {
+        let totals = total_by_key([(tt(1), u128::MAX), (tt(2), 1)]).expect("separate keys");
+        assert_eq!(totals, BTreeMap::from([(tt(1), u128::MAX), (tt(2), 1)]));
+
+        let err = total_by_key([(tt(1), u128::MAX), (tt(1), 1)]).unwrap_err();
+        assert!(matches!(err, ContractError::Construction(_)), "got {err:?}");
     }
 
     /// The change output exists to return a surplus, so it must not appear when

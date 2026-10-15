@@ -5,6 +5,7 @@
 use midnight_helpers::ledger_8 as helpers;
 use midnight_types::ledger_8 as types;
 use midnight_wallet_facade::ledger_8 as facade;
+use types::LEDGER;
 
 #[path = "per_ledger/builds.rs"]
 mod builds;
@@ -13,9 +14,6 @@ mod proving;
 
 pub use builds::{Builds, merge_transactions};
 pub use midnight_wallet_facade::ledger_8::{ReservedBuild, WalletBuilds};
-
-/// The generation this module builds for.
-const LEDGER: midnight_types::LedgerVersion = midnight_types::LedgerVersion::V8;
 
 impl helpers::transient_crypto::proofs::ProvingProvider for proving::ProofServerClient<'_> {
     async fn check(

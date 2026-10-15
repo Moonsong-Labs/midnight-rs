@@ -96,6 +96,39 @@ pub async fn send_next(ws: &mut ServerWs, sub: &serde_json::Value, data: serde_j
     .await;
 }
 
+/// The subscription `data` of one ledger event, for the subscription field
+/// `field`: `zswapLedgerEvents` of [`ZSWAP_LEDGER_EVENTS_SUBSCRIPTION`] or
+/// `dustLedgerEvents` of [`DUST_LEDGER_EVENTS_SUBSCRIPTION`].
+///
+/// [`ZSWAP_LEDGER_EVENTS_SUBSCRIPTION`]: crate::subscription::queries::ZSWAP_LEDGER_EVENTS_SUBSCRIPTION
+/// [`DUST_LEDGER_EVENTS_SUBSCRIPTION`]: crate::subscription::queries::DUST_LEDGER_EVENTS_SUBSCRIPTION
+pub fn ledger_event(field: &str, id: i64, raw: &str, max_id: i64) -> serde_json::Value {
+    json!({ field: {"id": id, "raw": raw, "maxId": max_id} })
+}
+
+/// The subscription `data` of the progress result of
+/// [`UNSHIELDED_TRANSACTIONS_SUBSCRIPTION`], with `highest_id` as the highest
+/// transaction id.
+///
+/// [`UNSHIELDED_TRANSACTIONS_SUBSCRIPTION`]: crate::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION
+pub fn unshielded_progress(highest_id: i64) -> serde_json::Value {
+    json!({"unshieldedTransactions": {
+        "__typename": "UnshieldedTransactionsProgress",
+        "highestTransactionId": highest_id,
+    }})
+}
+
+/// The integer variable `name` of the parsed `subscribe` message `sub`.
+///
+/// # Panics
+///
+/// When `sub` has no integer variable `name`.
+pub fn subscription_variable(sub: &serde_json::Value, name: &str) -> i64 {
+    sub["payload"]["variables"][name]
+        .as_i64()
+        .unwrap_or_else(|| panic!("{name} variable"))
+}
+
 /// Read one HTTP request (head plus its content-length body) off the
 /// stream, discarding it. Returns `false` if the peer disconnects before
 /// the head completes, errors mid-body, or the head exceeds 64 KiB. The

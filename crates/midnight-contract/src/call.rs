@@ -24,6 +24,7 @@ use midnight_provider::Builds;
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
+use midnight_types::ledger_9::convert::IntoLedger;
 
 use crate::error::ContractError;
 use crate::interpreter;
@@ -35,12 +36,7 @@ pub type Sig = midnight_helpers::ledger_9::Signature;
 
 /// Type alias for the unproven transaction object [`build_unproven_call_tx`]
 /// builds: a ledger 9 transaction over the Compact side's own types.
-pub type UnprovenTransaction = mn_ledger::structure::Transaction<
-    Sig,
-    mn_ledger::structure::ProofPreimageMarker,
-    midnight_transient_crypto::commitment::PedersenRandomness,
-    InMemoryDB,
->;
+pub type UnprovenTransaction = midnight_helpers::ledger_9::UnprovenTransaction<InMemoryDB>;
 
 /// Result of building an unproven circuit call transaction.
 pub struct UnprovenCallTx {
@@ -135,10 +131,9 @@ pub(crate) fn run_call(
         interpreter::Env {
             witnesses,
             private_state,
-            address: compact_address(contract_address),
+            address: contract_address.into_ledger(),
             block_time,
-            coin_public_key: coin_public_key
-                .map(|key| midnight_coin_structure::coin::PublicKey(key.0)),
+            coin_public_key: coin_public_key.map(IntoLedger::into_ledger),
         },
     )?)
 }
@@ -161,10 +156,7 @@ pub(crate) async fn call_funded_with(
     args: &[(&str, runtime::Value)],
     witnesses: &dyn runtime::WitnessProvider,
     private_state: Option<&mut Vec<u8>>,
-    coin_encryption_keys: &[(
-        midnight_types::CoinPublicKey,
-        midnight_types::EncryptionPublicKey,
-    )],
+    coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     // When false, skip Dust funding: the call is built proven but fee-less, for
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
@@ -226,36 +218,46 @@ pub(crate) async fn call_funded_with(
     Ok((tx_bytes, exec_result.state, exec_result.result))
 }
 
-/// The address as the Compact side names it.
-pub(crate) fn compact_address(
-    address: midnight_types::ContractAddress,
-) -> midnight_coin_structure::contract::ContractAddress {
-    midnight_coin_structure::contract::ContractAddress(address.0)
-}
-
 /// The circuit's public state program, as the transcript replays it: the
-/// ops the interpreter gathered, with the values it read filled in.
+/// [public transcript](runtime::ExecutionResult::public_transcript) without
+/// its `idx` ops of an empty path and its `ins` ops of no levels.
 pub(crate) fn verify_ops(
     exec_result: &runtime::ExecutionResult,
 ) -> Vec<Op<ResultModeVerify, InMemoryDB>> {
-    let mut read_iter = exec_result.reads.iter();
     exec_result
-        .gather_ops
-        .iter()
-        .map(|op| {
-            op.clone().translate(|()| {
-                read_iter
-                    .next()
-                    .cloned()
-                    .unwrap_or_else(|| AlignedValue::from(()))
-            })
-        })
+        .public_transcript()
+        .into_iter()
         .filter(|op| match op {
             Op::Idx { path, .. } => !path.is_empty(),
             Op::Ins { n, .. } => *n != 0,
             _ => true,
         })
         .collect()
+}
+
+/// The call's input: `args` encoded at the types that `circuit` declares for
+/// them.
+pub(crate) fn call_input(
+    circuit: &compact_codegen::ir::Circuit,
+    args: &[(&str, runtime::Value)],
+) -> Result<AlignedValue, ContractError> {
+    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
+        .arguments
+        .iter()
+        .map(|a| (a.name.name(), a.ty.clone()))
+        .collect();
+    Ok(interpreter::encode_circuit_input(args, &arg_types)?)
+}
+
+/// `value` in its tagged encoding. `what` names it in the error.
+pub(crate) fn tagged_bytes<T>(value: &T, what: &str) -> Result<Vec<u8>, ContractError>
+where
+    T: midnight_serialize::Serializable + midnight_serialize::Tagged,
+{
+    let mut bytes = Vec::new();
+    tagged_serialize(value, &mut bytes)
+        .map_err(|e| ContractError::Serialization(format!("serialize {what}: {e}")))?;
+    Ok(bytes)
 }
 
 /// `value` in another type of the same encoding: another storage backend,
@@ -265,9 +267,7 @@ where
     A: midnight_serialize::Serializable + midnight_serialize::Tagged,
     B: midnight_serialize::Deserializable + midnight_serialize::Tagged,
 {
-    let mut bytes = Vec::new();
-    tagged_serialize(value, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("serialize {what}: {e}")))?;
+    let bytes = tagged_bytes(value, what)?;
     midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
         .map_err(|e| ContractError::Serialization(format!("deserialize {what}: {e}")))
 }
@@ -315,55 +315,31 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let mut rng = rand::thread_rng();
 
-    let exec_result = interpreter::execute(
+    let exec_result = run_call(
         circuit,
         program,
-        state.clone(),
+        state,
+        block_time,
+        contract_address,
         args,
-        interpreter::Env {
-            witnesses,
-            private_state,
-            address: compact_address(contract_address),
-            ..interpreter::Env::new(block_time)
-        },
+        witnesses,
+        private_state,
+        None,
     )?;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
 
-    let verify_ops = verify_ops(&exec_result);
-
-    let address_for_ctx = compact_address(contract_address);
-    let mut context =
-        midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), address_for_ctx);
-    // Replay at the interpreter's time and balance: the partition checks each
-    // read that the ops recorded.
-    context.call_context.tblock = block_time;
-    context.call_context.balance = state.balance.clone();
-    let pre_transcript = mn_ledger::construct::PreTranscript {
-        context,
-        program: verify_ops,
-        comm_comm: None,
-    };
-
-    let partitioned = mn_ledger::construct::partition_transcripts(
-        &[pre_transcript],
+    let address_for_ctx = contract_address.into_ledger();
+    let (guaranteed, fallible) = crate::ledger_9::call::partition(
+        state,
+        address_for_ctx,
+        block_time,
+        verify_ops(&exec_result),
         &mn_ledger::structure::INITIAL_PARAMETERS,
-    )
-    .map_err(|e| ContractError::Construction(format!("partition failed: {e:?}")))?;
+    )?;
 
-    let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
-
-    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
-        .arguments
-        .iter()
-        .map(|a| (a.name.name(), a.ty.clone()))
-        .collect();
-    let input: AlignedValue = interpreter::encode_circuit_input(args, &arg_types)?;
-    let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
-        ().into()
-    } else {
-        AlignedValue::concat(&exec_result.communication_outputs)
-    };
+    let input = call_input(circuit, args)?;
+    let output = exec_result.output();
 
     let op = state
         .operations
@@ -398,15 +374,12 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     );
 
     let mut intents = StorageHashMap::new();
-    intents = intents.insert(0u16, intent);
+    intents = intents.insert(crate::ledger_9::call::INTENT_SEGMENT, intent);
 
     let tx: UnprovenTransaction = Transaction::from_intents(network_id, intents);
 
-    let mut bytes = Vec::new();
-    tagged_serialize(&tx, &mut bytes).map_err(|e| ContractError::Serialization(e.to_string()))?;
-
     Ok(UnprovenCallTx {
-        tx_bytes: bytes,
+        tx_bytes: tagged_bytes(&tx, "transaction")?,
         transaction: tx,
         new_state: exec_result.state,
     })

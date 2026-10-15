@@ -60,6 +60,8 @@ midnight-core                    meta-crate; re-exports the public API
   ├── midnight-private-state     per-contract private state + maintenance signing keys,
   │                              with password-encrypted export/import
   │
+  ├── midnight-owner-only        0700 directories, 0600 files on Unix, for the wallet and private-state stores
+  │
   ├── midnight-indexer-client    GraphQL client + subscriptions for the wallet sync
   │
   ├── compact-bindgen           `contract!` macro entry point
@@ -172,7 +174,7 @@ One node RPC, `midnight_contractState`, serves the whole state. `MidnightProvide
 ```
 Provider.get_contract_state(address, at)              → hex string   // at = None: the best block
 MidnightProvider.get_state_from_node(address, at)     → hex string
-  → deserialize_state → ContractState<InMemoryDB>
+  → hex decode → decode_contract_state → ContractState<InMemoryDB>
 ```
 
 Generated bindings expose this as `contract.ledger().await?`, which calls `midnight_contractState` over node RPC and returns a sync `Ledger` struct with typed field accessors. `contract.ledger_query()` (custom node builds only) routes per-field reads through `midnight_queryContractState` via the `StateQueryProvider` bridge in `midnight-provider`.
@@ -316,8 +318,7 @@ ledger_N::WalletBuilds::prepare_transfer(request, proof_provider)   // one hold 
   → ReservedBuild
   ↓
 (wallet released)    PreparedTransfer::prove       // the only real proving
-  → TransferResult { tx_bytes, ledger_version, spent_unshielded_inputs,
-                     spent_shielded_inputs, spent_dust, fee_speck, reserved_at }
+  → TransferResult { tx_bytes, ledger_version, spent, fee_speck }
   ↓
 (.await path only)   provider.submit(tx_bytes).await → PendingTx
 ```

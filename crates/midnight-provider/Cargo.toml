@@ -6,21 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 description = "Provider trait and MidnightProvider for Midnight network interaction"
 
-[features]
-default = ["bindgen"]
-# Enables the `lazy::StateQueryProvider` bridge for bindgen-generated code.
-# Depends on midnight-typed-state (not compact-bindgen) to avoid a cycle:
-# compact-bindgen re-exports midnight-contract, which transitively depends on
-# midnight-provider.
-bindgen = ["dep:midnight-typed-state"]
-
 [dependencies]
-midnight-typed-state = { workspace = true, optional = true }
+# midnight-typed-state, not compact-bindgen, to avoid a cycle: compact-bindgen
+# re-exports midnight-contract, which transitively depends on midnight-provider.
+midnight-typed-state = { workspace = true }
 midnight-types = { workspace = true }
 midnight-wallet-facade = { workspace = true }
 midnight-private-state = { workspace = true }
 midnight-helpers = { workspace = true }
-serde = { workspace = true }
 subxt = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }

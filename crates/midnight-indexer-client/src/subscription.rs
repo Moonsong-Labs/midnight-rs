@@ -40,6 +40,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
 
+use crate::client::graphql_url;
 use crate::error::IndexerError;
 use crate::types::GraphQLResponse;
 
@@ -155,19 +156,14 @@ pub struct SubscriptionClient {
 impl SubscriptionClient {
     /// Create a new subscription client.
     ///
-    /// `ws_url` should be the base indexer URL (e.g. `http://127.0.0.1:8088`)
-    /// or the full WebSocket subscription path. The client will normalize the
-    /// URL to the subscription endpoint at `/api/v3/graphql/ws`.
+    /// `ws_url` is the base indexer URL (e.g. `http://127.0.0.1:8088`), or a
+    /// URL whose path ends in `/graphql` or `/graphql/ws`. The client
+    /// subscribes at that path with `/ws` after `/graphql`, or at
+    /// `/api/v3/graphql/ws` under a base URL. An `http` or `https` scheme
+    /// becomes `ws` or `wss`.
     pub fn new(ws_url: impl Into<String>) -> Self {
         let raw: String = ws_url.into();
-        let base = raw.trim_end_matches('/');
-        let mut url = if base.ends_with("/graphql/ws") {
-            base.to_string()
-        } else if base.ends_with("/graphql") {
-            format!("{base}/ws")
-        } else {
-            format!("{base}/api/v3/graphql/ws")
-        };
+        let mut url = format!("{}/ws", graphql_url(&raw));
         // Ensure ws:// or wss:// scheme
         if url.starts_with("http://") {
             url = format!("ws://{}", &url[7..]);
@@ -282,8 +278,7 @@ impl SubscriptionClient {
                     match ack_msg.get("type").and_then(|v| v.as_str()) {
                         Some("connection_ack") => break,
                         Some("ping") => {
-                            let pong = serde_json::json!({"type": "pong"});
-                            let _ = sink.send(Message::Text(pong.to_string().into())).await;
+                            let _ = sink.send(pong_frame()).await;
                             continue;
                         }
                         _ => {
@@ -405,26 +400,22 @@ impl SubscriptionClient {
                                 else {
                                     continue;
                                 };
-                                // Read `errors` first: a partial result carries both,
-                                // and any error ends the stream.
                                 let envelope = serde_json::from_value::<
                                     GraphQLResponse<serde_json::Value>,
                                 >(payload);
-                                let item = match envelope {
-                                    Ok(GraphQLResponse { errors: Some(errors), .. })
-                                        if !errors.is_empty() =>
-                                    {
-                                        let _ = tx.send(Err(IndexerError::GraphQL(errors))).await;
+                                let item = match envelope.map(GraphQLResponse::into_result) {
+                                    Ok(Err(e)) => {
+                                        let _ = tx.send(Err(e)).await;
                                         break;
                                     }
-                                    Ok(GraphQLResponse { data: Some(data), .. }) => {
+                                    Ok(Ok(Some(data))) => {
                                         serde_json::from_value::<T>(data).map_err(|e| {
                                             IndexerError::Deserialization(format!(
                                                 "subscription event: {e}"
                                             ))
                                         })
                                     }
-                                    Ok(_) => continue,
+                                    Ok(Ok(None)) => continue,
                                     Err(e) => Err(IndexerError::Deserialization(format!(
                                         "subscription payload: {e}"
                                     ))),
@@ -434,8 +425,7 @@ impl SubscriptionClient {
                                 }
                             }
                             "ping" => {
-                                let pong = serde_json::json!({"type": "pong"});
-                                let _ = sink.send(Message::Text(pong.to_string().into())).await;
+                                let _ = sink.send(pong_frame()).await;
                             }
                             "error" => {
                                 let err_msg = parsed
@@ -460,6 +450,10 @@ impl SubscriptionClient {
             _cancel: cancel_tx,
         })
     }
+}
+
+fn pong_frame() -> Message {
+    Message::Text(serde_json::json!({"type": "pong"}).to_string().into())
 }
 
 fn host_from_url(url: &str) -> String {

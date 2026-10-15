@@ -18,43 +18,19 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
+#[expect(dead_code, reason = "these tests need no synced_provider")]
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
 use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{
-    LedgerVersion, MidnightProvider, NIGHT, Network, ProviderError, ShieldedTokenType, SpentInputs,
-    TransferKind, TransferRequest, WalletError, WalletFacade,
+    LedgerVersion, MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, TransferKind,
+    TransferRequest, WalletError, WalletFacade,
 };
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_wallet::LocalWallet;
 use tokio::sync::Notify;
-
-const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-
-macro_rules! devnet_or_skip {
-    () => {{
-        let (Ok(node), Ok(indexer)) = (
-            std::env::var("MIDNIGHT_NODE_URL"),
-            std::env::var("MIDNIGHT_INDEXER_URL"),
-        ) else {
-            eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
-            return;
-        };
-        (node, indexer)
-    }};
-}
-
-async fn synced_provider(node: &str, indexer: &str) -> (MidnightProvider, String) {
-    let provider = MidnightProvider::new(node, indexer);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .expect("dev seed")
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("sync");
-    let shielded_address = wallet.shielded_address();
-    (provider.with_wallet(wallet), shielded_address)
-}
 
 fn night() -> ShieldedTokenType {
     ShieldedTokenType(midnight_provider::HashOutput([0u8; 32]))
@@ -82,21 +58,11 @@ macro_rules! test_provers {
         impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for BrokenProver {
             async fn prove(
                 &self,
-                _tx: midnight_helpers::$ledger::Transaction<
-                    midnight_helpers::$ledger::Signature,
-                    midnight_helpers::$ledger::ProofPreimageMarker,
-                    midnight_helpers::$ledger::PedersenRandomness,
-                    DefaultDB,
-                >,
+                _tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
                 _rng: StdRng,
                 _resolver: &'static midnight_helpers::$ledger::Resolver,
                 _cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::Transaction<
-                midnight_helpers::$ledger::Signature,
-                midnight_helpers::$ledger::ProofMarker,
-                midnight_helpers::$ledger::PedersenRandomness,
-                DefaultDB,
-            > {
+            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
                 panic!("prover is down");
             }
         }
@@ -105,21 +71,11 @@ macro_rules! test_provers {
         impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ParkedProver {
             async fn prove(
                 &self,
-                tx: midnight_helpers::$ledger::Transaction<
-                    midnight_helpers::$ledger::Signature,
-                    midnight_helpers::$ledger::ProofPreimageMarker,
-                    midnight_helpers::$ledger::PedersenRandomness,
-                    DefaultDB,
-                >,
+                tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
                 rng: StdRng,
                 resolver: &'static midnight_helpers::$ledger::Resolver,
                 cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::Transaction<
-                midnight_helpers::$ledger::Signature,
-                midnight_helpers::$ledger::ProofMarker,
-                midnight_helpers::$ledger::PedersenRandomness,
-                DefaultDB,
-            > {
+            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
                 self.started.notify_one();
                 self.release.notified().await;
                 self.$ledger.prove(tx, rng, resolver, cost_model).await
@@ -135,10 +91,14 @@ test_provers!(ledger_9);
 /// readable. Before the split this read queued behind the whole proof.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_wallet_is_readable_while_a_build_proves() {
-    let (node, indexer) = devnet_or_skip!();
+    let Some((node, indexer)) = common::devnet_urls() else {
+        return;
+    };
     let prover = Arc::new(ParkedProver::default());
-    let (provider, recipient) = synced_provider(&node, &indexer).await;
-    let provider = Arc::new(provider.with_proof_provider(prover.clone()));
+    let provider = MidnightProvider::new(&node, &indexer).with_proof_provider(prover.clone());
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let recipient = wallet.shielded_address();
+    let provider = Arc::new(provider.with_wallet(wallet));
 
     let building = {
         let provider = provider.clone();
@@ -171,7 +131,7 @@ async fn the_wallet_is_readable_while_a_build_proves() {
 
     // The build still had to reserve before it proved, so release what it took.
     provider
-        .release(&SpentInputs::from(&result))
+        .release(&result.spent)
         .await
         .expect("release the reservation");
 }
@@ -192,14 +152,11 @@ async fn the_wallet_is_readable_while_a_build_proves() {
 /// Neither preparation proves or submits. Both release what they reserved.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_preparations_at_once_draw_different_inputs() {
-    let (node, indexer) = devnet_or_skip!();
+    let Some((node, indexer)) = common::devnet_urls() else {
+        return;
+    };
     let source = MidnightProvider::new(&node, &indexer);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .expect("dev seed")
-        .with_network(Network::Undeployed)
-        .sync(&source)
-        .await
-        .expect("sync");
+    let wallet = common::synced_wallet(&source, common::DEV_WALLET_SEED).await;
     let address = wallet.unshielded_address();
 
     // Each preparation spends one tNIGHT UTXO and draws Dust for its fee, so
@@ -211,17 +168,10 @@ async fn two_preparations_at_once_draw_different_inputs() {
         .filter(|u| u.is_night())
         .count();
     if spendable_dust < 2 || night < 2 {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!(
-                "2 spendable Dust UTXOs and 2 tNIGHT UTXOs are missing under make test-e2e: \
-                 this wallet has {spendable_dust} and {night}"
-            );
-        }
-        eprintln!(
-            "skipping: needs 2 spendable Dust UTXOs and 2 tNIGHT UTXOs, \
-             this wallet has {spendable_dust} and {night}"
-        );
-        return;
+        return common::skip(&format!(
+            "a wallet with 2 spendable Dust UTXOs and 2 tNIGHT UTXOs \
+             (this one has {spendable_dust} and {night})"
+        ));
     }
 
     let ledger = wallet.ledger_version();
@@ -296,8 +246,13 @@ async fn two_preparations_at_once_draw_different_inputs() {
 /// inputs back itself.
 #[tokio::test]
 async fn a_failed_proof_hands_the_reserved_coins_back() {
-    let (node, indexer) = devnet_or_skip!();
-    let (provider, recipient) = synced_provider(&node, &indexer).await;
+    let Some((node, indexer)) = common::devnet_urls() else {
+        return;
+    };
+    let provider = MidnightProvider::new(&node, &indexer);
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let recipient = wallet.shielded_address();
+    let provider = provider.with_wallet(wallet);
 
     let spendable_before = provider
         .spendable_shielded_coins()
@@ -305,11 +260,7 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
         .expect("wallet attached")
         .len();
     if spendable_before == 0 {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("spendable shielded coins are missing under make test-e2e");
-        }
-        eprintln!("skipping: this wallet holds no spendable shielded coins");
-        return;
+        return common::skip("a spendable shielded coin");
     }
 
     let broken = provider.with_proof_provider(Arc::new(BrokenProver));

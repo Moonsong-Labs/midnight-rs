@@ -9,29 +9,19 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
-use midnight_wallet::Wallet;
+#[expect(dead_code, reason = "this test needs no synced_provider")]
+mod common;
 
-use midnight_provider::{MidnightProvider, NIGHT, Network, NodeBlockHash};
-
-const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+use midnight_provider::{MidnightProvider, NIGHT, NodeBlockHash};
 
 #[tokio::test]
 async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .expect("dev seed")
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let recipient = wallet.unshielded_address();
     let provider = provider.with_wallet(wallet);
 

@@ -8,42 +8,55 @@
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
 use midnight_provider::{Builds, MidnightProvider};
-use midnight_wallet::{LedgerVersion, Seed, Wallet, WalletBuilder};
+use midnight_wallet::{LedgerVersion, Wallet};
+
+const DEFAULT_SHIELDED_TOKEN: midnight_wallet::ShieldedTokenType =
+    midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0; 32]));
 
 const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
-fn node_url() -> Option<String> {
-    std::env::var("MIDNIGHT_NODE_URL").ok()
+/// A seed that nothing else uses, so any coin its wallet holds came from a
+/// test in this file.
+const RECIPIENT_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000042";
+
+async fn synced_wallet(provider: &MidnightProvider, seed: &str) -> Wallet {
+    Wallet::from_seed(seed)
+        .expect("hex seed")
+        .with_network(midnight_wallet::Network::Undeployed)
+        .sync(provider)
+        .await
+        .expect("indexer sync should succeed")
 }
 
-fn indexer_url() -> Option<String> {
-    std::env::var("MIDNIGHT_INDEXER_URL").ok()
+async fn synced_provider(node: &str, indexer: &str, seed: &str) -> MidnightProvider {
+    let provider = MidnightProvider::new(node, indexer);
+    let wallet = synced_wallet(&provider, seed).await;
+    provider.with_wallet(wallet)
 }
 
-macro_rules! require_devnet {
-    () => {{
-        let node = match node_url() {
-            Some(u) => u,
-            None => {
-                if std::env::var("MIDNIGHT_E2E").is_ok() {
-                    panic!("MIDNIGHT_NODE_URL must be set in CI");
-                }
-                eprintln!("skipping: MIDNIGHT_NODE_URL not set");
-                return;
-            }
-        };
-        let indexer = match indexer_url() {
-            Some(u) => u,
-            None => {
-                if std::env::var("MIDNIGHT_E2E").is_ok() {
-                    panic!("MIDNIGHT_INDEXER_URL must be set in CI");
-                }
-                eprintln!("skipping: MIDNIGHT_INDEXER_URL not set");
-                return;
-            }
-        };
-        (node, indexer)
-    }};
+/// Prints a skip line on stderr for the precondition `missing`. The caller
+/// then returns without running the test.
+///
+/// # Panics
+///
+/// When `MIDNIGHT_E2E` is set. The make targets that run the devnet tests set
+/// it, so a test that they run never skips.
+fn skip(missing: &str) {
+    if std::env::var_os("MIDNIGHT_E2E").is_some() {
+        panic!("{missing} is missing while MIDNIGHT_E2E is set");
+    }
+    eprintln!("skipping: {missing} is missing");
+}
+
+fn devnet_urls() -> Option<(String, String)> {
+    let (Ok(node), Ok(indexer)) = (
+        std::env::var("MIDNIGHT_NODE_URL"),
+        std::env::var("MIDNIGHT_INDEXER_URL"),
+    ) else {
+        skip("MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL");
+        return None;
+    };
+    Some((node, indexer))
 }
 
 // ---------------------------------------------------------------------------
@@ -52,16 +65,11 @@ macro_rules! require_devnet {
 
 #[tokio::test]
 async fn sync_replays_events() {
-    let (node, indexer) = require_devnet!();
+    let Some((node, indexer)) = devnet_urls() else {
+        return;
+    };
 
-    let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = Wallet::from_seed(DEV_SEED)
-        .expect("dev seed")
-        .with_network(midnight_wallet::Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(wallet);
+    let provider = synced_provider(&node, &indexer, DEV_SEED).await;
 
     let cursors = provider.sync_cursors().await.expect("wallet attached");
     let utxos = provider.unshielded_utxos().await.expect("wallet attached");
@@ -108,15 +116,12 @@ async fn sync_replays_events() {
 
 #[tokio::test]
 async fn provider_build_context_succeeds() {
-    let (node, indexer) = require_devnet!();
+    let Some((node, indexer)) = devnet_urls() else {
+        return;
+    };
 
     let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = Wallet::from_seed(DEV_SEED)
-        .expect("dev seed")
-        .with_network(midnight_wallet::Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("indexer sync should succeed");
+    let wallet = synced_wallet(&provider, DEV_SEED).await;
     let seed = wallet.seed().clone();
     let provider = provider.with_wallet(wallet);
 
@@ -160,32 +165,24 @@ async fn provider_build_context_succeeds() {
 /// other tests in this file submit.
 #[tokio::test]
 async fn build_shielded_transfer_arbitrary_token_id() {
-    let (node, indexer) = require_devnet!();
+    let Some((node, indexer)) = devnet_urls() else {
+        return;
+    };
 
     let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = Wallet::from_seed(DEV_SEED)
-        .expect("dev seed")
-        .with_network(midnight_wallet::Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("indexer sync should succeed");
+    let wallet = synced_wallet(&provider, DEV_SEED).await;
     let recipient = wallet.shielded_address();
     let provider = provider.with_wallet(wallet);
 
-    let zero_token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
     let balance = provider.balance().await.expect("wallet attached");
     let Some(coin) = balance
         .shielded
         .coins
         .iter()
-        .find(|c| c.token_type != zero_token)
+        .find(|c| c.token_type != DEFAULT_SHIELDED_TOKEN)
         .cloned()
     else {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("a shielded coin with a non-zero token id is missing under make test-e2e");
-        }
-        eprintln!("skipping: dev wallet has no shielded coins with a non-zero token id");
-        return;
+        return skip("a shielded coin with a non-zero token id");
     };
     eprintln!(
         "shielded coin with non-zero token id: token={} value={}",
@@ -217,33 +214,19 @@ async fn build_shielded_transfer_arbitrary_token_id() {
 /// nothing else and require it to receive exactly the requested amount.
 #[tokio::test]
 async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
-    let (node, indexer) = require_devnet!();
+    let Some((node, indexer)) = devnet_urls() else {
+        return;
+    };
 
-    // A seed used by nothing else, so any coin it holds came from this test.
-    let recipient_seed =
-        Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000042").unwrap();
-    let recipient = recipient_seed.shielded_address(midnight_wallet::Network::Undeployed);
+    let provider = synced_provider(&node, &indexer, DEV_SEED).await;
 
-    let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = Wallet::from_seed(DEV_SEED)
-        .expect("dev seed")
-        .with_network(midnight_wallet::Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(wallet);
-
-    let token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
     // Distinctive enough that a coin of this value is unambiguous, and far
     // below any single dev coin so the sender must return change.
     const AMOUNT: u128 = 7;
 
     let payee = MidnightProvider::new(&node, &indexer);
-    let wallet = WalletBuilder::new(recipient_seed)
-        .with_network(midnight_wallet::Network::Undeployed)
-        .sync(&payee)
-        .await
-        .expect("payee sync should succeed");
+    let wallet = synced_wallet(&payee, RECIPIENT_SEED).await;
+    let recipient = wallet.shielded_address();
     let payee = payee.with_wallet(wallet);
     let before: std::collections::HashSet<_> = payee
         .spendable_shielded_coins()
@@ -254,7 +237,7 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
         .collect();
 
     let pending = provider
-        .transfer_shielded(token, AMOUNT, &recipient)
+        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, AMOUNT, &recipient)
         .await
         .expect("shielded transfer should build + submit");
     let (_best, pending) = pending.wait_best().await.expect("wait_best");
@@ -270,7 +253,7 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
             .await
             .expect("payee coins")
             .into_iter()
-            .find(|c| c.token_type == token && !before.contains(&c.nullifier));
+            .find(|c| c.token_type == DEFAULT_SHIELDED_TOKEN && !before.contains(&c.nullifier));
         if received.is_some() {
             break;
         }
@@ -316,36 +299,31 @@ fn shielded_delta(tx_bytes: &[u8], token: midnight_wallet::ShieldedTokenType) ->
 /// which sync timing would make flaky.
 #[tokio::test]
 async fn shielded_transfer_conserves_value() {
-    let (node, indexer) = require_devnet!();
+    let Some((node, indexer)) = devnet_urls() else {
+        return;
+    };
 
     let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = Wallet::from_seed(DEV_SEED)
-        .expect("dev seed")
-        .with_network(midnight_wallet::Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("indexer sync should succeed");
+    let wallet = synced_wallet(&provider, DEV_SEED).await;
     let recipient = wallet.shielded_address();
     let provider = provider.with_wallet(wallet);
-
-    let token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
 
     // 1 is deliberately far below any coin the dev preset mints, so the
     // remainder is large and an abandoned one would be unmissable.
     let result = provider
-        .transfer_shielded(token, 1, &recipient)
+        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, 1, &recipient)
         .build()
         .await
         .expect("shielded transfer should build");
 
     assert_eq!(
-        shielded_delta(&result.tx_bytes, token),
+        shielded_delta(&result.tx_bytes, DEFAULT_SHIELDED_TOKEN),
         0,
         "a self-funded transfer must leave no surplus; the remainder of the \
          selected coins has to return as change"
     );
     assert!(
-        !result.spent_shielded_inputs.is_empty(),
+        !result.spent.shielded.is_empty(),
         "the build selects coins up front, so it must surface their nullifiers \
          for reservation"
     );
@@ -357,25 +335,21 @@ async fn shielded_transfer_conserves_value() {
 /// amount no single coin can cover and require several inputs.
 #[tokio::test]
 async fn shielded_transfer_spans_multiple_coins() {
-    let (node, indexer) = require_devnet!();
+    let Some((node, indexer)) = devnet_urls() else {
+        return;
+    };
 
     let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = Wallet::from_seed(DEV_SEED)
-        .expect("dev seed")
-        .with_network(midnight_wallet::Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("indexer sync should succeed");
+    let wallet = synced_wallet(&provider, DEV_SEED).await;
     let recipient = wallet.shielded_address();
     let provider = provider.with_wallet(wallet);
 
-    let token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
     let balance = provider.balance().await.expect("wallet attached");
     let values: Vec<u128> = balance
         .shielded
         .coins
         .iter()
-        .filter(|c| c.token_type == token)
+        .filter(|c| c.token_type == DEFAULT_SHIELDED_TOKEN)
         .map(|c| c.value)
         .collect();
 
@@ -383,24 +357,16 @@ async fn shielded_transfer_spans_multiple_coins() {
         values.iter().copied().max(),
         values.iter().copied().sum::<u128>(),
     ) else {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("coins of the default shielded token are missing under make test-e2e");
-        }
-        eprintln!("skipping: dev wallet holds no coins of the default shielded token");
-        return;
+        return skip("a coin of the default shielded token");
     };
     if total <= largest {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("a second coin of the default shielded token is missing under make test-e2e");
-        }
-        eprintln!("skipping: dev wallet holds only one coin of the default shielded token");
-        return;
+        return skip("a second coin of the default shielded token");
     }
 
     // One more than the biggest coin: satisfiable only by combining coins.
     let amount = largest + 1;
     let result = provider
-        .transfer_shielded(token, amount, &recipient)
+        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, amount, &recipient)
         .build()
         .await
         .unwrap_or_else(|e| {
@@ -411,13 +377,13 @@ async fn shielded_transfer_spans_multiple_coins() {
         });
 
     assert!(
-        result.spent_shielded_inputs.len() >= 2,
+        result.spent.shielded.len() >= 2,
         "covering {amount} needs more than the largest coin ({largest}), so at \
          least two inputs; got {}",
-        result.spent_shielded_inputs.len()
+        result.spent.shielded.len()
     );
     assert_eq!(
-        shielded_delta(&result.tx_bytes, token),
+        shielded_delta(&result.tx_bytes, DEFAULT_SHIELDED_TOKEN),
         0,
         "a multi-coin transfer must return its change too"
     );
@@ -438,18 +404,13 @@ async fn shielded_transfer_spans_multiple_coins() {
 /// (the half is not submittable on its own).
 #[tokio::test]
 async fn build_shielded_swap_half_has_mirror_deltas() {
-    let (node, indexer) = require_devnet!();
+    let Some((node, indexer)) = devnet_urls() else {
+        return;
+    };
 
-    let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = Wallet::from_seed(DEV_SEED)
-        .expect("dev seed")
-        .with_network(midnight_wallet::Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(wallet);
+    let provider = synced_provider(&node, &indexer, DEV_SEED).await;
 
-    let give_token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
+    let give_token = DEFAULT_SHIELDED_TOKEN;
     let receive_token =
         midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0xABu8; 32]));
     const GIVE: u128 = 1;
@@ -462,10 +423,9 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
         .expect("swap half should build (coin selection + proofs + serialize)");
 
     // The build selects concrete give-side coins up front and surfaces their
-    // nullifiers so the caller can reserve them (unlike a plain transfer, whose
-    // coins the ledger selects internally).
+    // nullifiers so the caller can reserve them.
     assert!(
-        !result.spent_shielded_inputs.is_empty(),
+        !result.spent.shielded.is_empty(),
         "swap half should surface the spent give-side coin nullifiers"
     );
     assert!(

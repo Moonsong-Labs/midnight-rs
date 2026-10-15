@@ -116,6 +116,27 @@ pub struct FsZkConfigProvider {
     base: PathBuf,
 }
 
+/// The place of one kind of ZK artifact in a compiled contract directory:
+/// `{dir}/{circuit}.{ext}`.
+struct ArtifactFile {
+    dir: &'static str,
+    ext: &'static str,
+}
+
+const KEYS_DIR: &str = "keys";
+const PROVER: ArtifactFile = ArtifactFile {
+    dir: KEYS_DIR,
+    ext: "prover",
+};
+const VERIFIER: ArtifactFile = ArtifactFile {
+    dir: KEYS_DIR,
+    ext: "verifier",
+};
+const ZKIR: ArtifactFile = ArtifactFile {
+    dir: "zkir",
+    ext: "bzkir",
+};
+
 impl FsZkConfigProvider {
     pub fn new(base: impl Into<PathBuf>) -> Self {
         Self { base: base.into() }
@@ -128,11 +149,11 @@ impl FsZkConfigProvider {
     /// otherwise the configured path is returned unchanged so errors name what
     /// the caller passed rather than some unrelated directory it resolved to.
     fn base_dir(&self) -> PathBuf {
-        if self.base.join("keys").is_dir() {
+        if self.base.join(KEYS_DIR).is_dir() {
             return self.base.clone();
         }
         if let Some(parent) = self.base.parent()
-            && parent.join("keys").is_dir()
+            && parent.join(KEYS_DIR).is_dir()
         {
             return parent.to_path_buf();
         }
@@ -141,12 +162,14 @@ impl FsZkConfigProvider {
 
     fn read_opt(
         &self,
-        sub: &str,
+        file: ArtifactFile,
         circuit: &str,
-        ext: &str,
     ) -> Result<Option<Vec<u8>>, ZkConfigError> {
         validate_circuit_id(circuit)?;
-        let path = self.base_dir().join(sub).join(format!("{circuit}.{ext}"));
+        let path = self
+            .base_dir()
+            .join(file.dir)
+            .join(format!("{circuit}.{}", file.ext));
         match std::fs::read(&path) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -157,31 +180,31 @@ impl FsZkConfigProvider {
         }
     }
 
-    fn require(&self, sub: &str, circuit: &str, ext: &str) -> Result<Vec<u8>, ZkConfigError> {
-        self.read_opt(sub, circuit, ext)?
+    fn require(&self, file: ArtifactFile, circuit: &str) -> Result<Vec<u8>, ZkConfigError> {
+        self.read_opt(file, circuit)?
             .ok_or_else(|| ZkConfigError::NotFound(circuit.to_string()))
     }
 }
 
 impl ZkConfigProvider for FsZkConfigProvider {
     fn prover_key(&self, circuit: &str) -> Result<Vec<u8>, ZkConfigError> {
-        self.require("keys", circuit, "prover")
+        self.require(PROVER, circuit)
     }
 
     fn verifier_key(&self, circuit: &str) -> Result<Vec<u8>, ZkConfigError> {
-        self.require("keys", circuit, "verifier")
+        self.require(VERIFIER, circuit)
     }
 
     fn zkir(&self, circuit: &str) -> Result<Vec<u8>, ZkConfigError> {
-        self.require("zkir", circuit, "bzkir")
+        self.require(ZKIR, circuit)
     }
 
     fn artifacts(&self, circuit: &str) -> Result<ZkArtifacts, ZkConfigError> {
         // All-or-nothing: every artifact absent means "not this contract's
         // circuit" (NotFound); a partial set is a broken install (Incomplete).
-        let prover_key = self.read_opt("keys", circuit, "prover")?;
-        let verifier_key = self.read_opt("keys", circuit, "verifier")?;
-        let zkir = self.read_opt("zkir", circuit, "bzkir")?;
+        let prover_key = self.read_opt(PROVER, circuit)?;
+        let verifier_key = self.read_opt(VERIFIER, circuit)?;
+        let zkir = self.read_opt(ZKIR, circuit)?;
         match (prover_key, verifier_key, zkir) {
             (None, None, None) => Err(ZkConfigError::NotFound(circuit.to_string())),
             (Some(prover_key), Some(verifier_key), Some(zkir)) => Ok(ZkArtifacts {
@@ -191,9 +214,9 @@ impl ZkConfigProvider for FsZkConfigProvider {
             }),
             (prover_key, verifier_key, zkir) => {
                 let missing: Vec<&str> = [
-                    ("prover", prover_key.is_some()),
-                    ("verifier", verifier_key.is_some()),
-                    ("bzkir", zkir.is_some()),
+                    (PROVER.ext, prover_key.is_some()),
+                    (VERIFIER.ext, verifier_key.is_some()),
+                    (ZKIR.ext, zkir.is_some()),
                 ]
                 .into_iter()
                 .filter_map(|(name, present)| (!present).then_some(name))
@@ -207,7 +230,7 @@ impl ZkConfigProvider for FsZkConfigProvider {
     }
 
     fn list_circuits(&self) -> Result<Option<Vec<String>>, ZkConfigError> {
-        let keys_dir = self.base_dir().join("keys");
+        let keys_dir = self.base_dir().join(VERIFIER.dir);
         let entries = match std::fs::read_dir(&keys_dir) {
             Ok(entries) => entries,
             // An empty result here would be indistinguishable from "this
@@ -232,7 +255,7 @@ impl ZkConfigProvider for FsZkConfigProvider {
                     source,
                 })?
                 .path();
-            if path.extension().and_then(|e| e.to_str()) == Some("verifier")
+            if path.extension().and_then(|e| e.to_str()) == Some(VERIFIER.ext)
                 && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
             {
                 circuits.push(stem.to_string());

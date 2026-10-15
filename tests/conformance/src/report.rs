@@ -7,29 +7,16 @@
 
 use midnight_contract::runtime::ExecutionResult;
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
-use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
+use midnight_typed_state::{ContractState, InMemoryDB, StateValue};
 use serde_json::{Value as Json, json};
 
 use crate::state_json::{aligned_value_to_json, state_value_to_json};
 
-/// The public transcript as canonical JSON: gather-mode ops with each
-/// `popeq` placeholder substituted by the corresponding read result, the
-/// exact translation `call.rs` applies before partitioning transcripts.
+/// [`ExecutionResult::public_transcript`] as canonical JSON.
+///
+/// The ops that `call.rs` drops before it partitions the transcripts stay in.
 pub fn public_transcript_json(result: &ExecutionResult) -> Json {
-    let mut read_iter = result.reads.iter();
-    let verify_ops: Vec<midnight_onchain_runtime::ops::Op<ResultModeVerify, InMemoryDB>> = result
-        .gather_ops
-        .iter()
-        .map(|op| {
-            op.clone().translate(|()| {
-                read_iter
-                    .next()
-                    .cloned()
-                    .unwrap_or_else(|| AlignedValue::from(()))
-            })
-        })
-        .collect();
-    Json::Array(verify_ops.iter().map(op_to_json).collect())
+    Json::Array(result.public_transcript().iter().map(op_to_json).collect())
 }
 
 /// Canonical JSON for a single transcript op, matching the TS `Op<R>` union:
@@ -106,12 +93,7 @@ pub fn input_json(
 /// Concatenated communication outputs, as `call.rs` builds
 /// `ContractCallPrototype::output`.
 pub fn output_json(result: &ExecutionResult) -> Json {
-    let output: AlignedValue = if result.communication_outputs.is_empty() {
-        AlignedValue::from(())
-    } else {
-        AlignedValue::concat(result.communication_outputs.iter())
-    };
-    aligned_value_to_json(&output)
+    aligned_value_to_json(&result.output())
 }
 
 /// Canonical state channel: the post-execution `StateValue` both as readable

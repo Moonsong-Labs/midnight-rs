@@ -2,10 +2,9 @@
 //! coin to an *external* wallet that finds it through normal sync.
 //!
 //! The contract's `mint` circuit calls `mintShieldedToken(..., left(coinPK))`,
-//! creating a shielded output owned by `coinPK`. By attaching the recipient's
-//! `coin_public_key -> encryption_public_key` mapping with
-//! `with_coin_encryption_keys`, the SDK adds the discovery ciphertext to that
-//! output, so the recipient's wallet discovers the coin on its own, no
+//! creating a shielded output owned by `coinPK`. By attaching the recipient
+//! with `with_coin_encryption_keys`, the SDK adds the discovery ciphertext to
+//! that output, so the recipient's wallet discovers the coin on its own, no
 //! `watchFor`, no out-of-band coordination.
 //!
 //! ```bash
@@ -26,11 +25,6 @@ mod shielded_mint {
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
-
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/shielded-mint/compiled"
-);
 
 /// Dev node genesis wallet seed (funded with NIGHT at genesis) — pays fees and
 /// deploys the contract.
@@ -60,8 +54,6 @@ async fn main() -> anyhow::Result<()> {
     //    to get the same.
     let recipient_seed = Seed::from_hex(RECIPIENT_SEED)?;
     let recipient = recipient_seed.shielded_recipient();
-    let coin_pk = recipient.coin_public_key;
-    let enc_pk = recipient.enc_public_key;
     println!(
         "1. Recipient shielded address: {}\n",
         recipient_seed.shielded_address(&network)
@@ -71,14 +63,14 @@ async fn main() -> anyhow::Result<()> {
     println!("2. Deploying mint contract...");
     let contract = shielded_mint::Contract::deploy(provider)
         .with_initial_state(shielded_mint::LedgerInitialState)
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(shielded_mint::ZK_CONFIG_DIR)
         .await?;
     let address = contract.address().to_string();
     println!("   address: {address}\n");
 
-    // 3. Mint, attaching the recipient's coin->encryption key mapping for this
-    //    call. The SDK uses the mapping to add the discovery ciphertext to the
-    //    output the `mint` circuit creates.
+    // 3. Mint, attaching the recipient for this call. The SDK seals the
+    //    discovery ciphertext of the output the `mint` circuit creates to the
+    //    recipient's encryption key.
     use midnight_core::compact_bindgen::Bytes;
     use rand::Rng;
     let domain_sep = Bytes([0x11u8; 32]);
@@ -86,15 +78,12 @@ async fn main() -> anyhow::Result<()> {
     // A fresh nonce per mint: the coin commitment is derived from it, so a
     // unique nonce keeps each minted coin distinct (and the example re-runnable).
     let nonce = Bytes(rand::thread_rng().r#gen::<[u8; 32]>());
-    let coin_pk_arg = shielded_mint::ZswapCoinPublicKey {
-        bytes: Bytes(coin_pk.0.0),
-    };
 
     println!("3. Minting {value} units to the recipient...");
     contract
         .circuits()
-        .with_coin_encryption_keys([(coin_pk, enc_pk)])
-        .mint(domain_sep, value, nonce, coin_pk_arg)
+        .with_coin_encryption_keys([recipient])
+        .mint(domain_sep, value, nonce, recipient.coin_public_key.into())
         .await?;
     println!("   minted.\n");
 
@@ -116,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
         Some(coin) => {
             println!(
                 "   discovered minted coin: token_type={}, value={}",
-                hex::encode(coin.token_type.0.0),
+                coin.token_type_hex(),
                 coin.value
             );
             println!("\n=== Done: recipient found the coin through normal sync ===");
@@ -128,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
                     .shielded
                     .coins
                     .iter()
-                    .map(|c| (hex::encode(c.token_type.0.0), c.value))
+                    .map(|c| (c.token_type_hex(), c.value))
                     .collect::<Vec<_>>()
             );
         }

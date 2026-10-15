@@ -8,14 +8,11 @@
 //! test submits from the dev seed, so it has a binary of its own. Two tests
 //! that submit from one seed in one binary can select the same Dust.
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
-};
-use midnight_contract::{ShieldedOffer, ShieldedPayment, ShieldedTokenType};
-use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::Wallet;
+mod common;
 
-const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+use compact_bindgen::{AlignedValue, StateValue};
+use midnight_contract::{ShieldedOffer, ShieldedPayment, ShieldedTokenType};
+use midnight_provider::MidnightProvider;
 
 /// The offer's coin and payment must reach the guaranteed Zswap offer of the
 /// proven transaction, with a change output when the coin holds more than the
@@ -28,38 +25,19 @@ const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000
 /// is bboard-shaped, and the deploy path does not interpret it.
 #[tokio::test]
 async fn deploy_funded_with_shielded_offer() {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL is missing under make test-e2e");
-        }
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
 
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(0u64),
-                StateValue::Null,
-                StateValue::from(1u64),
-                StateValue::from(AlignedValue::from([0u8; 32])),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = common::contract_state(vec![
+        StateValue::from(0u64),
+        StateValue::Null,
+        StateValue::from(1u64),
+        StateValue::from(AlignedValue::from([0u8; 32])),
+    ]);
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .unwrap()
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("indexer sync should succeed");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let recipient = wallet.seed().shielded_recipient();
     let provider = provider.with_wallet(wallet);
 

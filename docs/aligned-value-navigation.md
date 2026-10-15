@@ -59,13 +59,11 @@ The generated `Ledger` struct navigates this tree:
 ```rust
 // Generated code (simplified):
 pub fn threshold(&self) -> Result<u8, StateError> {
-    let sv = get_field(self.state.data.get_ref(), FIELD_THRESHOLD)?;
-    let av = cell_value(sv)?;
-    <u8>::try_from(&*av.value).map_err(StateError::Conversion)
+    cell_as::<u8>(get_field_path(self.state.data.get_ref(), &[FIELD_THRESHOLD])?)
 }
 ```
 
-`get_field(root, index)` does `Array[index]`, `cell_value(sv)` extracts the `AlignedValue` from a `Cell`, and `TryFrom<&ValueSlice>` converts to the typed Rust value.
+`get_field_path(root, path)` does `Array[index]` for each index in `path`. A field of a ledger that fits one array has a path of one index. `cell_as(sv)` extracts the `AlignedValue` from a `Cell` and converts it to the typed Rust value through `TryFrom<&ValueSlice>`.
 
 ## How the interpreter uses this
 

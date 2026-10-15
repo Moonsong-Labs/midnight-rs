@@ -45,8 +45,7 @@ use tracing::{debug, warn};
 
 use crate::{
     ConflictStrategy, EncryptedExport, ExportOptions, FORMAT_KEYS, FORMAT_STATES, ImportOptions,
-    ImportResult, MIN_PASSWORD_LEN, PrivateStateError, PrivateStateProvider, Snapshot,
-    SnapshotStatus, crypto,
+    ImportResult, PrivateStateError, PrivateStateProvider, Snapshot, SnapshotStatus, crypto,
 };
 
 const STATES_SUBDIR: &str = "states";
@@ -59,7 +58,8 @@ const ADDRESS_MARKER: &str = "address.txt";
 #[serde(deny_unknown_fields)]
 struct KeyRecord {
     address: String,
-    data: String,
+    #[serde(with = "crate::base64_bytes")]
+    data: Vec<u8>,
 }
 
 /// One entry in a private-state export: the address it belongs to plus the
@@ -95,15 +95,14 @@ pub struct FsPrivateStateProvider {
     locks: Arc<StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 /// `~/.midnight/private-state/`, the base that holds one store per wallet.
 fn default_dir() -> Option<PathBuf> {
-    home_dir().map(|h| h.join(".midnight").join("private-state"))
+    std::env::home_dir().map(|h| h.join(".midnight").join("private-state"))
+}
+
+/// The on-disk name of `s`: the hex of its sha256.
+fn hashed_name(s: &str) -> String {
+    hex::encode(Sha256::digest(s.as_bytes()))
 }
 
 /// Whether `base` holds a store from before the per-wallet layout, which no
@@ -135,10 +134,7 @@ impl FsPrivateStateProvider {
     /// unshielded address: its bech32 prefix names the network, so each
     /// network also gets its own store.
     pub fn for_wallet(base: impl AsRef<Path>, wallet_address: &str) -> Self {
-        Self::new(
-            base.as_ref()
-                .join(hex::encode(Sha256::digest(wallet_address.as_bytes()))),
-        )
+        Self::new(base.as_ref().join(hashed_name(wallet_address)))
     }
 
     /// [`Self::for_wallet`] under `~/.midnight/private-state/`. `None` when no
@@ -184,31 +180,32 @@ impl FsPrivateStateProvider {
 
     /// `<states>/<sha256(address)>/`, the per-address journal directory.
     fn address_dir(&self, address: &str) -> PathBuf {
-        self.states_dir()
-            .join(hex::encode(Sha256::digest(address.as_bytes())))
+        self.states_dir().join(hashed_name(address))
     }
 
     /// `<keys>/<sha256(address)>.json`, the flat signing-key file.
     fn key_path(&self, address: &str) -> PathBuf {
-        self.keys_dir().join(format!(
-            "{}.json",
-            hex::encode(Sha256::digest(address.as_bytes()))
-        ))
+        self.keys_dir()
+            .join(format!("{}.json", hashed_name(address)))
     }
 
-    fn snapshot_filename(extrinsic_hash: &str) -> String {
+    /// `<states>/<sha256(address)>/<nanos>-<extrinsic_hash>.json`, the file
+    /// of a new journal snapshot. The module docs say what the timestamp is
+    /// for.
+    fn new_snapshot_path(&self, address: &str, extrinsic_hash: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         // 020-pad covers nanos through year ~2554; lexicographic sort matches
         // chronological order.
-        format!("{nanos:020}-{extrinsic_hash}.json")
+        self.address_dir(address)
+            .join(format!("{nanos:020}-{extrinsic_hash}.json"))
     }
 
     /// Read every snapshot file under `<address>/`, oldest first.
     fn load_snapshots(&self, address: &str) -> Result<Vec<(PathBuf, Snapshot)>, PrivateStateError> {
-        load_snapshots_in(&self.address_dir(address))
+        read_json_dir(&self.address_dir(address))
     }
 
     /// The journal head snapshot for `address`, picked from the `depends_on`
@@ -261,34 +258,20 @@ impl FsPrivateStateProvider {
         // TOCTOU between the two syscalls (a concurrent `forget` could delete
         // the marker between the check and the read, surfacing an Io error
         // where the recreate path was the right answer).
-        match fs::read_to_string(&marker) {
-            Ok(existing) => {
-                if existing.trim() != address {
-                    return Err(PrivateStateError::InvalidFormat(format!(
-                        "address marker at {} holds {:?} but caller passed {:?}; \
-                         the per-address directory does not match the address it \
-                         was created for. Resolve by deleting the directory or \
-                         repairing the marker.",
-                        marker.display(),
-                        existing.trim(),
-                        address,
-                    )));
-                }
-                Ok(())
+        match not_found_as_none(fs::read_to_string(&marker), "read", &marker)? {
+            Some(existing) if existing.trim() != address => {
+                Err(PrivateStateError::InvalidFormat(format!(
+                    "address marker at {} holds {:?} but caller passed {:?}; \
+                     the per-address directory does not match the address it \
+                     was created for. Resolve by deleting the directory or \
+                     repairing the marker.",
+                    marker.display(),
+                    existing.trim(),
+                    address,
+                )))
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let tmp = marker.with_extension("tmp");
-                write_private(&tmp, address.as_bytes())
-                    .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
-                fs::rename(&tmp, &marker).map_err(|e| {
-                    PrivateStateError::Io(format!("rename {}: {e}", marker.display()))
-                })?;
-                Ok(())
-            }
-            Err(e) => Err(PrivateStateError::Io(format!(
-                "read {}: {e}",
-                marker.display()
-            ))),
+            Some(_) => Ok(()),
+            None => write_atomic(&marker, address.as_bytes()),
         }
     }
 
@@ -305,13 +288,7 @@ impl FsPrivateStateProvider {
 
         let json = serde_json::to_vec_pretty(value)
             .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-
-        let tmp = path.with_extension("tmp");
-        write_private(&tmp, &json)
-            .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
-        fs::rename(&tmp, path)
-            .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))?;
-        Ok(())
+        write_atomic(path, &json)
     }
 }
 
@@ -327,9 +304,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         let _journal_guard = self.lock_address(address).await;
         let ext_hex = hex::encode(extrinsic_hash);
         self.ensure_address_marker(address)?;
-        // Reject duplicates so we never write two files for the same tx id.
-        // `find_snapshot_path` is the same lookup `confirm` / `mark_failed`
-        // use, so this guarantees those operations remain unambiguous.
+        // Reject duplicates: every lookup by tx id assumes one file per id.
         if self.find_snapshot_path(address, &ext_hex)?.is_some() {
             return Err(PrivateStateError::SnapshotAlreadyExists {
                 address: address.to_string(),
@@ -360,9 +335,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             depends_on: expected.clone(),
             data: state.to_vec(),
         };
-        let path = self
-            .address_dir(address)
-            .join(Self::snapshot_filename(&ext_hex));
+        let path = self.new_snapshot_path(address, &ext_hex);
         self.write_json_atomic(&path, &snapshot)?;
         debug!(
             address,
@@ -436,20 +409,8 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         address: &str,
         extrinsic_hash: [u8; 32],
     ) -> Result<(), PrivateStateError> {
-        let _journal_guard = self.lock_address(address).await;
-        let ext_hex = hex::encode(extrinsic_hash);
-        // Surface SnapshotNotFound for unknown hashes so callers see a
-        // consistent error variant across confirm / mark_failed /
-        // rollback_from. cascade_drop's own early-return semantics aren't
-        // load-bearing here.
-        if self.find_snapshot_path(address, &ext_hex)?.is_none() {
-            return Err(PrivateStateError::SnapshotNotFound {
-                address: address.to_string(),
-                extrinsic_hash: ext_hex,
-            });
-        }
-        cascade_drop(self, address, &ext_hex)?;
-        debug!(address, extrinsic_hash = %ext_hex, "marked snapshot failed");
+        self.rollback_from(address, extrinsic_hash).await?;
+        debug!(address, extrinsic_hash = %hex::encode(extrinsic_hash), "marked snapshot failed");
         Ok(())
     }
 
@@ -470,15 +431,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         extrinsic_hash: [u8; 32],
     ) -> Result<(), PrivateStateError> {
         let _journal_guard = self.lock_address(address).await;
-        let ext_hex = hex::encode(extrinsic_hash);
-        if self.find_snapshot_path(address, &ext_hex)?.is_none() {
-            return Err(PrivateStateError::SnapshotNotFound {
-                address: address.to_string(),
-                extrinsic_hash: ext_hex,
-            });
-        }
-        cascade_drop(self, address, &ext_hex)?;
-        Ok(())
+        cascade_drop(self, address, &hex::encode(extrinsic_hash))
     }
 
     /// Both fields come from a single `head_snapshot` call so a concurrent
@@ -506,16 +459,13 @@ impl PrivateStateProvider for FsPrivateStateProvider {
     async fn set_signing_key(&self, address: &str, key: &[u8]) -> Result<(), PrivateStateError> {
         let rec = KeyRecord {
             address: address.to_string(),
-            data: encode_b64(key),
+            data: key.to_vec(),
         };
         self.write_json_atomic(&self.key_path(address), &rec)
     }
 
     async fn get_signing_key(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
-        match read_json_opt::<KeyRecord>(&self.key_path(address))? {
-            Some(rec) => Ok(Some(decode_b64(&rec.data)?)),
-            None => Ok(None),
-        }
+        Ok(read_json_opt::<KeyRecord>(&self.key_path(address))?.map(|rec| rec.data))
     }
 
     async fn remove_signing_key(&self, address: &str) -> Result<(), PrivateStateError> {
@@ -530,23 +480,11 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         &self,
         opts: &ExportOptions,
     ) -> Result<EncryptedExport, PrivateStateError> {
-        if opts.password.chars().count() < MIN_PASSWORD_LEN {
-            return Err(PrivateStateError::PasswordTooShort);
-        }
+        opts.check_password()?;
         let entries = collect_export_entries(self)?;
-        if entries.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
-        let payload = serde_json::to_vec(&entries)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        let (salt, ciphertext) =
-            crypto::encrypt(&opts.password, FORMAT_STATES.as_bytes(), &payload)?;
+        let export = crypto::seal(FORMAT_STATES, opts, &entries)?;
         debug!(count = entries.len(), "exported snapshot journal");
-        Ok(EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext,
-        })
+        Ok(export)
     }
 
     async fn import_private_states(
@@ -554,24 +492,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         data: &EncryptedExport,
         opts: &ImportOptions,
     ) -> Result<ImportResult, PrivateStateError> {
-        if data.format != FORMAT_STATES {
-            return Err(PrivateStateError::InvalidFormat(format!(
-                "expected format {FORMAT_STATES}, got {}",
-                data.format
-            )));
-        }
-        let payload = crypto::decrypt(
-            &opts.password,
-            FORMAT_STATES.as_bytes(),
-            &data.salt,
-            &data.ciphertext,
-        )?;
-        let entries: Vec<ExportEntry> = serde_json::from_slice(&payload).map_err(|e| {
-            PrivateStateError::InvalidFormat(format!("decoded payload is not a snapshot list: {e}"))
-        })?;
-        if entries.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
+        let entries = crypto::open(FORMAT_STATES, data, opts)?;
         apply_import_entries(self, entries, opts.conflict)
     }
 
@@ -579,78 +500,26 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         &self,
         opts: &ExportOptions,
     ) -> Result<EncryptedExport, PrivateStateError> {
-        if opts.password.chars().count() < MIN_PASSWORD_LEN {
-            return Err(PrivateStateError::PasswordTooShort);
-        }
+        opts.check_password()?;
         let mut records: Vec<KeyRecord> = Vec::new();
-        let rd = match fs::read_dir(self.keys_dir()) {
-            Ok(rd) => Some(rd),
-            // Missing keys dir is "nothing to export"; any other read_dir
-            // failure (permission denied, I/O error) is real and must
-            // surface, not silently produce an empty backup.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => {
-                return Err(PrivateStateError::Io(format!(
-                    "read_dir {}: {e}",
-                    self.keys_dir().display()
+        for (path, rec) in read_json_dir::<KeyRecord>(&self.keys_dir())? {
+            // Cross-check the filename: a signing-key file at
+            // `<sha256(address)>.json` whose JSON `address` field
+            // has been edited would otherwise migrate the key to
+            // the edited address through an export/import
+            // round-trip.
+            let expected = self.key_path(&rec.address);
+            if path != expected {
+                return Err(PrivateStateError::InvalidFormat(format!(
+                    "signing-key file at {} has an address that does not \
+                     match its filename hash (expected {})",
+                    path.display(),
+                    expected.display(),
                 )));
             }
-        };
-        if let Some(rd) = rd {
-            for entry in rd {
-                let path = entry
-                    .map_err(|e| PrivateStateError::Io(e.to_string()))?
-                    .path();
-                if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                    continue;
-                }
-                if let Some(rec) = read_json_opt::<KeyRecord>(&path)? {
-                    // Validate base64 up front so a corrupt on-disk record
-                    // doesn't escape into the export and break the importer.
-                    decode_b64(&rec.data).map_err(|_| {
-                        PrivateStateError::InvalidFormat(format!(
-                            "malformed signing-key record on disk at {}",
-                            path.display()
-                        ))
-                    })?;
-                    // Cross-check the filename: a signing-key file at
-                    // `<sha256(address)>.json` whose JSON `address` field
-                    // has been edited would otherwise migrate the key to
-                    // the edited address through an export/import
-                    // round-trip.
-                    let expected_stem = hex::encode(Sha256::digest(rec.address.as_bytes()));
-                    // `to_string_lossy` surfaces non-UTF8 paths with U+FFFD
-                    // substitutions so the comparison still fails loudly
-                    // and the error message identifies the file, instead
-                    // of silently degrading to an empty string and
-                    // misclassifying the failure.
-                    let actual_stem = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    if actual_stem != expected_stem {
-                        return Err(PrivateStateError::InvalidFormat(format!(
-                            "signing-key file at {} has an address that does not \
-                             match its filename hash (filename={actual_stem}, \
-                             record address hashes to={expected_stem})",
-                            path.display(),
-                        )));
-                    }
-                    records.push(rec);
-                }
-            }
+            records.push(rec);
         }
-        if records.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
-        let payload = serde_json::to_vec(&records)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        let (salt, ciphertext) = crypto::encrypt(&opts.password, FORMAT_KEYS.as_bytes(), &payload)?;
-        Ok(EncryptedExport {
-            format: FORMAT_KEYS.to_string(),
-            salt,
-            ciphertext,
-        })
+        crypto::seal(FORMAT_KEYS, opts, &records)
     }
 
     async fn import_signing_keys(
@@ -658,57 +527,24 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         data: &EncryptedExport,
         opts: &ImportOptions,
     ) -> Result<ImportResult, PrivateStateError> {
-        if data.format != FORMAT_KEYS {
-            return Err(PrivateStateError::InvalidFormat(format!(
-                "expected format {FORMAT_KEYS}, got {}",
-                data.format
-            )));
-        }
-        let payload = crypto::decrypt(
-            &opts.password,
-            FORMAT_KEYS.as_bytes(),
-            &data.salt,
-            &data.ciphertext,
-        )?;
-        let records: Vec<KeyRecord> = serde_json::from_slice(&payload).map_err(|e| {
-            PrivateStateError::InvalidFormat(format!("malformed import payload: {e}"))
-        })?;
-        if records.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
+        let records: Vec<KeyRecord> = crypto::open(FORMAT_KEYS, data, opts)?;
 
-        // Resolve each record to its path; eagerly base64-decode so a corrupt
-        // entry aborts before any file is written.
-        let mut resolved = Vec::with_capacity(records.len());
-        for rec in records {
-            decode_b64(&rec.data)?;
-            let path = self.key_path(&rec.address);
-            resolved.push((path, rec));
-        }
+        let resolved: Vec<(PathBuf, KeyRecord)> = records
+            .into_iter()
+            .map(|rec| (self.key_path(&rec.address), rec))
+            .collect();
         reject_duplicate_paths(&resolved)?;
 
-        if opts.conflict == ConflictStrategy::Error
-            && let Some((_, rec)) = resolved.iter().find(|(p, _)| p.exists())
-        {
-            return Err(PrivateStateError::ImportConflict(rec.address.clone()));
-        }
-
+        // Decide every record before the first write, so a conflict leaves
+        // the store unchanged.
         let mut result = ImportResult::default();
+        let mut admitted = Vec::with_capacity(resolved.len());
         for (path, rec) in &resolved {
-            if path.exists() {
-                match opts.conflict {
-                    ConflictStrategy::Skip => {
-                        result.skipped += 1;
-                        continue;
-                    }
-                    ConflictStrategy::Overwrite => result.overwritten += 1,
-                    ConflictStrategy::Error => {
-                        return Err(PrivateStateError::ImportConflict(rec.address.clone()));
-                    }
-                }
-            } else {
-                result.imported += 1;
+            if result.admit(path.exists(), opts.conflict, || rec.address.clone())? {
+                admitted.push((path, rec));
             }
+        }
+        for (path, rec) in admitted {
             self.write_json_atomic(path, rec)?;
         }
         Ok(result)
@@ -773,38 +609,17 @@ fn find_leaf(snapshots: Vec<Snapshot>) -> Result<Option<Snapshot>, PrivateStateE
     // One leaf, but we still need to rule out an isolated cycle hiding
     // alongside this valid root-leaf chain (e.g., {A_root, B<->C}). Do a
     // BFS from every root (snapshot with `depends_on=None`) following
-    // child edges; anything not reached belongs to a cycle. We can't
-    // reuse `topo_sort` here because it intentionally appends orphans so
-    // the snapshot inventory is complete.
-    use std::collections::HashMap;
-    use std::collections::VecDeque;
+    // child edges; anything not reached belongs to a cycle.
     let by_hash: HashMap<&str, &Snapshot> = snapshots
         .iter()
         .map(|s| (s.extrinsic_hash.as_str(), s))
         .collect();
-    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut roots: Vec<&str> = Vec::new();
-    for s in &snapshots {
-        match s.depends_on.as_deref() {
-            None => roots.push(s.extrinsic_hash.as_str()),
-            Some(parent) => children
-                .entry(parent)
-                .or_default()
-                .push(s.extrinsic_hash.as_str()),
-        }
-    }
-    let mut reachable: HashSet<&str> = HashSet::with_capacity(total);
-    let mut q: VecDeque<&str> = roots.into();
-    while let Some(h) = q.pop_front() {
-        if !reachable.insert(h) {
-            continue;
-        }
-        if let Some(cs) = children.get(h) {
-            for c in cs {
-                q.push_back(c);
-            }
-        }
-    }
+    let roots = snapshots
+        .iter()
+        .filter(|s| s.depends_on.is_none())
+        .map(|s| s.extrinsic_hash.as_str())
+        .collect();
+    let reachable: HashSet<&str> = walk_children(&snapshots, roots).into_iter().collect();
     if reachable.len() != total {
         let mut orphans: Vec<String> = by_hash
             .keys()
@@ -848,42 +663,23 @@ fn find_leaf(snapshots: Vec<Snapshot>) -> Result<Option<Snapshot>, PrivateStateE
 /// each snapshot follows its parent. Within one parent the order is
 /// extrinsic_hash-lexicographic so the result is deterministic.
 fn topo_sort(snapshots: Vec<Snapshot>) -> Vec<Snapshot> {
-    use std::collections::HashMap;
-    use std::collections::VecDeque;
-
     let mut by_hash: HashMap<String, Snapshot> = snapshots
         .into_iter()
         .map(|s| (s.extrinsic_hash.clone(), s))
         .collect();
 
-    let mut children: HashMap<String, Vec<String>> = HashMap::new();
-    let mut roots: Vec<String> = Vec::new();
-    for s in by_hash.values() {
-        match &s.depends_on {
-            None => roots.push(s.extrinsic_hash.clone()),
-            Some(parent) => children
-                .entry(parent.clone())
-                .or_default()
-                .push(s.extrinsic_hash.clone()),
-        }
-    }
-    roots.sort();
-    for v in children.values_mut() {
-        v.sort();
-    }
+    let mut roots: Vec<&str> = by_hash
+        .values()
+        .filter(|s| s.depends_on.is_none())
+        .map(|s| s.extrinsic_hash.as_str())
+        .collect();
+    roots.sort_unstable();
+    let order: Vec<String> = walk_children(by_hash.values(), roots)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
 
-    let mut out = Vec::with_capacity(by_hash.len());
-    let mut q: VecDeque<String> = roots.into();
-    while let Some(h) = q.pop_front() {
-        if let Some(s) = by_hash.remove(&h) {
-            if let Some(cs) = children.remove(&h) {
-                for c in cs {
-                    q.push_back(c);
-                }
-            }
-            out.push(s);
-        }
-    }
+    let mut out: Vec<Snapshot> = order.iter().filter_map(|h| by_hash.remove(h)).collect();
     // Orphans (snapshot whose `depends_on` points at a missing parent) won't
     // be reached by the BFS; append them in hash order so they're still
     // included in the inventory.
@@ -893,10 +689,45 @@ fn topo_sort(snapshots: Vec<Snapshot>) -> Vec<Snapshot> {
     out
 }
 
+/// The hashes reachable from `starts` along child edges (a child's
+/// `depends_on` names its parent), breadth first. Each hash appears once, and
+/// every child comes after its parent. Siblings come in hash order.
+fn walk_children<'a>(
+    snapshots: impl IntoIterator<Item = &'a Snapshot>,
+    starts: Vec<&'a str>,
+) -> Vec<&'a str> {
+    use std::collections::VecDeque;
+
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    for s in snapshots {
+        if let Some(parent) = s.depends_on.as_deref() {
+            children.entry(parent).or_default().push(&s.extrinsic_hash);
+        }
+    }
+    for siblings in children.values_mut() {
+        siblings.sort_unstable();
+    }
+
+    let mut visited = HashSet::new();
+    let mut order = Vec::new();
+    let mut queue: VecDeque<&str> = starts.into();
+    while let Some(hash) = queue.pop_front() {
+        if !visited.insert(hash) {
+            continue;
+        }
+        order.push(hash);
+        if let Some(cs) = children.get(hash) {
+            queue.extend(cs);
+        }
+    }
+    order
+}
+
 /// Cascade-drop a snapshot and every snapshot that transitively depends on
 /// it. Walks the dependency graph (`depends_on` edges) starting from
 /// `start_hash`, collects every reachable extrinsic_hash, then deletes the
-/// corresponding files. A no-op if `start_hash` is not present.
+/// corresponding files. Errors with [`PrivateStateError::SnapshotNotFound`]
+/// if `start_hash` is not present.
 fn cascade_drop(
     provider: &FsPrivateStateProvider,
     address: &str,
@@ -907,66 +738,38 @@ fn cascade_drop(
         .iter()
         .any(|(_, s)| s.extrinsic_hash == start_hash)
     {
-        return Ok(());
+        return Err(PrivateStateError::SnapshotNotFound {
+            address: address.to_string(),
+            extrinsic_hash: start_hash.to_string(),
+        });
     }
+    let path_by_hash: HashMap<&str, &Path> = snapshots
+        .iter()
+        .map(|(path, s)| (s.extrinsic_hash.as_str(), path.as_path()))
+        .collect();
+    let doomed = walk_children(snapshots.iter().map(|(_, s)| s), vec![start_hash]);
 
-    let mut failed: HashSet<String> = HashSet::new();
-    failed.insert(start_hash.to_string());
-    loop {
-        let mut grew = false;
-        for (_, snap) in &snapshots {
-            if failed.contains(&snap.extrinsic_hash) {
-                continue;
-            }
-            if let Some(parent) = &snap.depends_on
-                && failed.contains(parent)
-            {
-                failed.insert(snap.extrinsic_hash.clone());
-                grew = true;
-            }
-        }
-        if !grew {
-            break;
-        }
-    }
-
-    // Delete child-first and stop at the first failure, so a partial
-    // cascade is always recoverable. The doomed set is the start snapshot
-    // plus everything that (transitively) depends on it. Deleting a parent
-    // before its child and then failing would leave the surviving child an
-    // orphan whose `depends_on` points at a now-missing parent, which
-    // `find_leaf` rejects. Deleting children before parents means every
-    // surviving doomed snapshot still has its parent on disk, so the
-    // journal stays a valid chain and re-running `mark_failed` resumes the
-    // drop from where it stopped.
-    let mut path_by_hash: HashMap<String, PathBuf> = HashMap::new();
-    let mut doomed: Vec<Snapshot> = Vec::new();
-    for (path, snap) in snapshots {
-        if failed.contains(&snap.extrinsic_hash) {
-            path_by_hash.insert(snap.extrinsic_hash.clone(), path);
-            doomed.push(snap);
-        }
-    }
-    for snap in child_first(doomed) {
-        if let Some(path) = path_by_hash.get(&snap.extrinsic_hash) {
+    // Delete child-first (the reverse of the walk order) and stop at the
+    // first failure, so a partial cascade is always recoverable. The doomed
+    // set is the start snapshot plus everything that (transitively) depends
+    // on it. Deleting a parent before its child and then failing would leave
+    // the surviving child an orphan whose `depends_on` points at a
+    // now-missing parent, which `find_leaf` rejects. Deleting children
+    // before parents means every surviving doomed snapshot still has its
+    // parent on disk, so the journal stays a valid chain and re-running
+    // `mark_failed` resumes the drop from where it stopped.
+    for hash in doomed.into_iter().rev() {
+        if let Some(path) = path_by_hash.get(hash) {
             remove_file_opt(path).map_err(|e| {
                 PrivateStateError::Io(format!(
-                    "cascade_drop on {address} stopped at snapshot {} ({}): {e}; \
+                    "cascade_drop on {address} stopped at snapshot {hash} ({}): {e}; \
                      re-run mark_failed to resume",
-                    snap.extrinsic_hash,
                     path.display()
                 ))
             })?;
         }
     }
     Ok(())
-}
-
-/// Order `snapshots` so that each one comes before its parent.
-fn child_first(snapshots: Vec<Snapshot>) -> Vec<Snapshot> {
-    let mut ordered = topo_sort(snapshots);
-    ordered.reverse();
-    ordered
 }
 
 /// Walk the per-address journal directories, collecting every snapshot
@@ -976,56 +779,31 @@ fn collect_export_entries(
     provider: &FsPrivateStateProvider,
 ) -> Result<Vec<ExportEntry>, PrivateStateError> {
     let mut out: Vec<ExportEntry> = Vec::new();
-    let states_dir = provider.states_dir();
-    let rd = match fs::read_dir(&states_dir) {
-        Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-        Err(e) => {
-            return Err(PrivateStateError::Io(format!(
-                "read dir {}: {e}",
-                states_dir.display()
-            )));
-        }
-    };
-    for entry in rd {
-        let dir = entry
-            .map_err(|e| PrivateStateError::Io(e.to_string()))?
-            .path();
+    for dir in list_dir(&provider.states_dir())? {
         if !dir.is_dir() {
             continue;
         }
         let addr_marker = dir.join(ADDRESS_MARKER);
-        let address = match fs::read_to_string(&addr_marker) {
-            Ok(s) => s.trim().to_string(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => {
-                return Err(PrivateStateError::Io(format!(
-                    "read {}: {e}",
-                    addr_marker.display()
-                )));
-            }
+        let Some(address) =
+            not_found_as_none(fs::read_to_string(&addr_marker), "read", &addr_marker)?
+        else {
+            continue;
         };
+        let address = address.trim().to_string();
         // Cross-check the marker against the directory name: the directory
         // hash is the source of truth, so a tampered or stale marker must
         // not silently rebind snapshots through an export/import round-trip.
-        let expected_dir = hex::encode(Sha256::digest(address.as_bytes()));
-        // `to_string_lossy` surfaces non-UTF8 paths with U+FFFD so the
-        // comparison still fails loudly and the error message identifies
-        // the directory.
-        let actual_dir = dir
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if actual_dir != expected_dir {
+        let expected = provider.address_dir(&address);
+        if dir != expected {
             return Err(PrivateStateError::InvalidFormat(format!(
                 "address marker at {} holds {:?} whose sha256 does not match \
-                 the directory name (directory={actual_dir}, expected hash \
-                 for marker={expected_dir})",
+                 the directory name (expected directory {})",
                 addr_marker.display(),
                 address,
+                expected.display(),
             )));
         }
-        for (_, snap) in load_snapshots_in(&dir)? {
+        for (_, snap) in read_json_dir::<Snapshot>(&dir)? {
             out.push(ExportEntry {
                 address: address.clone(),
                 snapshot: snap,
@@ -1093,58 +871,39 @@ fn apply_import_entries(
         per_address.insert(address.clone(), by_hash);
     }
 
-    // Pass 4: detect-before-mutate. For each entry, classify the action
-    // against the destination (using the cached HashMap) and stage the
-    // resulting (path, snapshot) write. No on-disk changes yet.
-    enum Action {
-        Insert(PathBuf),
-        Overwrite(PathBuf),
-        Skip,
-    }
-    let mut staged: Vec<(String, ExportEntry, Action)> = Vec::with_capacity(entries.len());
+    // Pass 4: detect-before-mutate. For each entry, decide against the
+    // destination (using the cached HashMap) whether to write it, and stage
+    // the target path of the write. No on-disk changes yet.
+    let mut staged: Vec<(ExportEntry, Option<PathBuf>)> = Vec::with_capacity(entries.len());
     let mut result = ImportResult::default();
     for entry in entries {
-        let dir = provider.address_dir(&entry.address);
         let by_hash = per_address.get(&entry.address).expect("populated above");
         let existing = by_hash.get(&entry.snapshot.extrinsic_hash);
-        let action = match (existing, conflict) {
-            (Some(_), ConflictStrategy::Skip) => {
-                result.skipped += 1;
-                Action::Skip
-            }
-            (Some((p, existing_snap)), ConflictStrategy::Overwrite) => {
-                // Status monotonicity: don't let an Overwrite import
-                // silently downgrade a Confirmed snapshot back to
-                // Pending and drop its `block_hash` / `block_height`.
-                if existing_snap.status == SnapshotStatus::Confirmed
-                    && entry.snapshot.status == SnapshotStatus::Pending
-                {
-                    return Err(PrivateStateError::InvalidFormat(format!(
-                        "import would downgrade a Confirmed snapshot to \
-                         Pending at {} / {}; refusing to discard the \
-                         existing block_hash / block_height",
-                        entry.address, entry.snapshot.extrinsic_hash
-                    )));
-                }
-                result.overwritten += 1;
-                Action::Overwrite(p.clone())
-            }
-            (Some(_), ConflictStrategy::Error) => {
-                return Err(PrivateStateError::ImportConflict(format!(
-                    "{} / {}",
-                    entry.address, entry.snapshot.extrinsic_hash
-                )));
-            }
-            (None, _) => {
-                result.imported += 1;
-                Action::Insert(dir.join(FsPrivateStateProvider::snapshot_filename(
-                    &entry.snapshot.extrinsic_hash,
-                )))
-            }
-        };
+        // Status monotonicity: don't let an Overwrite import
+        // silently downgrade a Confirmed snapshot back to
+        // Pending and drop its `block_hash` / `block_height`.
+        if conflict == ConflictStrategy::Overwrite
+            && let Some((_, existing_snap)) = existing
+            && existing_snap.status == SnapshotStatus::Confirmed
+            && entry.snapshot.status == SnapshotStatus::Pending
+        {
+            return Err(PrivateStateError::InvalidFormat(format!(
+                "import would downgrade a Confirmed snapshot to \
+                 Pending at {} / {}; refusing to discard the \
+                 existing block_hash / block_height",
+                entry.address, entry.snapshot.extrinsic_hash
+            )));
+        }
+        let write = result.admit(existing.is_some(), conflict, || {
+            format!("{} / {}", entry.address, entry.snapshot.extrinsic_hash)
+        })?;
+        let target = write.then(|| match existing {
+            Some((path, _)) => path.clone(),
+            None => provider.new_snapshot_path(&entry.address, &entry.snapshot.extrinsic_hash),
+        });
         // Update the in-memory view so Pass 5 can validate the merged
         // journal without touching disk.
-        if !matches!(action, Action::Skip) {
+        if target.is_some() {
             per_address
                 .get_mut(&entry.address)
                 .expect("populated above")
@@ -1153,7 +912,7 @@ fn apply_import_entries(
                     (PathBuf::new(), entry.snapshot.clone()),
                 );
         }
-        staged.push((entry.address.clone(), entry, action));
+        staged.push((entry, target));
     }
 
     // Pass 5: run `find_leaf` on every address in the payload (even ones
@@ -1176,13 +935,10 @@ fn apply_import_entries(
     // Pass 6: commit. Every prior pass ran on borrowed data; the only IO
     // failures left are filesystem-level (ENOSPC etc.), which we surface
     // as `Io` like any other write.
-    for (address, entry, action) in staged {
-        provider.ensure_address_marker(&address)?;
-        match action {
-            Action::Skip => continue,
-            Action::Overwrite(p) | Action::Insert(p) => {
-                provider.write_json_atomic(&p, &entry.snapshot)?;
-            }
+    for (entry, target) in staged {
+        provider.ensure_address_marker(&entry.address)?;
+        if let Some(path) = target {
+            provider.write_json_atomic(&path, &entry.snapshot)?;
         }
     }
     Ok(result)
@@ -1210,130 +966,85 @@ fn validate_hash_field(name: &str, field: Option<&str>) -> Result<(), PrivateSta
     Ok(())
 }
 
-/// Load every snapshot file under `dir`, oldest first. Free function so the
-/// export path (which has only the directory path) can reuse it.
-fn load_snapshots_in(dir: &Path) -> Result<Vec<(PathBuf, Snapshot)>, PrivateStateError> {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => {
-            return Err(PrivateStateError::Io(format!(
-                "read dir {}: {e}",
-                dir.display()
-            )));
-        }
+/// The paths of the entries in `dir`, or none when `dir` does not exist. Any
+/// other failure surfaces, so a store that cannot be listed never exports as
+/// an empty backup.
+fn list_dir(dir: &Path) -> Result<Vec<PathBuf>, PrivateStateError> {
+    let io_err =
+        |e: std::io::Error| PrivateStateError::Io(format!("read dir {}: {e}", dir.display()));
+    let Some(entries) = not_found_as_none(fs::read_dir(dir), "read dir", dir)? else {
+        return Ok(Vec::new());
     };
-    let mut out: Vec<(PathBuf, Snapshot)> = Vec::new();
-    for entry in entries {
-        let path = entry
-            .map_err(|e| PrivateStateError::Io(e.to_string()))?
-            .path();
+    entries
+        .map(|entry| entry.map(|e| e.path()).map_err(io_err))
+        .collect()
+}
+
+/// Every `*.json` record in `dir` with its path, sorted by file name. Empty
+/// when `dir` does not exist.
+fn read_json_dir<T: DeserializeOwned>(dir: &Path) -> Result<Vec<(PathBuf, T)>, PrivateStateError> {
+    let mut out = Vec::new();
+    for path in list_dir(dir)? {
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        if let Some(snap) = read_json_opt::<Snapshot>(&path)? {
-            out.push((path, snap));
+        if let Some(record) = read_json_opt(&path)? {
+            out.push((path, record));
         }
     }
-    // Filenames begin with a 020-padded nanos timestamp, so lexicographic
-    // sort is chronological.
     out.sort_by(|a, b| a.0.file_name().cmp(&b.0.file_name()));
     Ok(out)
 }
 
-/// Create `dir` and its missing ancestors owner-only on Unix. `mode` applies
-/// only to directories this call creates, so this call also narrows an
-/// existing `dir`. Other platforms keep their default permissions.
 fn create_private_dir(dir: &Path) -> Result<(), PrivateStateError> {
-    let create_err =
-        |e: std::io::Error| PrivateStateError::Io(format!("create dir {}: {e}", dir.display()));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .map_err(create_err)?;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| {
-            PrivateStateError::Io(format!("set mode 0700 on dir {}: {e}", dir.display()))
-        })?;
-    }
-    #[cfg(not(unix))]
-    fs::create_dir_all(dir).map_err(create_err)?;
-    Ok(())
+    midnight_owner_only::create_dir_all(dir)
+        .map_err(|e| PrivateStateError::Io(format!("create dir {}: {e}", dir.display())))
 }
 
-/// Write a file readable only by its owner on Unix. Callers write to a
-/// temporary path and rename, and rename keeps the mode, so the final file is
-/// owner-only too. Permissions are unchanged on other platforms.
-fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        // `mode` applies only when this call creates the file, so a stale
-        // temporary file keeps its wider mode. Narrow it before the contents
-        // land, or they are briefly readable.
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        file.write_all(contents)?;
-        Ok(())
+/// Write `contents` to a `.tmp` sibling of `path`, then rename it into place
+/// (see the module docs).
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), PrivateStateError> {
+    let tmp = path.with_extension("tmp");
+    midnight_owner_only::write(&tmp, contents)
+        .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
+    fs::rename(&tmp, path)
+        .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))
+}
+
+/// `None` when `result` failed with `NotFound`. Any other error becomes
+/// [`PrivateStateError::Io`] that names `op` and `path`.
+fn not_found_as_none<T>(
+    result: std::io::Result<T>,
+    op: &str,
+    path: &Path,
+) -> Result<Option<T>, PrivateStateError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(PrivateStateError::Io(format!(
+            "{op} {}: {e}",
+            path.display()
+        ))),
     }
-    #[cfg(not(unix))]
-    fs::write(path, contents)
 }
 
 fn read_json_opt<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, PrivateStateError> {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(PrivateStateError::Io(format!(
-            "read {}: {e}",
-            path.display()
-        ))),
-    }
+    not_found_as_none(fs::read(path), "read", path)?
+        .map(|bytes| {
+            serde_json::from_slice(&bytes)
+                .map_err(|e| PrivateStateError::Serialize(format!("{}: {e}", path.display())))
+        })
+        .transpose()
 }
 
 fn remove_file_opt(path: &Path) -> Result<(), PrivateStateError> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(PrivateStateError::Io(format!(
-            "remove {}: {e}",
-            path.display()
-        ))),
-    }
+    not_found_as_none(fs::remove_file(path), "remove", path)?;
+    Ok(())
 }
 
 fn clear_dir(dir: &Path) -> Result<(), PrivateStateError> {
-    match fs::remove_dir_all(dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(PrivateStateError::Io(format!(
-            "clear {}: {e}",
-            dir.display()
-        ))),
-    }
-}
-
-fn encode_b64(bytes: &[u8]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(bytes)
-}
-
-fn decode_b64(s: &str) -> Result<Vec<u8>, PrivateStateError> {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(s)
-        .map_err(|e| PrivateStateError::InvalidFormat(format!("data is not base64: {e}")))
+    not_found_as_none(fs::remove_dir_all(dir), "clear", dir)?;
+    Ok(())
 }
 
 fn parse_hash(s: &str) -> Result<[u8; 32], PrivateStateError> {
@@ -1370,6 +1081,48 @@ mod tests {
 
     fn ext(seed: u8) -> [u8; 32] {
         [seed; 32]
+    }
+
+    fn pending(hash: u8, parent: Option<u8>, data: &[u8]) -> Snapshot {
+        Snapshot {
+            status: SnapshotStatus::Pending,
+            extrinsic_hash: hex::encode(ext(hash)),
+            block_hash: None,
+            block_height: None,
+            depends_on: parent.map(|p| hex::encode(ext(p))),
+            data: data.to_vec(),
+        }
+    }
+
+    /// Write `snap` into the journal of `address` in the layout of
+    /// `append_pending`, but without its checks.
+    fn write_raw(p: &FsPrivateStateProvider, address: &str, snap: &Snapshot) {
+        p.ensure_address_marker(address).unwrap();
+        let path = p.new_snapshot_path(address, &snap.extrinsic_hash);
+        p.write_json_atomic(&path, snap).unwrap();
+    }
+
+    // Seal and open by hand, not with `crypto::seal` and `crypto::open`, so
+    // that these fixtures check the aad == format rule on their own.
+    fn envelope(format: &str, payload: &impl Serialize) -> EncryptedExport {
+        let bytes = serde_json::to_vec(payload).unwrap();
+        let (salt, ciphertext) = crypto::encrypt(PW, format.as_bytes(), &bytes).unwrap();
+        EncryptedExport {
+            format: format.to_string(),
+            salt,
+            ciphertext,
+        }
+    }
+
+    fn entries_of(export: &EncryptedExport) -> Vec<ExportEntry> {
+        let payload = crypto::decrypt(
+            PW,
+            FORMAT_STATES.as_bytes(),
+            &export.salt,
+            &export.ciphertext,
+        )
+        .unwrap();
+        serde_json::from_slice(&payload).unwrap()
     }
 
     #[tokio::test]
@@ -1420,22 +1173,6 @@ mod tests {
         let snaps = p.snapshots("0200aa").await.unwrap();
         assert_eq!(snaps.len(), 1);
         assert_eq!(snaps[0].extrinsic_hash, hex::encode(ext(1)));
-        assert_eq!(p.head_extrinsic("0200aa").await.unwrap(), Some(ext(1)));
-    }
-
-    #[tokio::test]
-    async fn rollback_from_drops_snapshot_and_descendants() {
-        let (_dir, p) = provider();
-        p.append_pending("0200aa", ext(1), None, b"s1")
-            .await
-            .unwrap();
-        p.append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
-            .await
-            .unwrap();
-        p.append_pending("0200aa", ext(3), Some(ext(2)), b"s3")
-            .await
-            .unwrap();
-        p.rollback_from("0200aa", ext(2)).await.unwrap();
         assert_eq!(p.head_extrinsic("0200aa").await.unwrap(), Some(ext(1)));
     }
 
@@ -1525,18 +1262,9 @@ mod tests {
             .export_private_states(&ExportOptions::new(PW))
             .await
             .unwrap();
-        let payload =
-            crypto::decrypt(PW, FORMAT_STATES.as_bytes(), &exp.salt, &exp.ciphertext).unwrap();
-        let mut entries: Vec<ExportEntry> = serde_json::from_slice(&payload).unwrap();
+        let mut entries = entries_of(&exp);
         entries.sort_by(|a, b| a.snapshot.extrinsic_hash.cmp(&b.snapshot.extrinsic_hash));
-        let leaf_first_payload = serde_json::to_vec(&entries).unwrap();
-        let (salt, ct) =
-            crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &leaf_first_payload).unwrap();
-        let leaf_first = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let leaf_first = envelope(FORMAT_STATES, &entries);
 
         let (_dst_dir, dst) = provider();
         dst.import_private_states(&leaf_first, &ImportOptions::new(PW))
@@ -1566,17 +1294,9 @@ mod tests {
             .unwrap();
 
         // Decrypt, duplicate the entry, re-encrypt, then try to import.
-        let payload =
-            crypto::decrypt(PW, FORMAT_STATES.as_bytes(), &exp.salt, &exp.ciphertext).unwrap();
-        let mut entries: Vec<ExportEntry> = serde_json::from_slice(&payload).unwrap();
+        let mut entries = entries_of(&exp);
         entries.push(entries[0].clone());
-        let dup_payload = serde_json::to_vec(&entries).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &dup_payload).unwrap();
-        let dup = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let dup = envelope(FORMAT_STATES, &entries);
 
         let (_dst_dir, dst) = provider();
         let err = dst
@@ -1599,21 +1319,11 @@ mod tests {
         let bad = vec![ExportEntry {
             address: "0200aa".into(),
             snapshot: Snapshot {
-                status: SnapshotStatus::Pending,
                 extrinsic_hash: "not-hex".into(),
-                block_hash: None,
-                block_height: None,
-                depends_on: None,
-                data: b"bytes".to_vec(),
+                ..pending(0, None, b"bytes")
             },
         }];
-        let payload = serde_json::to_vec(&bad).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_STATES, &bad);
 
         let (_dir, dst) = provider();
         let err = dst
@@ -1628,10 +1338,9 @@ mod tests {
 
     #[tokio::test]
     async fn append_pending_rejects_duplicate_extrinsic_hash() {
-        // Two calls to `append_pending` with the same extrinsic_hash would
-        // otherwise leave two files in the directory both claiming the same
-        // tx id, which makes `confirm` / `mark_failed` operate on whichever
-        // one `find_snapshot_path` happens to return first.
+        // A second append with the same extrinsic_hash would leave two files
+        // that claim one tx id, and each lookup by id would then pick one of
+        // them arbitrarily.
         let (_dir, p) = provider();
         p.append_pending("0200aa", ext(1), None, b"s1")
             .await
@@ -1717,26 +1426,20 @@ mod tests {
     }
 
     #[test]
-    fn a_cascade_removes_children_before_parents() {
-        let snapshot = |hash: u8, parent: Option<u8>| Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: hex::encode(ext(hash)),
-            block_hash: None,
-            block_height: None,
-            depends_on: parent.map(|p| hex::encode(ext(p))),
-            data: Vec::new(),
-        };
-        // The chain is 1 <- 2 <- 3, given out of order.
-        let doomed = vec![
-            snapshot(2, Some(1)),
-            snapshot(3, Some(2)),
-            snapshot(1, None),
+    fn a_cascade_from_mid_chain_removes_children_before_parents() {
+        // The chain is 1 <- 5 <- 3, given out of order. The cascade starts
+        // at 5, which is not a root, and its child 3 sorts below it.
+        let journal = [
+            pending(5, Some(1), b""),
+            pending(3, Some(5), b""),
+            pending(1, None, b""),
         ];
-        let order: Vec<String> = child_first(doomed)
+        let start = hex::encode(ext(5));
+        let delete_order: Vec<&str> = walk_children(&journal, vec![start.as_str()])
             .into_iter()
-            .map(|s| s.extrinsic_hash)
+            .rev()
             .collect();
-        assert_eq!(order, [3, 2, 1].map(|h| hex::encode(ext(h))));
+        assert_eq!(delete_order, [3, 5].map(|h| hex::encode(ext(h))));
     }
 
     #[cfg(unix)]
@@ -1787,17 +1490,20 @@ mod tests {
         p.set_signing_key("0200aa", b"k").await.unwrap();
         // Corrupt the file in place: replace `data` with non-base64.
         let key_path = p.key_path("0200aa");
-        let mut rec: KeyRecord = read_json_opt(&key_path).unwrap().unwrap();
-        rec.data = "!!!not-base64!!!".into();
-        p.write_json_atomic(&key_path, &rec).unwrap();
+        fs::write(
+            &key_path,
+            r#"{"address":"0200aa","data":"!!!not-base64!!!"}"#,
+        )
+        .unwrap();
 
         let err = p
             .export_signing_keys(&ExportOptions::new(PW))
             .await
             .unwrap_err();
         assert!(
-            matches!(err, PrivateStateError::InvalidFormat(_)),
-            "expected InvalidFormat, got {err:?}"
+            matches!(err, PrivateStateError::Serialize(ref m)
+                if m.contains(&key_path.display().to_string())),
+            "expected Serialize naming the file, got {err:?}"
         );
     }
 
@@ -1819,22 +1525,7 @@ mod tests {
         // disk to exercise `find_leaf`'s defense against an already-branched
         // journal (one produced by import, manual editing, or a pre-fix
         // version of the SDK).
-        let sibling = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: hex::encode(ext(3)),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(hex::encode(ext(1))),
-            data: b"b".to_vec(),
-        };
-        let dir = p.address_dir("0200aa");
-        p.write_json_atomic(
-            &dir.join(FsPrivateStateProvider::snapshot_filename(&hex::encode(
-                ext(3),
-            ))),
-            &sibling,
-        )
-        .unwrap();
+        write_raw(&p, "0200aa", &pending(3, Some(1), b"b"));
 
         let err = p.head("0200aa").await.unwrap_err();
         assert!(
@@ -1855,40 +1546,8 @@ mod tests {
         // public API (it would require a future child to predate its parent),
         // but a corrupted directory could.
         let (_dir, p) = provider();
-        let addr_dir = p.address_dir("0200aa");
-        fs::create_dir_all(&addr_dir).unwrap();
-        // The address marker is normally written by `append_pending`; write
-        // it explicitly here so the path doesn't reject the address on read.
-        fs::write(addr_dir.join(ADDRESS_MARKER), "0200aa").unwrap();
-
-        let a_hex = hex::encode(ext(0xAA));
-        let b_hex = hex::encode(ext(0xBB));
-        let a = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: a_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(b_hex.clone()),
-            data: b"a".to_vec(),
-        };
-        let b = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: b_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(a_hex.clone()),
-            data: b"b".to_vec(),
-        };
-        p.write_json_atomic(
-            &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&a_hex)),
-            &a,
-        )
-        .unwrap();
-        p.write_json_atomic(
-            &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&b_hex)),
-            &b,
-        )
-        .unwrap();
+        write_raw(&p, "0200aa", &pending(0xAA, Some(0xBB), b"a"));
+        write_raw(&p, "0200aa", &pending(0xBB, Some(0xAA), b"b"));
 
         let err = p.head("0200aa").await.unwrap_err();
         assert!(
@@ -1902,13 +1561,7 @@ mod tests {
         // A payload that decrypts cleanly but isn't a valid `Vec<KeyRecord>`
         // (e.g., wrong shape) should surface as `InvalidFormat`, matching
         // the snapshot-import error variant.
-        let bad_payload = serde_json::to_vec(&serde_json::json!({"not": "an array"})).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_KEYS.as_bytes(), &bad_payload).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_KEYS.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_KEYS, &serde_json::json!({"not": "an array"}));
 
         let (_dir, dst) = provider();
         let err = dst
@@ -1922,6 +1575,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn import_signing_keys_conflict_writes_nothing() {
+        let (_dir, dst) = provider();
+        dst.set_signing_key("0200aa", b"old").await.unwrap();
+        // The new key comes first, so an import that writes before it meets
+        // the conflict leaves that key behind.
+        let records = [
+            KeyRecord {
+                address: "0200bb".into(),
+                data: b"new".to_vec(),
+            },
+            KeyRecord {
+                address: "0200aa".into(),
+                data: b"other".to_vec(),
+            },
+        ];
+        let exp = envelope(FORMAT_KEYS, &records);
+
+        let err = dst
+            .import_signing_keys(&exp, &ImportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::ImportConflict(ref a) if a == "0200aa"),
+            "expected ImportConflict(0200aa), got {err:?}"
+        );
+        assert_eq!(dst.get_signing_key("0200bb").await.unwrap(), None);
+        assert_eq!(
+            dst.get_signing_key("0200aa").await.unwrap().as_deref(),
+            Some(&b"old"[..])
+        );
+    }
+
+    #[tokio::test]
     async fn mark_failed_errors_on_unknown_hash() {
         // Matches `confirm`'s SnapshotNotFound semantics so a typo doesn't
         // silently no-op.
@@ -1930,11 +1616,6 @@ mod tests {
             .await
             .unwrap();
         let err = p.mark_failed("0200aa", ext(42)).await.unwrap_err();
-        assert!(
-            matches!(err, PrivateStateError::SnapshotNotFound { .. }),
-            "expected SnapshotNotFound, got {err:?}"
-        );
-        let err = p.rollback_from("0200aa", ext(42)).await.unwrap_err();
         assert!(
             matches!(err, PrivateStateError::SnapshotNotFound { .. }),
             "expected SnapshotNotFound, got {err:?}"
@@ -2001,42 +1682,12 @@ mod tests {
         // that {B, C} are unreachable from any root via depends_on and
         // surface InvalidFormat.
         let (_dir, p) = provider();
-        let addr_dir = p.address_dir("0200aa");
-        fs::create_dir_all(&addr_dir).unwrap();
-        fs::write(addr_dir.join(ADDRESS_MARKER), "0200aa").unwrap();
-        let a_hex = hex::encode(ext(0xAA));
-        let b_hex = hex::encode(ext(0xBB));
-        let c_hex = hex::encode(ext(0xCC));
-        let a = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: a_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: None,
-            data: b"a".to_vec(),
-        };
-        let b = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: b_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(c_hex.clone()),
-            data: b"b".to_vec(),
-        };
-        let c = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: c_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(b_hex.clone()),
-            data: b"c".to_vec(),
-        };
-        for (h, s) in [(&a_hex, &a), (&b_hex, &b), (&c_hex, &c)] {
-            p.write_json_atomic(
-                &addr_dir.join(FsPrivateStateProvider::snapshot_filename(h)),
-                s,
-            )
-            .unwrap();
+        for s in [
+            pending(0xAA, None, b"a"),
+            pending(0xBB, Some(0xCC), b"b"),
+            pending(0xCC, Some(0xBB), b"c"),
+        ] {
+            write_raw(&p, "0200aa", &s);
         }
         let err = p.head("0200aa").await.unwrap_err();
         assert!(
@@ -2055,24 +1706,7 @@ mod tests {
         // journal. The cycle case (all parents present) is covered by
         // `find_leaf_detects_isolated_cycle_alongside_root_leaf`.
         let (_dir, p) = provider();
-        let addr_dir = p.address_dir("0200aa");
-        fs::create_dir_all(&addr_dir).unwrap();
-        fs::write(addr_dir.join(ADDRESS_MARKER), "0200aa").unwrap();
-        let c_hex = hex::encode(ext(0xCC));
-        let missing_hex = hex::encode(ext(0xFF));
-        let c = Snapshot {
-            status: SnapshotStatus::Pending,
-            extrinsic_hash: c_hex.clone(),
-            block_hash: None,
-            block_height: None,
-            depends_on: Some(missing_hex),
-            data: b"c".to_vec(),
-        };
-        p.write_json_atomic(
-            &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&c_hex)),
-            &c,
-        )
-        .unwrap();
+        write_raw(&p, "0200aa", &pending(0xCC, Some(0xFF), b"c"));
         let err = p.head("0200aa").await.unwrap_err();
         assert!(
             matches!(err, PrivateStateError::InvalidFormat(ref m)
@@ -2086,24 +1720,14 @@ mod tests {
         let bad = vec![ExportEntry {
             address: "0200aa".into(),
             snapshot: Snapshot {
-                status: SnapshotStatus::Pending,
                 // 64 chars, valid hex content, but uppercase: would not be
                 // byte-equal to an internally produced lowercase encoding
                 // of the same bytes.
                 extrinsic_hash: "AA".repeat(32),
-                block_hash: None,
-                block_height: None,
-                depends_on: None,
-                data: b"x".to_vec(),
+                ..pending(0, None, b"x")
             },
         }];
-        let payload = serde_json::to_vec(&bad).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_STATES, &bad);
         let (_dir, dst) = provider();
         let err = dst
             .import_private_states(&exp, &ImportOptions::new(PW))
@@ -2209,22 +1833,9 @@ mod tests {
         // Now build an external payload with C<-ext(1) (a second child of A).
         let bad = vec![ExportEntry {
             address: "0200aa".into(),
-            snapshot: Snapshot {
-                status: SnapshotStatus::Pending,
-                extrinsic_hash: hex::encode(ext(3)),
-                block_hash: None,
-                block_height: None,
-                depends_on: Some(hex::encode(ext(1))),
-                data: b"s3".to_vec(),
-            },
+            snapshot: pending(3, Some(1), b"s3"),
         }];
-        let payload = serde_json::to_vec(&bad).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_STATES, &bad);
         let err = dst
             .import_private_states(&exp, &ImportOptions::new(PW))
             .await
@@ -2252,22 +1863,9 @@ mod tests {
 
         let payload = vec![ExportEntry {
             address: "0200aa".into(),
-            snapshot: Snapshot {
-                status: SnapshotStatus::Pending,
-                extrinsic_hash: hex::encode(ext(1)),
-                block_hash: None,
-                block_height: None,
-                depends_on: None,
-                data: b"s1".to_vec(),
-            },
+            snapshot: pending(1, None, b"s1"),
         }];
-        let bytes = serde_json::to_vec(&payload).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &bytes).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_STATES, &payload);
         let err = dst
             .import_private_states(
                 &exp,
@@ -2296,50 +1894,18 @@ mod tests {
         // the breakage at the import call site instead of at the next
         // call_with.
         let (_dir, dst) = provider();
-        let addr_dir = dst.address_dir("0200aa");
-        fs::create_dir_all(&addr_dir).unwrap();
-        fs::write(addr_dir.join(ADDRESS_MARKER), "0200aa").unwrap();
         // A is the shared root; B and C are siblings under A.
-        for (h, parent) in [
-            (ext(1), None),
-            (ext(2), Some(ext(1))),
-            (ext(3), Some(ext(1))),
-        ] {
-            let s = Snapshot {
-                status: SnapshotStatus::Pending,
-                extrinsic_hash: hex::encode(h),
-                block_hash: None,
-                block_height: None,
-                depends_on: parent.map(hex::encode),
-                data: b"x".to_vec(),
-            };
-            dst.write_json_atomic(
-                &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&hex::encode(h))),
-                &s,
-            )
-            .unwrap();
+        for (h, parent) in [(1, None), (2, Some(1)), (3, Some(1))] {
+            write_raw(&dst, "0200aa", &pending(h, parent, b"x"));
         }
 
         // Skip-strategy import containing only an entry that already
         // exists (ext(1)). Every iteration takes the Skip arm.
         let payload = vec![ExportEntry {
             address: "0200aa".into(),
-            snapshot: Snapshot {
-                status: SnapshotStatus::Pending,
-                extrinsic_hash: hex::encode(ext(1)),
-                block_hash: None,
-                block_height: None,
-                depends_on: None,
-                data: b"x".to_vec(),
-            },
+            snapshot: pending(1, None, b"x"),
         }];
-        let bytes = serde_json::to_vec(&payload).unwrap();
-        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &bytes).unwrap();
-        let exp = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext: ct,
-        };
+        let exp = envelope(FORMAT_STATES, &payload);
         let err = dst
             .import_private_states(
                 &exp,

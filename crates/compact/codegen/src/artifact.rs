@@ -42,14 +42,7 @@ pub fn load(path: &Path) -> Result<ContractInfo, Box<dyn std::error::Error>> {
 }
 
 pub fn load_str(text: &str) -> Result<ContractInfo, Box<dyn std::error::Error>> {
-    let artifact = ir::parse_str(text).map_err(|e| {
-        // The reader's Display already carries the format name.
-        ArtifactError(
-            e.to_string()
-                .trim_start_matches("analyzed-ir: ")
-                .to_string(),
-        )
-    })?;
+    let artifact = ir::parse_str(text)?;
     Ok(from_program(&artifact)?)
 }
 
@@ -77,14 +70,14 @@ pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactE
         helpers.push(c.clone());
     }
 
-    let natives: Vec<ir::Native> = artifact
-        .elements
-        .iter()
-        .filter_map(|e| match e {
-            ir::ProgramElement::Native(n) => Some(n.clone()),
-            _ => None,
-        })
-        .collect();
+    let mut natives = Vec::new();
+    for n in artifact.elements.iter().filter_map(|e| match e {
+        ir::ProgramElement::Native(n) => Some(n),
+        _ => None,
+    }) {
+        check_type(&n.result_type)?;
+        natives.push(n.clone());
+    }
 
     let mut witnesses = Vec::new();
     for w in artifact.elements.iter().filter_map(|e| match e {
@@ -143,13 +136,12 @@ struct Context<'a> {
 
 impl<'a> Context<'a> {
     fn new(artifact: &'a ir::AnalyzedIr) -> Self {
-        let mut circuits = HashMap::new();
-        for e in &artifact.elements {
-            if let ir::ProgramElement::Circuit(c) = e {
-                circuits.insert(c.name.0.as_str(), c);
-            }
+        Context {
+            circuits: artifact
+                .circuits()
+                .map(|c| (c.name.0.as_str(), c))
+                .collect(),
         }
-        Context { circuits }
     }
 
     // -- types ----------------------------------------------------------
@@ -236,27 +228,32 @@ impl<'a> Context<'a> {
 
 // -- free helpers -------------------------------------------------------
 
-/// Refuse a type no consumer can handle, naming it. Keeping this at load
-/// time is what lets the interpreter assume every type it meets is one it
-/// can execute.
+/// Refuse a type no consumer can handle, naming it, so that a bad artifact
+/// fails at load and not mid-execution.
 fn check_type(t: &ir::Type) -> Result<(), ArtifactError> {
+    unsupported_type(t).map_or(Ok(()), |what| unsupported(&what))
+}
+
+/// The construct in `t` that the interpreter cannot execute, or `None` when
+/// it can execute every part of `t`.
+///
+/// The compiler's language is wider than what runs off-chain: a foreign-curve
+/// field or point has no value representation in the interpreter, and an ADT
+/// or a type variable is not a value type at all. The search goes through
+/// vectors, aliases, tuples and struct fields, and the description names the
+/// first such construct that it finds.
+///
+/// [`load`] refuses an artifact that holds such a type.
+pub fn unsupported_type(t: &ir::Type) -> Option<String> {
     match t {
-        ir::Type::Field(ft)
-            if !matches!(
-                ft,
-                ir::FieldType::Native | ir::FieldType::Scalar(ir::Curve::Jubjub)
-            ) =>
-        {
-            unsupported("a secp256k1 field type")
-        }
-        ir::Type::Point(ir::Curve::Secp256k1) => unsupported("a secp256k1 point type"),
-        ir::Type::Adt { name, .. } => unsupported(&format!("ADT type {name} in a value position")),
-        ir::Type::TypeVar(v) => unsupported(&format!("type variable {v}")),
-        ir::Type::Vector { ty, .. } => check_type(ty),
-        ir::Type::Alias { ty, .. } => check_type(ty),
-        ir::Type::Tuple(types) => types.iter().try_for_each(check_type),
-        ir::Type::Struct { fields, .. } => fields.iter().try_for_each(|(_, t)| check_type(t)),
-        _ => Ok(()),
+        ir::Type::Field(ft) if !ft.is_native() => Some("a secp256k1 field type".to_string()),
+        ir::Type::Point(ir::Curve::Secp256k1) => Some("a secp256k1 point type".to_string()),
+        ir::Type::Adt { name, .. } => Some(format!("ADT type {name} in a value position")),
+        ir::Type::TypeVar(v) => Some(format!("type variable {v}")),
+        ir::Type::Vector { ty, .. } | ir::Type::Alias { ty, .. } => unsupported_type(ty),
+        ir::Type::Tuple(types) => types.iter().find_map(unsupported_type),
+        ir::Type::Struct { fields, .. } => fields.iter().find_map(|(_, t)| unsupported_type(t)),
+        _ => None,
     }
 }
 
@@ -350,9 +347,7 @@ fn check_expr(e: &ir::Expr) -> Result<(), ArtifactError> {
         EltRef { expr, .. } | TupleRef { expr, .. } | Return(expr) | Assert { expr, .. } => {
             check_expr(expr)
         }
-        FieldToBytes { expr, .. } | VectorToBytes { expr, .. } | BytesToVector { expr, .. } => {
-            check_expr(expr)
-        }
+        VectorToBytes { expr, .. } | BytesToVector { expr, .. } => check_expr(expr),
         Tuple(ta) | VectorLit(ta) => tuple_args(ta),
         TupleSlice { ty, expr, .. } => {
             check_type(ty)?;
@@ -439,6 +434,9 @@ fn check_expr(e: &ir::Expr) -> Result<(), ArtifactError> {
         }
         CastFromField {
             field_type, expr, ..
+        }
+        | FieldToBytes {
+            field_type, expr, ..
         } => {
             check_type(&ir::Type::Field(field_type.clone()))?;
             check_expr(expr)
@@ -512,14 +510,17 @@ fn check_operand(o: &ir::Operand) -> Result<(), ArtifactError> {
     }
 }
 
+/// Load the artifact at `rel`, a path relative to this crate's manifest
+/// directory.
+#[cfg(test)]
+pub(crate) fn load_fixture(rel: &str) -> ContractInfo {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+    load(&path).unwrap_or_else(|e| panic!("load {}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn fixture(rel: &str) -> ContractInfo {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-        load(&path).expect("the artifact loads")
-    }
 
     /// The runtime checks the coin commitment before it runs the
     /// instructions, and that check is not one of them, so the interpreter
@@ -558,7 +559,8 @@ mod tests {
 
     #[test]
     fn loads_the_bboard_artifact() {
-        let info = fixture("../../../tests/conformance/fixtures/bboard/compiler/analyzed-ir.sexp");
+        let info =
+            load_fixture("../../../tests/conformance/fixtures/bboard/compiler/analyzed-ir.sexp");
         let names: Vec<_> = info.circuits.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"post") && names.contains(&"public_key"));
         let message = info
@@ -576,7 +578,8 @@ mod tests {
 
     #[test]
     fn loads_the_gateway_artifact() {
-        let info = fixture("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
+        let info =
+            load_fixture("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
         assert_eq!(info.circuits.len(), 6);
         assert_eq!(info.ledger.len(), 10);
         let threshold = info.ledger.iter().find(|f| f.name == "threshold").unwrap();

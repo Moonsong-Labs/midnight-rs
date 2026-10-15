@@ -53,10 +53,7 @@ pub enum ContractError {
     /// The deploy stops before it proves anything, and the wallet gets the
     /// offer's coins back. Add coins of `token_type` to the offer, or pay
     /// less of it.
-    #[error(
-        "the shielded offer pays {paid} of token {} but its coins hold {held}",
-        hex::encode(token_type.0.0)
-    )]
+    #[error("the shielded offer pays {paid} of token {token_type} but its coins hold {held}")]
     ShieldedOfferShortfall {
         /// The token that the coins do not cover.
         token_type: midnight_types::ShieldedTokenType,

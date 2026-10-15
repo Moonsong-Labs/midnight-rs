@@ -111,9 +111,7 @@ impl<'a> Reader<'a> {
     fn skip_ws(&mut self) {
         while let Some(c) = self.peek() {
             match c {
-                b' ' | b'\t' | b'\r' | b'\n' => {
-                    self.pos += 1;
-                }
+                c if c.is_ascii_whitespace() => self.pos += 1,
                 b';' => {
                     while let Some(c) = self.peek() {
                         self.pos += 1;
@@ -181,10 +179,7 @@ impl<'a> Reader<'a> {
     /// A `.` is the pair dot only when it stands alone; symbols like
     /// `%tmp.2` contain dots inside one token.
     fn lone_dot(&self) -> bool {
-        matches!(
-            self.src.get(self.pos + 1),
-            None | Some(b' ') | Some(b'\t') | Some(b'\r') | Some(b'\n') | Some(b'(') | Some(b')')
-        )
+        self.src.get(self.pos + 1).is_none_or(|&c| is_delimiter(c))
     }
 
     fn read_string(&mut self) -> Result<Sexp, ReadError> {
@@ -246,11 +241,8 @@ impl<'a> Reader<'a> {
 
     fn read_atom(&mut self) -> Result<Sexp, ReadError> {
         let start = self.pos;
-        while let Some(c) = self.peek() {
-            match c {
-                b' ' | b'\t' | b'\r' | b'\n' | b'(' | b')' | b'[' | b']' | b'"' | b';' => break,
-                _ => self.pos += 1,
-            }
+        while self.peek().is_some_and(|c| !is_delimiter(c)) {
+            self.pos += 1;
         }
         if start == self.pos {
             return Err(self.err("empty token"));
@@ -269,6 +261,10 @@ impl<'a> Reader<'a> {
             Ok(Sexp::Sym(tok.to_string()))
         }
     }
+}
+
+fn is_delimiter(c: u8) -> bool {
+    c.is_ascii_whitespace() || matches!(c, b'(' | b')' | b'[' | b']' | b'"' | b';')
 }
 
 /// Read the artifact's single top-level datum.

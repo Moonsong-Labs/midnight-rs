@@ -1,10 +1,9 @@
 //! The attached wallet's builds on this generation, with this generation's
 //! prover.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
-use midnight_types::{SpendableShieldedCoin, TransferRequest, TransferResult, WalletError};
+use midnight_types::{SpendableShieldedCoin, TransferRequest, TransferResult};
 
 use super::facade::{ReservedBuild, WalletBuilds};
 use super::helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
@@ -119,7 +118,8 @@ impl<'a> Builds<'a> {
     ///
     /// # Errors
     ///
-    /// [`ProviderError::Wallet`] with [`WalletError::DuplicateInput`] when
+    /// [`ProviderError::Wallet`] with
+    /// [`WalletError::DuplicateInput`](midnight_types::WalletError::DuplicateInput) when
     /// `coins` names a coin twice. The provider checks this before it asks
     /// the wallet, so a custom wallet that breaks the
     /// [`WalletBuilds::spend_shielded`] contract cannot spend a coin twice.
@@ -131,13 +131,7 @@ impl<'a> Builds<'a> {
         rng: &mut StdRng,
     ) -> Result<(Vec<PreparedInput>, HeldInputs), ProviderError> {
         let nullifiers: Vec<_> = coins.iter().map(|c| c.nullifier).collect();
-        let mut named = HashSet::with_capacity(nullifiers.len());
-        if let Some(repeated) = nullifiers.iter().find(|n| !named.insert(**n)) {
-            return Err(WalletError::DuplicateInput {
-                input: format!("shielded coin {repeated:?}"),
-            }
-            .into());
-        }
+        midnight_types::refuse_repeated_nullifiers(&nullifiers)?;
         let (prepared, spent) = self.wallet.spend_shielded(context, nullifiers, rng).await?;
         Ok((prepared, HeldInputs::of(spent, self.provider.facade())))
     }
@@ -151,8 +145,7 @@ impl<'a> Builds<'a> {
     }
 
     async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
-        let external: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &tx_bytes[..])
-            .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))?;
+        let external = deserialize_transaction(tx_bytes)?;
 
         // Refuse any non-fee token deficit: this path only adds Dust, so a
         // shortfall in any other token (an unfunded swap side) would just fail
@@ -217,18 +210,13 @@ impl<'a> Builds<'a> {
 /// Merge proven transactions of this generation into one. See
 /// [`MidnightProvider::merge_transactions`].
 pub fn merge_transactions(txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
-    let deserialize = |bytes: &[u8]| -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
-        tagged_deserialize(&mut &bytes[..])
-            .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))
-    };
-
     let mut iter = txs.iter();
     let first = iter.next().ok_or_else(|| {
         ProviderError::Transaction("merge_transactions requires at least one transaction".into())
     })?;
-    let mut merged = deserialize(first)?;
+    let mut merged = deserialize_transaction(first)?;
     for bytes in iter {
-        let other = deserialize(bytes)?;
+        let other = deserialize_transaction(bytes)?;
         merged = merged
             .merge(&other)
             .map_err(|e| ProviderError::Transaction(format!("merge transactions: {e:?}")))?;
@@ -238,4 +226,9 @@ pub fn merge_transactions(txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
     tagged_serialize(&merged, &mut out)
         .map_err(|e| ProviderError::Transaction(format!("serialize merged transaction: {e}")))?;
     Ok(out)
+}
+
+fn deserialize_transaction(bytes: &[u8]) -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
+    tagged_deserialize(&mut &bytes[..])
+        .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))
 }

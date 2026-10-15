@@ -9,17 +9,15 @@
 //! [`fixtures_dir`] and [`counter_zk_dir`] for the two layouts and the
 //! variables that override them.
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
-    StorageHashMap,
-};
+mod common;
+
+use common::{epoch, with_witnesses};
+use compact_bindgen::{AlignedValue, ContractState, InMemoryDB, StateValue, StorageHashMap};
 use midnight_contract::ContractMaintenanceVerifyingKey;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
-use midnight_wallet::Wallet;
 
-use compact_codegen::ir;
 use compact_codegen::types::ContractInfo;
 
 // ---------------------------------------------------------------------------
@@ -47,17 +45,10 @@ mod bboard {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// An overriding directory from the environment. An empty value reads as
-/// unset, so `VAR=` in a make recipe does not resolve to the process's
-/// working directory.
-fn env_dir(var: &str) -> Option<String> {
-    std::env::var(var).ok().filter(|v| !v.is_empty())
-}
-
 /// Where the interpreter fixtures live: `<name>/compiler/analyzed-ir.sexp`
 /// per contract. Defaults to this crate's own committed fixtures.
 fn fixtures_dir() -> String {
-    env_dir("MIDNIGHT_COMPILED_DIR")
+    common::env_dir("MIDNIGHT_COMPILED_DIR")
         .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures").to_string())
 }
 
@@ -65,19 +56,7 @@ fn fixtures_dir() -> String {
 /// different layout from [`fixtures_dir`] and cannot be served by the same
 /// path. Defaults to the committed devnet artifacts.
 fn counter_zk_dir() -> String {
-    env_dir("COUNTER_KEYED_DIR").unwrap_or_else(|| {
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../devnet/contracts/counter/compiled"
-        )
-        .to_string()
-    })
-}
-
-fn load_contract_info(compiled_dir: &str, contract: &str) -> ContractInfo {
-    let path = format!("{compiled_dir}/{contract}/compiler/analyzed-ir.sexp");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    compact_codegen::artifact::load_str(&text).unwrap()
+    common::env_dir("COUNTER_KEYED_DIR").unwrap_or_else(|| common::compiled_dir("counter"))
 }
 
 /// Parse an analyzed-ir.sexp artifact embedded at compile time.
@@ -85,38 +64,61 @@ fn load_info(analyzed_ir_text: &str) -> ContractInfo {
     compact_codegen::artifact::load_str(analyzed_ir_text).unwrap()
 }
 
-/// The tables a circuit body resolves a `call` through: every circuit the
-/// contract defines, plus its witness and native declarations.
-fn program_of(info: &ContractInfo) -> interpreter::Program<'_> {
-    interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives)
+/// The counter ledger at `round`. The fixture states are built by hand, so a
+/// test that reads one through the generated `Ledger` does not check the
+/// generator against itself.
+fn counter_state(round: u64) -> ContractState<InMemoryDB> {
+    common::contract_state(vec![StateValue::from(round)])
 }
 
-/// No witnesses, a scratch private state, the zero address, the epoch.
-fn epoch() -> interpreter::Env<'static> {
-    interpreter::Env::new(midnight_base_crypto::time::Timestamp::from_secs(0))
+/// The tiny ledger: a zero authority, `value`, and the STATE cell `state`.
+fn tiny_state(value: u64, state: u8) -> ContractState<InMemoryDB> {
+    common::contract_state(vec![
+        StateValue::from(AlignedValue::from([0u8; 32])),
+        StateValue::from(AlignedValue::from(
+            midnight_transient_crypto::curve::Fr::from(value),
+        )),
+        StateValue::from(AlignedValue::from(state)),
+    ])
 }
 
-/// `epoch()` with `witnesses` answering the witness calls.
-fn with_witnesses(witnesses: &dyn WitnessProvider) -> interpreter::Env<'_> {
-    interpreter::Env {
-        witnesses,
-        ..epoch()
+/// The election ledger with `authority` and every other field at zero. The
+/// two Merkle tree fields hold `Null`, where the generated builder writes
+/// blank trees.
+fn election_state(authority: [u8; 32]) -> ContractState<InMemoryDB> {
+    common::contract_state(vec![
+        StateValue::from(AlignedValue::from(authority)),
+        StateValue::from(AlignedValue::from(0u8)),
+        StateValue::from(AlignedValue::from(false)),
+        StateValue::from(0u64),
+        StateValue::from(0u64),
+        StateValue::Null,
+        StateValue::Null,
+        StateValue::Map(StorageHashMap::new()),
+        StateValue::Map(StorageHashMap::new()),
+    ])
+}
+
+/// Answers the witness `name` with `key`, and every other witness with
+/// `Unknown`.
+struct SecretKeyWitness {
+    name: &'static str,
+    key: [u8; 32],
+}
+
+impl WitnessProvider for SecretKeyWitness {
+    fn call_witness(
+        &self,
+        _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
+        name: &str,
+        _args: &[Value],
+    ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
+        Ok(if name == self.name {
+            WitnessOutcome::Value(Value::AlignedValue(AlignedValue::from(self.key)))
+        } else {
+            WitnessOutcome::Unknown
+        })
     }
-}
-
-fn find_circuit<'a>(info: &'a ContractInfo, circuit_name: &str) -> &'a ir::Circuit {
-    try_find_circuit(info, circuit_name).unwrap_or_else(|e| panic!("{e}"))
-}
-
-fn try_find_circuit<'a>(
-    info: &'a ContractInfo,
-    circuit_name: &str,
-) -> Result<&'a ir::Circuit, String> {
-    info.circuits
-        .iter()
-        .find(|c| c.name == circuit_name)
-        .map(|c| &c.def)
-        .ok_or_else(|| format!("circuit {circuit_name} not found"))
 }
 
 /// Test the generated InitialState (named LedgerInitialState when contract! has no name arg).
@@ -145,15 +147,11 @@ const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/analyzed-ir.sex
 #[test]
 fn counter_increment_with_typed_state() {
     let info = load_info(COUNTER_INFO);
-    let ir = find_circuit(&info, "increment");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "increment").def;
+    let program = common::program(&info);
 
     // Build initial state and verify through typed accessor
-    let state = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = counter_state(0);
     let ledger = counter::Ledger::new(state.clone());
     assert_eq!(ledger.round().unwrap(), 0u64);
 
@@ -172,14 +170,10 @@ fn counter_increment_with_typed_state() {
 #[test]
 fn counter_build_tx_with_typed_state() {
     let info = load_info(COUNTER_INFO);
-    let ir = find_circuit(&info, "increment");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "increment").def;
+    let program = common::program(&info);
 
-    let state = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = counter_state(0);
 
     let address = midnight_coin_structure::contract::ContractAddress(
         midnight_base_crypto::hash::HashOutput([0xAA; 32]),
@@ -213,51 +207,20 @@ fn counter_build_tx_with_typed_state() {
 #[test]
 fn tiny_get_typed() {
     let info = load_info(TINY_INFO);
-    let ir = find_circuit(&info, "get");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "get").def;
+    let program = common::program(&info);
 
     // Build state with known value
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from([0u8; 32])),
-                StateValue::from(AlignedValue::from(
-                    midnight_transient_crypto::curve::Fr::from(42u64),
-                )),
-                StateValue::from(AlignedValue::from(1u8)),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = tiny_state(42, 1);
 
     // Verify typed accessors work on the state
     let ledger = tiny::Ledger::new(state.clone());
     // state() returns the generated STATE enum; just check it doesn't error
     let _state_val = ledger.state().unwrap();
 
-    struct TinyWitness;
-    impl WitnessProvider for TinyWitness {
-        fn call_witness(
-            &self,
-            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
-            name: &str,
-            _args: &[Value],
-        ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
-            match name {
-                "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
-                    AlignedValue::from([1u8; 32]),
-                ))),
-                _ => Ok(WitnessOutcome::Unknown),
-            }
-        }
-    }
-
     // The state cell is `set` (1), so `get()` must return `some(42)`:
     // the Maybe<Field> struct literal [is_some = true, value = 42].
-    let r = interpreter::execute(ir, &program, state, &[], with_witnesses(&TinyWitness))
-        .expect("tiny get executes");
+    let r = interpreter::execute(ir, &program, state, &[], epoch()).expect("tiny get executes");
     let expected = AlignedValue::concat(
         [
             AlignedValue::from(true),
@@ -275,40 +238,10 @@ fn tiny_get_typed() {
 #[test]
 fn tiny_set_typed() {
     let info = load_info(TINY_INFO);
-    let ir = find_circuit(&info, "set");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "set").def;
+    let program = common::program(&info);
 
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from([0u8; 32])),
-                StateValue::from(AlignedValue::from(
-                    midnight_transient_crypto::curve::Fr::from(0u64),
-                )),
-                StateValue::from(AlignedValue::from(0u8)),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    struct TinySetWitness;
-    impl WitnessProvider for TinySetWitness {
-        fn call_witness(
-            &self,
-            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
-            name: &str,
-            _args: &[Value],
-        ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
-            match name {
-                "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
-                    AlignedValue::from([0u8; 32]),
-                ))),
-                _ => Ok(WitnessOutcome::Unknown),
-            }
-        }
-    }
+    let state = tiny_state(0, 0);
 
     use midnight_transient_crypto::curve::Fr;
     // Enum variants resolve from the type's own variant list, so the circuit
@@ -321,7 +254,10 @@ fn tiny_set_typed() {
             "v",
             Value::AlignedValue(AlignedValue::from(Fr::from(42u64))),
         )],
-        with_witnesses(&TinySetWitness),
+        with_witnesses(&SecretKeyWitness {
+            name: "private$secret_key",
+            key: [0; 32],
+        }),
     );
 
     let r = result.expect("tiny set executes");
@@ -351,58 +287,26 @@ fn tiny_set_typed() {
 #[test]
 fn election_advance_typed() {
     let info = load_info(ELECTION_INFO);
-    let ir = find_circuit(&info, "advance");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "advance").def;
+    let program = common::program(&info);
 
-    let authority = [0xAA; 32];
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from(authority)),
-                StateValue::from(AlignedValue::from(0u8)),
-                StateValue::from(AlignedValue::from(false)),
-                StateValue::from(0u64),
-                StateValue::from(0u64),
-                StateValue::Null,
-                StateValue::Null,
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::Map(StorageHashMap::new()),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = election_state([0xAA; 32]);
 
     // Verify initial state through typed accessors
     let ledger = election::Ledger::new(state.clone());
     assert_eq!(ledger.tally_yes().unwrap(), 0u64);
     assert_eq!(ledger.tally_no().unwrap(), 0u64);
 
-    struct ElectionWitness;
-    impl WitnessProvider for ElectionWitness {
-        fn call_witness(
-            &self,
-            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
-            name: &str,
-            _args: &[Value],
-        ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
-            match name {
-                "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
-                    AlignedValue::from([1u8; 32]),
-                ))),
-                _ => Ok(WitnessOutcome::Unknown),
-            }
-        }
-    }
-
     // `advance()` derives the caller's public key from the secret-key
     // witness and asserts it equals the stored authority. The witness here
     // is not the authority ([0xAA; 32]), so the circuit's own Compact
     // `assert` fires — a semantic outcome of the circuit logic, not an
     // interpreter gap. Accept exactly that assertion and nothing else.
-    let err = match interpreter::execute(ir, &program, state, &[], with_witnesses(&ElectionWitness))
-    {
+    let witness = SecretKeyWitness {
+        name: "private$secret_key",
+        key: [1; 32],
+    };
+    let err = match interpreter::execute(ir, &program, state, &[], with_witnesses(&witness)) {
         Ok(_) => panic!("advance must fail the authorization assert"),
         Err(e) => e,
     };
@@ -434,22 +338,10 @@ fn election_advance_typed() {
 /// The bboard `local_secret_key()` witness used by the post/take_down tests.
 const BBOARD_SK: [u8; 32] = [1u8; 32];
 
-struct BboardWitness;
-impl WitnessProvider for BboardWitness {
-    fn call_witness(
-        &self,
-        _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
-        name: &str,
-        _args: &[Value],
-    ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
-        match name {
-            "local_secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
-                AlignedValue::from(BBOARD_SK),
-            ))),
-            _ => Ok(WitnessOutcome::Unknown),
-        }
-    }
-}
+const BBOARD_WITNESS: SecretKeyWitness = SecretKeyWitness {
+    name: "local_secret_key",
+    key: BBOARD_SK,
+};
 
 /// Independently compute bboard's `public_key(sk, instance as Field as
 /// Bytes<32>)`: `persistentHash<Vector<3, Bytes<32>>>([pad(32, "bboard:pk:"),
@@ -458,10 +350,6 @@ impl WitnessProvider for BboardWitness {
 /// `convertFieldToBytes`), so this pins the interpreter's `field-to-bytes`
 /// output: a wrong byte order or alignment changes the hash.
 fn bboard_public_key(sk: [u8; 32], instance: u64) -> AlignedValue {
-    use midnight_base_crypto::hash::PersistentHashWriter;
-    use midnight_base_crypto::repr::BinaryHashRepr;
-    use midnight_transient_crypto::fab::ValueReprAlignedValue;
-
     let prefix = b"bboard:pk:";
     let mut pad = [0u8; 32];
     pad[..prefix.len()].copy_from_slice(prefix);
@@ -476,9 +364,7 @@ fn bboard_public_key(sk: [u8; 32], instance: u64) -> AlignedValue {
         ]
         .iter(),
     );
-    let mut hasher = PersistentHashWriter::default();
-    ValueReprAlignedValue(preimage).binary_repr(&mut hasher);
-    AlignedValue::from(hasher.finalize().0)
+    common::persistent_hash(preimage)
 }
 
 /// Read a cell of the bboard state array as an `AlignedValue`.
@@ -503,8 +389,8 @@ fn bboard_post_executes() {
     // oracle pins the exact FAB encoding, including alignment, that the
     // interpreter writes; a typed decode would launder encoding bugs.
     let info = load_info(BBOARD_INFO);
-    let ir = find_circuit(&info, "post");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "post").def;
+    let program = common::program(&info);
 
     // The state bboard's constructor leaves: it writes `vacant` and `none`,
     // which are the defaults, and increments `instance` to 1.
@@ -523,7 +409,7 @@ fn bboard_post_executes() {
             "new_message",
             Value::AlignedValue(AlignedValue::from(new_message)),
         )],
-        with_witnesses(&BboardWitness),
+        with_witnesses(&BBOARD_WITNESS),
     )
     .expect("bboard post executes");
     eprintln!("bboard post: executed ✓ (ops: {})", r.gather_ops.len());
@@ -565,29 +451,22 @@ fn bboard_take_down_executes() {
     // purpose so the oracle pins the exact FAB encoding (including
     // alignment) instead of laundering it through a typed decode.
     let info = load_info(BBOARD_INFO);
-    let ir = find_circuit(&info, "take_down");
-    let program = program_of(&info);
+    let ir = &common::exported_circuit(&info, "take_down").def;
+    let program = common::program(&info);
 
     let message = [7u8; 32];
     let occupied_message =
         AlignedValue::concat([AlignedValue::from(true), AlignedValue::from(message)].iter());
     // Post-`post` ledger state: occupied board whose poster matches the
     // witness key at instance 1.
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(1u64),
-                StateValue::from(occupied_message),
-                StateValue::from(1u64),
-                StateValue::from(bboard_public_key(BBOARD_SK, 1)),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = common::contract_state(vec![
+        StateValue::from(1u64),
+        StateValue::from(occupied_message),
+        StateValue::from(1u64),
+        StateValue::from(bboard_public_key(BBOARD_SK, 1)),
+    ]);
 
-    let r = interpreter::execute(ir, &program, state, &[], with_witnesses(&BboardWitness))
+    let r = interpreter::execute(ir, &program, state, &[], with_witnesses(&BBOARD_WITNESS))
         .expect("bboard take_down executes");
     eprintln!("bboard take_down: executed ✓ (ops: {})", r.gather_ops.len());
 
@@ -657,7 +536,6 @@ fn bboard_pure_public_key_matches_the_oracle() {
 #[test]
 fn execute_all_compiled_circuits() {
     use midnight_contract::runtime::InterpreterError;
-    use midnight_transient_crypto::curve::Fr;
 
     /// Every circuit the three fixtures define. A fixture regenerated with a
     /// contract added or removed changes this.
@@ -680,50 +558,9 @@ fn execute_all_compiled_circuits() {
     }
 
     let states: Vec<(&str, ContractState<InMemoryDB>)> = vec![
-        (
-            "counter",
-            ContractState::new(
-                StateValue::Array(vec![StateValue::from(0u64)].into()),
-                StorageHashMap::new(),
-                ContractMaintenanceAuthority::default(),
-            ),
-        ),
-        (
-            "tiny",
-            ContractState::new(
-                StateValue::Array(
-                    vec![
-                        StateValue::from(AlignedValue::from([0u8; 32])),
-                        StateValue::from(AlignedValue::from(Fr::from(0u64))),
-                        StateValue::from(AlignedValue::from(0u8)),
-                    ]
-                    .into(),
-                ),
-                StorageHashMap::new(),
-                ContractMaintenanceAuthority::default(),
-            ),
-        ),
-        (
-            "election",
-            ContractState::new(
-                StateValue::Array(
-                    vec![
-                        StateValue::from(AlignedValue::from([0u8; 32])),
-                        StateValue::from(AlignedValue::from(0u8)),
-                        StateValue::from(AlignedValue::from(false)),
-                        StateValue::from(0u64),
-                        StateValue::from(0u64),
-                        StateValue::Null,
-                        StateValue::Null,
-                        StateValue::Map(StorageHashMap::new()),
-                        StateValue::Map(StorageHashMap::new()),
-                    ]
-                    .into(),
-                ),
-                StorageHashMap::new(),
-                ContractMaintenanceAuthority::default(),
-            ),
-        ),
+        ("counter", counter_state(0)),
+        ("tiny", tiny_state(0, 0)),
+        ("election", election_state([0; 32])),
     ];
 
     let mut ok = 0u32;
@@ -735,8 +572,8 @@ fn execute_all_compiled_circuits() {
         if !std::path::Path::new(&path).exists() {
             continue;
         }
-        let info = load_contract_info(&dir, contract_name);
-        let program = program_of(&info);
+        let info = common::load_compiled(&format!("{dir}/{contract_name}"));
+        let program = common::program(&info);
 
         for circuit in &info.circuits {
             let name = circuit.name.as_str();
@@ -829,35 +666,18 @@ async fn governance_deploy_then_apply_both_updates() {
     use midnight_contract::{Contract, NodeBlockHash, SigningKey};
     use midnight_onchain_runtime::state::EntryPointBuf;
 
-    let (node_url, indexer_url) = match (
-        std::env::var("MIDNIGHT_NODE_URL").ok(),
-        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
-    ) {
-        (Some(n), Some(i)) => (n, i),
-        _ => {
-            eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
-            return;
-        }
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
+        return;
     };
 
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&provider)
-            .await
-            .expect("indexer sync should succeed");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let keys_dir = counter_zk_dir();
     let vk_bytes = std::fs::read(format!("{keys_dir}/keys/increment.verifier"))
         .expect("read increment.verifier");
-    let initial = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let initial = counter_state(0);
 
     // The caller owns the committee signing key; the SDK only learns its public
     // half.

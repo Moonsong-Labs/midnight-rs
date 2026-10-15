@@ -9,51 +9,38 @@
 //! Needs a devnet, and a genesis wallet with tNIGHT and dust to fund the
 //! fresh address this drives.
 
-use midnight_provider::{MidnightProvider, Network, Seed};
-use midnight_wallet::NIGHT;
-use midnight_wallet::{Wallet, WalletBuilder};
+mod common;
 
-/// Genesis wallet: holds tNIGHT and dust, and is already registered.
-const FUNDER_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+use midnight_provider::{Network, Seed};
+use midnight_wallet::NIGHT;
 
 /// Enough tNIGHT that the coin carries real generationless dust.
 const SEND: u128 = 5_000_000_000_000;
 
-/// A seed no earlier run has used, because a registration is permanent and the
-/// devnet keeps its chain between runs.
-fn unused_seed() -> Seed {
+/// The hex of a seed no earlier run has used, because a registration is
+/// permanent and the devnet keeps its chain between runs.
+fn unused_seed() -> String {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    let mut bytes = [0u8; 32];
-    bytes[16..].copy_from_slice(&nonce.to_be_bytes());
-    Seed::from_bytes(&bytes).expect("a 32-byte seed")
+    format!("{nonce:064x}")
 }
 
 /// Two unregistered tNIGHT UTXOs is the case that fails when a registration
 /// spends every one of them: it builds, and the node refuses it.
 #[tokio::test]
 async fn a_wallet_holding_two_unregistered_utxos_can_register() {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
 
     let seed = unused_seed();
-    let address = seed.unshielded_address(Network::Undeployed);
+    let address = Seed::from_hex(&seed)
+        .expect("hex seed")
+        .unshielded_address(Network::Undeployed);
 
-    let funder = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(FUNDER_SEED)
-        .unwrap()
-        .with_network(Network::Undeployed)
-        .sync(&funder)
-        .await
-        .expect("sync the funder");
-    let funder = funder.with_wallet(wallet);
+    let funder = common::synced_provider(&node_url, &indexer_url, common::DEV_WALLET_SEED).await;
 
     for _ in 0..2 {
         funder
@@ -65,13 +52,7 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
             .expect("funding finalized");
     }
 
-    let fresh = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = WalletBuilder::new(seed)
-        .with_network(Network::Undeployed)
-        .sync(&fresh)
-        .await
-        .expect("sync the fresh wallet");
-    let fresh = fresh.with_wallet(wallet);
+    let fresh = common::synced_provider(&node_url, &indexer_url, &seed).await;
 
     // Finalized on chain is not yet visible through the indexer, which the
     // fresh wallet syncs from. Poll rather than assume, as below.

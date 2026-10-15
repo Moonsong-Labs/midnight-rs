@@ -7,24 +7,13 @@
 //! - [`fetch_state_from_node`] reads the node's `midnight_contractState` RPC
 //!   through a `MidnightProvider`, and takes a block hash to pin the read.
 //!
-//! The other helpers in this module (`deserialize_state`, `verifier_keys`) are
-//! `pub(crate)` plumbing used by `Contract::deploy`/`Contract::at`.
+//! The other helpers in this module are `pub(crate)` plumbing for the deploy,
+//! call and maintenance paths.
 
 use midnight_base_crypto::time::Timestamp;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::error::ContractError;
-
-/// Deserialize a hex-encoded contract state (as the node RPC returns it) into a
-/// [`ContractState`].
-pub(crate) fn deserialize_state(
-    hex_state: &str,
-) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let bytes = hex::decode(hex_state)
-        .map_err(|e| ContractError::StateFetch(format!("hex decode: {e}")))?;
-    midnight_typed_state::decode_contract_state(&bytes)
-        .map_err(|e| ContractError::StateFetch(format!("deserialize: {e}")))
-}
 
 /// Fetch contract state through a provider, at the node's best block, and
 /// deserialize it. Returns [`ContractError::NotFound`] when no contract exists
@@ -33,11 +22,7 @@ pub async fn fetch_state<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let hex = provider
-        .get_contract_state(address, None)
-        .await?
-        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
-    deserialize_state(&hex)
+    Ok(node_state(provider, address, None).await?.1)
 }
 
 /// Fetch contract state directly from the node RPC (`midnight_contractState`).
@@ -53,15 +38,16 @@ pub async fn fetch_state_from_node(
     Ok(node_state(provider, address, at_block_hash).await?.1)
 }
 
-/// [`fetch_state_from_node`], with the bytes the node served alongside the
-/// view: a transaction carries the state in the chain's own encoding.
-pub(crate) async fn node_state(
-    provider: &midnight_provider::MidnightProvider,
+/// The contract's state that `provider` serves, at `at_block_hash` when
+/// given, with the bytes it was served in alongside the view: a transaction
+/// carries the state in the chain's own encoding.
+pub(crate) async fn node_state<P: midnight_provider::Provider>(
+    provider: &P,
     address: &str,
     at_block_hash: Option<midnight_provider::NodeBlockHash>,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     let hex = provider
-        .get_state_from_node(address, at_block_hash)
+        .get_contract_state(address, at_block_hash)
         .await?
         .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
     let bytes =
@@ -123,11 +109,7 @@ pub(crate) fn populate_verifier_keys(
     for (circuit, key) in verifier_keys(zk_config, declared)? {
         // The Compact side's view is ledger 9's state, whose operation holds
         // either key version.
-        let op = midnight_helpers::ledger_9::contract_operation_new(
-            Some(midnight_helpers::ContractVerifyingKeyBytes(key)),
-            None,
-        )
-        .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))?;
+        let op = crate::ledger_9::state::operation(&circuit, &key)?;
         state.operations = state.operations.insert(circuit.as_bytes().into(), op);
     }
     Ok(state)
@@ -219,9 +201,6 @@ pub(crate) fn verifier_keys(
             let bytes = zk_config
                 .verifier_key(&circuit)
                 .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))?;
-            verifier_key_version(&bytes).map_err(|e| {
-                ContractError::Construction(format!("deserialize {circuit}.verifier: {e}"))
-            })?;
             Ok((circuit, bytes))
         })
         .collect()

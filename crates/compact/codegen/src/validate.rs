@@ -23,14 +23,7 @@ mod tests {
     fn minimal_info(compiler: &str) -> ContractInfo {
         ContractInfo {
             compiler_version: compiler.to_string(),
-            runtime_version: "0.16.101".to_string(),
-            circuits: Vec::new(),
-            witnesses: Vec::new(),
-            contracts: Vec::new(),
-            ledger: Vec::new(),
-            has_constructor: false,
-            helpers: Vec::new(),
-            natives: Vec::new(),
+            ..Default::default()
         }
     }
 

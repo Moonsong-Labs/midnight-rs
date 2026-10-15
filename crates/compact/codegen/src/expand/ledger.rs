@@ -4,9 +4,17 @@ use quote::{format_ident, quote};
 use crate::ir::Type;
 use crate::types::{Circuit, FieldIndex, LedgerField, StorageKind};
 
+use super::circuit_calls::typed_params;
+use super::circuits::return_type_ident;
+use super::constants::field_const_ident;
 use super::emit_ir::type_ref;
 use super::helpers::{make_ident, to_pascal_case};
 use super::types::{encode_to_aligned_value, type_to_tokens};
+
+/// The name of the lazy query struct of the contract `contract_name`.
+fn query_struct_ident(contract_name: &str) -> Ident {
+    format_ident!("{}Query", contract_name)
+}
 
 pub(crate) fn emit_ledger_wrapper(
     fields: &[LedgerField],
@@ -15,7 +23,7 @@ pub(crate) fn emit_ledger_wrapper(
     info: &crate::types::ContractInfo,
 ) -> TokenStream {
     let struct_name = format_ident!("{}", name);
-    let query_struct_name = format_ident!("{}Query", name);
+    let query_struct_name = query_struct_ident(name);
 
     // Circuits that carry an on-chain entry point, and so a verifier key.
     // Pure circuits are evaluated off-chain and have neither.
@@ -32,10 +40,9 @@ pub(crate) fn emit_ledger_wrapper(
 
     let accessors: Vec<_> = fields
         .iter()
-        .filter_map(|field| {
-            let field_index = field.field_index()?;
-            let const_name = format_ident!("FIELD_{}", field.name.to_uppercase());
-            Some(emit_field_accessor(field, &const_name, &field_index))
+        .map(|field| {
+            let const_name = field_const_ident(&field.name);
+            emit_field_accessor(field, &const_name)
         })
         .collect();
 
@@ -406,25 +413,10 @@ pub(crate) fn emit_ledger_wrapper(
     }
 }
 
-/// Generate a `get_field` or `get_field_path` call depending on the index type.
-fn navigate_to_field(const_name: &Ident, field_index: &FieldIndex) -> TokenStream {
-    match field_index {
-        FieldIndex::Single(_) => {
-            quote! { get_field(self.state.data.get_ref(), #const_name) }
-        }
-        FieldIndex::Path(_) => {
-            quote! { get_field_path(self.state.data.get_ref(), #const_name) }
-        }
-    }
-}
-
-fn emit_field_accessor(
-    field: &LedgerField,
-    const_name: &Ident,
-    field_index: &FieldIndex,
-) -> TokenStream {
+fn emit_field_accessor(field: &LedgerField, const_name: &Ident) -> TokenStream {
     let method_name = make_ident(&field.name);
-    let nav = navigate_to_field(const_name, field_index);
+    let field_indices = field_indices_expr(const_name, &field.index);
+    let nav = quote! { get_field_path(self.state.data.get_ref(), #field_indices) };
     let doc = format!(
         "Access the `{}` ledger field ({}).",
         field.name, field.storage
@@ -434,12 +426,25 @@ fn emit_field_accessor(
         StorageKind::Cell => {
             emit_cell_accessor(&method_name, &doc, &nav, field.element_type.as_ref())
         }
-        StorageKind::Counter => emit_counter_accessor(&method_name, &doc, &nav),
-        StorageKind::Map => emit_map_accessor(&method_name, &doc, &nav, field),
-        StorageKind::Set => emit_set_accessor(&method_name, &doc, &nav, field),
-        StorageKind::List => emit_list_accessor(&method_name, &doc, &nav, field),
+        StorageKind::Counter => emit_typed_cell_accessor(&method_name, &doc, &nav, &quote! { u64 }),
+        StorageKind::Map => {
+            let key_ty = storage_arg_tokens(field.key.as_ref());
+            let val_ty = storage_arg_tokens(field.value.as_ref());
+            let accessor = quote! { MapAccessor<'_, #key_ty, #val_ty> };
+            emit_from_state_accessor(&method_name, &doc, &nav, &accessor)
+        }
+        StorageKind::Set => {
+            let elem_ty = storage_arg_tokens(field.element_type.as_ref());
+            let accessor = quote! { SetAccessor<'_, #elem_ty> };
+            emit_from_state_accessor(&method_name, &doc, &nav, &accessor)
+        }
+        StorageKind::List => {
+            let elem_ty = storage_arg_tokens(field.element_type.as_ref());
+            let accessor = quote! { ListAccessor<'_, #elem_ty> };
+            emit_from_state_accessor(&method_name, &doc, &nav, &accessor)
+        }
         StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => {
-            emit_merkle_tree_accessor(&method_name, &doc, &nav)
+            emit_from_state_accessor(&method_name, &doc, &nav, &quote! { MerkleTreeAccessor<'_> })
         }
     }
 }
@@ -450,115 +455,48 @@ fn emit_cell_accessor(
     nav: &TokenStream,
     cell_type: Option<&Type>,
 ) -> TokenStream {
-    if let Some(ty) = cell_type {
-        let (ret_type, body) = cell_accessor(ty, nav);
-        quote! {
-            #[doc = #doc]
-            pub fn #method_name(&self) -> Result<#ret_type, StateError> {
-                #body
-            }
-        }
-    } else {
-        quote! {
+    match cell_type {
+        Some(ty) => emit_typed_cell_accessor(method_name, doc, nav, &type_to_tokens(ty)),
+        None => quote! {
             #[doc = #doc]
             pub fn #method_name(&self) -> Result<&StateValue<InMemoryDB>, StateError> {
                 #nav
             }
-        }
+        },
     }
 }
 
-fn emit_counter_accessor(method_name: &Ident, doc: &str, nav: &TokenStream) -> TokenStream {
-    let body = cell_value_body(&quote! { u64 }, nav);
-    quote! {
-        #[doc = #doc]
-        pub fn #method_name(&self) -> Result<u64, StateError> {
-            #body
-        }
-    }
-}
-
-fn emit_map_accessor(
+fn emit_typed_cell_accessor(
     method_name: &Ident,
     doc: &str,
     nav: &TokenStream,
-    field: &LedgerField,
+    ret_type: &TokenStream,
 ) -> TokenStream {
-    let key_ty = field
-        .key
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
-    let val_ty = field
-        .value
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     quote! {
         #[doc = #doc]
-        pub fn #method_name(&self) -> Result<MapAccessor<'_, #key_ty, #val_ty>, StateError> {
-            let sv = #nav?;
-            match sv {
-                StateValue::Map(map) => Ok(MapAccessor::new(map)),
-                _ => Err(StateError::UnexpectedVariant {
-                    expected: "Map",
-                    actual: variant_name(sv),
-                }),
-            }
+        pub fn #method_name(&self) -> Result<#ret_type, StateError> {
+            cell_as::<#ret_type>(#nav?)
         }
     }
 }
 
-fn emit_set_accessor(
+fn emit_from_state_accessor(
     method_name: &Ident,
     doc: &str,
     nav: &TokenStream,
-    field: &LedgerField,
+    accessor: &TokenStream,
 ) -> TokenStream {
-    let elem_ty = field
-        .element_type
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     quote! {
         #[doc = #doc]
-        pub fn #method_name(&self) -> Result<SetAccessor<'_, #elem_ty>, StateError> {
-            let sv = #nav?;
-            match sv {
-                StateValue::Map(map) => Ok(SetAccessor::new(map)),
-                _ => Err(StateError::UnexpectedVariant {
-                    expected: "Map",
-                    actual: variant_name(sv),
-                }),
-            }
+        pub fn #method_name(&self) -> Result<#accessor, StateError> {
+            <#accessor>::from_state(#nav?)
         }
     }
 }
 
-fn emit_list_accessor(
-    method_name: &Ident,
-    doc: &str,
-    nav: &TokenStream,
-    field: &LedgerField,
-) -> TokenStream {
-    let elem_ty = field
-        .element_type
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
-    quote! {
-        #[doc = #doc]
-        pub fn #method_name(&self) -> Result<ListAccessor<'_, #elem_ty>, StateError> {
-            let sv = #nav?;
-            ListAccessor::from_state(sv)
-        }
-    }
-}
-
-fn emit_merkle_tree_accessor(method_name: &Ident, doc: &str, nav: &TokenStream) -> TokenStream {
-    quote! {
-        #[doc = #doc]
-        pub fn #method_name(&self) -> Result<MerkleTreeAccessor<'_>, StateError> {
-            let sv = #nav?;
-            MerkleTreeAccessor::from_state(sv)
-        }
-    }
+/// The Rust type of a storage type argument, or `Vec<u8>` for an absent one.
+fn storage_arg_tokens(ty: Option<&Type>) -> TokenStream {
+    ty.map_or_else(|| quote! { Vec<u8> }, type_to_tokens)
 }
 
 // ---------------------------------------------------------------------------
@@ -633,36 +571,6 @@ fn emit_initial_state(fields: &[LedgerField], name: &str, has_constructor: bool)
     let struct_name = format_ident!("{}InitialState", name);
     let ledger_name = format_ident!("{}", name);
     let doc = initial_state_doc(has_constructor);
-
-    if fields.is_empty() {
-        return quote! {
-            #doc
-            #[derive(Debug, Clone, Default)]
-            pub struct #struct_name;
-
-            impl #struct_name {
-                /// Build the `ContractState` for deployment.
-                pub fn build(self) -> ContractState<InMemoryDB> {
-                    ContractState::new(
-                        StateValue::Array(vec![].into()),
-                        StorageHashMap::new(),
-                        ContractMaintenanceAuthority::default(),
-                    )
-                }
-
-                /// Build and wrap in the typed Ledger.
-                pub fn into_ledger(self) -> #ledger_name {
-                    #ledger_name::new(self.build())
-                }
-            }
-
-            impl From<#struct_name> for ContractState<InMemoryDB> {
-                fn from(state: #struct_name) -> Self {
-                    state.build()
-                }
-            }
-        };
-    }
 
     let mut field_defs = Vec::new();
     let mut field_defaults = Vec::new();
@@ -741,23 +649,33 @@ fn emit_initial_state(fields: &[LedgerField], name: &str, has_constructor: bool)
     }
 
     let state_expr = state_array_expr(field_conversions);
-    let model_imports = super::circuit_calls::model_imports();
-
-    quote! {
-        #doc
-        #[derive(Debug, Clone)]
-        pub struct #struct_name {
-            #(#field_defs),*
+    let definition = if fields.is_empty() {
+        quote! {
+            #[derive(Debug, Clone, Default)]
+            pub struct #struct_name;
         }
+    } else {
+        let model_imports = super::circuit_calls::model_imports();
+        quote! {
+            #[derive(Debug, Clone)]
+            pub struct #struct_name {
+                #(#field_defs),*
+            }
 
-        impl Default for #struct_name {
-            fn default() -> Self {
-                #model_imports
-                Self {
-                    #(#field_defaults),*
+            impl Default for #struct_name {
+                fn default() -> Self {
+                    #model_imports
+                    Self {
+                        #(#field_defaults),*
+                    }
                 }
             }
         }
+    };
+
+    quote! {
+        #doc
+        #definition
 
         impl #struct_name {
             /// Build the `ContractState` for deployment.
@@ -833,14 +751,13 @@ fn merkle_tree_default(field: &LedgerField) -> TokenStream {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> TokenStream {
-    let struct_name = format_ident!("{}Query", name);
+    let struct_name = query_struct_ident(name);
 
     let accessors: Vec<_> = fields
         .iter()
         .filter_map(|field| {
-            let field_index = field.field_index()?;
-            let const_name = format_ident!("FIELD_{}", field.name.to_uppercase());
-            emit_lazy_field_accessor(field, &const_name, &field_index)
+            let const_name = field_const_ident(&field.name);
+            emit_lazy_field_accessor(field, &const_name)
         })
         .collect();
 
@@ -880,17 +797,13 @@ fn field_indices_expr(const_name: &Ident, field_index: &FieldIndex) -> TokenStre
     }
 }
 
-fn emit_lazy_field_accessor(
-    field: &LedgerField,
-    const_name: &Ident,
-    field_index: &FieldIndex,
-) -> Option<TokenStream> {
+fn emit_lazy_field_accessor(field: &LedgerField, const_name: &Ident) -> Option<TokenStream> {
     let method_name = make_ident(&field.name);
     let doc = format!(
         "Query the `{}` ledger field ({}) from the node.",
         field.name, field.storage
     );
-    let field_indices = field_indices_expr(const_name, field_index);
+    let field_indices = field_indices_expr(const_name, &field.index);
     let path_expr = quote! { lazy::build_query_path(#field_indices) };
 
     match field.storage {
@@ -900,19 +813,14 @@ fn emit_lazy_field_accessor(
             &path_expr,
             field.element_type.as_ref(),
         )),
-        StorageKind::Counter => Some(emit_lazy_counter_accessor(&method_name, &doc, &path_expr)),
-        StorageKind::Map => Some(emit_lazy_map_accessor(
+        StorageKind::Counter => Some(emit_lazy_typed_cell_accessor(
             &method_name,
             &doc,
             &path_expr,
-            field,
+            &quote! { u64 },
         )),
-        StorageKind::Set => Some(emit_lazy_set_accessor(
-            &method_name,
-            &doc,
-            &path_expr,
-            field,
-        )),
+        StorageKind::Map => Some(emit_lazy_map_accessor(&method_name, &path_expr, field)),
+        StorageKind::Set => Some(emit_lazy_set_accessor(&method_name, &path_expr, field)),
         StorageKind::List => Some(emit_lazy_list_accessor(&method_name, &field_indices, field)),
         // Merkle trees don't support single-value lookup via the RPC.
         StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => None,
@@ -925,98 +833,76 @@ fn emit_lazy_cell_accessor(
     path_expr: &TokenStream,
     cell_type: Option<&Type>,
 ) -> TokenStream {
-    if let Some(ty) = cell_type {
-        let ret_type = lazy_cell_return_type(ty);
-        let query_body = lazy_query_body(path_expr);
-        quote! {
-            #[doc = #doc]
-            pub async fn #method_name(&self) -> Result<#ret_type, lazy::ContractError> {
-                #query_body
-                let av = cell_value(&sv)?;
-                Ok(<#ret_type>::try_from(&*av.value).map_err(StateError::Conversion)?)
-            }
-        }
-    } else {
-        let query_body = lazy_query_body(path_expr);
-        quote! {
-            #[doc = #doc]
-            pub async fn #method_name(&self) -> Result<StateValue<InMemoryDB>, lazy::ContractError> {
-                #query_body
-                Ok(sv)
+    match cell_type {
+        Some(ty) => emit_lazy_typed_cell_accessor(method_name, doc, path_expr, &type_to_tokens(ty)),
+        None => {
+            let query_body = lazy_query_body(path_expr);
+            quote! {
+                #[doc = #doc]
+                pub async fn #method_name(&self) -> Result<StateValue<InMemoryDB>, lazy::ContractError> {
+                    #query_body
+                    Ok(sv)
+                }
             }
         }
     }
 }
 
-fn emit_lazy_counter_accessor(
+fn emit_lazy_typed_cell_accessor(
     method_name: &Ident,
     doc: &str,
     path_expr: &TokenStream,
+    ret_type: &TokenStream,
 ) -> TokenStream {
     let query_body = lazy_query_body(path_expr);
     quote! {
         #[doc = #doc]
-        pub async fn #method_name(&self) -> Result<u64, lazy::ContractError> {
+        pub async fn #method_name(&self) -> Result<#ret_type, lazy::ContractError> {
             #query_body
-            let av = cell_value(&sv)?;
-            Ok(<u64>::try_from(&*av.value).map_err(StateError::Conversion)?)
+            Ok(cell_as::<#ret_type>(&sv)?)
         }
     }
 }
 
 fn emit_lazy_map_accessor(
     method_name: &Ident,
-    _doc: &str,
     path_expr: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
     let (key_ty, key_av) = lazy_key(field.key.as_ref());
-    let val_ty = field
-        .value
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
+    let val_ty = storage_arg_tokens(field.value.as_ref());
     let doc = format!("Look up a value by key in the `{}` map (map).", field.name);
+    let query = lazy_query_result(&quote! { key_path });
     quote! {
         #[doc = #doc]
         pub async fn #method_name(&self, key: #key_ty) -> Result<Option<#val_ty>, lazy::ContractError> {
-            let mut path = #path_expr;
-            path.push(lazy::value_to_query_key(&#key_av));
-            let results = self.provider.query_contract_state(
-                &self.address,
-                vec![lazy::StateQuery { path }],
-                self.at_block_hash,
-            ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
-            let result = results.first().ok_or(lazy::ContractError::NoValue)?;
+            let mut key_path = #path_expr;
+            key_path.push(lazy::value_to_query_key(&#key_av));
+            #query
             // No value and no error means key not found
             if result.value.is_none() && result.error.is_none() {
                 return Ok(None);
             }
             let sv = lazy::decode_state_value(result)?;
-            let av = cell_value(&sv)?;
-            Ok(Some(<#val_ty>::try_from(&*av.value).map_err(StateError::Conversion)?))
+            Ok(Some(cell_as::<#val_ty>(&sv)?))
         }
     }
 }
 
 fn emit_lazy_set_accessor(
     method_name: &Ident,
-    _doc: &str,
     path_expr: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
     let (key_ty, key_av) = lazy_key(field.element_type.as_ref());
     let doc = format!("Check if a key exists in the `{}` set (set).", field.name);
+    let query = lazy_query_result(&quote! { key_path });
     quote! {
         #[doc = #doc]
         pub async fn #method_name(&self, key: #key_ty) -> Result<bool, lazy::ContractError> {
-            let mut path = #path_expr;
-            path.push(lazy::value_to_query_key(&#key_av));
-            let results = self.provider.query_contract_state(
-                &self.address,
-                vec![lazy::StateQuery { path }],
-                self.at_block_hash,
-            ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
-            let result = results.first().ok_or(lazy::ContractError::NoValue)?;
+            let mut key_path = #path_expr;
+            key_path.push(lazy::value_to_query_key(&#key_av));
+            #query
             // Sets store Null for present keys; absent keys have no value
             if result.value.is_none() && result.error.is_none() {
                 return Ok(false);
@@ -1031,10 +917,11 @@ fn emit_lazy_set_accessor(
 /// that encodes `key` at the layout of `ty`.
 fn lazy_key(ty: Option<&Type>) -> (TokenStream, TokenStream) {
     let key = quote! { key };
-    match ty {
-        Some(ty) => (type_to_tokens(ty), encode_to_aligned_value(&key, ty)),
-        None => (quote! { Vec<u8> }, quote! { AlignedValue::from(#key) }),
-    }
+    let encode = ty.map_or_else(
+        || quote! { AlignedValue::from(#key) },
+        |ty| encode_to_aligned_value(&key, ty),
+    );
+    (storage_arg_tokens(ty), encode)
 }
 
 fn emit_lazy_list_accessor(
@@ -1042,10 +929,7 @@ fn emit_lazy_list_accessor(
     field_indices: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
-    let elem_ty = field
-        .element_type
-        .as_ref()
-        .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
+    let elem_ty = storage_arg_tokens(field.element_type.as_ref());
     let doc = format!(
         "Get an element by index from the `{}` list (list), counted from the front.\n\n\
          Returns `Ok(None)` if `index` is not less than the list's length. For a large \
@@ -1070,13 +954,13 @@ fn emit_lazy_list_accessor(
                 return Err(lazy::ContractError::NoValue);
             };
             let sv = lazy::decode_state_value(length)?;
-            let len = <u64>::try_from(&*cell_value(&sv)?.value).map_err(StateError::Conversion)?;
+            let len = cell_as::<u64>(&sv)?;
             if index as u64 >= len {
                 return Ok(None);
             }
             let sv = lazy::decode_state_value(element)?;
             let value = match tails_left {
-                None => <#elem_ty>::try_from(&*cell_value(&sv)?.value).map_err(StateError::Conversion)?,
+                None => cell_as::<#elem_ty>(&sv)?,
                 Some(n) => ListAccessor::<#elem_ty>::from_state(&sv)?
                     .get(n)
                     .ok_or(StateError::IndexOutOfBounds(n))??,
@@ -1086,33 +970,28 @@ fn emit_lazy_list_accessor(
     }
 }
 
-/// The common query + decode preamble shared by all lazy accessors.
-///
-/// Emits code that:
-/// 1. Builds the query path
-/// 2. Calls `provider.query_contract_state`
-/// 3. Decodes the first result into a `StateValue`
-fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
+/// Statements that send one `provider.query_contract_state` call for the path
+/// `path_expr` and bind its single result as `result`.
+fn lazy_query_result(path_expr: &TokenStream) -> TokenStream {
     quote! {
-        let path = #path_expr;
         let results = self.provider.query_contract_state(
             &self.address,
-            vec![lazy::StateQuery { path }],
+            vec![lazy::StateQuery { path: #path_expr }],
             self.at_block_hash,
         ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
         // One query was sent; a missing result is a malformed RPC response,
         // not a panic.
         let result = results.first().ok_or(lazy::ContractError::NoValue)?;
-        let sv = lazy::decode_state_value(result)?;
     }
 }
 
-/// Resolve the return type for a lazy cell accessor, unwrapping aliases.
-fn lazy_cell_return_type(ty: &Type) -> TokenStream {
-    if let Type::Alias { ty: inner, .. } = ty {
-        lazy_cell_return_type(inner)
-    } else {
-        type_to_tokens(ty)
+/// Statements that query the path `path_expr` and bind the decoded
+/// `StateValue` as `sv`.
+fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
+    let query = lazy_query_result(path_expr);
+    quote! {
+        #query
+        let sv = lazy::decode_state_value(result)?;
     }
 }
 
@@ -1126,6 +1005,15 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     // `IntoFuture` impl.
     let mut constructors = Vec::new();
     let mut call_items = Vec::new();
+    let send_bounds = quote! {
+        P: midnight_contract::AsMidnightProvider
+            + midnight_contract::Provider
+            + ::core::marker::Send
+            + ::core::marker::Sync,
+        Wp: midnight_contract::runtime::WitnessProvider
+            + ::core::marker::Send
+            + ::core::marker::Sync,
+    };
 
     for circuit in &info.circuits {
         // A pure circuit is evaluated off-chain and has no call path.
@@ -1133,8 +1021,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             continue;
         }
 
-        let sanitized = circuit.name.replace(['$', '-'], "_");
-        let method_name = format_ident!("{}", sanitized);
+        let method_name = make_ident(&circuit.name);
         let call_ty = format_ident!("{}CallBuilder", to_pascal_case(&circuit.name));
         let circuit_name_str = &circuit.name;
 
@@ -1160,12 +1047,15 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // Submit path (`.await` via `IntoFuture`): call + return the circuit's
         // typed result. `__circuits` is destructured from `self` at the call
         // site below; `ir`, `program` and `__args` come from the shared `setup`.
+        let call_args = quote! {
+            ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)
+        };
         let ret_type = quote! {
             ::core::result::Result<midnight_contract::CallOutcome<#value_ty>, midnight_contract::ContractError>
         };
         let submit_tail = quote! {
             #decode
-            let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+            let __outcome = __circuits.contract.call_with(#call_args).await?;
             ::core::result::Result::Ok(midnight_contract::CallOutcome {
                 value: __decode(__outcome.value)?,
                 extrinsic_hash: __outcome.extrinsic_hash,
@@ -1176,7 +1066,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         // Constructor params / call-struct fields (identical syntax) and the
         // destructure idents, each with a leading comma.
-        let param_list = circuit_params(circuit);
+        let param_list = typed_params(circuit.arguments());
         let ident_list: Vec<_> = circuit
             .arguments()
             .iter()
@@ -1185,6 +1075,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let params = quote! { #(, #param_list)* };
         let field_idents = quote! { #(, #ident_list)* };
         let setup = circuit_setup(ledger_name, circuit);
+        let open = quote! {
+            let #call_ty { circuits: __circuits #field_idents } = self;
+            #setup
+        };
 
         // Constructor on `Circuits`: returns the call builder holding a `&mut`
         // to this `Circuits` (so the next call's shielded inputs / witnesses are
@@ -1220,9 +1114,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
                     // Boxed for the same reason `without_dust` below is.
                     ::std::boxed::Box::pin(async move {
-                        let #call_ty { circuits: __circuits #field_idents } = self;
-                        #setup
-                        let __bytes = __circuits.contract.build_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), true).await?;
+                        #open
+                        let __bytes = __circuits.contract.build_call_with(#call_args, true).await?;
                         ::core::result::Result::Ok(__bytes)
                     })
                     .await
@@ -1244,8 +1137,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 > {
                     // Boxed for the same reason `without_dust` below is.
                     ::std::boxed::Box::pin(async move {
-                        let #call_ty { circuits: __circuits #field_idents } = self;
-                        #setup
+                        #open
                         #decode
                         let __simulated = __circuits.contract.simulate_with(ir, &program, &__args, &__circuits.witnesses).await?;
                         ::core::result::Result::Ok(midnight_contract::Simulated {
@@ -1264,13 +1156,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             // to sponsor via `MidnightProvider::balance_transaction`.
             impl<'c, 'a, P, Wp> midnight_contract::DustlessBuilder for #call_ty<'c, 'a, P, Wp>
             where
-                P: midnight_contract::AsMidnightProvider
-                    + midnight_contract::Provider
-                    + ::core::marker::Send
-                    + ::core::marker::Sync,
-                Wp: midnight_contract::runtime::WitnessProvider
-                    + ::core::marker::Send
-                    + ::core::marker::Sync,
+                #send_bounds
             {
                 type Error = midnight_contract::ContractError;
                 // Boxed for the same reason the `IntoFuture` impl below is: the
@@ -1286,9 +1172,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     >,
                 > + ::core::marker::Send {
                     ::std::boxed::Box::pin(async move {
-                        let #call_ty { circuits: __circuits #field_idents } = self;
-                        #setup
-                        let __bytes = __circuits.contract.build_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), false).await?;
+                        #open
+                        let __bytes = __circuits.contract.build_call_with(#call_args, false).await?;
                         ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_proven_bytes(__bytes))
                     })
                 }
@@ -1296,13 +1181,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
             impl<'c, 'a, P, Wp> ::core::future::IntoFuture for #call_ty<'c, 'a, P, Wp>
             where
-                P: midnight_contract::AsMidnightProvider
-                    + midnight_contract::Provider
-                    + ::core::marker::Send
-                    + ::core::marker::Sync,
-                Wp: midnight_contract::runtime::WitnessProvider
-                    + ::core::marker::Send
-                    + ::core::marker::Sync,
+                #send_bounds
             {
                 type Output = #ret_type;
                 type IntoFuture = ::core::pin::Pin<
@@ -1312,8 +1191,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 >;
                 fn into_future(self) -> Self::IntoFuture {
                     ::std::boxed::Box::pin(async move {
-                        let #call_ty { circuits: __circuits #field_idents } = self;
-                        #setup
+                        #open
                         #submit_tail
                     })
                 }
@@ -1361,10 +1239,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         pub struct Circuits<'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
             contract: &'a midnight_contract::Contract<P>,
             witnesses: Wp,
-            coin_encryption_keys: Vec<(
-                midnight_contract::CoinPublicKey,
-                midnight_contract::EncryptionPublicKey,
-            )>,
+            coin_encryption_keys: Vec<midnight_contract::ShieldedRecipient>,
             shielded: midnight_contract::ShieldedInputs,
         }
 
@@ -1399,27 +1274,23 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             }
 
 
-            /// Attach `coin_public_key -> encryption_public_key` mappings for the
-            /// shielded coins these circuit calls create (e.g. via
-            /// `mintShieldedToken`). The SDK adds a discovery ciphertext to each
-            /// matching output so the recipient's wallet finds the coin through
-            /// normal sync, no `watchFor`. Without a mapping, an external
-            /// recipient would have to scan for the coin explicitly.
+            /// Supply the encryption key of each recipient of the shielded coins
+            /// these circuit calls create (e.g. via `mintShieldedToken`). The
+            /// SDK seals a discovery ciphertext to that key on each output whose
+            /// coin public key matches a recipient. The recipient's wallet then
+            /// finds the coin through normal sync, with no `watchFor`. Without
+            /// an entry, an external recipient has to scan for the coin
+            /// explicitly. `parse_shielded_recipient` reads a recipient from a
+            /// shielded address.
             ///
             /// The calling wallet's own coin public key needs no entry: the SDK
-            /// maps it to the wallet's encryption public key, so a coin sent to
-            /// `ownPublicKey()` reaches the wallet. An entry for that key takes
-            /// priority.
+            /// seals a coin sent to `ownPublicKey()` to the wallet's encryption
+            /// key. An entry for that key takes priority.
             pub fn with_coin_encryption_keys(
                 mut self,
-                keys: impl IntoIterator<
-                    Item = (
-                        midnight_contract::CoinPublicKey,
-                        midnight_contract::EncryptionPublicKey,
-                    ),
-                >,
+                coin_encryption_keys: impl IntoIterator<Item = midnight_contract::ShieldedRecipient>,
             ) -> Self {
-                self.coin_encryption_keys = keys.into_iter().collect();
+                self.coin_encryption_keys = coin_encryption_keys.into_iter().collect();
                 self
             }
         }
@@ -1450,8 +1321,8 @@ pub(crate) fn emit_simulator(
         .filter(|circuit| !circuit.pure())
         .map(|circuit| {
             let method_name = make_ident(&circuit.name);
-            let params = circuit_params(circuit);
-            let return_ty = format_ident!("{}Return", to_pascal_case(&circuit.name));
+            let params = typed_params(circuit.arguments());
+            let return_ty = return_type_ident(&circuit.name);
             let setup = circuit_setup(&ledger_name, circuit);
             let (_, decode) = circuit_decode(circuit);
             let doc = format!(
@@ -1569,24 +1440,6 @@ pub(crate) fn emit_simulator(
     }
 }
 
-/// The parameter list of `circuit`, one `name: Type` per argument. An argument
-/// with no typed conversion takes a `runtime::Value`.
-pub(super) fn circuit_params(circuit: &Circuit) -> Vec<TokenStream> {
-    circuit
-        .arguments()
-        .iter()
-        .map(|arg| {
-            let name = make_ident(arg.name.name());
-            if super::circuit_calls::has_typed_conversion(&arg.ty) {
-                let ty = type_to_tokens(&arg.ty);
-                quote! { #name: #ty }
-            } else {
-                quote! { #name: midnight_contract::runtime::Value }
-            }
-        })
-        .collect()
-}
-
 /// The statements that run before generated code executes `circuit`.
 ///
 /// They build the program that the circuit resolves its calls against (typed
@@ -1675,25 +1528,6 @@ pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
     (value_ty, decode)
 }
 
-fn cell_accessor(ty: &Type, nav: &TokenStream) -> (TokenStream, TokenStream) {
-    if let Type::Alias { ty: inner, .. } = ty {
-        cell_accessor(inner, nav)
-    } else {
-        let ret_type = type_to_tokens(ty);
-        let body = cell_value_body(&ret_type, nav);
-        (ret_type, body)
-    }
-}
-
-/// Generate the body for a cell accessor that uses `cell_value` + `TryFrom<&ValueSlice>`.
-fn cell_value_body(ret_type: &TokenStream, nav: &TokenStream) -> TokenStream {
-    quote! {
-        let sv = #nav?;
-        let av = cell_value(sv)?;
-        <#ret_type>::try_from(&*av.value).map_err(StateError::Conversion)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1721,6 +1555,11 @@ mod tests {
             .and_then(|tail| tail.split(",StorageHashMap::new()").next())
             .expect("build() constructs a ContractState")
             .to_string()
+    }
+
+    #[test]
+    fn an_empty_ledger_builds_an_empty_array() {
+        assert_eq!(built_state(&[]), "StateValue::Array(vec![].into())");
     }
 
     /// A ledger that fits one array keeps the array it always built — the

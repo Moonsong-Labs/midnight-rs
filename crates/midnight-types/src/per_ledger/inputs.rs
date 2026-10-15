@@ -10,7 +10,6 @@
 //! That is also the shape an external signer needs: "give me an `Input` for this
 //! coin" is one step it can implement without releasing anything.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::helpers;
@@ -92,12 +91,7 @@ pub fn prepare_shielded_inputs(
     nullifiers: &[Nullifier],
     rng: &mut StdRng,
 ) -> Result<Vec<PreparedInput>, WalletError> {
-    let mut named = HashSet::with_capacity(nullifiers.len());
-    if let Some(repeated) = nullifiers.iter().find(|n| !named.insert(*n)) {
-        return Err(WalletError::DuplicateInput {
-            input: format!("shielded coin {repeated:?}"),
-        });
-    }
+    crate::refuse_repeated_nullifiers(nullifiers)?;
     context.with_wallet_from_seed(seed.into_ledger(), |wallet| {
         let mut prepared = Vec::with_capacity(nullifiers.len());
         for nullifier in nullifiers {

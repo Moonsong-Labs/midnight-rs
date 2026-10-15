@@ -1,3 +1,7 @@
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::hash::Hash;
+
 use crate::{LedgerVersion, Network, UnknownLedger};
 
 /// Errors that can occur with wallet operations.
@@ -197,4 +201,25 @@ pub enum WalletError {
          or name the network with `with_network`, for example `with_network(Network::Preprod)`"
     )]
     NetworkUnknown,
+}
+
+/// Refuse a list of shielded coin nullifiers that names one coin twice.
+///
+/// A build calls this before it spends anything, so a repeated coin cannot be
+/// spent, or its value counted, twice.
+///
+/// # Errors
+///
+/// [`WalletError::DuplicateInput`] naming the first nullifier that `nullifiers`
+/// repeats.
+pub fn refuse_repeated_nullifiers<N: Eq + Hash + Debug>(
+    nullifiers: &[N],
+) -> Result<(), WalletError> {
+    let mut named = HashSet::with_capacity(nullifiers.len());
+    match nullifiers.iter().find(|n| !named.insert(*n)) {
+        Some(repeated) => Err(WalletError::DuplicateInput {
+            input: format!("shielded coin {repeated:?}"),
+        }),
+        None => Ok(()),
+    }
 }

@@ -5,6 +5,7 @@
 use midnight_helpers::ledger_8 as helpers;
 use midnight_provider::ledger_8 as provider;
 use midnight_types::ledger_8 as types;
+use types::LEDGER;
 
 #[path = "per_ledger/call.rs"]
 pub(crate) mod call;
@@ -17,7 +18,4 @@ mod resolver;
 #[path = "per_ledger/shielded.rs"]
 mod shielded;
 #[path = "per_ledger/state.rs"]
-mod state;
-
-/// The generation this module builds for.
-const LEDGER: midnight_types::LedgerVersion = midnight_types::LedgerVersion::V8;
+pub(crate) mod state;

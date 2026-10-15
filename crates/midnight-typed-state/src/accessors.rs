@@ -18,12 +18,16 @@ pub struct MapAccessor<'a, K, V> {
 }
 
 impl<'a, K, V> MapAccessor<'a, K, V> {
-    /// Creates a new accessor wrapping the given map reference.
-    pub fn new(map: &'a HashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>) -> Self {
-        Self {
+    /// Wraps a `Map` field.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `sv` is not a `Map`.
+    pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
+        crate::nav::map_value(sv).map(|map| Self {
             map,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Returns the number of entries in the map.
@@ -55,12 +59,7 @@ where
     /// key is present but the value cannot be converted.
     pub fn get(&self, key: K) -> Option<Result<V, StateError>> {
         let sp = self.map.get(&key.into())?;
-        let sv: &StateValue<InMemoryDB> = &sp;
-        let av = match crate::nav::cell_value(sv) {
-            Ok(av) => av,
-            Err(e) => return Some(Err(e)),
-        };
-        Some(V::try_from(&*av.value).map_err(StateError::Conversion))
+        Some(crate::nav::cell_as(&sp))
     }
 }
 
@@ -75,11 +74,7 @@ where
             let (key_sp, val_sp) = &*pair;
             let key_av: &AlignedValue = key_sp;
             let k = K::try_from(&*key_av.value).map_err(StateError::Conversion)?;
-
-            let sv: &StateValue<InMemoryDB> = val_sp;
-            let av = crate::nav::cell_value(sv)?;
-            let v = V::try_from(&*av.value).map_err(StateError::Conversion)?;
-
+            let v = crate::nav::cell_as(val_sp)?;
             Ok((k, v))
         })
     }
@@ -96,12 +91,16 @@ pub struct SetAccessor<'a, T> {
 }
 
 impl<'a, T> SetAccessor<'a, T> {
-    /// Creates a new accessor wrapping the given map reference.
-    pub fn new(map: &'a HashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>) -> Self {
-        Self {
+    /// Wraps a `Set` field: a `Map` from each element to `Null`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `sv` is not a `Map`.
+    pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
+        crate::nav::map_value(sv).map(|map| Self {
             map,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Returns the number of elements in the set.
@@ -169,8 +168,7 @@ impl<'a, T> ListAccessor<'a, T> {
     ///
     /// Returns an error if `sv` is not an `Array` with a `Cell(u64)` length slot.
     pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
-        let len = crate::nav::cell_value(crate::nav::get_field(sv, LIST_LENGTH)?)?;
-        let len = u64::try_from(&*len.value).map_err(StateError::Conversion)?;
+        let len: u64 = crate::nav::cell_as(crate::nav::get_field(sv, LIST_LENGTH)?)?;
         let len = usize::try_from(len)
             .map_err(|_| StateError::Conversion(InvalidBuiltinDecode("usize")))?;
         Ok(Self {
@@ -230,8 +228,7 @@ fn list_head<T>(node: &StateValue<InMemoryDB>) -> Result<T, StateError>
 where
     for<'vs> T: TryFrom<&'vs ValueSlice, Error = InvalidBuiltinDecode>,
 {
-    let av = crate::nav::cell_value(crate::nav::get_field(node, LIST_HEAD)?)?;
-    T::try_from(&*av.value).map_err(StateError::Conversion)
+    crate::nav::cell_as(crate::nav::get_field(node, LIST_HEAD)?)
 }
 
 /// Structural accessor for a Midnight contract merkle tree field.
@@ -268,19 +265,8 @@ impl<'a> MerkleTreeAccessor<'a> {
     /// the past roots of a `HistoricMerkleTree`. Read slot `[2]` of `sv` for
     /// them.
     pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
-        let arr = match sv {
-            StateValue::Array(arr) => arr,
-            other => {
-                return Err(StateError::UnexpectedVariant {
-                    expected: "Array",
-                    actual: crate::nav::variant_name(other),
-                });
-            }
-        };
-
         // Element [0]: BoundedMerkleTree
-        let tree_sv = arr.get(0).ok_or(StateError::IndexOutOfBounds(0))?;
-        let tree = match tree_sv {
+        let tree = match crate::nav::get_field(sv, 0)? {
             StateValue::BoundedMerkleTree(t) => t,
             other => {
                 return Err(StateError::UnexpectedVariant {
@@ -291,11 +277,7 @@ impl<'a> MerkleTreeAccessor<'a> {
         };
 
         // Element [1]: Cell containing u64 (first_free counter)
-        let first_free = {
-            let sv = arr.get(1).ok_or(StateError::IndexOutOfBounds(1))?;
-            let av = crate::nav::cell_value(sv)?;
-            u64::try_from(&*av.value).map_err(StateError::Conversion)?
-        };
+        let first_free = crate::nav::cell_as(crate::nav::get_field(sv, 1)?)?;
 
         Ok(Self { tree, first_free })
     }

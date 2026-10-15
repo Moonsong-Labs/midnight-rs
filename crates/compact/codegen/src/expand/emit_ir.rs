@@ -90,15 +90,10 @@ pub(crate) fn witnesses(defs: &[crate::ir::Witness]) -> TokenStream {
 
 /// A bound reaches 2^248-1, so no integer literal holds it. The digits go
 /// through `FromStr`, whose target type the field infers.
-/// `unwrap_or_default` keeps generated code panic-free; the digits come from
-/// `BigUint::to_string`, which `FromStr` accepts.
-fn biguint(v: &num_bigint::BigUint) -> TokenStream {
-    let digits = v.to_string();
-    quote! { #digits.parse().unwrap_or_default() }
-}
-
-/// The signed counterpart of [`biguint`], for literals and VM operands.
-fn bigint(v: &num_bigint::BigInt) -> TokenStream {
+/// `unwrap_or_default` keeps generated code panic-free: the digits, with the
+/// sign of a negative `BigInt`, come from the value's `Display`, which
+/// `FromStr` accepts.
+fn decimal(v: &impl std::fmt::Display) -> TokenStream {
     let digits = v.to_string();
     quote! { #digits.parse().unwrap_or_default() }
 }
@@ -126,7 +121,7 @@ pub(crate) fn type_ref(t: &Type) -> TokenStream {
             quote! { __ir::Type::Field(#ft) }
         }
         Type::Unsigned(maxval) => {
-            let maxval = biguint(maxval);
+            let maxval = decimal(maxval);
             quote! { __ir::Type::Unsigned(#maxval) }
         }
         Type::Point(c) => {
@@ -217,7 +212,7 @@ fn struct_field(f: &(String, Type)) -> TokenStream {
 fn literal(l: &Literal) -> TokenStream {
     match l {
         Literal::Int(i) => {
-            let i = bigint(i);
+            let i = decimal(i);
             quote! { __ir::Literal::Int(#i) }
         }
         Literal::Bool(b) => quote! { __ir::Literal::Bool(#b) },
@@ -317,7 +312,7 @@ fn instruction(i: &Instruction) -> TokenStream {
 fn operand(o: &Operand) -> TokenStream {
     match o {
         Operand::Int(i) => {
-            let i = bigint(i);
+            let i = decimal(i);
             quote! { __ir::Operand::Int(#i) }
         }
         Operand::Bool(b) => quote! { __ir::Operand::Bool(#b) },
@@ -326,7 +321,7 @@ fn operand(o: &Operand) -> TokenStream {
             quote! { __ir::Operand::Str(#v) }
         }
         Operand::Align { value, bytes: n } => {
-            let value = biguint(value);
+            let value = decimal(value);
             quote! { __ir::Operand::Align { value: #value, bytes: #n } }
         }
         Operand::Stack => quote! { __ir::Operand::Stack },
@@ -426,6 +421,30 @@ fn cmp(variant: TokenStream, bits: u64, left: &Expr, right: &Expr) -> TokenStrea
     quote! { __ir::Expr::#variant { bits: #bits, left: #left, right: #right } }
 }
 
+/// The vector and byte-string element reads, which index with an expression.
+fn indexed(variant: TokenStream, ty: &Type, inner: &Expr, index: &Expr) -> TokenStream {
+    let ty = type_ref(ty);
+    let inner = bx(expr(inner));
+    let index = bx(expr(index));
+    quote! { __ir::Expr::#variant { ty: #ty, expr: #inner, index: #index } }
+}
+
+/// The vector and byte-string slices, which start at an expression.
+fn sliced(variant: TokenStream, ty: &Type, inner: &Expr, index: &Expr, len: u64) -> TokenStream {
+    let ty = type_ref(ty);
+    let inner = bx(expr(inner));
+    let index = bx(expr(index));
+    quote! { __ir::Expr::#variant { ty: #ty, expr: #inner, index: #index, len: #len } }
+}
+
+/// The casts that carry both the source and the target type.
+fn cast(variant: TokenStream, ty: &Type, from: &Type, inner: &Expr) -> TokenStream {
+    let ty = type_ref(ty);
+    let from = type_ref(from);
+    let inner = bx(expr(inner));
+    quote! { __ir::Expr::#variant { ty: #ty, from: #from, expr: #inner } }
+}
+
 fn expr(e: &Expr) -> TokenStream {
     match e {
         Expr::Quote(lit) => {
@@ -482,48 +501,20 @@ fn expr(e: &Expr) -> TokenStream {
             let inner = bx(expr(inner));
             quote! { __ir::Expr::TupleSlice { ty: #ty, expr: #inner, index: #index, len: #len } }
         }
-        Expr::VectorRef {
-            ty,
-            expr: inner,
-            index,
-        } => {
-            let ty = type_ref(ty);
-            let inner = bx(expr(inner));
-            let index = bx(expr(index));
-            quote! { __ir::Expr::VectorRef { ty: #ty, expr: #inner, index: #index } }
-        }
+        Expr::VectorRef { ty, expr, index } => indexed(quote! { VectorRef }, ty, expr, index),
+        Expr::BytesRef { ty, expr, index } => indexed(quote! { BytesRef }, ty, expr, index),
         Expr::VectorSlice {
             ty,
-            expr: inner,
+            expr,
             index,
             len,
-        } => {
-            let ty = type_ref(ty);
-            let inner = bx(expr(inner));
-            let index = bx(expr(index));
-            quote! { __ir::Expr::VectorSlice { ty: #ty, expr: #inner, index: #index, len: #len } }
-        }
-        Expr::BytesRef {
-            ty,
-            expr: inner,
-            index,
-        } => {
-            let ty = type_ref(ty);
-            let inner = bx(expr(inner));
-            let index = bx(expr(index));
-            quote! { __ir::Expr::BytesRef { ty: #ty, expr: #inner, index: #index } }
-        }
+        } => sliced(quote! { VectorSlice }, ty, expr, index, *len),
         Expr::BytesSlice {
             ty,
-            expr: inner,
+            expr,
             index,
             len,
-        } => {
-            let ty = type_ref(ty);
-            let inner = bx(expr(inner));
-            let index = bx(expr(index));
-            quote! { __ir::Expr::BytesSlice { ty: #ty, expr: #inner, index: #index, len: #len } }
-        }
+        } => sliced(quote! { BytesSlice }, ty, expr, index, *len),
         Expr::Add { ty, left, right } => typed_binop(quote! { Add }, ty, left, right),
         Expr::Sub { ty, left, right } => typed_binop(quote! { Sub }, ty, left, right),
         Expr::Mul { ty, left, right } => typed_binop(quote! { Mul }, ty, left, right),
@@ -616,26 +607,8 @@ fn expr(e: &Expr) -> TokenStream {
             let inner = bx(expr(inner));
             quote! { __ir::Expr::BytesToVector { len: #len, expr: #inner } }
         }
-        Expr::CastFromEnum {
-            ty,
-            from,
-            expr: inner,
-        } => {
-            let ty = type_ref(ty);
-            let from = type_ref(from);
-            let inner = bx(expr(inner));
-            quote! { __ir::Expr::CastFromEnum { ty: #ty, from: #from, expr: #inner } }
-        }
-        Expr::CastToEnum {
-            ty,
-            from,
-            expr: inner,
-        } => {
-            let ty = type_ref(ty);
-            let from = type_ref(from);
-            let inner = bx(expr(inner));
-            quote! { __ir::Expr::CastToEnum { ty: #ty, from: #from, expr: #inner } }
-        }
+        Expr::CastFromEnum { ty, from, expr } => cast(quote! { CastFromEnum }, ty, from, expr),
+        Expr::CastToEnum { ty, from, expr } => cast(quote! { CastToEnum }, ty, from, expr),
         Expr::CastToField {
             field_type: ft,
             from,
@@ -651,28 +624,19 @@ fn expr(e: &Expr) -> TokenStream {
             field_type: ft,
             expr: inner,
         } => {
-            let maxval = biguint(maxval);
+            let maxval = decimal(maxval);
             let ft = field_type(ft);
             let inner = bx(expr(inner));
             quote! { __ir::Expr::CastFromField { maxval: #maxval, field_type: #ft, expr: #inner } }
         }
-        Expr::SafeCast {
-            ty,
-            from,
-            expr: inner,
-        } => {
-            let ty = type_ref(ty);
-            let from = type_ref(from);
-            let inner = bx(expr(inner));
-            quote! { __ir::Expr::SafeCast { ty: #ty, from: #from, expr: #inner } }
-        }
+        Expr::SafeCast { ty, from, expr } => cast(quote! { SafeCast }, ty, from, expr),
         Expr::DowncastUnsigned {
             from_maxval,
             to_maxval,
             expr: inner,
         } => {
-            let from_maxval = biguint(from_maxval);
-            let to_maxval = biguint(to_maxval);
+            let from_maxval = decimal(from_maxval);
+            let to_maxval = decimal(to_maxval);
             let inner = bx(expr(inner));
             quote! {
                 __ir::Expr::DowncastUnsigned {

@@ -7,27 +7,35 @@ use std::sync::Arc;
 
 use super::helpers;
 use super::provider::Builds;
-use super::types::convert::IntoLedger;
+use super::types::convert::{IntoLedger, IntoSdk};
 use helpers::coin_structure::coin::{
-    Info as ZswapCoinInfo, Nonce, PublicAddress, ShieldedTokenType, TokenType, UnshieldedTokenType,
-    UserAddress,
+    Info as ZswapCoinInfo, PublicAddress, PublicKey, QualifiedInfo, ShieldedTokenType, TokenType,
+    UnshieldedTokenType, UserAddress,
 };
+use helpers::coin_structure::transfer::Recipient;
 use helpers::{
-    AlignedValue, BuildContext, BuildContractAction, BuildInput, BuildOutput, BuildTransient,
-    BuildUtxoOutput, BuilderContext, ContractAddress, ContractCallPrototype, DefaultDB,
-    EntryPointBuf, FromContext, HashOutput, IntentInfo, KeyLocation, OfferInfo, ProofPreimage,
-    SplittableRng, StandardTransactionInfo, TokenInfo, Transcript, UnshieldedOfferInfo, UtxoOutput,
+    AlignedValue, BuildContext, BuildContractAction, BuildUtxoOutput, BuilderContext,
+    ContractAddress, ContractCallPrototype, DefaultDB, EntryPointBuf, FromContext, IntentInfo,
+    KeyLocation, OfferInfo, ProofPreimage, SplittableRng, StandardTransactionInfo, TokenInfo,
+    Transcript, UnshieldedOfferInfo, UtxoOutput,
 };
+use midnight_base_crypto::fab::{InvalidBuiltinDecode, ValueSlice};
 use midnight_base_crypto::time::Timestamp;
 use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
+use crate::address::format_address;
 use crate::call::ShieldedInputs;
-use crate::change::change_due;
+use crate::change::{change_due, total_by_key};
 use crate::error::ContractError;
 use crate::runtime;
+
+/// The segment of the intent that a call, a deploy or a maintenance update
+/// adds. A call's fallible offers and fallible transients ride in it too.
+pub(crate) const INTENT_SEGMENT: helpers::SegmentId =
+    helpers::Segment::Fallible as helpers::SegmentId;
 
 /// An unshielded payout to an address the call's transcript names.
 ///
@@ -78,20 +86,31 @@ impl<D: helpers::DB + Clone, C: helpers::BuilderContext<D>> BuildUtxoOutput<D, C
     }
 }
 
-/// The context that the partition replays a call's ops in: the contract
-/// state with its balance, at the block time that the interpreter ran at.
+/// Partition a call's ops, `program`, into its guaranteed and fallible
+/// transcripts under `parameters`.
 ///
-/// The partition checks each read that the ops recorded, so a clock or
-/// balance check that reads another value here fails the build.
-fn partition_context(
+/// The partition replays the ops in a context of the contract state with its
+/// balance, at the block time that the interpreter ran at. It checks each
+/// read that the ops recorded, so a clock or balance check that reads another
+/// value here fails the build.
+pub(crate) fn partition(
     state: &helpers::ContractState<DefaultDB>,
     address: ContractAddress,
     block_time: Timestamp,
-) -> helpers::QueryContext<DefaultDB> {
+    program: Vec<helpers::Op<helpers::ResultModeVerify, DefaultDB>>,
+    parameters: &helpers::LedgerParameters,
+) -> Result<helpers::mn_ledger::construct::TranscriptPair<DefaultDB>, ContractError> {
     let mut context = helpers::QueryContext::new(state.data.clone(), address);
     context.call_context.tblock = block_time;
     context.call_context.balance = state.balance.clone();
-    context
+    let pre_transcript = helpers::PreTranscript {
+        context,
+        program,
+        comm_comm: None,
+    };
+    let partitioned = helpers::partition_transcripts(&[pre_transcript], parameters)
+        .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
+    Ok(partitioned.into_iter().next().unwrap_or((None, None)))
 }
 
 /// Build this generation's transaction for a circuit call the interpreter
@@ -116,10 +135,7 @@ pub(crate) async fn call_transaction(
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
-    coin_encryption_keys: &[(
-        midnight_types::CoinPublicKey,
-        midnight_types::EncryptionPublicKey,
-    )],
+    coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     pay_fees: bool,
 ) -> Result<Vec<u8>, ContractError> {
@@ -140,15 +156,14 @@ pub(crate) async fn call_transaction(
         .iter()
         .map(|op| crate::call::reencode(op, "circuit op"))
         .collect::<Result<Vec<helpers::Op<helpers::ResultModeVerify, DefaultDB>>, _>>()?;
-    let pre_transcript = helpers::PreTranscript {
-        context: partition_context(&state_db, helper_addr, block_time),
-        program,
-        comm_comm: None,
-    };
     let chain_parameters = BuilderContext::ledger_parameters(&*context).await;
-    let partitioned = helpers::partition_transcripts(&[pre_transcript], &chain_parameters)
-        .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
-    let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
+    let (guaranteed, fallible) = partition(
+        &state_db,
+        helper_addr,
+        block_time,
+        program,
+        &chain_parameters,
+    )?;
 
     // Commitments the ledger partitioned into the fallible section. A
     // circuit-created coin's Zswap output must ride in the same segment as the
@@ -175,18 +190,17 @@ pub(crate) async fn call_transaction(
     // Value this call mints, per (token, segment). The ledger credits a mint
     // against the offer's balance, so a circuit output covered by one draws
     // nothing from the attached coins and must not be charged to them.
-    let mut minted_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
-        std::collections::BTreeMap::new();
+    let mut mints = Vec::new();
     for (transcript, is_fallible) in [(guaranteed.as_ref(), false), (fallible.as_ref(), true)] {
         let Some(transcript) = transcript else {
             continue;
         };
         for kv in transcript.effects.shielded_mints.iter() {
             let token = helper_addr.custom_shielded_token_type(*kv.0);
-            let minted = minted_value.entry((token, is_fallible)).or_default();
-            *minted = minted.saturating_add(u128::from(*kv.1));
+            mints.push(((token, is_fallible), u128::from(*kv.1)));
         }
     }
+    let minted_value = total_by_key(mints)?;
 
     let guaranteed_payouts = payouts_of(guaranteed.as_ref());
     let fallible_payouts = payouts_of(fallible.as_ref());
@@ -194,7 +208,7 @@ pub(crate) async fn call_transaction(
     // 3. Make the circuit's proving keys resolvable, and prove with the
     //    resolver that finds them.
     let key_location =
-        crate::resolver::register(&hex::encode(contract_address.0.0), circuit_name, &zk_config)?;
+        crate::resolver::register(&format_address(&contract_address), circuit_name, &zk_config)?;
     context.update_resolver(super::resolver::shared()).await;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
@@ -221,17 +235,8 @@ pub(crate) async fn call_transaction(
     //    prototype's private transcript outputs (the ZKIR's private inputs).
     //    Without these, proving a witness-using circuit fails with "ran out of
     //    private transcript outputs".
-    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
-        .arguments
-        .iter()
-        .map(|a| (a.name.name(), a.ty.clone()))
-        .collect();
-    let input: AlignedValue = crate::interpreter::encode_circuit_input(args, &arg_types)?;
-    let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
-        ().into()
-    } else {
-        AlignedValue::concat(&exec_result.communication_outputs)
-    };
+    let input = crate::call::call_input(circuit, args)?;
+    let output = exec_result.output();
     let private_transcript_outputs = exec_result.private_transcript_outputs.clone();
 
     // 5. Build the call action holding only typed values; `build` is infallible.
@@ -253,18 +258,8 @@ pub(crate) async fn call_transaction(
             &mut self,
             rng: &mut helpers::StdRng,
             _context: std::sync::Arc<C>,
-            intent: &helpers::Intent<
-                helpers::Signature,
-                helpers::ProofPreimageMarker,
-                helpers::PedersenRandomness,
-                DefaultDB,
-            >,
-        ) -> helpers::Intent<
-            helpers::Signature,
-            helpers::ProofPreimageMarker,
-            helpers::PedersenRandomness,
-            DefaultDB,
-        > {
+            intent: &helpers::UnprovenIntent<DefaultDB>,
+        ) -> helpers::UnprovenIntent<DefaultDB> {
             use rand::Rng;
 
             let call = ContractCallPrototype {
@@ -323,7 +318,7 @@ pub(crate) async fn call_transaction(
     let build_context = context.clone();
     let mut tx_info =
         StandardTransactionInfo::new_from_context(context, builds.proof_provider(), None);
-    tx_info.add_intent(1, Box::new(intent_info));
+    tx_info.add_intent(INTENT_SEGMENT, Box::new(intent_info));
     // Attach a Zswap output for every coin the circuit created via
     // `createZswapOutput` (shielded mints/sends). Each carries the circuit's
     // exact coin, and a discovery ciphertext when `build_shielded_offer_outputs`
@@ -331,14 +326,14 @@ pub(crate) async fn call_transaction(
     //
     // Route each coin to the offer for the segment its creating op was
     // partitioned into (see `fallible_commitments`): guaranteed coins stay in
-    // the guaranteed offer, fallible coins ride at the intent's segment (1, set
-    // via `add_intent` above). Segment must match or the tx fails
+    // the guaranteed offer, fallible coins ride at the intent's segment
+    // (`INTENT_SEGMENT`). Segment must match or the tx fails
     // `AllCommitmentsSubsetCheckFailure`.
     // Coins the circuit asked to spend via `createZswapInput` (issue #122 gap 3
     // / the `sendShielded` path). Each is spent against `kernel.self()`, so
     // compute its contract-owned commitment to pair it with the matching
     // self-output below into a transient.
-    let self_recipient = helpers::coin_structure::transfer::Recipient::Contract(helper_addr);
+    let self_recipient = Recipient::Contract(helper_addr);
     let mut pending_input_coins: Vec<(helpers::coin_structure::coin::Commitment, ZswapCoinInfo)> =
         Vec::with_capacity(exec_result.zswap_inputs.len());
     for zi in &exec_result.zswap_inputs {
@@ -346,68 +341,56 @@ pub(crate) async fn call_transaction(
         pending_input_coins.push((coin.commitment(&self_recipient), coin));
     }
 
-    let mut guaranteed_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuildContext>>> = Vec::new();
-    let mut fallible_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuildContext>>> = Vec::new();
-    let mut guaranteed_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>> =
-        Vec::new();
-    let mut fallible_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>> = Vec::new();
+    let mut offers = SegmentOffers::new();
     // Routing table for caller-provided shielded inputs: for each circuit
-    // output, its token type and the segment it landed in (`true` = fallible /
-    // segment 1). A caller coin funds the receive/output of the same token, so
-    // its input must ride in that output's segment to balance per-segment.
+    // output, its token type and the segment it landed in (`true` = fallible,
+    // at `INTENT_SEGMENT`). A caller coin funds the receive/output of the same
+    // token, so its input must ride in that output's segment to balance
+    // per-segment.
     let mut output_segments: Vec<(ShieldedTokenType, bool)> = Vec::new();
     // Value the circuit's own outputs draw per (token, segment), against which
     // the attached coins are reconciled below. Transients are excluded: their
     // output and input halves cancel, so they consume none of the attached
     // value.
-    let mut circuit_output_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
-        std::collections::BTreeMap::new();
-    for (commitment, decoded, output) in build_shielded_offer_outputs(
+    let mut drawn = Vec::new();
+    for (commitment, output) in build_shielded_offer_outputs(
         &exec_result.zswap_outputs,
         coin_encryption_keys,
         (change_cpk, change_epk),
     )? {
         let is_fallible = fallible_commitments.contains(&commitment);
-        output_segments.push((decoded.coin.type_, is_fallible));
+        output_segments.push((output.coin.type_, is_fallible));
 
         // A contract-owned output whose commitment matches a pending
         // `createZswapInput` is a coin created and spent in the same call: emit
         // it as a transient (bundled output + spend) instead of a plain output.
-        let paired = if decoded.is_user {
-            None
-        } else {
-            pending_input_coins
+        let paired = match output.recipient {
+            MintRecipient::Contract(contract) => pending_input_coins
                 .iter()
                 .position(|(c, _)| *c == commitment)
+                .map(|idx| (idx, contract)),
+            MintRecipient::User { .. } => None,
         };
-        if let Some(idx) = paired {
+        if let Some((idx, contract)) = paired {
             pending_input_coins.remove(idx);
-            let transient = Box::new(ContractOwnedTransient {
-                coin: decoded.coin,
-                contract: ContractAddress(decoded.recipient_key),
-                segment: if is_fallible { 1 } else { 0 },
-            }) as Box<dyn BuildTransient<DefaultDB, BuildContext>>;
-            if is_fallible {
-                fallible_transients.push(transient);
-            } else {
-                guaranteed_transients.push(transient);
-            }
+            offers
+                .at(is_fallible)
+                .transients
+                .push(Box::new(ContractOwnedTransient {
+                    coin: output.coin,
+                    contract,
+                    segment: if is_fallible {
+                        INTENT_SEGMENT
+                    } else {
+                        helpers::Segment::Guaranteed.into()
+                    },
+                }));
         } else {
-            let drawn = circuit_output_value
-                .entry((decoded.coin.type_, is_fallible))
-                .or_default();
-            *drawn = drawn.checked_add(decoded.coin.value).ok_or_else(|| {
-                ContractError::Construction(
-                    "circuit shielded output values overflow a u128 total".into(),
-                )
-            })?;
-            if is_fallible {
-                fallible_outputs.push(Box::new(output));
-            } else {
-                guaranteed_outputs.push(Box::new(output));
-            }
+            drawn.push(((output.coin.type_, is_fallible), output.coin.value));
+            offers.at(is_fallible).outputs.push(Box::new(output));
         }
     }
+    let circuit_output_value = total_by_key(drawn)?;
 
     // Any `createZswapInput` not paired with a same-call self-output spends a
     // coin already in the contract's Zswap state (a persistent contract-owned
@@ -431,10 +414,7 @@ pub(crate) async fn call_transaction(
         .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
         .await?;
     let circuit_offers = CircuitOffers {
-        guaranteed_outputs,
-        fallible_outputs,
-        guaranteed_transients,
-        fallible_transients,
+        offers,
         output_segments,
         circuit_output_value,
         minted_value,
@@ -457,13 +437,39 @@ pub(crate) async fn call_transaction(
 /// `output_segments` routes those coins, and the two value maps size their
 /// change.
 struct CircuitOffers {
-    guaranteed_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuildContext>>>,
-    fallible_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuildContext>>>,
-    guaranteed_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>>,
-    fallible_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuildContext>>>,
+    offers: SegmentOffers,
     output_segments: Vec<(ShieldedTokenType, bool)>,
     circuit_output_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
     minted_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
+}
+
+/// A call's two Zswap offers: the guaranteed one, and the fallible one at
+/// [`INTENT_SEGMENT`].
+struct SegmentOffers {
+    guaranteed: OfferInfo<DefaultDB, BuildContext>,
+    fallible: OfferInfo<DefaultDB, BuildContext>,
+}
+
+impl SegmentOffers {
+    fn new() -> Self {
+        let empty = || OfferInfo {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            transients: Vec::new(),
+        };
+        Self {
+            guaranteed: empty(),
+            fallible: empty(),
+        }
+    }
+
+    fn at(&mut self, fallible: bool) -> &mut OfferInfo<DefaultDB, BuildContext> {
+        if fallible {
+            &mut self.fallible
+        } else {
+            &mut self.guaranteed
+        }
+    }
 }
 
 /// Attach the reserved `prepared` coins to the circuit's offers, then prove the
@@ -480,34 +486,18 @@ async fn attach_and_prove(
     pay_fees: bool,
 ) -> Result<Vec<u8>, ContractError> {
     let CircuitOffers {
-        mut guaranteed_outputs,
-        mut fallible_outputs,
-        guaranteed_transients,
-        fallible_transients,
+        mut offers,
         output_segments,
         circuit_output_value,
         minted_value,
     } = circuit_offers;
-    let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB, BuildContext>>> = Vec::new();
-    let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB, BuildContext>>> = Vec::new();
-    let mut attached_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
-        std::collections::BTreeMap::new();
+    let mut attached = Vec::new();
     for input in prepared {
         let to_fallible = shielded_input_to_fallible(input.token_type(), &output_segments)?;
-        let attached = attached_value
-            .entry((input.token_type(), to_fallible))
-            .or_default();
-        *attached = attached.checked_add(input.value()).ok_or_else(|| {
-            ContractError::Construction(
-                "attached shielded coin values overflow a u128 total".into(),
-            )
-        })?;
-        if to_fallible {
-            fallible_inputs.push(Box::new(input));
-        } else {
-            guaranteed_inputs.push(Box::new(input));
-        }
+        attached.push(((input.token_type(), to_fallible), input.value()));
+        offers.at(to_fallible).inputs.push(Box::new(input));
     }
+    let attached_value = total_by_key(attached)?;
 
     // Return whatever the attached coins carry beyond what the circuit's outputs
     // draw. Zswap asserts only `balance >= 0` per (token, segment), so a surplus
@@ -518,36 +508,24 @@ async fn attach_and_prove(
     for ((token_type, is_fallible), change) in
         change_due(&attached_value, &circuit_output_value, &minted_value)
     {
-        let output = Box::new(KeyedOutput {
+        offers.at(is_fallible).outputs.push(Box::new(KeyedOutput {
             coin_public_key: change_cpk,
             enc_public_key: change_epk,
             token_type,
             value: change,
-        }) as Box<dyn BuildOutput<DefaultDB, BuildContext>>;
-        if is_fallible {
-            fallible_outputs.push(output);
-        } else {
-            guaranteed_outputs.push(output);
-        }
+        }));
     }
 
-    tx_info.set_guaranteed_offer(OfferInfo {
-        inputs: guaranteed_inputs,
-        outputs: guaranteed_outputs,
-        transients: guaranteed_transients,
-    });
-    if !fallible_outputs.is_empty()
-        || !fallible_inputs.is_empty()
-        || !fallible_transients.is_empty()
+    let SegmentOffers {
+        guaranteed,
+        fallible,
+    } = offers;
+    tx_info.set_guaranteed_offer(guaranteed);
+    if !fallible.outputs.is_empty()
+        || !fallible.inputs.is_empty()
+        || !fallible.transients.is_empty()
     {
-        tx_info.fallible_offers.insert(
-            1,
-            OfferInfo {
-                inputs: fallible_inputs,
-                outputs: fallible_outputs,
-                transients: fallible_transients,
-            },
-        );
+        tx_info.fallible_offers.insert(INTENT_SEGMENT, fallible);
     }
     // Build fee-less, even when this call pays for itself.
     //
@@ -558,9 +536,8 @@ async fn attach_and_prove(
     // the most expensive operation in the SDK, so the circuit's proof is paid
     // for once per iteration rather than once per call. Dust is attached below,
     // after proving, in its own intent segment, which leaves the circuit proof
-    // untouched. A deploy with no shielded offer and a maintenance update are
-    // unaffected: they mock-prove while balancing, which a user circuit cannot
-    // do (upstream `MockProver::check` rejects non-builtin circuits).
+    // untouched. A transaction with no user circuit can take
+    // `super::deploy::build_with_mock_fee_proofs` instead.
     let mut bytes = prove_without_fee(tx_info).await?;
 
     // Fund the already-proven transaction the same way a sponsor funds someone
@@ -585,10 +562,7 @@ pub(super) async fn prove_without_fee(
     let built = super::types::build_no_validate(tx_info)
         .await
         .map_err(ProviderError::Wallet)?;
-    let mut bytes = Vec::new();
-    helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
-    Ok(bytes)
+    crate::call::tagged_bytes(&built.finalized, "transaction")
 }
 
 /// Pick the segment a caller-provided shielded input should ride in: the same
@@ -598,7 +572,7 @@ pub(super) async fn prove_without_fee(
 ///
 /// `output_segments` pairs each circuit-created output's token type with whether
 /// it was partitioned into the fallible segment. Returns `Ok(true)` for fallible
-/// (segment 1), `Ok(false)` for guaranteed (segment 0); defaults to guaranteed
+/// (`INTENT_SEGMENT`), `Ok(false)` for guaranteed; defaults to guaranteed
 /// when no circuit output matches the token (nothing to co-locate with).
 ///
 /// Errors when the circuit creates outputs of this token in *both* segments:
@@ -624,7 +598,7 @@ fn shielded_input_to_fallible(
         (true, true) => Err(ContractError::Construction(format!(
             "cannot route shielded input for token {}: the circuit creates outputs of this token \
              in both the guaranteed and fallible segments, so the input's segment is ambiguous",
-            hex::encode(token_type.0.0)
+            token_type.into_sdk()
         ))),
         (false, true) => Ok(true),
         // Guaranteed match, or no match at all: ride in the guaranteed segment.
@@ -634,44 +608,28 @@ fn shielded_input_to_fallible(
 
 /// A circuit-created shielded coin (`createZswapOutput`) decoded into the
 /// fields a Zswap offer `Output` needs.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct DecodedShieldedOutput {
     /// The coin to mint into the output (nonce, token type/color, value).
     pub coin: ZswapCoinInfo,
-    /// `true` => external user recipient (`ZswapCoinPublicKey`); `false` =>
-    /// contract recipient (`ContractAddress`).
-    pub is_user: bool,
-    /// The recipient's 32-byte key: coin public key (user) or address
-    /// (contract).
-    pub recipient_key: HashOutput,
+    /// The external user (`ZswapCoinPublicKey`) or the contract
+    /// (`ContractAddress`) that receives the coin.
+    pub recipient: Recipient,
 }
 
-/// Read FAB atom `idx` of `av` as a zero-padded 32-byte value. FAB atoms are
-/// zero-trimmed, so a `Bytes<32>`/`HashOutput` atom may be shorter than 32
-/// bytes; pad on the right to recover the fixed-width value.
-///
-/// `what` is the full field context used verbatim in error messages (e.g.
-/// `"shielded output: coin.nonce"`), so callers pass whether it is an input or
-/// an output; this helper stays agnostic.
-fn aligned_atom_bytes32(
-    av: &AlignedValue,
-    idx: usize,
-    what: &str,
-) -> Result<[u8; 32], ContractError> {
-    let atom = av
-        .value
-        .0
-        .get(idx)
-        .ok_or_else(|| ContractError::Construction(format!("{what} missing FAB atom {idx}")))?;
-    if atom.0.len() > 32 {
+/// Decode `value`, a struct the interpreter captured, as `T`. `what` names the
+/// capture in the error.
+fn decode<T>(value: &runtime::Value, what: &str) -> Result<T, ContractError>
+where
+    T: for<'a> TryFrom<&'a ValueSlice, Error = InvalidBuiltinDecode>,
+{
+    let runtime::Value::AlignedValue(av) = value else {
         return Err(ContractError::Construction(format!(
-            "{what} atom is {} bytes, wider than 32",
-            atom.0.len()
+            "{what} is not a struct-encoded value: {value:?}"
         )));
-    }
-    let mut out = [0u8; 32];
-    out[..atom.0.len()].copy_from_slice(&atom.0);
-    Ok(out)
+    };
+    T::try_from(&*av.value)
+        .map_err(|_| ContractError::Construction(format!("{what} does not decode: {value:?}")))
 }
 
 /// Decode a captured [`CircuitZswapOutput`] (the `(coin, recipient)` args of a
@@ -686,57 +644,18 @@ fn aligned_atom_bytes32(
 pub(crate) fn decode_shielded_output(
     output: &runtime::CircuitZswapOutput,
 ) -> Result<DecodedShieldedOutput, ContractError> {
-    let coin_av = match &output.coin {
-        runtime::Value::AlignedValue(av) => av,
-        other => {
-            return Err(ContractError::Construction(format!(
-                "shielded output coin is not a struct-encoded value: {other:?}"
-            )));
-        }
-    };
-    let nonce = aligned_atom_bytes32(coin_av, 0, "shielded output: coin.nonce")?;
-    let color = aligned_atom_bytes32(coin_av, 1, "shielded output: coin.color")?;
-    let value_atom = coin_av.value.0.get(2).ok_or_else(|| {
-        ContractError::Construction("shielded output: coin.value missing FAB atom 2".into())
-    })?;
-    if value_atom.0.len() > 16 {
-        return Err(ContractError::Construction(format!(
-            "shielded output: coin.value atom is {} bytes, wider than a Uint<128>",
-            value_atom.0.len()
-        )));
-    }
-    let mut value_bytes = [0u8; 16];
-    value_bytes[..value_atom.0.len()].copy_from_slice(&value_atom.0);
-    let value = u128::from_le_bytes(value_bytes);
-
-    let recipient_av = match &output.recipient {
-        runtime::Value::AlignedValue(av) => av,
-        other => {
-            return Err(ContractError::Construction(format!(
-                "shielded output recipient is not a struct-encoded value: {other:?}"
-            )));
-        }
-    };
-    // Either.is_left: a Boolean FAB atom — `[1]` for true, empty (trimmed) for
-    // false.
-    let is_left_atom = recipient_av.value.0.first().ok_or_else(|| {
-        ContractError::Construction("shielded output: recipient.is_left missing".into())
-    })?;
-    let is_user = is_left_atom.0.first().copied() == Some(1);
-    let recipient_key = if is_user {
-        aligned_atom_bytes32(recipient_av, 1, "shielded output: recipient.left")?
-    } else {
-        aligned_atom_bytes32(recipient_av, 2, "shielded output: recipient.right")?
-    };
-
+    let coin = decode(&output.coin, "shielded output coin")?;
+    // A tuple, not upstream `Recipient`: the commitment hashes only the chosen
+    // side, so the unused side need not be empty.
+    let (is_left, user, contract): (bool, PublicKey, ContractAddress) =
+        decode(&output.recipient, "shielded output recipient")?;
     Ok(DecodedShieldedOutput {
-        coin: ZswapCoinInfo {
-            nonce: Nonce(HashOutput(nonce)),
-            type_: ShieldedTokenType(HashOutput(color)),
-            value,
+        coin,
+        recipient: if is_left {
+            Recipient::User(user)
+        } else {
+            Recipient::Contract(contract)
         },
-        is_user,
-        recipient_key: HashOutput(recipient_key),
     })
 }
 
@@ -753,34 +672,8 @@ pub(crate) fn decode_shielded_output(
 fn decode_shielded_input(
     input: &runtime::CircuitZswapInput,
 ) -> Result<ZswapCoinInfo, ContractError> {
-    let coin_av = match &input.coin {
-        runtime::Value::AlignedValue(av) => av,
-        other => {
-            return Err(ContractError::Construction(format!(
-                "shielded input coin is not a struct-encoded value: {other:?}"
-            )));
-        }
-    };
-    let nonce = aligned_atom_bytes32(coin_av, 0, "shielded input: coin.nonce")?;
-    let color = aligned_atom_bytes32(coin_av, 1, "shielded input: coin.color")?;
-    let value_atom = coin_av.value.0.get(2).ok_or_else(|| {
-        ContractError::Construction("shielded input: coin.value missing FAB atom 2".into())
-    })?;
-    if value_atom.0.len() > 16 {
-        return Err(ContractError::Construction(format!(
-            "shielded input: coin.value atom is {} bytes, wider than a Uint<128>",
-            value_atom.0.len()
-        )));
-    }
-    let mut value_bytes = [0u8; 16];
-    value_bytes[..value_atom.0.len()].copy_from_slice(&value_atom.0);
-    let value = u128::from_le_bytes(value_bytes);
-
-    Ok(ZswapCoinInfo {
-        nonce: Nonce(HashOutput(nonce)),
-        type_: ShieldedTokenType(HashOutput(color)),
-        value,
-    })
+    let coin: QualifiedInfo = decode(&input.coin, "shielded input coin")?;
+    Ok(ZswapCoinInfo::from(&coin))
 }
 
 /// Where a circuit-minted coin's Zswap output goes.
@@ -805,17 +698,15 @@ enum MintRecipient {
 /// claims (`claimed_shielded_spends`).
 struct MintedCoinOutput {
     coin: ZswapCoinInfo,
-    token_type: ShieldedTokenType,
-    value: u128,
     recipient: MintRecipient,
 }
 
 impl helpers::TokenInfo for MintedCoinOutput {
     fn token_type(&self) -> ShieldedTokenType {
-        self.token_type
+        self.coin.type_
     }
     fn value(&self) -> u128 {
-        self.value
+        self.coin.value
     }
 }
 
@@ -859,8 +750,9 @@ struct ContractOwnedTransient {
     /// The owning contract (`kernel.self()`): recipient of the created output
     /// and origin of the spend.
     contract: ContractAddress,
-    /// The segment the coin's create/spend ops partitioned into (0 = guaranteed,
-    /// 1 = the call's fallible segment). The input and output halves share it.
+    /// The segment the coin's create/spend ops partitioned into: the
+    /// guaranteed segment, or `INTENT_SEGMENT` when fallible. The input and
+    /// output halves share it.
     segment: u16,
 }
 
@@ -887,82 +779,57 @@ impl helpers::BuildTransient<helpers::DefaultDB, helpers::BuildContext> for Cont
     }
 }
 
-/// A circuit-created Zswap offer output, its coin commitment, and the decoded
-/// coin/recipient. The commitment lets [`call_transaction`] route the output to
-/// the offer for the segment the ledger partitioned the coin's creating op into,
-/// and match it against a `createZswapInput` to form a transient; the decoded
-/// fields let it build the transient's coin when they pair.
-type ShieldedOfferOutput = (
-    helpers::coin_structure::coin::Commitment,
-    DecodedShieldedOutput,
-    MintedCoinOutput,
-);
+/// A circuit-created Zswap offer output and its coin commitment. The commitment
+/// lets [`call_transaction`] route the output to the offer for the segment the
+/// ledger partitioned the coin's creating op into, and match it against a
+/// `createZswapInput` to form a transient; the output gives the coin and the
+/// contract of that transient when they pair.
+type ShieldedOfferOutput = (helpers::coin_structure::coin::Commitment, MintedCoinOutput);
 
 /// Turn the coins a circuit created via `createZswapOutput` into Zswap offer
 /// outputs, each paired with its coin commitment.
 ///
 /// An output for a user carries a discovery ciphertext when the recipient's
 /// encryption key is known, so the recipient finds the coin through normal
-/// sync (no `watchFor`). `enc_keys` maps coin public keys to encryption public
-/// keys. `wallet_keys` is the calling wallet's pair, and it applies when
-/// `enc_keys` has no entry for that coin public key. Thus a coin that a circuit
-/// sends to `ownPublicKey()` reaches the wallet with no entry from the caller,
-/// as in midnight-js. An output for another user that `enc_keys` leaves out
-/// has no ciphertext.
+/// sync (no `watchFor`). `coin_encryption_keys` gives the encryption key of
+/// each recipient it lists. `wallet_keys` is the calling wallet's pair, and it
+/// applies when `coin_encryption_keys` has no entry for that coin public key.
+/// Thus a coin that a circuit sends to `ownPublicKey()` reaches the wallet with
+/// no entry from the caller, as in midnight-js. An output for another user that
+/// `coin_encryption_keys` leaves out has no ciphertext.
 ///
 /// The commitment is derived with the same coin-structure `Info::commitment` the
 /// on-chain runtime used to record the transcript's claimed effect, so the two
 /// match by construction and the caller can route each output by segment.
 fn build_shielded_offer_outputs(
     zswap_outputs: &[runtime::CircuitZswapOutput],
-    enc_keys: &[(
-        midnight_types::CoinPublicKey,
-        midnight_types::EncryptionPublicKey,
-    )],
+    coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     wallet_keys: (helpers::CoinPublicKey, helpers::EncryptionPublicKey),
 ) -> Result<Vec<ShieldedOfferOutput>, ContractError> {
-    // Index the mappings once so the per-output lookup is O(1); keyed by the
+    // Index the recipients once so the per-output lookup is O(1); keyed by the
     // coin public key's raw bytes (`HashOutput` inner array).
     let mut epk_by_cpk: std::collections::HashMap<[u8; 32], helpers::EncryptionPublicKey> =
-        enc_keys
+        coin_encryption_keys
             .iter()
-            .map(|(cpk, epk)| (cpk.0.0, epk.into_ledger()))
+            .map(|r| (r.coin_public_key.0.0, r.enc_public_key.into_ledger()))
             .collect();
     let (wallet_cpk, wallet_epk) = wallet_keys;
     epk_by_cpk.entry(wallet_cpk.0.0).or_insert(wallet_epk);
     let mut outputs: Vec<ShieldedOfferOutput> = Vec::with_capacity(zswap_outputs.len());
     for zo in zswap_outputs {
         let decoded = decode_shielded_output(zo)?;
-        let token_type = decoded.coin.type_;
-        let value = decoded.coin.value;
-        let commitment = {
-            let recipient = if decoded.is_user {
-                helpers::coin_structure::transfer::Recipient::User(
-                    helpers::coin_structure::coin::PublicKey(decoded.recipient_key),
-                )
-            } else {
-                helpers::coin_structure::transfer::Recipient::Contract(ContractAddress(
-                    decoded.recipient_key,
-                ))
-            };
-            decoded.coin.commitment(&recipient)
-        };
-        let recipient = if decoded.is_user {
-            let epk = epk_by_cpk.get(&decoded.recipient_key.0).copied();
-            MintRecipient::User {
-                cpk: helpers::CoinPublicKey(decoded.recipient_key),
-                epk,
-            }
-        } else {
-            MintRecipient::Contract(ContractAddress(decoded.recipient_key))
+        let commitment = decoded.coin.commitment(&decoded.recipient);
+        let recipient = match decoded.recipient {
+            Recipient::User(cpk) => MintRecipient::User {
+                cpk,
+                epk: epk_by_cpk.get(&cpk.0.0).copied(),
+            },
+            Recipient::Contract(contract) => MintRecipient::Contract(contract),
         };
         outputs.push((
             commitment,
-            decoded,
             MintedCoinOutput {
                 coin: decoded.coin,
-                token_type,
-                value,
                 recipient,
             },
         ));
@@ -974,6 +841,8 @@ fn build_shielded_offer_outputs(
 mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
+    use helpers::HashOutput;
+    use helpers::coin_structure::coin::Nonce;
 
     /// A transcript claiming one spend of `token` by `recipient`.
     fn transcript_claiming(
@@ -1048,36 +917,22 @@ mod tests {
     /// devnet-E2E concern; this pins the FAB decode mechanics.)
     #[test]
     fn decode_shielded_output_extracts_coin_and_user_recipient() {
-        let nonce = [2u8; 32];
-        let color = [3u8; 32];
-        let value: u128 = 1000;
+        let coin = ZswapCoinInfo {
+            nonce: Nonce(HashOutput([2u8; 32])),
+            type_: ShieldedTokenType(HashOutput([3u8; 32])),
+            value: 1000,
+        };
         let cpk = [4u8; 32];
 
-        let coin = Value::AlignedValue(AlignedValue::concat(
-            [
-                AlignedValue::from(nonce),
-                AlignedValue::from(color),
-                AlignedValue::from(value),
-            ]
-            .iter(),
-        ));
-        let recipient = Value::AlignedValue(AlignedValue::concat(
-            [
-                AlignedValue::from(true),
-                AlignedValue::from(cpk),
-                AlignedValue::from([0u8; 32]),
-            ]
-            .iter(),
-        ));
+        let decoded =
+            decode_shielded_output(&coin_to_user(&coin, cpk)).expect("decode must succeed");
 
-        let decoded = decode_shielded_output(&CircuitZswapOutput { coin, recipient })
-            .expect("decode must succeed");
-
-        assert_eq!(decoded.coin.nonce.0.0, nonce);
-        assert_eq!(decoded.coin.type_.0.0, color);
-        assert_eq!(decoded.coin.value, value);
-        assert!(decoded.is_user, "Either::left is a user recipient");
-        assert_eq!(decoded.recipient_key.0, cpk);
+        assert_eq!(decoded.coin, coin);
+        assert_eq!(
+            decoded.recipient,
+            Recipient::User(PublicKey(HashOutput(cpk))),
+            "Either::left is a user recipient"
+        );
     }
 
     /// The commitment `build_shielded_offer_outputs` returns is the routing key
@@ -1111,11 +966,11 @@ mod tests {
     }
 
     /// A coin that a circuit sends to the calling wallet (`ownPublicKey()`)
-    /// must be findable with no entry from the caller. A coin for another
-    /// unmapped user must not be sealed to the wallet's key, which its
+    /// must be findable with no entry from the caller. A coin for another user
+    /// with no entry must not be sealed to the wallet's key, which its
     /// recipient cannot open.
     #[test]
-    fn only_the_wallets_own_coin_is_sealed_without_a_mapping() {
+    fn only_the_wallets_own_coin_is_sealed_without_an_entry() {
         let wallet = a_wallet();
         let coin = |nonce| ZswapCoinInfo {
             nonce: Nonce(HashOutput(nonce)),
@@ -1134,7 +989,7 @@ mod tests {
 
         let sealed_to: Vec<_> = outputs
             .iter()
-            .map(|(_, _, output)| match output.recipient {
+            .map(|(_, output)| match output.recipient {
                 MintRecipient::User { epk, .. } => epk,
                 MintRecipient::Contract(_) => panic!("both coins go to a user"),
             })

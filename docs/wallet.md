@@ -244,7 +244,9 @@ let balance = provider.balance().await?;
 
 balance.shielded.coins;          // Vec<ShieldedCoinBalance { token_type, value }>
 balance.shielded.total_count;    // usize
+balance.shielded_value(token);   // u128, summed over the coins of one ShieldedTokenType
 balance.unshielded;              // Vec<UnshieldedUtxoInfo { token_type, value }>
+balance.unshielded_value(NIGHT); // u128, summed over the UTXOs of one UnshieldedTokenType
 balance.dust.spendable_utxos;    // usize
 balance.dust.balance_speck;      // u128  (1 DUST = 10^15 SPECK)
 ```
@@ -313,8 +315,7 @@ let result = provider
     .transfer_shielded(token_type, amount, &recipient)
     .build()
     .await?;
-// result: TransferResult { tx_bytes, ledger_version, spent_unshielded_inputs,
-//                          spent_shielded_inputs, spent_dust, fee_speck, reserved_at }
+// result: TransferResult { tx_bytes, ledger_version, spent, fee_speck }
 println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / SPECKS_PER_DUST as f64);
 let pending = provider.submit(&result.tx_bytes).await?;
 ```

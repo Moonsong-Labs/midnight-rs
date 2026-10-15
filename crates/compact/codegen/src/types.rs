@@ -44,6 +44,7 @@ fn version_family(version: &str) -> Option<String> {
 }
 
 #[derive(Debug)]
+#[cfg_attr(test, derive(Default))]
 pub struct ContractInfo {
     pub compiler_version: String,
     pub runtime_version: String,
@@ -123,10 +124,6 @@ impl LedgerField {
             FieldIndex::Single(i) => Some(*i),
             FieldIndex::Path(_) => None,
         }
-    }
-
-    pub fn field_index(&self) -> Option<FieldIndex> {
-        Some(self.index.clone())
     }
 }
 

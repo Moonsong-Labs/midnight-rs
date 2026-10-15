@@ -17,11 +17,6 @@ mod contract {
     );
 }
 
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/shielded-mint/compiled"
-);
-
 /// Mint `amount` units of a fresh shielded token to `recipient` and wait for
 /// `recipient_provider` to discover the coin through normal sync, returning the
 /// minted token's type. `minter` deploys the contract and pays the fees.
@@ -38,26 +33,18 @@ pub async fn mint_token_to(
     use midnight_core::compact_bindgen::Bytes;
     use rand::Rng;
 
-    let pending = contract::Contract::deploy(minter)
+    let mint = contract::Contract::deploy(minter)
         .with_initial_state(contract::LedgerInitialState)
-        .with_zk_config(ZK_KEYS_DIR)
-        .send()
+        .with_zk_config(contract::ZK_CONFIG_DIR)
         .await?;
-    let (_best, pending) = pending.wait_best().await?;
-    let mint = pending.into_contract().await?;
 
     let shielded = recipient.shielded_recipient();
-    let coin_pk = shielded.coin_public_key;
-    let enc_pk = shielded.enc_public_key;
     let domain_sep = Bytes([0x22u8; 32]);
     // Fresh nonce per run so the coin (and the example) stays re-runnable.
     let nonce = Bytes(rand::thread_rng().r#gen::<[u8; 32]>());
-    let coin_pk_arg = contract::ZswapCoinPublicKey {
-        bytes: Bytes(coin_pk.0.0),
-    };
     mint.circuits()
-        .with_coin_encryption_keys([(coin_pk, enc_pk)])
-        .mint(domain_sep, amount, nonce, coin_pk_arg)
+        .with_coin_encryption_keys([shielded])
+        .mint(domain_sep, amount, nonce, shielded.coin_public_key.into())
         .await?;
 
     let minted = |c: &ShieldedCoinBalance| c.value == amount as u128;

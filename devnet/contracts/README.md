@@ -28,7 +28,7 @@ The SDK reads no other compiler output, so `make compile-contracts` drops the re
 
 ## Use a contract from a crate
 
-Give the artifact path to `contract!`, and the `compiled/` directory to `with_zk_config`. The macro resolves its path against the `Cargo.toml` directory of the crate. `with_zk_config` resolves a relative path against the working directory of the process, so the examples build the path from `CARGO_MANIFEST_DIR`:
+Give the artifact path to `contract!`. The macro resolves it against the `Cargo.toml` directory of the crate. It also emits `ZK_CONFIG_DIR`, the absolute path of `compiled/` on the build machine, so a binary that runs on another machine passes its own directory. Pass the const to `with_zk_config`:
 
 ```rust
 mod counter {
@@ -37,10 +37,7 @@ mod counter {
 
 let contract = counter::Contract::deploy(&provider)
     .with_initial_state(counter::LedgerInitialState::default())
-    .with_zk_config(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../devnet/contracts/counter/compiled"
-    ))
+    .with_zk_config(counter::ZK_CONFIG_DIR)
     .await?;
 ```
 

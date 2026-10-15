@@ -4,7 +4,7 @@
 use std::io::Cursor;
 
 use midnight_onchain_runtime::state::ContractMaintenanceVerifyingKey;
-use midnight_serialize::{Tagged, peek_tag, tagged_deserialize, tagged_serialize};
+use midnight_serialize::{Tagged, peek_tag, tagged_deserialize};
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use super::helpers;
@@ -54,9 +54,10 @@ pub(crate) fn from_view(
     for entry in view.operations.iter() {
         let (entry_point, op) = &*entry;
         let circuit = String::from_utf8_lossy(&entry_point.0).into_owned();
+        let what = format!("verifier key {circuit}");
         let key = match (&op.v2, &op.v3) {
-            (Some(key), _) => Some(encoded(key, &circuit)?),
-            (None, Some(key)) => Some(encoded(key, &circuit)?),
+            (Some(key), _) => Some(crate::call::tagged_bytes(key, &what)?),
+            (None, Some(key)) => Some(crate::call::tagged_bytes(key, &what)?),
             (None, None) => None,
         };
         let native = match key {
@@ -88,16 +89,6 @@ pub(crate) fn from_view(
     };
 
     Ok(helpers::ContractState::new(data, operations, authority))
-}
-
-fn encoded<T: midnight_serialize::Serializable + Tagged>(
-    key: &T,
-    circuit: &str,
-) -> Result<Vec<u8>, ContractError> {
-    let mut bytes = Vec::new();
-    tagged_serialize(key, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("verifier key {circuit}: {e}")))?;
-    Ok(bytes)
 }
 
 /// The operation that verifies `circuit`'s proofs against `verifier_key`, the

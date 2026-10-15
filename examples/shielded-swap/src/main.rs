@@ -28,7 +28,7 @@
 mod mint;
 
 use anyhow::{Context, ensure};
-use midnight_core::provider::{ShieldedCoinBalance, ShieldedTokenType, WalletBalance};
+use midnight_core::provider::WalletBalance;
 use midnight_core::{MidnightProvider, Seed, Wallet, WalletBuilder};
 
 fn env_or(name: &str, default: &str) -> String {
@@ -67,15 +67,6 @@ async fn resync_until(
     }
 }
 
-/// Total spendable value of one shielded token in a balance's coin set.
-fn shielded_total(coins: &[ShieldedCoinBalance], token: ShieldedTokenType) -> u128 {
-    coins
-        .iter()
-        .filter(|c| c.token_type == token)
-        .map(|c| c.value)
-        .sum()
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Shielded Swap Example (A and B trade two tokens) ===\n");
@@ -106,15 +97,15 @@ async fn main() -> anyhow::Result<()> {
     println!("Setup: A holds token X, B holds token Y (minted).\n");
 
     // Snapshot both wallets so the final check proves both tokens actually moved.
-    let a_before = provider_a.balance().await?.shielded.coins;
-    let b_before = provider_b.balance().await?.shielded.coins;
+    let a_before = provider_a.balance().await?;
+    let b_before = provider_b.balance().await?;
     let (a_x0, a_y0) = (
-        shielded_total(&a_before, token_x),
-        shielded_total(&a_before, token_y),
+        a_before.shielded_value(token_x),
+        a_before.shielded_value(token_y),
     );
     let (b_x0, b_y0) = (
-        shielded_total(&b_before, token_x),
-        shielded_total(&b_before, token_y),
+        b_before.shielded_value(token_x),
+        b_before.shielded_value(token_y),
     );
     println!("pre-swap:  A[X={a_x0}, Y={a_y0}]  B[X={b_x0}, Y={b_y0}]\n");
 
@@ -139,25 +130,15 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Both wallets resync and the balances reflect the exchange.
-    let a_after = resync_until(&provider_a, |b| {
-        shielded_total(&b.shielded.coins, token_y) != a_y0
-    })
-    .await?
-    .shielded
-    .coins;
-    let b_after = resync_until(&provider_b, |b| {
-        shielded_total(&b.shielded.coins, token_x) != b_x0
-    })
-    .await?
-    .shielded
-    .coins;
+    let a_after = resync_until(&provider_a, |b| b.shielded_value(token_y) != a_y0).await?;
+    let b_after = resync_until(&provider_b, |b| b.shielded_value(token_x) != b_x0).await?;
     let (a_x1, a_y1) = (
-        shielded_total(&a_after, token_x),
-        shielded_total(&a_after, token_y),
+        a_after.shielded_value(token_x),
+        a_after.shielded_value(token_y),
     );
     let (b_x1, b_y1) = (
-        shielded_total(&b_after, token_x),
-        shielded_total(&b_after, token_y),
+        b_after.shielded_value(token_x),
+        b_after.shielded_value(token_y),
     );
     println!("post-swap: A[X={a_x1}, Y={a_y1}]  B[X={b_x1}, Y={b_y1}]");
 

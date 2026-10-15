@@ -5,9 +5,10 @@
 //! next at a hard fork.
 
 use midnight_helpers::ledger_9 as helpers;
+use midnight_types::WalletError;
 use midnight_types::ledger_9 as types;
-use midnight_types::{LedgerVersion, WalletError};
 use midnight_wallet_facade::ledger_9 as facade;
+use types::LEDGER;
 
 #[path = "per_ledger/balance.rs"]
 mod balance;
@@ -23,9 +24,6 @@ pub mod state;
 mod transfer;
 
 pub use state::{ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, Wallet};
-
-/// The generation this module keeps a wallet in.
-pub(crate) const LEDGER: LedgerVersion = LedgerVersion::V9;
 
 /// The state of `wallet`, when it is in this generation.
 fn wallet_state(wallet: &crate::Wallet) -> Result<&Wallet, WalletError> {

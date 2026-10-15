@@ -13,8 +13,13 @@ use crate::types::TransactionHash;
 use midnight_types::SpentInputs;
 use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
+use subxt::tx::{TransactionInBlock, TransactionStatus};
 
 use crate::ProviderError;
+
+type AtBlock = subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>;
+type Status = TransactionStatus<subxt::SubstrateConfig, AtBlock>;
+type InBlock = TransactionInBlock<subxt::SubstrateConfig, AtBlock>;
 
 /// Whether a terminal status proves the transaction will never be included, so
 /// the inputs it reserved can be handed back.
@@ -121,10 +126,7 @@ impl SubmitError {
     /// surfaces. Returns `None` for non-terminal statuses and for the two
     /// success terminals (`InBestBlock` / `InFinalizedBlock`), which the
     /// wait loops handle themselves.
-    fn from_terminal_status<T: subxt::Config, C>(
-        status: &subxt::tx::TransactionStatus<T, C>,
-    ) -> Option<Self> {
-        use subxt::tx::TransactionStatus;
+    fn from_terminal_status<T: subxt::Config, C>(status: &TransactionStatus<T, C>) -> Option<Self> {
         match status {
             TransactionStatus::Invalid { message } => Some(Self::Invalid {
                 message: message.clone(),
@@ -311,10 +313,7 @@ impl std::fmt::Display for Verdict {
 /// retract the transaction from the mempool; the node keeps it queued
 /// until it lands in a block or is dropped by the node itself.
 pub struct PendingTx {
-    progress: subxt::tx::TransactionProgress<
-        subxt::SubstrateConfig,
-        subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
-    >,
+    progress: subxt::tx::TransactionProgress<subxt::SubstrateConfig, AtBlock>,
     reservation: Option<Reservation>,
     transaction_hash: TransactionHash,
 }
@@ -383,27 +382,9 @@ impl PendingTx {
     /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
     /// the [`SubmitError`] kinds of the other failures and what each implies
     /// about retrying.
-    pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ProviderError> {
-        use subxt::tx::TransactionStatus;
-        while let Some(status) = self.progress.next().await {
-            let status = status.map_err(SubmitError::watch)?;
-            if let Some(err) = SubmitError::from_terminal_status(&status) {
-                // Taken by value: holding a borrow of `self` across the await
-                // would make this future require `PendingTx: Sync`, which the
-                // watch stream is not.
-                if rejection_is_definitive(&err)
-                    && let Some(reservation) = self.reservation.take()
-                {
-                    reservation.release().await;
-                }
-                return Err(err.into());
-            }
-            if let TransactionStatus::InBestBlock(in_block) = status {
-                let tx = tx_in_block_with_verdict(&in_block, self.transaction_hash).await?;
-                return Ok((applied(tx)?, self));
-            }
-        }
-        Err(SubmitError::stream_ended("reaching best block").into())
+    pub async fn wait_best(self) -> Result<(TxInBlock, Self), ProviderError> {
+        self.wait_for(TransactionStatus::as_in_block, "reaching best block")
+            .await
     }
 
     /// Drive the watch stream until the transaction is in a finalized block,
@@ -418,8 +399,16 @@ impl PendingTx {
     /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
     /// the [`SubmitError`] kinds of the other failures and what each implies
     /// about retrying.
-    pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ProviderError> {
-        use subxt::tx::TransactionStatus;
+    pub async fn wait_finalized(self) -> Result<(TxInBlock, Self), ProviderError> {
+        self.wait_for(TransactionStatus::as_finalized, "finalization")
+            .await
+    }
+
+    async fn wait_for(
+        mut self,
+        landed: fn(&Status) -> Option<&InBlock>,
+        awaiting: &'static str,
+    ) -> Result<(TxInBlock, Self), ProviderError> {
         while let Some(status) = self.progress.next().await {
             let status = status.map_err(SubmitError::watch)?;
             if let Some(err) = SubmitError::from_terminal_status(&status) {
@@ -433,12 +422,12 @@ impl PendingTx {
                 }
                 return Err(err.into());
             }
-            if let TransactionStatus::InFinalizedBlock(in_block) = status {
-                let tx = tx_in_block_with_verdict(&in_block, self.transaction_hash).await?;
+            if let Some(in_block) = landed(&status) {
+                let tx = tx_in_block_with_verdict(in_block, self.transaction_hash).await?;
                 return Ok((applied(tx)?, self));
             }
         }
-        Err(SubmitError::stream_ended("finalization").into())
+        Err(SubmitError::stream_ended(awaiting).into())
     }
 }
 
@@ -447,10 +436,7 @@ impl PendingTx {
 /// `Failure` when neither is present (the dispatch errored and only
 /// `System::ExtrinsicFailed` was emitted).
 async fn tx_in_block_with_verdict(
-    in_block: &subxt::tx::TransactionInBlock<
-        subxt::SubstrateConfig,
-        subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
-    >,
+    in_block: &InBlock,
     transaction_hash: TransactionHash,
 ) -> Result<TxInBlock, ProviderError> {
     let block_hash = in_block.block_hash().0;
@@ -496,10 +482,7 @@ async fn tx_in_block_with_verdict(
 /// a crash between submit and record would leave a transaction on the wire
 /// with no local handle to reconcile it.
 pub struct PreparedTx {
-    tx: subxt::tx::SubmittableTransaction<
-        subxt::SubstrateConfig,
-        subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
-    >,
+    tx: subxt::tx::SubmittableTransaction<subxt::SubstrateConfig, AtBlock>,
     transaction_hash: TransactionHash,
 }
 
@@ -589,30 +572,30 @@ mod tests {
         ProviderError::Submission(e)
     }
 
+    fn every_variant() -> [SubmitError; 7] {
+        let m = || "x".to_string();
+        [
+            SubmitError::NotSubmitted { message: m() },
+            SubmitError::SubmitRpc { message: m() },
+            SubmitError::Invalid {
+                message: m(),
+                code: None,
+            },
+            SubmitError::Dropped { message: m() },
+            SubmitError::NodeError { message: m() },
+            SubmitError::WatchStream { message: m() },
+            SubmitError::VerdictFetch { message: m() },
+        ]
+    }
+
     /// The wait site is where a node's rejection arrives, and it is the only
     /// place a reservation can be freed on one. Freeing on a status that still
     /// permits inclusion would let a later build spend the same coins.
     #[test]
     fn only_a_definitive_rejection_frees_inputs_at_the_wait_site() {
-        let m = || "x".to_string();
-
-        assert!(rejection_is_definitive(&SubmitError::Invalid {
-            message: m(),
-            code: None
-        }));
-
-        for still_possible in [
-            SubmitError::Dropped { message: m() },
-            SubmitError::NodeError { message: m() },
-            SubmitError::WatchStream { message: m() },
-            SubmitError::VerdictFetch { message: m() },
-            SubmitError::SubmitRpc { message: m() },
-            SubmitError::NotSubmitted { message: m() },
-        ] {
-            assert!(
-                !rejection_is_definitive(&still_possible),
-                "only Invalid rules out inclusion"
-            );
+        for e in every_variant() {
+            let expected = matches!(e, SubmitError::Invalid { .. });
+            assert_eq!(rejection_is_definitive(&e), expected, "{e:?}");
         }
     }
 
@@ -623,27 +606,9 @@ mod tests {
     /// it.
     #[test]
     fn only_a_failed_submission_frees_inputs_at_the_submit_site() {
-        let m = || "x".to_string();
-
-        assert!(never_reached_the_node(&err(SubmitError::NotSubmitted {
-            message: m()
-        })));
-
-        for ambiguous in [
-            SubmitError::SubmitRpc { message: m() },
-            SubmitError::Invalid {
-                message: m(),
-                code: None,
-            },
-            SubmitError::Dropped { message: m() },
-            SubmitError::NodeError { message: m() },
-            SubmitError::WatchStream { message: m() },
-            SubmitError::VerdictFetch { message: m() },
-        ] {
-            assert!(
-                !never_reached_the_node(&err(ambiguous)),
-                "only NotSubmitted proves the transaction never left"
-            );
+        for e in every_variant() {
+            let expected = matches!(e, SubmitError::NotSubmitted { .. });
+            assert_eq!(never_reached_the_node(&err(e.clone())), expected, "{e:?}");
         }
 
         assert!(!never_reached_the_node(&ProviderError::NoWallet));
@@ -651,7 +616,6 @@ mod tests {
 
     use super::*;
     use subxt::SubstrateConfig;
-    use subxt::tx::TransactionStatus;
 
     /// The client type parameter is irrelevant for the terminal-status
     /// variants, which only carry a message.

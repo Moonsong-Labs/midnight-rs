@@ -67,20 +67,6 @@ pub struct ShieldedPayment {
     pub value: u128,
 }
 
-/// The total value of each token in `values`.
-pub(crate) fn value_by_token(
-    values: impl IntoIterator<Item = (ShieldedTokenType, u128)>,
-) -> Result<BTreeMap<ShieldedTokenType, u128>, ContractError> {
-    let mut totals = BTreeMap::new();
-    for (token_type, value) in values {
-        let total: &mut u128 = totals.entry(token_type).or_default();
-        *total = total.checked_add(value).ok_or_else(|| {
-            ContractError::Construction("shielded offer values overflow a u128 total".into())
-        })?;
-    }
-    Ok(totals)
-}
-
 /// Refuse an offer whose outputs pay more of a token than its coins hold.
 ///
 /// `held` and `paid` are the totals of each token. The check walks the paid

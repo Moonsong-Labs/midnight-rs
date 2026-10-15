@@ -8,15 +8,13 @@
 
 use std::time::Duration;
 
-use midnight_indexer_client::testutil::{accept_subscriber, accept_ws, bind, next_json, send_json};
+use midnight_indexer_client::testutil::{
+    accept_subscriber, accept_ws, bind, next_json, send_json, send_next,
+};
 use midnight_indexer_client::{GraphQLError, IndexerError, SubscriptionClient};
 use serde_json::json;
 
 const QUERY: &str = "subscription { events { value } }";
-
-fn next_msg(sub_id: &str, data: serde_json::Value) -> serde_json::Value {
-    json!({"type": "next", "id": sub_id, "payload": {"data": data}})
-}
 
 async fn recv(
     sub: &mut midnight_indexer_client::Subscription<serde_json::Value>,
@@ -31,8 +29,7 @@ async fn events_flow_and_client_pings_a_quiet_server() {
     let (listener, url) = bind().await;
     let server = tokio::spawn(async move {
         let (mut ws, sub) = accept_subscriber(&listener).await;
-        let sub_id = sub["id"].as_str().unwrap().to_string();
-        send_json(&mut ws, &next_msg(&sub_id, json!({"value": 1}))).await;
+        send_next(&mut ws, &sub, json!({"value": 1})).await;
         // Go silent until the client's keepalive ping arrives; answer with
         // pong, then prove the connection survived by sending more data.
         loop {
@@ -42,7 +39,7 @@ async fn events_flow_and_client_pings_a_quiet_server() {
                 break;
             }
         }
-        send_json(&mut ws, &next_msg(&sub_id, json!({"value": 2}))).await;
+        send_next(&mut ws, &sub, json!({"value": 2})).await;
         // Hold the socket open until the client disconnects.
         while next_json(&mut ws).await.is_some() {}
     });
@@ -97,8 +94,7 @@ async fn abrupt_server_drop_yields_retryable_transport_error() {
     let (listener, url) = bind().await;
     let server = tokio::spawn(async move {
         let (mut ws, sub) = accept_subscriber(&listener).await;
-        let sub_id = sub["id"].as_str().unwrap().to_string();
-        send_json(&mut ws, &next_msg(&sub_id, json!({"value": 7}))).await;
+        send_next(&mut ws, &sub, json!({"value": 7})).await;
         // Drop the socket without a close handshake.
         drop(ws);
     });
@@ -158,7 +154,7 @@ async fn graphql_errors_in_a_next_frame_end_the_stream_with_err() {
     let server = tokio::spawn(async move {
         let (mut ws, sub) = accept_subscriber(&listener).await;
         let sub_id = sub["id"].as_str().unwrap().to_string();
-        send_json(&mut ws, &next_msg(&sub_id, json!({"value": 1}))).await;
+        send_next(&mut ws, &sub, json!({"value": 1})).await;
         send_json(
             &mut ws,
             &json!({

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{CoinPublicKey, EncryptionPublicKey};
 
-use super::call::prove_without_fee;
+use super::call::{INTENT_SEGMENT, prove_without_fee};
 use super::helpers;
 use super::provider::Builds;
 use super::shielded::KeyedOutput;
@@ -18,10 +18,10 @@ use helpers::{
 };
 
 use crate::ShieldedOffer;
-use crate::change::change_due;
+use crate::change::{change_due, total_by_key};
 use crate::deploy::DeployResult;
 use crate::error::ContractError;
-use crate::offer::{refuse_shortfall, value_by_token};
+use crate::offer::refuse_shortfall;
 
 /// Deploy `initial_state` with Dust fee payment from the provider's funded
 /// wallet. See [`crate::deploy::deploy_funded`].
@@ -46,46 +46,57 @@ pub(crate) async fn deploy_funded(
             &mut self,
             _rng: &mut helpers::StdRng,
             _context: Arc<C>,
-            intent: &helpers::Intent<
-                helpers::Signature,
-                helpers::ProofPreimageMarker,
-                helpers::PedersenRandomness,
-                DefaultDB,
-            >,
-        ) -> helpers::Intent<
-            helpers::Signature,
-            helpers::ProofPreimageMarker,
-            helpers::PedersenRandomness,
-            DefaultDB,
-        > {
+            intent: &helpers::UnprovenIntent<DefaultDB>,
+        ) -> helpers::UnprovenIntent<DefaultDB> {
             intent.add_deploy(self.deploy.clone())
         }
     }
 
-    let intent_info: IntentInfo<DefaultDB, BuildContext> = IntentInfo {
-        guaranteed_unshielded_offer: None,
-        fallible_unshielded_offer: None,
-        actions: vec![Box::new(DeployAction { deploy })],
-    };
-
-    let mut tx_info =
-        StandardTransactionInfo::new_from_context(context.clone(), builds.proof_provider(), None);
-    tx_info.add_intent(1, Box::new(intent_info));
-
+    let tx_info = single_action_tx_info(builds, context.clone(), DeployAction { deploy });
     let tx_bytes = match shielded_offer {
-        None => {
-            tx_info.set_guaranteed_offer(OfferInfo {
-                inputs: vec![],
-                outputs: vec![],
-                transients: vec![],
-            });
-            tx_info.use_mock_proofs_for_fees(true);
-            builds.build_funded(tx_info).await?.tx_bytes
-        }
+        None => build_with_mock_fee_proofs(builds, tx_info).await?,
         Some(offer) => Box::pin(offer_transaction(builds, &context, tx_info, offer)).await?,
     };
 
     Ok(DeployResult { address, tx_bytes })
+}
+
+/// The transaction info for one intent, at [`INTENT_SEGMENT`], that holds
+/// `action` alone.
+pub(super) fn single_action_tx_info(
+    builds: &Builds<'_>,
+    context: Arc<BuildContext>,
+    action: impl BuildContractAction<DefaultDB, BuildContext> + 'static,
+) -> StandardTransactionInfo<DefaultDB, BuildContext> {
+    let mut tx_info =
+        StandardTransactionInfo::new_from_context(context, builds.proof_provider(), None);
+    tx_info.add_intent(
+        INTENT_SEGMENT,
+        Box::new(IntentInfo {
+            guaranteed_unshielded_offer: None,
+            fallible_unshielded_offer: None,
+            actions: vec![Box::new(action)],
+        }),
+    );
+    tx_info
+}
+
+/// Build `tx_info` with an empty guaranteed offer, pay its fee, and serialize
+/// the result. The wallet balances the fee against mock proofs.
+///
+/// Only a transaction with no user circuit can take this path: upstream
+/// `MockProver::check` rejects a circuit that is not built in.
+pub(super) async fn build_with_mock_fee_proofs(
+    builds: &Builds<'_>,
+    mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+) -> Result<Vec<u8>, ContractError> {
+    tx_info.set_guaranteed_offer(OfferInfo {
+        inputs: vec![],
+        outputs: vec![],
+        transients: vec![],
+    });
+    tx_info.use_mock_proofs_for_fees(true);
+    Ok(builds.build_funded(tx_info).await?.tx_bytes)
 }
 
 /// Add `offer` to the deploy in `tx_info`, prove it, and pay its fee.
@@ -133,12 +144,12 @@ async fn pay_offer(
     prepared: Vec<PreparedInput>,
     (change_cpk, change_epk): (CoinPublicKey, EncryptionPublicKey),
 ) -> Result<Vec<u8>, ContractError> {
-    let held_value = value_by_token(
+    let held_value = total_by_key(
         prepared
             .iter()
             .map(|input| (input.token_type().into_sdk(), input.value())),
     )?;
-    let paid_value = value_by_token(
+    let paid_value = total_by_key(
         offer
             .outputs
             .iter()

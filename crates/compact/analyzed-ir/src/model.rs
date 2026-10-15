@@ -147,6 +147,15 @@ pub enum FieldType {
     Scalar(Curve),
 }
 
+impl FieldType {
+    /// Whether values of this field compute in the native scalar field. The
+    /// compiler distinguishes the Jubjub scalar field from the native one,
+    /// but they share a modulus, so both compute identically.
+    pub fn is_native(&self) -> bool {
+        matches!(self, FieldType::Native | FieldType::Scalar(Curve::Jubjub))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Curve {
     Jubjub,
@@ -223,16 +232,6 @@ impl Type {
     /// circuit that returns nothing.
     pub fn is_unit(&self) -> bool {
         matches!(self.resolved(), Type::Tuple(types) if types.is_empty())
-    }
-
-    /// Whether values of this type are computed in the native scalar field.
-    /// The compiler distinguishes the Jubjub scalar field from the native
-    /// one, but they share a modulus, so both compute identically.
-    pub fn is_native_field(&self) -> bool {
-        matches!(
-            self.resolved(),
-            Type::Field(FieldType::Native) | Type::Field(FieldType::Scalar(Curve::Jubjub))
-        )
     }
 }
 
@@ -711,8 +710,8 @@ mod type_tests {
 
     #[test]
     fn the_jubjub_scalar_field_computes_as_the_native_field() {
-        assert!(Type::Field(FieldType::Native).is_native_field());
-        assert!(Type::Field(FieldType::Scalar(Curve::Jubjub)).is_native_field());
-        assert!(!Type::Field(FieldType::Scalar(Curve::Secp256k1)).is_native_field());
+        assert!(FieldType::Native.is_native());
+        assert!(FieldType::Scalar(Curve::Jubjub).is_native());
+        assert!(!FieldType::Scalar(Curve::Secp256k1).is_native());
     }
 }

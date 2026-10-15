@@ -24,7 +24,7 @@ use num_bigint::{BigInt, BigUint};
 // through `midnight_contract::runtime` (see lib.rs), not this module.
 use compact_runtime::{
     CircuitZswapInput, CircuitZswapOutput, ExecutionResult, InterpreterError, NoWitnesses, Value,
-    WitnessContext, WitnessNative, WitnessOutcome, WitnessProvider, integer_fallback_aligned,
+    WitnessContext, WitnessNative, WitnessOutcome, WitnessProvider,
 };
 // Value/builtin helpers used internally by the tree-walk (arithmetic,
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
@@ -74,19 +74,27 @@ impl<'a> Program<'a> {
         self.circuits.get(id).copied()
     }
 
-    /// What a `call` name resolves to.
+    /// The declaration that a `call` name refers to.
     ///
     /// A circuit wins over everything else: a circuit that shadows a native's
     /// name is a distinct identifier, and the call site names it directly.
-    fn callee(&self, id: &ir::Ident) -> Callee<'a> {
-        if let Some(c) = self.circuits.get(id.0.as_str()).copied() {
-            return Callee::Circuit(c);
+    fn declaration(&self, id: &ir::Ident) -> Option<Decl<'a>> {
+        if let Some(c) = self.circuit(&id.0) {
+            return Some(Decl::Circuit(c));
         }
-        match self.natives.get(id.0.as_str()) {
-            Some(n) if n.class == "witness" => Callee::Witness,
-            Some(_) => Callee::Pure,
-            None if self.witnesses.contains_key(id.name()) => Callee::Witness,
-            None => Callee::Pure,
+        if let Some(n) = self.natives.get(id.0.as_str()).copied() {
+            return Some(Decl::Native(n));
+        }
+        self.witnesses.get(id.name()).copied().map(Decl::Witness)
+    }
+
+    /// What a `call` name resolves to.
+    fn callee(&self, id: &ir::Ident) -> Callee<'a> {
+        match self.declaration(id) {
+            Some(Decl::Circuit(c)) => Callee::Circuit(c),
+            Some(Decl::Native(n)) if n.class == "witness" => Callee::Witness,
+            Some(Decl::Witness(_)) => Callee::Witness,
+            Some(Decl::Native(_)) | None => Callee::Pure,
         }
     }
 
@@ -99,9 +107,9 @@ impl<'a> Program<'a> {
     where
         'a: 'b,
     {
-        match self.natives.get(id.0.as_str()) {
-            Some(n) => n.entry.strip_prefix(RUNTIME_MODULE).unwrap_or(&n.entry),
-            None => id.name(),
+        match self.declaration(id) {
+            Some(Decl::Native(n)) => n.entry.strip_prefix(RUNTIME_MODULE).unwrap_or(&n.entry),
+            _ => id.name(),
         }
     }
 
@@ -109,29 +117,28 @@ impl<'a> Program<'a> {
     /// argument order, which a builtin encodes its arguments at. An undeclared
     /// callee has none.
     fn argument_types(&self, id: &ir::Ident) -> Vec<Type> {
-        let arguments = match self.natives.get(id.0.as_str()) {
-            Some(n) => &n.arguments,
-            None => match self.witnesses.get(id.name()) {
-                Some(w) => &w.arguments,
-                None => return Vec::new(),
-            },
+        let arguments = match self.declaration(id) {
+            Some(Decl::Native(n)) => &n.arguments,
+            Some(Decl::Witness(w)) => &w.arguments,
+            Some(Decl::Circuit(_)) | None => return Vec::new(),
         };
         arguments.iter().map(|a| a.ty.clone()).collect()
     }
 
     /// The callee's declared result type, which the call site's static type is.
     fn result_type(&self, id: &ir::Ident) -> Option<&'a Type> {
-        if let Some(c) = self.circuits.get(id.0.as_str()).copied() {
-            return Some(&c.result_type);
-        }
-        if let Some(n) = self.natives.get(id.0.as_str()).copied() {
-            return Some(&n.result_type);
-        }
-        self.witnesses
-            .get(id.name())
-            .copied()
-            .map(|w| &w.result_type)
+        Some(match self.declaration(id)? {
+            Decl::Circuit(c) => &c.result_type,
+            Decl::Native(n) => &n.result_type,
+            Decl::Witness(w) => &w.result_type,
+        })
     }
+}
+
+enum Decl<'a> {
+    Circuit(&'a ir::Circuit),
+    Native(&'a ir::Native),
+    Witness(&'a ir::Witness),
 }
 
 /// What a `call` name resolves to.
@@ -260,7 +267,6 @@ pub fn execute(
         local_types,
         reads: Vec::new(),
         gather_ops: Vec::new(),
-        communication_outputs: Vec::new(),
         private_transcript_outputs: Vec::new(),
         zswap_outputs: Vec::new(),
         zswap_inputs: Vec::new(),
@@ -273,67 +279,39 @@ pub fn execute(
 
     // The circuit's value is its body's value (the compiler lowers `return
     // disclose(x)` into the body's final expression).
-    let result_value = Some(eval_expr(&mut ctx, &circuit.body)?);
+    let result = eval_expr(&mut ctx, &circuit.body)?;
 
-    // If no explicit disclose() calls were recorded, but the circuit has
-    // an implicit return value, use that as the communication output.
-    // This handles the case where the compiler lowers `return disclose(x)`
-    // into the body without a separate disclose() call.
-    //
     // The encoding must match the circuit's declared result type: the
     // canonical runtime encodes the output through the result descriptor, so
     // a `Field`-returning circuit binds a field-aligned output even when the
     // value is small.
-    let mut comm_outputs = ctx.communication_outputs;
-    if comm_outputs.is_empty()
-        && let Some(ref val) = result_value
-        && !matches!(val, Value::Void)
-    {
-        comm_outputs.push(encode_typed(val, &circuit.result_type)?);
-    }
+    let communication_outputs = if matches!(result, Value::Void) {
+        Vec::new()
+    } else {
+        vec![encode_typed(&result, &circuit.result_type)?]
+    };
 
     Ok(ExecutionResult {
         state: ctx.state,
         reads: ctx.reads,
         gather_ops: ctx.gather_ops,
-        result: result_value,
-        communication_outputs: comm_outputs,
+        result: Some(result),
+        communication_outputs,
         private_transcript_outputs: ctx.private_transcript_outputs,
         zswap_outputs: ctx.zswap_outputs,
         zswap_inputs: ctx.zswap_inputs,
     })
 }
 
-/// Refuse a type the interpreter cannot execute, naming it.
+/// Refuse a type the interpreter cannot execute, naming it. Refusing it by
+/// name beats reading it as if it were a native field.
 ///
-/// The compiler's language is wider than what runs off-chain: a foreign-curve
-/// field or point has no value representation here, and an ADT or a type
-/// variable is not a value type at all. Refusing them by name beats reading
-/// one as if it were a native field.
+/// [`execute`] is public and runs circuits that no artifact supplied, so this
+/// check runs again at run time (the rule is
+/// `compact_codegen::artifact::unsupported_type`).
 fn check_type(ty: &Type) -> Result<(), InterpreterError> {
-    let unsupported = |what: String| Err(InterpreterError::Unsupported(what));
-    match ty {
-        Type::Field(field_type) if !is_native_field_type(field_type) => {
-            unsupported("a secp256k1 field type".to_string())
-        }
-        Type::Point(ir::Curve::Secp256k1) => unsupported("a secp256k1 point type".to_string()),
-        Type::Adt { name, .. } => unsupported(format!("ADT type {name} in a value position")),
-        Type::TypeVar(v) => unsupported(format!("type variable {v}")),
-        Type::Vector { ty, .. } | Type::Alias { ty, .. } => check_type(ty),
-        Type::Tuple(types) => types.iter().try_for_each(check_type),
-        Type::Struct { fields, .. } => fields.iter().try_for_each(|(_, t)| check_type(t)),
-        _ => Ok(()),
-    }
-}
-
-/// Whether values of this field compute in the native scalar field. The
-/// compiler distinguishes the Jubjub scalar field from the native one, but
-/// they share a modulus, so both compute identically.
-fn is_native_field_type(field_type: &ir::FieldType) -> bool {
-    matches!(
-        field_type,
-        ir::FieldType::Native | ir::FieldType::Scalar(ir::Curve::Jubjub)
-    )
+    compact_codegen::artifact::unsupported_type(ty)
+        .map_or(Ok(()), |what| Err(InterpreterError::Unsupported(what)))
 }
 
 /// FAB-encode a circuit's argument list into the single input value the
@@ -372,8 +350,6 @@ struct ExecContext<'a> {
     local_types: HashMap<String, Type>,
     reads: Vec<AlignedValue>,
     gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
-    /// Values disclosed via `disclose()` — corresponds to ZKIR `Output` instructions.
-    communication_outputs: Vec<AlignedValue>,
     /// The results of the witness calls and of the witness-class natives, in
     /// call order. Surfaced as `ExecutionResult::private_transcript_outputs`.
     private_transcript_outputs: Vec<AlignedValue>,
@@ -699,7 +675,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                 .map(|a| eval_expr(ctx, a))
                 .collect::<Result<_, _>>()?;
             match program.callee(name) {
-                Callee::Circuit(circuit) => call_circuit(ctx, circuit, &values),
+                Callee::Circuit(c) => call_circuit(ctx, &c.arguments, &c.body, &values),
                 Callee::Witness => eval_witness_call(ctx, name, values),
                 Callee::Pure => eval_pure_call(ctx, name, values),
             }
@@ -709,41 +685,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         E::Sub { left, right, .. } => eval_arith(ctx, left, right, ArithOp::Sub),
         E::Mul { left, right, .. } => eval_arith(ctx, left, right, ArithOp::Mul),
 
-        E::Eq { left, right, .. } => {
-            let l = eval_expr(ctx, left)?;
-            let r = eval_expr(ctx, right)?;
-            Ok(Value::Bool(values_equal(&l, &r)))
-        }
+        E::Eq { left, right, .. } => Ok(Value::Bool(eval_equal(ctx, left, right)?)),
+        E::Neq { left, right, .. } => Ok(Value::Bool(!eval_equal(ctx, left, right)?)),
 
-        E::Neq { left, right, .. } => {
-            let l = eval_expr(ctx, left)?;
-            let r = eval_expr(ctx, right)?;
-            Ok(Value::Bool(!values_equal(&l, &r)))
-        }
-
-        E::Lt { left, right, .. } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Bool(l < r))
-        }
-
-        E::Le { left, right, .. } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Bool(l <= r))
-        }
-
-        E::Gt { left, right, .. } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Bool(l > r))
-        }
-
-        E::Ge { left, right, .. } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Bool(l >= r))
-        }
+        E::Lt { left, right, .. } => eval_compare(ctx, left, right, u128::lt),
+        E::Le { left, right, .. } => eval_compare(ctx, left, right, u128::le),
+        E::Gt { left, right, .. } => eval_compare(ctx, left, right, u128::gt),
+        E::Ge { left, right, .. } => eval_compare(ctx, left, right, u128::ge),
 
         E::If { cond, then, els } => {
             let c = eval_expr(ctx, cond)?;
@@ -760,19 +708,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         // order.
         E::VectorRef { ty, expr, index } => {
             let val = eval_expr(ctx, expr)?;
-            let idx_val = eval_expr(ctx, index)?;
-            let n = value_to_u128(&idx_val).ok_or_else(|| {
-                InterpreterError::TypeError(format!(
-                    "vector index expression did not evaluate to an integer (got {idx_val:?})"
-                ))
-            })?;
-            // `as usize` would silently wrap an index like 2^64 + 1 to 1 on
-            // 64-bit targets and read the wrong element; reject it instead.
-            let idx = usize::try_from(n).map_err(|_| {
-                InterpreterError::TypeError(format!(
-                    "vector index {n} out of bounds (does not fit in usize)"
-                ))
-            })?;
+            let idx = eval_index(ctx, index, "vector")?;
             indexed_element(&val, Some(ty), idx, "vector")
         }
 
@@ -798,50 +734,23 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
 
         E::New { ty, elements } => {
             check_type(ty)?;
-            // Struct literal: encode each element with the alignment
-            // declared by the corresponding field type, then concatenate
-            // all field encodings into a single flat AlignedValue. The
-            // result has the same FAB layout the on-chain
-            // `persistent_hash` circuit produces for `<StructName>(...)`.
-            let struct_name = match ty {
-                Type::Struct { name, .. } => name.clone(),
-                other => {
-                    return Err(InterpreterError::TypeError(format!(
-                        "`new` op with non-struct type {other:?}"
-                    )));
-                }
-            };
-            // The type carries its own field list, which is exact per
-            // instantiation where a name is not: two instantiations of one
-            // generic struct share a name and differ in layout.
-            let fields: Vec<(String, Type)> = match ty {
-                Type::Struct { fields, .. } => fields.clone(),
-                other => {
-                    return Err(InterpreterError::TypeError(format!(
-                        "`new` op with non-struct type {other:?}"
-                    )));
-                }
+            let Type::Struct { name, fields } = ty else {
+                return Err(InterpreterError::TypeError(format!(
+                    "`new` op with non-struct type {ty:?}"
+                )));
             };
             if fields.len() != elements.len() {
                 return Err(InterpreterError::TypeError(format!(
-                    "`new {struct_name}` expects {} fields, got {}",
+                    "`new {name}` expects {} fields, got {}",
                     fields.len(),
                     elements.len()
                 )));
             }
-            let mut parts: Vec<midnight_base_crypto::fab::AlignedValue> =
-                Vec::with_capacity(elements.len());
-            for ((field_name, field_ty), element) in fields.iter().zip(elements.iter()) {
-                let val = eval_expr(ctx, element)?;
-                let av = encode_typed(&val, field_ty).map_err(|e| {
-                    InterpreterError::TypeError(format!(
-                        "cannot encode field `{field_name}` of `{struct_name}`: {e}"
-                    ))
-                })?;
-                parts.push(av);
-            }
-            let combined = midnight_base_crypto::fab::AlignedValue::concat(parts.iter());
-            Ok(Value::AlignedValue(combined))
+            let values = elements
+                .iter()
+                .map(|element| eval_expr(ctx, element))
+                .collect::<Result<Vec<_>, _>>()?;
+            encode_typed(&Value::Tuple(values), ty).map(Value::AlignedValue)
         }
 
         E::CastFromBytes { ty, len, expr } => {
@@ -850,7 +759,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             eval_cast(val, &Type::Bytes(*len), ty)
         }
 
-        E::CastFromEnum { ty, from, expr } | E::CastToEnum { ty, from, expr } => {
+        E::CastFromEnum { ty, from, expr }
+        | E::CastToEnum { ty, from, expr }
+        | E::SafeCast { ty, from, expr } => {
             check_type(ty)?;
             check_type(from)?;
             let val = eval_expr(ctx, expr)?;
@@ -862,11 +773,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             from,
             expr,
         } => {
-            if !is_native_field_type(field_type) {
-                return Err(InterpreterError::Unsupported(
-                    "a cast to a secp256k1 field".to_string(),
-                ));
-            }
+            check_type(&Type::Field(field_type.clone()))?;
             check_type(from)?;
             let val = eval_expr(ctx, expr)?;
             eval_cast(val, from, &Type::Field(ir::FieldType::Native))
@@ -877,24 +784,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             field_type,
             expr,
         } => {
-            if !is_native_field_type(field_type) {
-                return Err(InterpreterError::Unsupported(
-                    "a cast from a secp256k1 field".to_string(),
-                ));
-            }
+            check_type(&Type::Field(field_type.clone()))?;
             let val = eval_expr(ctx, expr)?;
             eval_cast(
                 val,
                 &Type::Field(ir::FieldType::Native),
                 &Type::Unsigned(maxval.clone()),
             )
-        }
-
-        E::SafeCast { ty, from, expr } => {
-            check_type(ty)?;
-            check_type(from)?;
-            let val = eval_expr(ctx, expr)?;
-            eval_cast(val, from, ty)
         }
 
         E::DowncastUnsigned {
@@ -980,11 +876,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             field_type,
             expr,
         } => {
-            if !is_native_field_type(field_type) {
-                return Err(InterpreterError::Unsupported(
-                    "field-to-bytes on a secp256k1 field".to_string(),
-                ));
-            }
+            check_type(&Type::Field(field_type.clone()))?;
             let val = eval_expr(ctx, expr)?;
             let fr = value_to_fr(&val).ok_or_else(|| {
                 InterpreterError::TypeError(format!(
@@ -992,18 +884,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                 ))
             })?;
             let len = ir_length(*len)?;
-            let mut bytes = fr.as_le_bytes();
-            // Trim trailing zeros here (not just in bytes_aligned_value) so
-            // the width check below sees the value's true byte length.
-            while matches!(bytes.last(), Some(0)) {
-                bytes.pop();
-            }
-            if bytes.len() > len {
-                return Err(InterpreterError::TypeError(format!(
-                    "range error: Field value {fr:?} does not fit into {len} bytes"
-                )));
-            }
-            Ok(Value::AlignedValue(bytes_aligned_value(bytes, len)?))
+            bytes_aligned_value(fr.as_le_bytes(), len)
+                .map(Value::AlignedValue)
+                .map_err(|_| {
+                    InterpreterError::TypeError(format!(
+                        "range error: Field value {fr:?} does not fit into {len} bytes"
+                    ))
+                })
         }
 
         // Bytes<len> → Vector<len, Uint<8>>. Element i is byte i. The
@@ -1013,13 +900,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         // Vector<N, Uint<8>> layout.
         E::BytesToVector { len, expr } => {
             let val = eval_expr(ctx, expr)?;
-            let len = ir_length(*len)?;
-            let bytes = value_to_byte_string(&val, len)?;
-            let elements = (0..len)
-                .map(|i| {
-                    let b = bytes.get(i).copied().unwrap_or(0);
-                    Value::AlignedValue(AlignedValue::from(b))
-                })
+            let elements = padded_bytes(&val, ir_length(*len)?)?
+                .into_iter()
+                .map(|b| Value::AlignedValue(AlignedValue::from(b)))
                 .collect();
             Ok(Value::Tuple(elements))
         }
@@ -1123,27 +1006,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         E::BytesRef { ty, expr, index } => {
             check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
-            let n = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
-                InterpreterError::TypeError("byte index is not an integer".into())
-            })?;
-            let i = usize::try_from(n).map_err(|_| {
-                InterpreterError::TypeError(format!(
-                    "byte index {n} out of bounds (does not fit in usize)"
-                ))
-            })?;
+            let i = eval_index(ctx, index, "byte")?;
             let Type::Bytes(width) = ty.resolved() else {
                 return Err(InterpreterError::TypeError(format!(
                     "byte reference has non-bytes operand type {ty:?}"
                 )));
             };
-            let width = ir_length(*width)?;
-            if i >= width {
-                return Err(InterpreterError::TypeError(format!(
-                    "byte index {i} out of bounds for a {width}-byte value"
-                )));
-            }
-            let bytes = value_to_byte_string(&val, width)?;
-            Ok(Value::Integer(bytes.get(i).copied().unwrap_or(0) as u128))
+            byte_at(&val, ir_length(*width)?, i, "byte")
         }
 
         // A run of `len` elements from a tuple or vector, taken from a
@@ -1170,9 +1039,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         } => {
             check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
-            let start = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
-                InterpreterError::TypeError("slice index is not an integer".into())
-            })? as usize;
+            let start = eval_index(ctx, index, "slice")?;
             slice_elements(&val, ty, start, ir_length(*len)?)
         }
 
@@ -1185,14 +1052,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         } => {
             check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
-            let n = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
-                InterpreterError::TypeError("slice index is not an integer".into())
-            })?;
-            let start = usize::try_from(n).map_err(|_| {
-                InterpreterError::TypeError(format!(
-                    "slice index {n} out of bounds (does not fit in usize)"
-                ))
-            })?;
+            let start = eval_index(ctx, index, "slice")?;
             let len = ir_length(*len)?;
             let Type::Bytes(width) = ty.resolved() else {
                 return Err(InterpreterError::TypeError(format!(
@@ -1205,10 +1065,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                     "slice of {len} bytes at {start} is out of bounds for a {width}-byte value"
                 )));
             }
-            let bytes = value_to_byte_string(&val, width)?;
-            let slice = (start..start + len)
-                .map(|i| bytes.get(i).copied().unwrap_or(0))
-                .collect();
+            let slice = padded_bytes(&val, width)?[start..start + len].to_vec();
             Ok(Value::AlignedValue(bytes_aligned_value(slice, len)?))
         }
     }
@@ -1254,27 +1111,38 @@ fn eval_cast(val: Value, from: &Type, to: &Type) -> Result<Value, InterpreterErr
     Ok(val)
 }
 
-/// Run a circuit's body as a pure call: parameters bound positionally, the
-/// body's value returned.
+/// Run a circuit body or an inline loop callee as a pure call: parameters
+/// bound positionally, the body's value returned.
 ///
-/// The parameters shadow the caller's bindings rather than replacing them;
-/// identifiers are unique program-wide, so nothing else is reachable anyway.
+/// The parameters shadow the caller's locals rather than replacing them. An
+/// inline callee closes over the enclosing scope: a loop body reads the
+/// circuit's own arguments, and the generated TypeScript passes a closure that
+/// captures them. A circuit body reaches nothing else, because identifiers are
+/// unique program-wide.
 fn call_circuit(
     ctx: &mut ExecContext,
-    circuit: &ir::Circuit,
+    params: &[ir::Argument],
+    body: &ir::Expr,
     args: &[Value],
 ) -> Result<Value, InterpreterError> {
-    for param in &circuit.arguments {
+    if params.len() != args.len() {
+        return Err(InterpreterError::TypeError(format!(
+            "callee takes {} parameters but got {} arguments",
+            params.len(),
+            args.len()
+        )));
+    }
+    for param in params {
         check_type(&param.ty)?;
     }
     let saved_locals = ctx.locals.clone();
     let saved_types = ctx.local_types.clone();
-    for (param, val) in circuit.arguments.iter().zip(args.iter()) {
+    for (param, val) in params.iter().zip(args.iter()) {
         ctx.locals.insert(param.name.0.clone(), val.clone());
         ctx.local_types
             .insert(param.name.0.clone(), param.ty.clone());
     }
-    let result = eval_expr(ctx, &circuit.body);
+    let result = eval_expr(ctx, body);
     ctx.locals = saved_locals;
     ctx.local_types = saved_types;
     result
@@ -1288,10 +1156,6 @@ fn eval_pure_call(
 ) -> Result<Value, InterpreterError> {
     let program = ctx.program;
     let name = program.runtime_name(id);
-    // Handle disclose specially: record the value as a communication output.
-    if name == "disclose" {
-        return disclose(ctx, values);
-    }
     match try_builtin_typed(name, &values, &program.argument_types(id)) {
         Some(result) => result,
         None => Err(InterpreterError::Unsupported(format!(
@@ -1308,13 +1172,6 @@ fn eval_witness_call(
 ) -> Result<Value, InterpreterError> {
     let program = ctx.program;
     let name = program.runtime_name(id);
-    // Handle disclose before anything else: it must always record the value
-    // in communication_outputs regardless of the witness provider. A witness
-    // provider that intercepts "disclose" would break the communication
-    // commitment.
-    if name == "disclose" {
-        return disclose(ctx, values);
-    }
 
     // The Compact "witness" native primitives (see [`WitnessNative`]).
     // These are effectful and have no witness-provider/builtin entry, so the
@@ -1412,17 +1269,6 @@ fn eval_witness_call(
     )))
 }
 
-/// Record a disclosed value as a communication output and pass it through.
-fn disclose(ctx: &mut ExecContext, values: Vec<Value>) -> Result<Value, InterpreterError> {
-    match values.into_iter().next() {
-        Some(arg) => {
-            ctx.communication_outputs.push(arg.try_to_aligned_value()?);
-            Ok(arg)
-        }
-        None => Ok(Value::Void),
-    }
-}
-
 /// The element type of a byte string, `Uint<0..255>`: what indexing or
 /// iterating a `Bytes<N>` yields.
 fn byte_type() -> Type {
@@ -1440,7 +1286,6 @@ fn splice_spread(
     expected: usize,
     out: &mut Vec<Value>,
 ) -> Result<(), InterpreterError> {
-    use midnight_base_crypto::fab;
     match inner {
         Value::Tuple(els) => {
             if els.len() != expected {
@@ -1453,35 +1298,21 @@ fn splice_spread(
             Ok(())
         }
         Value::AlignedValue(av) => {
-            let atoms = &av.value.0;
-            let segments = &av.alignment.0;
-            if atoms.len() != expected || segments.len() != expected {
+            let atoms = av.value.0.len();
+            if atoms != expected {
                 return Err(InterpreterError::TypeError(format!(
-                    "spread of length {expected} got an AlignedValue with {} atoms \
-                     ({} alignment segments); only flat one-atom-per-element \
-                     vectors can be spliced",
-                    atoms.len(),
-                    segments.len()
+                    "spread of length {expected} got an AlignedValue with {atoms} atoms"
                 )));
             }
-            for (atom, segment) in atoms.iter().zip(segments.iter()) {
-                let fab::AlignmentSegment::Atom(a) = segment else {
-                    return Err(InterpreterError::TypeError(
-                        "spread over an AlignedValue with non-atom alignment \
-                         (e.g. Maybe) is not supported"
-                            .to_string(),
-                    ));
-                };
-                let single = fab::AlignedValue::new(
-                    fab::Value(vec![atom.clone()]),
-                    fab::Alignment::singleton(*a),
-                )
-                .ok_or_else(|| {
+            for i in 0..expected {
+                let element = slice_atoms(&av, i..i + 1).ok_or_else(|| {
                     InterpreterError::TypeError(
-                        "spread element does not satisfy its alignment".to_string(),
+                        "spread over an AlignedValue that does not carry one alignment atom \
+                         per value atom (e.g. Maybe) is not supported"
+                            .to_string(),
                     )
                 })?;
-                out.push(Value::AlignedValue(single));
+                out.push(Value::AlignedValue(element));
             }
             Ok(())
         }
@@ -1510,6 +1341,23 @@ fn value_to_byte_string(val: &Value, length: usize) -> Result<&[u8], Interpreter
             "expected a Bytes<{length}> value, got {other:?}"
         ))),
     }
+}
+
+/// The `length` bytes of a `Bytes<length>` value. The FAB normal form trims
+/// trailing zero bytes, so this puts back the ones the encoding dropped.
+fn padded_bytes(val: &Value, length: usize) -> Result<Vec<u8>, InterpreterError> {
+    let mut bytes = value_to_byte_string(val, length)?.to_vec();
+    bytes.resize(length, 0);
+    Ok(bytes)
+}
+
+fn byte_at(val: &Value, length: usize, i: usize, what: &str) -> Result<Value, InterpreterError> {
+    if i >= length {
+        return Err(InterpreterError::TypeError(format!(
+            "{what} index {i} out of bounds for a {length}-byte value"
+        )));
+    }
+    Ok(Value::Integer(padded_bytes(val, length)?[i].into()))
 }
 
 /// Decode a `Vector<length, Uint<8>>` value into its byte string (element i
@@ -1594,22 +1442,7 @@ fn indexed_element(
             // A Bytes value yields one byte per index, out of the single atom
             // that holds them all.
             if let Type::Bytes(length) = ty.resolved() {
-                let length = ir_length(*length)?;
-                if i >= length {
-                    return Err(InterpreterError::TypeError(format!(
-                        "{what} index {i} out of bounds for a {length}-byte value"
-                    )));
-                }
-                // The FAB normal form trims trailing zero bytes, so a byte
-                // past the payload is one the encoding dropped.
-                let byte = av
-                    .value
-                    .0
-                    .first()
-                    .and_then(|atom| atom.0.get(i))
-                    .copied()
-                    .unwrap_or(0);
-                return Ok(Value::Integer(byte as u128));
+                return byte_at(val, ir_length(*length)?, i, what);
             }
             let range = element_atom_range(ty, i).ok_or_else(|| {
                 InterpreterError::TypeError(match element_count(ty) {
@@ -1662,8 +1495,8 @@ fn apply_fun(
     args: &[Value],
 ) -> Result<Value, InterpreterError> {
     match fun {
-        ir::Fun::Ref(id) => match ctx.program.circuits.get(id.0.as_str()).copied() {
-            Some(circuit) => call_circuit(ctx, circuit, args),
+        ir::Fun::Ref(id) => match ctx.program.circuit(&id.0) {
+            Some(c) => call_circuit(ctx, &c.arguments, &c.body, args),
             None => Err(InterpreterError::TypeError(format!(
                 "loop calls `{}`, which is not a circuit in the program",
                 id.0
@@ -1671,33 +1504,7 @@ fn apply_fun(
         },
         ir::Fun::Circuit {
             arguments, body, ..
-        } => {
-            if arguments.len() != args.len() {
-                return Err(InterpreterError::TypeError(format!(
-                    "loop callee takes {} parameters but got {} arguments",
-                    arguments.len(),
-                    args.len()
-                )));
-            }
-            for param in arguments {
-                check_type(&param.ty)?;
-            }
-            // An inline callee closes over the enclosing scope: a loop body
-            // reads the circuit's own arguments, and the generated TypeScript
-            // passes a closure that captures them. So the parameters shadow
-            // the caller's locals rather than replacing them.
-            let saved_locals = ctx.locals.clone();
-            let saved_types = ctx.local_types.clone();
-            for (param, val) in arguments.iter().zip(args.iter()) {
-                ctx.locals.insert(param.name.0.clone(), val.clone());
-                ctx.local_types
-                    .insert(param.name.0.clone(), param.ty.clone());
-            }
-            let result = eval_expr(ctx, body);
-            ctx.locals = saved_locals;
-            ctx.local_types = saved_types;
-            result
-        }
+        } => call_circuit(ctx, arguments, body, args),
     }
 }
 
@@ -1705,6 +1512,42 @@ fn eval_as_integer(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<u128, Inter
     let val = eval_expr(ctx, expr)?;
     value_to_u128(&val)
         .ok_or_else(|| InterpreterError::TypeError(format!("expected integer, got {val:?}")))
+}
+
+fn eval_index(
+    ctx: &mut ExecContext,
+    expr: &ir::Expr,
+    what: &str,
+) -> Result<usize, InterpreterError> {
+    let n = eval_as_integer(ctx, expr)?;
+    // `as usize` would silently wrap an index like 2^64 + 1 to 1 on 64-bit
+    // targets and read the wrong element; reject it instead.
+    usize::try_from(n).map_err(|_| {
+        InterpreterError::TypeError(format!(
+            "{what} index {n} out of bounds (does not fit in usize)"
+        ))
+    })
+}
+
+fn eval_compare(
+    ctx: &mut ExecContext,
+    left: &ir::Expr,
+    right: &ir::Expr,
+    cmp: fn(&u128, &u128) -> bool,
+) -> Result<Value, InterpreterError> {
+    let l = eval_as_integer(ctx, left)?;
+    let r = eval_as_integer(ctx, right)?;
+    Ok(Value::Bool(cmp(&l, &r)))
+}
+
+fn eval_equal(
+    ctx: &mut ExecContext,
+    left: &ir::Expr,
+    right: &ir::Expr,
+) -> Result<bool, InterpreterError> {
+    let l = eval_expr(ctx, left)?;
+    let r = eval_expr(ctx, right)?;
+    Ok(values_equal(&l, &r))
 }
 
 #[derive(Clone, Copy)]
@@ -1809,13 +1652,7 @@ fn either_variant_field_slice(
         let (left_off, _) = layout.field_slice("left")?;
         let (right_off, _) = layout.field_slice("right")?;
 
-        let mut disc = av.clone();
-        disc.value = midnight_base_crypto::fab::Value(
-            av.value.0.get(disc_off..disc_off + disc_len)?.to_vec(),
-        );
-        disc.alignment = midnight_base_crypto::fab::Alignment(
-            av.alignment.0.get(disc_off..disc_off + disc_len)?.to_vec(),
-        );
+        let disc = slice_atoms(av, disc_off..disc_off + disc_len)?;
         let is_left = is_truthy(&Value::AlignedValue(disc));
 
         let (variant_field, variant_off) = if is_left {
@@ -1875,6 +1712,7 @@ fn exec_ledger_query(
     instructions: &[ir::Instruction],
 ) -> Result<Value, InterpreterError> {
     let cost_model = &INITIAL_COST_MODEL;
+    let debug = std::env::var("INTERPRETER_DEBUG").is_ok();
     let mut ops: Vec<Op<ResultModeGather, InMemoryDB>> = Vec::new();
     for instruction in instructions {
         ops.push(build_op(ctx, instruction)?);
@@ -1883,7 +1721,7 @@ fn exec_ledger_query(
     // Record the ops for transcript construction
     ctx.gather_ops.extend(ops.iter().cloned());
 
-    if std::env::var("INTERPRETER_DEBUG").is_ok() {
+    if debug {
         eprintln!("[interpreter] executing {} ops:", ops.len());
         for (i, op) in ops.iter().enumerate() {
             eprintln!("  {i:3}: {op:?}");
@@ -1907,29 +1745,20 @@ fn exec_ledger_query(
     let res = qc
         .query::<ResultModeGather>(&ops, None, cost_model)
         .map_err(|e| InterpreterError::LedgerQueryFailed(format!("{e:?}")))?;
-    let events = res.events;
-    let new_state = ContractState {
+    let reads: Vec<AlignedValue> = res
+        .events
+        .into_iter()
+        .filter_map(|e| match e {
+            GatherEvent::Read(av) => Some(av),
+            GatherEvent::Log(_) => None,
+        })
+        .collect();
+    ctx.state = ContractState {
         data: res.context.state,
         ..ctx.state.clone()
     };
 
-    // Collect popeq read results
-    for event in &events {
-        if let GatherEvent::Read(av) = event {
-            ctx.reads.push(av.clone());
-        }
-    }
-
-    ctx.state = new_state;
-
-    if std::env::var("INTERPRETER_DEBUG").is_ok() {
-        let reads: Vec<_> = events
-            .iter()
-            .filter_map(|e| match e {
-                GatherEvent::Read(av) => Some(av),
-                _ => None,
-            })
-            .collect();
+    if debug {
         eprintln!("  -> {} read events", reads.len());
         for (i, av) in reads.iter().enumerate() {
             eprintln!(
@@ -1941,14 +1770,12 @@ fn exec_ledger_query(
     }
 
     // Return the last read value if any, otherwise void
-    if let Some(last_read) = events.iter().rev().find_map(|e| match e {
-        GatherEvent::Read(av) => Some(av.clone()),
-        _ => None,
-    }) {
-        Ok(Value::AlignedValue(last_read))
-    } else {
-        Ok(Value::Void)
-    }
+    let result = reads
+        .last()
+        .cloned()
+        .map_or(Value::Void, Value::AlignedValue);
+    ctx.reads.extend(reads);
+    Ok(result)
 }
 
 /// One expanded VM instruction as the op the VM runs.
@@ -2101,40 +1928,10 @@ fn u32_arg(i: &ir::Instruction, name: &str) -> Result<u32, InterpreterError> {
 /// One element of an `idx` path.
 fn path_key(ctx: &mut ExecContext, entry: &ir::Operand) -> Result<Key, InterpreterError> {
     match entry {
-        ir::Operand::Align { value, bytes } => Ok(Key::Value(literal_key(value, *bytes)?)),
         ir::Operand::Stack => Ok(Key::Stack),
-        ir::Operand::Expr(e) => match e.as_ref() {
-            // Resolve the local and encode it with its declared type when
-            // known, so the key's alignment matches what the on-chain insert
-            // produced (an Integer local of type Uint<16> must become a 2-byte
-            // key, not the type-less 8-byte default).
-            ir::Expr::VarRef(id) => match ctx.locals.get(id.0.as_str()) {
-                Some(val @ (Value::Integer(_) | Value::AlignedValue(_) | Value::Bool(_))) => {
-                    let local_ty = ctx.local_types.get(id.0.as_str());
-                    match encode_ledger_key(val, local_ty)? {
-                        StateValue::Cell(ref av) => Ok(Key::Value((**av).clone())),
-                        other => Err(InterpreterError::TypeError(format!(
-                            "variable `{}` did not encode to a cell key (got {other:?})",
-                            id.0
-                        ))),
-                    }
-                }
-                _ => Err(InterpreterError::UndefinedVariable(id.0.clone())),
-            },
-            // Encode the computed value with its inferred type, so the key's
-            // alignment matches what the insert that stored it produced.
-            other => {
-                let ty = infer_type_of_expr(ctx, other);
-                let val = eval_expr(ctx, other)?;
-                match encode_ledger_key(&val, ty.as_ref())? {
-                    StateValue::Cell(ref av) => Ok(Key::Value((**av).clone())),
-                    other => Err(InterpreterError::TypeError(format!(
-                        "a computed ledger path element did not encode to a cell key \
-                         (got {other:?})"
-                    ))),
-                }
-            }
-        },
+        ir::Operand::Align { .. } | ir::Operand::Expr(_) => {
+            operand_aligned(ctx, entry).map(Key::Value)
+        }
         other => Err(InterpreterError::Unsupported(format!(
             "path element {other:?}"
         ))),
@@ -2218,7 +2015,12 @@ fn operand_aligned(
                 (Value::Integer(_) | Value::Struct(_) | Value::Tuple(_), Some(ty)) => {
                     encode_typed(&val, ty)
                 }
-                _ => value_aligned(&val),
+                // The type-free encoding would concatenate the elements at
+                // guessed integer widths.
+                (Value::Tuple(_), None) => Err(InterpreterError::Unsupported(format!(
+                    "aligned encoding of {val:?} without a declared type"
+                ))),
+                _ => val.try_to_aligned_value(),
             }
         }
         VmArg::Literal { value, bytes } => literal_key(value, bytes),
@@ -2250,31 +2052,6 @@ fn operand_aligned(
         other => Err(InterpreterError::Unsupported(format!(
             "push of a {} operand",
             other.kind()
-        ))),
-    }
-}
-
-/// The [`AlignedValue`] behind an evaluated [`Value`].
-///
-/// Mirrors `Value::to_state_value`, which wraps the same encoding in a
-/// `StateValue`; a concatenation needs the value itself.
-fn value_aligned(val: &Value) -> Result<AlignedValue, InterpreterError> {
-    match val {
-        Value::AlignedValue(av) => Ok(av.clone()),
-        Value::Integer(n) => Ok(integer_fallback_aligned(*n)),
-        Value::Bool(b) => Ok(AlignedValue::from(*b)),
-        Value::Void => Ok(AlignedValue::from(())),
-        // A `Cell` wraps exactly one aligned value, so unwrapping it is the
-        // encoding. The other state variants are containers in the state tree
-        // with no aligned form at all.
-        Value::StateValue(sv) => compact_runtime::cell_aligned_value(sv).ok_or_else(|| {
-            InterpreterError::Unsupported("aligned encoding of a non-Cell state value".to_string())
-        }),
-        // A struct or tuple needs its declared type to encode, which the
-        // caller has only for an expression operand. `encode_typed` handles
-        // those; reaching here means none was inferred.
-        other => Err(InterpreterError::Unsupported(format!(
-            "aligned encoding of {other:?} without a declared type"
         ))),
     }
 }
@@ -2368,30 +2145,6 @@ fn reduce_operand(o: &ir::Operand) -> VmArg<'_> {
     }
 }
 
-/// Encode an evaluated [`Value`] as a [`StateValue`] for pushing onto
-/// the ledger query stack, re-aligning integers to the expression's
-/// declared [`Type`] when known.
-///
-/// The default [`Value::to_state_value`] conversion throws away type
-/// information and encodes integers at the u64 width. That's fine for
-/// arithmetic but wrong wherever the on-chain encoding is width-sensitive
-/// (e.g. `Map<Field, _>` or `Map<Uint<16>, _>` keys): the insert path
-/// produces a key with the declared type's alignment, while a u64-aligned
-/// off-chain key would never match it. When the declared type is known,
-/// integers are routed through [`encode_typed`] so the alignment matches
-/// the insert path byte-for-byte; out-of-range integers error instead of
-/// wrapping. Everything else (pre-encoded `AlignedValue`s, booleans,
-/// type-less integers) keeps the `to_state_value` behavior.
-fn encode_ledger_key(
-    val: &Value,
-    ty: Option<&Type>,
-) -> Result<StateValue<InMemoryDB>, InterpreterError> {
-    match (val, ty) {
-        (Value::Integer(_), Some(ty)) => encode_typed(val, ty).map(StateValue::from),
-        _ => Ok(val.to_state_value()),
-    }
-}
-
 /// The `AlignedValue` of an `(align value bytes)` constant: a literal ledger
 /// key, encoded at the width the instruction declares.
 fn literal_key(value: &BigUint, bytes: u64) -> Result<AlignedValue, InterpreterError> {
@@ -2408,7 +2161,7 @@ fn max_for_bytes(bytes: u64) -> BigUint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compact_runtime::try_builtin;
+    use compact_runtime::{integer_fallback_aligned, try_builtin};
     use ir::FieldType;
     use midnight_typed_state::{ContractMaintenanceAuthority, StorageHashMap};
 
@@ -2629,14 +2382,6 @@ mod tests {
         use midnight_transient_crypto::curve::Fr;
         use midnight_transient_crypto::hash::transient_hash;
 
-        let as_fr = |v: &Value| -> Fr {
-            match v {
-                Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-                Value::Integer(n) => Fr::from(*n),
-                other => panic!("not a field value: {other:?}"),
-            }
-        };
-
         // A Poseidon output is a full-width field element (wider than u128) — the
         // shape that fed the "expected integer" failure in a gateway committee
         // signature's mod-r reduction `c_native - challenge_quotient * order`.
@@ -2660,7 +2405,7 @@ mod tests {
             ],
         )
         .expect("field subtraction must not reject a wide operand");
-        assert_eq!(as_fr(&sub), Fr(c_native.0 - Fr::from(5u64).0));
+        assert_eq!(as_fr(sub), Fr(c_native.0 - Fr::from(5u64).0));
 
         // The full mod-r reduction shape, all field arithmetic.
         let c = run(
@@ -2688,7 +2433,7 @@ mod tests {
             ],
         )
         .expect("field reduction must evaluate");
-        assert_eq!(as_fr(&c), Fr(c_native.0 - Fr::from(3u64).0 * order.0));
+        assert_eq!(as_fr(c), Fr(c_native.0 - Fr::from(3u64).0 * order.0));
     }
 
     #[test]
@@ -2702,10 +2447,7 @@ mod tests {
             order.parse::<BigInt>().expect("a decimal literal"),
         ));
         let result = eval(literal, field()).expect("a Field literal wider than u128 must parse");
-        let got = match result {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected a Field AlignedValue, got {other:?}"),
-        };
+        let got = as_fr(result);
 
         // Independently: the parsed element equals JUBJUB_ORDER's little-endian bytes.
         let order_le: [u8; 32] = [
@@ -2785,6 +2527,14 @@ mod tests {
         Value::AlignedValue(AlignedValue::from(Fr::from(n)))
     }
 
+    fn as_fr(v: Value) -> midnight_transient_crypto::curve::Fr {
+        use midnight_transient_crypto::curve::Fr;
+        match v {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).expect("a field element"),
+            other => panic!("expected a Field AlignedValue, got {other:?}"),
+        }
+    }
+
     /// The `persistentCommit` builtin must reproduce the ledger's own
     /// `ContractAddress::custom_shielded_token_type`, which is how a minted
     /// coin's color (token type) is derived: `persistentCommit((domain_sep,
@@ -2814,17 +2564,10 @@ mod tests {
         let via_builtin = try_builtin("persistentCommit", &[value, opening])
             .expect("persistentCommit is a known builtin")
             .expect("persistentCommit succeeds");
-        let got = match via_builtin {
-            Value::AlignedValue(av) => {
-                let atom = &av.value.0[0];
-                let mut b = [0u8; 32];
-                b[..atom.0.len()].copy_from_slice(&atom.0);
-                b
-            }
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
+        let got =
+            compact_runtime::value_to_hash_output(&via_builtin).expect("a 32-byte commitment");
         assert_eq!(
-            got, expected.0,
+            got, expected,
             "persistentCommit must match ContractAddress::custom_shielded_token_type"
         );
     }
@@ -2950,11 +2693,9 @@ mod tests {
     /// struct hashes exactly as the flat sequence does.
     #[test]
     fn transient_hash_orders_a_struct_by_its_declared_type() {
-        use compact_codegen::ir::{FieldType, Type};
         use midnight_transient_crypto::curve::Fr;
         use midnight_transient_crypto::hash::transient_hash;
 
-        let field = || Type::Field(FieldType::Native);
         let ty = Type::Struct {
             name: "JubjubSchnorrHashInput".to_string(),
             fields: vec![
@@ -2976,13 +2717,11 @@ mod tests {
         fields.insert("annY".to_string(), fr_value(2));
         fields.insert("annX".to_string(), fr_value(1));
 
-        let got = match try_builtin_typed("transientHash", &[Value::Struct(fields)], &[ty])
-            .expect("builtin known")
-            .expect("ok")
-        {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
+        let got = as_fr(
+            try_builtin_typed("transientHash", &[Value::Struct(fields)], &[ty])
+                .expect("builtin known")
+                .expect("ok"),
+        );
 
         assert_eq!(
             got,
@@ -2996,11 +2735,9 @@ mod tests {
     /// by element would hand each element the vector's type and reject it.
     #[test]
     fn transient_hash_orders_a_struct_nested_in_a_vector() {
-        use compact_codegen::ir::{FieldType, Type};
         use midnight_transient_crypto::curve::Fr;
         use midnight_transient_crypto::hash::transient_hash;
 
-        let field = || Type::Field(FieldType::Native);
         let element = Type::Struct {
             name: "Pair".to_string(),
             fields: vec![("x".to_string(), field()), ("y".to_string(), field())],
@@ -3015,13 +2752,11 @@ mod tests {
         pair.insert("x".to_string(), fr_value(8));
         let arg = Value::Tuple(vec![Value::Struct(pair)]);
 
-        let got = match try_builtin_typed("transientHash", &[arg], &[ty])
-            .expect("builtin known")
-            .expect("a struct inside a vector must hash")
-        {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
+        let got = as_fr(
+            try_builtin_typed("transientHash", &[arg], &[ty])
+                .expect("builtin known")
+                .expect("a struct inside a vector must hash"),
+        );
 
         assert_eq!(got, transient_hash(&[Fr::from(8u64), Fr::from(9u64)]));
     }
@@ -3058,11 +2793,7 @@ mod tests {
         let via_builtin = try_builtin("transientHash", &[Value::Integer(n)])
             .expect("builtin known")
             .expect("ok");
-        let got = match via_builtin {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        assert_eq!(got, direct);
+        assert_eq!(as_fr(via_builtin), direct);
     }
 
     #[test]
@@ -3110,11 +2841,6 @@ mod tests {
             Value::Integer(big).try_to_aligned_value().unwrap(),
             AlignedValue::from(big)
         );
-        let decoded = match Value::Integer(big).to_state_value() {
-            StateValue::Cell(ref sp) => u128::try_from(&*sp.value).expect("decode u128"),
-            other => panic!("expected Cell, got {other:?}"),
-        };
-        assert_eq!(decoded, big);
     }
 
     #[test]
@@ -3148,12 +2874,50 @@ mod tests {
 
     #[test]
     fn a_typed_integer_ledger_key_takes_the_declared_width() {
+        let program = Program::new(&[], &[], &[]);
+        let mut ps = Vec::new();
+        let mut ctx = test_ctx(
+            &program,
+            &mut ps,
+            HashMap::from([("k".to_string(), uint("65535"))]),
+        );
+        ctx.locals.insert("k".to_string(), Value::Integer(7));
         // Uint<0..65535> is a 2-byte atom, not the type-less 8-byte default.
-        let sv = encode_ledger_key(&Value::Integer(7), Some(&uint("65535"))).expect("encode key");
-        match sv {
-            StateValue::Cell(ref sp) => assert_eq!((**sp).clone(), AlignedValue::from(7u16)),
-            other => panic!("expected Cell, got {other:?}"),
-        }
+        assert_eq!(
+            path_key(&mut ctx, &ir::Operand::Expr(Box::new(var("k")))).expect("encode key"),
+            Key::Value(AlignedValue::from(7u16))
+        );
+    }
+
+    /// A `Map` lookup builds its key as an `idx` path element, and an insert
+    /// pushes it as a cell. A key that encodes differently on the two paths is
+    /// never found.
+    #[test]
+    fn a_tuple_ledger_key_encodes_alike_in_a_path_and_a_push() {
+        let program = Program::new(&[], &[], &[]);
+        let mut ps = Vec::new();
+        let mut ctx = test_ctx(
+            &program,
+            &mut ps,
+            HashMap::from([(
+                "k".to_string(),
+                Type::Tuple(vec![uint("255"), uint("65535")]),
+            )]),
+        );
+        ctx.locals.insert(
+            "k".to_string(),
+            Value::Tuple(vec![Value::Integer(1), Value::Integer(2)]),
+        );
+        let key = ir::Operand::Expr(Box::new(var("k")));
+        let cell = ir::Operand::StateValue(ir::StateValue::Cell(Box::new(key.clone())));
+        let inserted = match push_value(&mut ctx, &cell).expect("push the key") {
+            StateValue::Cell(ref sp) => (**sp).clone(),
+            other => panic!("a pushed key is a cell, got {other:?}"),
+        };
+        assert_eq!(
+            path_key(&mut ctx, &key).expect("a tuple path key"),
+            Key::Value(inserted)
+        );
     }
 
     #[test]
@@ -3308,11 +3072,7 @@ mod tests {
         let result = try_builtin("degradeToTransient", &[Value::AlignedValue(av)])
             .expect("builtin known")
             .expect("ok");
-        let got = match result {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        assert_eq!(got, Fr::from(7u64));
+        assert_eq!(as_fr(result), Fr::from(7u64));
     }
 
     // -----------------------------------------------------------------------
@@ -3324,6 +3084,21 @@ mod tests {
     // overflow.
     // -----------------------------------------------------------------------
 
+    fn assert_integers(value: Value, expected: &[u128]) {
+        match value {
+            Value::Tuple(els) => {
+                assert_eq!(els.len(), expected.len(), "{els:?}");
+                for (el, &want) in els.iter().zip(expected) {
+                    assert!(
+                        values_equal(el, &Value::Integer(want)),
+                        "expected {want}, got {el:?}"
+                    );
+                }
+            }
+            other => panic!("expected Tuple, got {other:?}"),
+        }
+    }
+
     #[test]
     fn spread_splices_tuple_value_into_constructor() {
         let v = Value::Tuple(vec![Value::Integer(2), Value::Integer(3)]);
@@ -3333,18 +3108,7 @@ mod tests {
             ir::Expr::Tuple(vec![single(int(1)), spread(2, var("v")), single(int(4))]),
         );
         let result = run(&circ, &[("v", v)]).expect("eval");
-        match result {
-            Value::Tuple(els) => {
-                assert_eq!(els.len(), 4, "spread must splice, not nest: {els:?}");
-                for (el, want) in els.iter().zip([1u128, 2, 3, 4]) {
-                    assert!(
-                        values_equal(el, &Value::Integer(want)),
-                        "expected {want}, got {el:?}"
-                    );
-                }
-            }
-            other => panic!("expected Tuple, got {other:?}"),
-        }
+        assert_integers(result, &[1, 2, 3, 4]);
     }
 
     #[test]
@@ -3358,14 +3122,7 @@ mod tests {
             ir::Expr::VectorLit(vec![spread(2, var("v"))]),
         );
         let result = run(&circ, &[("v", Value::AlignedValue(av))]).expect("eval");
-        match result {
-            Value::Tuple(els) => {
-                assert_eq!(els.len(), 2);
-                assert!(values_equal(&els[0], &Value::Integer(7)), "{:?}", els[0]);
-                assert!(values_equal(&els[1], &Value::Integer(9)), "{:?}", els[1]);
-            }
-            other => panic!("expected Tuple, got {other:?}"),
-        }
+        assert_integers(result, &[7, 9]);
     }
 
     #[test]
@@ -3399,12 +3156,7 @@ mod tests {
         // significant (casts.ts convertBytesToField), so the value is
         // 0x2A + 0x01·256 = 298.
         let result = eval(bytes_to_field(4, "2a010000"), field()).expect("eval");
-        match result {
-            Value::AlignedValue(av) => {
-                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), Fr::from(298u64));
-            }
-            other => panic!("expected AlignedValue, got {other:?}"),
-        }
+        assert_eq!(as_fr(result), Fr::from(298u64));
     }
 
     #[test]
@@ -3419,12 +3171,7 @@ mod tests {
 
         let result =
             eval(bytes_to_field(32, &hex::encode(&le)), field()).expect("p - 1 must be accepted");
-        match result {
-            Value::AlignedValue(av) => {
-                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), p_minus_1);
-            }
-            other => panic!("expected AlignedValue, got {other:?}"),
-        }
+        assert_eq!(as_fr(result), p_minus_1);
 
         // Increment the little-endian byte string to get exactly p.
         let mut p = le;
@@ -3449,12 +3196,7 @@ mod tests {
         // Bytes<0> (the empty byte string) converts to the Field value 0,
         // matching Fr::from_le_bytes(&[]).
         let result = eval(bytes_to_field(0, ""), field()).expect("eval");
-        match result {
-            Value::AlignedValue(av) => {
-                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), Fr::from(0u64));
-            }
-            other => panic!("expected AlignedValue, got {other:?}"),
-        }
+        assert_eq!(as_fr(result), Fr::from(0u64));
     }
 
     fn field_to_bytes(len: u64, expr: ir::Expr) -> ir::Expr {
@@ -3500,18 +3242,7 @@ mod tests {
             expr: Box::new(bytes("01020300")),
         };
         let result = eval(expr, vector(4, uint("255"))).expect("eval");
-        match result {
-            Value::Tuple(els) => {
-                assert_eq!(els.len(), 4);
-                for (el, want) in els.iter().zip([1u128, 2, 3, 0]) {
-                    assert!(
-                        values_equal(el, &Value::Integer(want)),
-                        "expected {want}, got {el:?}"
-                    );
-                }
-            }
-            other => panic!("expected Tuple, got {other:?}"),
-        }
+        assert_integers(result, &[1, 2, 3, 0]);
     }
 
     #[test]
@@ -3694,7 +3425,6 @@ mod tests {
             local_types,
             reads: Vec::new(),
             gather_ops: Vec::new(),
-            communication_outputs: Vec::new(),
             private_transcript_outputs: Vec::new(),
             zswap_outputs: Vec::new(),
             zswap_inputs: Vec::new(),
@@ -3864,6 +3594,12 @@ mod tests {
             )),
             Value::AlignedValue(AlignedValue::from([1u8, 2])),
         ] {
+            // A loop over a `Bytes` argument reads its bytes the same way.
+            if let Value::AlignedValue(_) = input {
+                let err = indexed_element(&input, Some(&Type::Bytes(1)), 0, "loop")
+                    .expect_err("malformed byte value");
+                assert!(matches!(err, InterpreterError::TypeError(_)), "got {err}");
+            }
             let err = run(&reference, &[("x", input)]).expect_err("malformed byte value");
             assert!(matches!(err, InterpreterError::TypeError(_)), "got {err}");
         }

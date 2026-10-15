@@ -9,14 +9,13 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
-use midnight_wallet::Wallet;
+mod common;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use midnight_helpers::{DefaultDB, StdRng};
-use midnight_provider::{MidnightProvider, Network};
-
-const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+use midnight_provider::MidnightProvider;
 
 /// Wraps each generation's real prover and records whether one ran.
 #[derive(Default)]
@@ -33,21 +32,11 @@ macro_rules! proof_recorder {
         impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ProofRecorder {
             async fn prove(
                 &self,
-                tx: midnight_helpers::$ledger::Transaction<
-                    midnight_helpers::$ledger::Signature,
-                    midnight_helpers::$ledger::ProofPreimageMarker,
-                    midnight_helpers::$ledger::PedersenRandomness,
-                    DefaultDB,
-                >,
+                tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
                 rng: StdRng,
                 resolver: &'static midnight_helpers::$ledger::Resolver,
                 cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::Transaction<
-                midnight_helpers::$ledger::Signature,
-                midnight_helpers::$ledger::ProofMarker,
-                midnight_helpers::$ledger::PedersenRandomness,
-                DefaultDB,
-            > {
+            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
                 self.proved.store(true, Ordering::SeqCst);
                 self.$ledger.prove(tx, rng, resolver, cost_model).await
             }
@@ -57,24 +46,6 @@ macro_rules! proof_recorder {
 
 proof_recorder!(ledger_8);
 proof_recorder!(ledger_9);
-
-async fn dev_provider(recorder: Arc<ProofRecorder>) -> Option<MidnightProvider> {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
-        return None;
-    };
-    let provider = MidnightProvider::new(&node_url, &indexer_url).with_proof_provider(recorder);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .unwrap()
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("sync");
-    Some(provider.with_wallet(wallet))
-}
 
 /// Counts the wallet's tNIGHT UTXOs, and how many of them still await a
 /// registration.
@@ -94,22 +65,20 @@ async fn night_counts(provider: &MidnightProvider) -> (usize, usize) {
 /// refusal has to come before proving.
 #[tokio::test]
 async fn a_second_registration_is_refused_before_proving() {
-    let recorder = Arc::new(ProofRecorder::default());
-    let Some(provider) = dev_provider(recorder.clone()).await else {
+    let Some((node, indexer)) = common::devnet_urls() else {
         return;
     };
+    let recorder = Arc::new(ProofRecorder::default());
+    let provider = common::synced_provider(&node, &indexer, common::DEV_WALLET_SEED)
+        .await
+        .with_proof_provider(recorder.clone());
 
     let (total, unregistered) = night_counts(&provider).await;
     assert!(total > 0, "the wallet needs tNIGHT for this test");
     if unregistered > 0 {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!(
-                "a wallet whose every tNIGHT UTXO generates dust is missing under make test-e2e: \
-                 {unregistered} are unregistered"
-            );
-        }
-        eprintln!("skipping: this wallet still has {unregistered} unregistered tNIGHT UTXOs");
-        return;
+        return common::skip(&format!(
+            "a wallet whose every tNIGHT UTXO generates dust ({unregistered} are unregistered)"
+        ));
     }
 
     let Err(err) = provider.register_dust(None).build().await else {

@@ -7,6 +7,7 @@ members = [
     "crates/midnight-core",
     "crates/midnight-crypto",
     "crates/midnight-private-state",
+    "crates/midnight-owner-only",
     "crates/midnight-wallet",
     "crates/midnight-wallet-facade",
     "crates/midnight-types",
@@ -36,6 +37,7 @@ midnight-contract = { path = "crates/midnight-contract" }
 midnight-core = { path = "crates/midnight-core" }
 midnight-crypto = { path = "crates/midnight-crypto" }
 midnight-private-state = { path = "crates/midnight-private-state" }
+midnight-owner-only = { path = "crates/midnight-owner-only" }
 midnight-wallet = { path = "crates/midnight-wallet" }
 midnight-wallet-facade = { path = "crates/midnight-wallet-facade" }
 midnight-types = { path = "crates/midnight-types" }

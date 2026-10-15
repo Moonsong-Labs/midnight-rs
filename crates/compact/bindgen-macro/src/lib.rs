@@ -1,6 +1,8 @@
+use std::path::Path;
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 
 /// Parsed macro input supporting these forms:
@@ -19,35 +21,28 @@ struct ContractInput {
 impl Parse for ContractInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let attrs = input.call(syn::Attribute::parse_outer)?;
-
-        if input.peek(syn::Ident) && input.peek2(syn::Token![,]) {
+        let name = if input.peek(syn::Ident) && input.peek2(syn::Token![,]) {
             let name: syn::Ident = input.parse()?;
-            let _comma: syn::Token![,] = input.parse()?;
-            let path: syn::LitStr = input.parse()?;
-            let crate_path = extract_crate_path(&attrs)?;
-            Ok(ContractInput {
-                attrs: strip_crate_attr(attrs),
-                name: Some(name),
-                path,
-                crate_path,
-            })
+            input.parse::<syn::Token![,]>()?;
+            Some(name)
         } else {
-            let path: syn::LitStr = input.parse()?;
-            let crate_path = extract_crate_path(&attrs)?;
-            let attrs = strip_crate_attr(attrs);
-            if !attrs.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    &path,
-                    "attributes require a named contract: contract!(#[...] Name, \"path\")",
-                ));
-            }
-            Ok(ContractInput {
-                attrs,
-                name: None,
-                path,
-                crate_path,
-            })
+            None
+        };
+        let path: syn::LitStr = input.parse()?;
+        let crate_path = extract_crate_path(&attrs)?;
+        let attrs = strip_crate_attr(attrs);
+        if name.is_none() && !attrs.is_empty() {
+            return Err(syn::Error::new_spanned(
+                &path,
+                "attributes require a named contract: contract!(#[...] Name, \"path\")",
+            ));
         }
+        Ok(ContractInput {
+            attrs,
+            name,
+            path,
+            crate_path,
+        })
     }
 }
 
@@ -70,9 +65,28 @@ fn strip_crate_attr(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
         .collect()
 }
 
+/// The compactc output directory of `artifact`, when `artifact` sits at
+/// `compiler/analyzed-ir.sexp` inside it.
+fn compactc_output_dir(artifact: &Path) -> Option<&Path> {
+    if !artifact.ends_with("compiler/analyzed-ir.sexp") {
+        return None;
+    }
+    artifact.parent()?.parent()
+}
+
 /// Generate typed Rust bindings from a Compact `analyzed-ir.sexp` artifact.
 ///
 /// The path is relative to the crate's `CARGO_MANIFEST_DIR`.
+///
+/// # ZK config directory
+///
+/// When the path ends in `compiler/analyzed-ir.sexp`, the layout that compactc
+/// writes, the macro also emits `pub const ZK_CONFIG_DIR: &str` beside the
+/// bindings. It is the absolute path of the compactc output directory (the
+/// parent of `compiler/`) on the build machine. Pass it to `with_zk_config`,
+/// which reads `keys/` and `zkir/` from it. A binary that runs on another
+/// machine passes its own directory. An artifact at another path gets no
+/// `ZK_CONFIG_DIR`.
 ///
 /// # Name shadowing in flat form
 ///
@@ -136,7 +150,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
         .map_or_else(|| "Ledger".into(), ToString::to_string);
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
-    let full_path = std::path::Path::new(&manifest_dir).join(path.value());
+    let full_path = Path::new(&manifest_dir).join(path.value());
 
     let json = match std::fs::read_to_string(&full_path) {
         Ok(s) => s,
@@ -165,18 +179,29 @@ pub fn contract(input: TokenStream) -> TokenStream {
     let track_file = quote! {
         const _: &[u8] = include_bytes!(#full_path_str);
     };
+    let zk_config_dir = compactc_output_dir(&full_path).map(|dir| {
+        let dir = dir.to_string_lossy().into_owned();
+        quote! {
+            /// The compactc output directory of this contract, as an absolute
+            /// path on the build machine. It holds `compiler/`, and `keys/` and
+            /// `zkir/` when compactc made them. Pass it to `with_zk_config`.
+            pub const ZK_CONFIG_DIR: &str = #dir;
+        }
+    });
+    let body = quote! { #inner #zk_config_dir };
 
+    let snake = compact_codegen::to_snake_case(&contract_name);
+    let lint_allows = quote! {
+        #[allow(dead_code, clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
+    };
     let output = if name.is_some() {
-        let mod_name = syn::Ident::new(
-            &compact_codegen::to_snake_case(&contract_name),
-            proc_macro2::Span::call_site(),
-        );
+        let mod_name = format_ident!("{}", snake);
         quote! {
             #track_file
             #(#attrs)*
-            #[allow(dead_code, clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
+            #lint_allows
             pub mod #mod_name {
-                #inner
+                #body
             }
         }
     } else {
@@ -189,19 +214,13 @@ pub fn contract(input: TokenStream) -> TokenStream {
         // referenced. The module keeps the imports scoped to the generated
         // code, while `pub use ...::*` keeps every generated item visible at
         // the call site exactly as before.
-        let mod_name = syn::Ident::new(
-            &format!(
-                "__{}_bindings",
-                compact_codegen::to_snake_case(&contract_name)
-            ),
-            proc_macro2::Span::call_site(),
-        );
+        let mod_name = format_ident!("__{}_bindings", snake);
         quote! {
             #track_file
             #[doc(hidden)]
-            #[allow(dead_code, clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
+            #lint_allows
             mod #mod_name {
-                #inner
+                #body
             }
             pub use #mod_name::*;
         }

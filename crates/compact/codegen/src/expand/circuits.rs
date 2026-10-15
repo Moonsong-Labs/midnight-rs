@@ -1,14 +1,15 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use crate::ir::{Argument, Type, Witness};
 use crate::types::Circuit;
 
 use super::circuit_calls::{
-    has_typed_conversion, is_void_type, type_to_value_conversion, value_to_type_conversion,
+    has_typed_conversion, is_void_type, type_to_value_conversion, typed_params,
+    value_to_type_conversion,
 };
 use super::helpers::{make_ident, to_pascal_case};
-use super::ledger::{circuit_decode, circuit_params, circuit_setup};
+use super::ledger::{circuit_decode, circuit_setup};
 use super::types::type_to_tokens;
 
 pub(crate) fn emit_circuit_types(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
@@ -58,8 +59,8 @@ pub(crate) fn emit_pure_circuits(circuits: &[Circuit], contract_name: &str) -> T
         .filter(|circuit| circuit.pure())
         .map(|circuit| {
             let fn_name = make_ident(&circuit.name);
-            let params = circuit_params(circuit);
-            let return_ty = format_ident!("{}Return", to_pascal_case(&circuit.name));
+            let params = typed_params(circuit.arguments());
+            let return_ty = return_type_ident(&circuit.name);
             let setup = circuit_setup(&ledger_name, circuit);
             let (_, decode) = circuit_decode(circuit);
             let doc = format!(
@@ -107,17 +108,9 @@ pub(crate) fn emit_pure_circuits(circuits: &[Circuit], contract_name: &str) -> T
 fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     // Trait method signatures.
     let trait_methods = witnesses.iter().map(|w| {
-        let method = format_ident!("{}", w.name.name().replace(['$', '-'], "_"));
-        let params = w.arguments.iter().map(|arg| {
-            let pid = make_ident(arg.name.name());
-            let pty = if has_typed_conversion(&arg.ty) {
-                type_to_tokens(&arg.ty)
-            } else {
-                quote! { midnight_contract::runtime::Value }
-            };
-            quote! { #pid: #pty }
-        });
-        let ret = result_type_to_tokens(&w.result_type);
+        let method = make_ident(w.name.name());
+        let params = typed_params(&w.arguments);
+        let ret = type_to_tokens(&w.result_type);
         let doc = format!("Witness `{}`.", w.name.name());
         quote! {
             #[doc = #doc]
@@ -137,7 +130,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     // Adapter dispatch arms (matched on the on-chain witness name).
     let arms = witnesses.iter().map(|w| {
         let name = w.name.name();
-        let method = format_ident!("{}", name.replace(['$', '-'], "_"));
+        let method = make_ident(name);
 
         let mut bindings = Vec::new();
         let mut idents = Vec::new();
@@ -179,7 +172,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
         let ret_expr = if is_void_type(&w.result_type) {
             quote! { { #call; midnight_contract::runtime::Value::Void } }
         } else {
-            let ret_ty = result_type_to_tokens(&w.result_type);
+            let ret_ty = type_to_tokens(&w.result_type);
             let conv = type_to_value_conversion(&format_ident!("__r"), &w.result_type);
             quote! { { let __r: #ret_ty = #call; #conv } }
         };
@@ -288,8 +281,19 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     }
 }
 
+/// The name of the struct that holds the arguments of the circuit or witness
+/// `name`.
+fn call_struct_ident(name: &str) -> Ident {
+    format_ident!("{}Call", to_pascal_case(name))
+}
+
+/// The name of the alias for the result type of the circuit or witness `name`.
+pub(super) fn return_type_ident(name: &str) -> Ident {
+    format_ident!("{}Return", to_pascal_case(name))
+}
+
 fn emit_call_struct(name: &str, arguments: &[Argument], pure: bool, proof: bool) -> TokenStream {
-    let type_name = format_ident!("{}Call", to_pascal_case(name));
+    let type_name = call_struct_ident(name);
 
     let fields: Vec<_> = arguments
         .iter()
@@ -318,8 +322,8 @@ fn emit_call_struct(name: &str, arguments: &[Argument], pure: bool, proof: bool)
 }
 
 fn emit_return_type(name: &str, result_type: &Type) -> TokenStream {
-    let type_name = format_ident!("{}Return", to_pascal_case(name));
-    let rust_type = result_type_to_tokens(result_type);
+    let type_name = return_type_ident(name);
+    let rust_type = type_to_tokens(result_type);
     let doc = format!("Return type of the `{name}` circuit.");
 
     quote! {
@@ -335,7 +339,7 @@ fn emit_calls_enum(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
         .chain(witnesses.iter().map(|w| w.name.name()))
         .map(|name| {
             let variant = format_ident!("{}", to_pascal_case(name));
-            let call_type = format_ident!("{}Call", to_pascal_case(name));
+            let call_type = call_struct_ident(name);
             quote! { #variant(#call_type) }
         })
         .collect();
@@ -346,12 +350,5 @@ fn emit_calls_enum(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
         pub enum Calls {
             #(#variants),*
         }
-    }
-}
-
-fn result_type_to_tokens(ty: &Type) -> TokenStream {
-    match ty {
-        Type::Tuple(types) if types.is_empty() => quote! { () },
-        other => type_to_tokens(other),
     }
 }

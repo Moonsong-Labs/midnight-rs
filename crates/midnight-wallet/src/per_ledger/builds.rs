@@ -28,6 +28,17 @@ fn reserve(wallet: &mut super::Wallet, prepared: PreparedTransfer) -> ReservedBu
     ReservedBuild::reserved(prepared)
 }
 
+/// Fund `tx_info` from `wallet`, and name `wallet`'s seed as the one the
+/// build draws on, as [`super::Wallet::add_funding`] requires.
+fn fund_from(
+    wallet: &mut super::Wallet,
+    tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
+) -> Result<(), WalletError> {
+    wallet.add_funding(&tx_info.context)?;
+    tx_info.set_funding_seeds(vec![wallet.seed().into_ledger()]);
+    Ok(())
+}
+
 #[async_trait]
 impl WalletBuilds for LocalWallet {
     async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
@@ -60,8 +71,7 @@ impl WalletBuilds for LocalWallet {
     ) -> Result<ReservedBuild, WalletError> {
         let mut guard = self.inner().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
-        wallet.add_funding(&tx_info.context)?;
-        tx_info.set_funding_seeds(vec![wallet.seed().into_ledger()]);
+        fund_from(wallet, &mut tx_info)?;
         let prepared = prepare_no_validate(tx_info).await?;
         Ok(reserve(wallet, prepared))
     }
@@ -107,8 +117,7 @@ impl WalletBuilds for LocalWallet {
     ) -> Result<Option<ReservedBuild>, WalletError> {
         let mut guard = self.inner().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
-        wallet.add_funding(&tx_info.context)?;
-        tx_info.set_funding_seeds(vec![wallet.seed().into_ledger()]);
+        fund_from(wallet, &mut tx_info)?;
         let Some(prepared) = balance_external(tx_info, external)? else {
             return Ok(None);
         };

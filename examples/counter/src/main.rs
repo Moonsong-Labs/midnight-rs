@@ -19,10 +19,6 @@ mod counter {
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/counter/compiled"
-);
 
 /// Dev node genesis wallet seed (funded with NIGHT tokens at genesis).
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -45,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
     println!("1. Deploying counter contract...");
     let pending = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(counter::ZK_CONFIG_DIR)
         .send()
         .await?;
     println!("   ext hash:  {}", pending.extrinsic_hash_hex());
@@ -78,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
     //    address.
     println!("4. Reconnecting via Contract::at and calling increment...");
     let reconnected = counter::Contract::at(&provider, &contract_address)
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(counter::ZK_CONFIG_DIR)
         .build();
     let returned: u64 = reconnected.circuits().increment().await?.value;
     println!("   returned = {returned}");

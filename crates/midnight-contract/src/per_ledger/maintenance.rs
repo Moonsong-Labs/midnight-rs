@@ -6,13 +6,13 @@ use std::sync::Arc;
 use midnight_base_crypto::signatures::{Signature, VerifyingKey};
 use midnight_typed_state::{ContractState, InMemoryDB};
 
+use super::deploy::{build_with_mock_fee_proofs, single_action_tx_info};
 use super::helpers;
 use super::provider::Builds;
 use super::types::convert::IntoLedger;
 use helpers::{
     BuildContext, ContractOperationVersion, ContractOperationVersionedVerifierKey, DefaultDB,
-    EntryPointBuf, FromContext, IntentInfo, MaintenanceUpdate, OfferInfo, SingleUpdate,
-    StandardTransactionInfo,
+    EntryPointBuf, MaintenanceUpdate, SingleUpdate,
 };
 
 use crate::error::ContractError;
@@ -119,18 +119,8 @@ impl helpers::BuildContractAction<DefaultDB, BuildContext> for AttachMaintenance
         &mut self,
         _rng: &mut helpers::StdRng,
         _context: Arc<BuildContext>,
-        intent: &helpers::Intent<
-            helpers::Signature,
-            helpers::ProofPreimageMarker,
-            helpers::PedersenRandomness,
-            DefaultDB,
-        >,
-    ) -> helpers::Intent<
-        helpers::Signature,
-        helpers::ProofPreimageMarker,
-        helpers::PedersenRandomness,
-        DefaultDB,
-    > {
+        intent: &helpers::UnprovenIntent<DefaultDB>,
+    ) -> helpers::UnprovenIntent<DefaultDB> {
         intent.add_maintenance_update(self.update.clone())
     }
 }
@@ -151,24 +141,11 @@ pub(crate) async fn maintenance_funded(
         });
 
     let context = builds.execution_context().await?;
-    let intent_info: IntentInfo<DefaultDB, BuildContext> = IntentInfo {
-        guaranteed_unshielded_offer: None,
-        fallible_unshielded_offer: None,
-        actions: vec![Box::new(AttachMaintenance { update })],
-    };
-
-    let mut tx_info =
-        StandardTransactionInfo::new_from_context(context, builds.proof_provider(), None);
-    tx_info.add_intent(1, Box::new(intent_info));
-    tx_info.set_guaranteed_offer(OfferInfo {
-        inputs: vec![],
-        outputs: vec![],
-        transients: vec![],
-    });
-    tx_info.use_mock_proofs_for_fees(true);
-
-    let built = builds.build_funded(tx_info).await?;
-    Ok(built.tx_bytes)
+    build_with_mock_fee_proofs(
+        builds,
+        single_action_tx_info(builds, context, AttachMaintenance { update }),
+    )
+    .await
 }
 
 #[cfg(test)]

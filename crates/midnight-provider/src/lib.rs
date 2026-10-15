@@ -22,7 +22,7 @@ pub use transfer::{
     DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedSwap, ShieldedTransfer,
     UnshieldedTransfer,
 };
-pub use types::{Health, StateQuery, StateQueryResult, StorageKey, TransactionHash};
+pub use types::{Health, TransactionHash};
 
 // Re-export the vocabulary that appears in MidnightProvider's public surface
 // so callers don't need separate deps for it. The implementation types
@@ -48,6 +48,12 @@ pub use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 pub use midnight_private_state::{
     ConflictStrategy, EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions,
     ImportResult, PrivateStateError, PrivateStateProvider, Snapshot, SnapshotStatus,
+};
+
+// Re-export the state query model that `Provider` and the generated lazy
+// accessors share, so callers need no separate dep on midnight-typed-state.
+pub use midnight_typed_state::lazy::{
+    StateQuery, StateQueryProvider, StateQueryResult, StorageKey,
 };
 
 use std::sync::Arc;
@@ -91,57 +97,19 @@ pub trait Provider: Send + Sync {
 // Bridge: MidnightProvider → StateQueryProvider (from compact-bindgen)
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "bindgen")]
-mod lazy_bridge {
-    use super::*;
-    use midnight_typed_state::{hex, lazy};
+impl StateQueryProvider for MidnightProvider {
+    type Error = ProviderError;
 
-    /// Re-export so consumers can use `StateQueryProvider` without depending
-    /// on `compact-bindgen` directly.
-    pub use lazy::StateQueryProvider;
-
-    impl lazy::StateQueryProvider for MidnightProvider {
-        type Error = ProviderError;
-
-        async fn query_contract_state(
-            &self,
-            address: &str,
-            queries: Vec<lazy::StateQuery>,
-            at_block_hash: Option<NodeBlockHash>,
-        ) -> Result<Vec<lazy::StateQueryResult>, ProviderError> {
-            // Convert bindgen hex strings → StorageKey raw bytes
-            let provider_queries: Vec<StateQuery> = queries
-                .into_iter()
-                .map(|q| StateQuery {
-                    path: q
-                        .path
-                        .into_iter()
-                        .map(|h| StorageKey(hex::decode(&h).unwrap_or_else(|_| h.into_bytes())))
-                        .collect(),
-                })
-                .collect();
-
-            let results = self
-                .query_contract_state_at(address, provider_queries, at_block_hash)
-                .await?;
-
-            // Convert StorageKey raw bytes → bindgen hex strings
-            Ok(results
-                .into_iter()
-                .map(|r| lazy::StateQueryResult {
-                    query: lazy::StateQuery {
-                        path: r.query.path.into_iter().map(|k| hex::encode(k.0)).collect(),
-                    },
-                    value: r.value,
-                    error: r.error,
-                })
-                .collect())
-        }
+    async fn query_contract_state(
+        &self,
+        address: &str,
+        queries: Vec<StateQuery>,
+        at_block_hash: Option<NodeBlockHash>,
+    ) -> Result<Vec<StateQueryResult>, ProviderError> {
+        self.query_contract_state_at(address, queries, at_block_hash)
+            .await
     }
 }
-
-#[cfg(feature = "bindgen")]
-pub use lazy_bridge::StateQueryProvider;
 
 // ---------------------------------------------------------------------------
 // Blanket impls for &T, Arc<T>, Box<T>

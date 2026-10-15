@@ -5,84 +5,41 @@
 //! wallet discovers the coin through normal sync, no `watchFor`.
 //!
 //! Gated on `MIDNIGHT_NODE_URL` / `MIDNIGHT_INDEXER_URL` (a running devnet +
-//! indexer). The compiled contract defaults to the committed fixture
-//! `devnet/contracts/shielded-mint/compiled`; override with `MINT_KEYED_DIR`.
+//! indexer).
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
-};
-use midnight_contract::Contract;
-use midnight_contract::runtime::Value;
-use midnight_wallet::{Seed, Wallet, WalletBuilder};
+mod common;
+
+mod shielded_mint {
+    compact_bindgen::contract!(
+        "../../devnet/contracts/shielded-mint/compiled/compiler/analyzed-ir.sexp"
+    );
+}
+
+use compact_bindgen::Bytes;
+use midnight_wallet::Seed;
 
 #[tokio::test]
 async fn mint_to_external_recipient_discovered_by_sync() {
-    let (node_url, indexer_url) = match (
-        std::env::var("MIDNIGHT_NODE_URL").ok(),
-        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
-    ) {
-        (Some(n), Some(i)) => (n, i),
-        _ => {
-            eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
-            return;
-        }
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
+        return;
     };
-    let keyed = std::env::var("MINT_KEYED_DIR").unwrap_or_else(|_| {
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../devnet/contracts/shielded-mint/compiled"
-        )
-        .to_string()
-    });
 
-    // --- Load the mint circuit IR, helpers, structs, enums, arg-types ---
-    let info_path = format!("{keyed}/compiler/analyzed-ir.sexp");
-    let info_json = std::fs::read_to_string(&info_path).expect("read contract-info");
-    let info: compact_codegen::types::ContractInfo =
-        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
-    let mint = info
-        .circuits
-        .iter()
-        .find(|c| c.name == "mint")
-        .expect("mint circuit");
-    let ir = &mint.def;
-    let program =
-        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
-
-    // --- Recipient (cpk, epk) from a second seed (derived, never synced for
-    //     the mint itself) ---
-    let recip_seed =
-        Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000002").unwrap();
+    // --- Recipient keys from a second seed (derived, never synced for the
+    //     mint itself) ---
+    let recip_seed = Seed::from_hex(common::RECIPIENT_SEED).unwrap();
     let recip = recip_seed.shielded_recipient();
-    let cpk = recip.coin_public_key;
-    let epk = recip.enc_public_key;
-    let cpk_bytes = cpk.0.0;
 
     // --- Funder wallet deploys the mint contract ---
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&provider)
-            .await
-            .expect("funder sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
-    // A mint-only contract has no user ledger fields: an empty array.
-    let initial = ContractState::new(
-        StateValue::Array(vec![].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    let contract = Contract::deploy(provider)
-        .with_initial_state(initial)
-        .with_zk_config(&keyed)
+    let contract = shielded_mint::Contract::deploy(provider)
+        .with_initial_state(shielded_mint::LedgerInitialState)
+        .with_zk_config(shielded_mint::ZK_CONFIG_DIR)
         .await
         .expect("deploy mint contract");
-    let address = contract.address().to_string();
-    eprintln!("deployed mint contract at {address}");
+    eprintln!("deployed mint contract at {}", contract.address());
 
     // --- Call mint(domain_sep, value, nonce, coinPK) ---
     //
@@ -95,55 +52,32 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     // can't be reproduced by the prover's zero-noop padding, which fails SNARK verify
     // with InvalidProof. The constant `left(...)` folds that branch away.
     let domain_sep = [0x11u8; 32];
-    let mint_value: u128 = 1000;
+    let mint_value: u64 = 1000;
     let nonce = [0x22u8; 32];
-    let args = [
-        (
-            "domain_sep",
-            Value::AlignedValue(AlignedValue::from(domain_sep)),
-        ),
-        ("value", Value::Integer(mint_value)),
-        ("nonce", Value::AlignedValue(AlignedValue::from(nonce))),
-        ("coinPK", Value::AlignedValue(AlignedValue::from(cpk_bytes))),
-    ];
 
-    // The coin→enc key mapping is supplied per-call so the SDK attaches the
-    // discovery ciphertext to the circuit-created output.
+    // The recipient is supplied per call so the SDK attaches the discovery
+    // ciphertext to the circuit-created output.
     contract
-        .call_with(
-            ir,
-            &program,
-            "mint",
-            &args,
-            &midnight_contract::runtime::NoWitnesses,
-            &[(cpk, epk)],
-            midnight_contract::ShieldedInputs::default(),
+        .circuits()
+        .with_coin_encryption_keys([recip])
+        .mint(
+            Bytes(domain_sep),
+            mint_value,
+            Bytes(nonce),
+            recip.coin_public_key.into(),
         )
         .await
         .expect("mint call");
     eprintln!("mint call submitted");
 
     // Expected custom shielded token type = tokenType(domain_sep, contract_addr).
-    // The contract address is a 32-byte hex string.
-    let addr_bytes = {
-        let hex = address.strip_prefix("0x").unwrap_or(&address);
-        let v = hex::decode(hex).expect("address hex");
-        let mut a = [0u8; 32];
-        a.copy_from_slice(&v);
-        a
-    };
-    let contract_addr =
-        midnight_contract::ContractAddress(midnight_base_crypto::hash::HashOutput(addr_bytes));
-    let expected_tt = contract_addr
+    let expected_tt = midnight_contract::parse_address(contract.address())
+        .expect("contract address")
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
     // --- Recipient syncs normally and must discover the minted coin ---
     let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = WalletBuilder::new(&recip_seed)
-        .with_network(midnight_provider::Network::Undeployed)
-        .sync(&recip_provider)
-        .await
-        .expect("recipient sync");
+    let wallet = common::synced_wallet(&recip_provider, common::RECIPIENT_SEED).await;
     let recip_provider = recip_provider.with_wallet(wallet);
 
     // The call above returns once the chain finalized the mint, which is
@@ -165,7 +99,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
             .coins;
         if coins
             .iter()
-            .any(|c| c.token_type == expected_tt && c.value == mint_value)
+            .any(|c| c.token_type == expected_tt && c.value == u128::from(mint_value))
         {
             eprintln!("recipient discovered the minted coin via sync ✓");
             return;
@@ -174,12 +108,11 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     }
 
     panic!(
-        "recipient wallet did not discover the minted coin (type {}, value {mint_value}); \
-         shielded coins seen: {:?}",
-        hex::encode(expected_tt.0.0),
+        "recipient wallet did not discover the minted coin (type {expected_tt}, \
+         value {mint_value}); shielded coins seen: {:?}",
         coins
             .iter()
-            .map(|c| (hex::encode(c.token_type.0.0), c.value))
+            .map(|c| (c.token_type_hex(), c.value))
             .collect::<Vec<_>>()
     );
 }

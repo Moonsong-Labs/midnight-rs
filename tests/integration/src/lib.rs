@@ -105,6 +105,20 @@ mod synthetic_tests {
         )
     }
 
+    /// Build a compound `StateValue::Array` for a merkle-tree field.
+    ///
+    /// Layout: `[BoundedMerkleTree(blank), Cell(first_free), Map(empty)]`
+    fn merkle_tree_state(depth: u8, first_free: u64) -> StateValue<InMemoryDB> {
+        StateValue::Array(
+            vec![
+                StateValue::BoundedMerkleTree(MerkleTree::blank(depth)),
+                StateValue::from(first_free),
+                StateValue::Map(StorageHashMap::new()),
+            ]
+            .into(),
+        )
+    }
+
     // ---------------------------------------------------------------
     // Election contract: 9 fields
     //   0: authority  (cell, Bytes<32>)
@@ -112,29 +126,15 @@ mod synthetic_tests {
     //   2: topic      (cell, Struct Maybe{is_some: bool, value: Opaque})
     //   3: tally_yes  (counter, Uint<64>)
     //   4: tally_no   (counter, Uint<64>)
-    //   5: committed_votes (merkle-tree) -- use Null placeholder
-    //   6: eligible_voters (merkle-tree) -- use Null placeholder
+    //   5: committed_votes (merkle-tree)
+    //   6: eligible_voters (merkle-tree)
     //   7: committed  (set, Bytes<32>)
     //   8: revealed   (set, Bytes<32>)
     // ---------------------------------------------------------------
     pub(crate) mod election_tests {
         use super::*;
-        use crate::election::Election;
+        use crate::election::{Election, FIELD_COMMITTED};
         use compact_bindgen::Bytes;
-
-        /// Build a compound `StateValue::Array` for a merkle-tree field.
-        ///
-        /// Layout: `[BoundedMerkleTree(blank), Cell(first_free=0), Map(empty)]`
-        pub(super) fn empty_merkle_tree_value(depth: u8) -> StateValue<InMemoryDB> {
-            StateValue::Array(
-                vec![
-                    StateValue::BoundedMerkleTree(MerkleTree::blank(depth)),
-                    StateValue::from(0u64),
-                    StateValue::Map(StorageHashMap::new()),
-                ]
-                .into(),
-            )
-        }
 
         /// Build a 9-element election state array.
         pub(crate) fn election_state(
@@ -159,9 +159,9 @@ mod synthetic_tests {
                     // 4: tally_no (counter)
                     StateValue::from(tally_no),
                     // 5: committed_votes (merkle-tree, depth=10)
-                    empty_merkle_tree_value(10),
+                    merkle_tree_state(10, 0),
                     // 6: eligible_voters (merkle-tree, depth=10)
-                    empty_merkle_tree_value(10),
+                    merkle_tree_state(10, 0),
                     // 7: committed (set, empty)
                     StateValue::Map(StorageHashMap::new()),
                     // 8: revealed (set, empty)
@@ -169,6 +169,21 @@ mod synthetic_tests {
                 ]
                 .into(),
             )
+        }
+
+        /// An election state whose `committed` set holds `keys`.
+        pub(crate) fn election_state_with_committed(keys: &[[u8; 32]]) -> StateValue<InMemoryDB> {
+            let state = election_state([0u8; 32], 0, 0, 0);
+            let StateValue::Array(fields) = &state else {
+                panic!("an election state is an array");
+            };
+            let committed = keys.iter().fold(StorageHashMap::new(), |map, key| {
+                map.insert(AlignedValue::from(*key), StateValue::Null)
+            });
+            let fields = fields
+                .insert(FIELD_COMMITTED, StateValue::Map(committed))
+                .expect("committed is a field");
+            StateValue::Array(fields)
         }
 
         #[test]
@@ -212,25 +227,7 @@ mod synthetic_tests {
             let key1 = [0x11u8; 32];
             let key2 = [0x22u8; 32];
 
-            let committed_map = StorageHashMap::new()
-                .insert(AlignedValue::from(key1), StateValue::Null)
-                .insert(AlignedValue::from(key2), StateValue::Null);
-
-            let root = StateValue::Array(
-                vec![
-                    StateValue::from(AlignedValue::from([0u8; 32])),
-                    StateValue::from(AlignedValue::from(0u8)),
-                    StateValue::from(AlignedValue::from(false)),
-                    StateValue::from(0u64),
-                    StateValue::from(0u64),
-                    empty_merkle_tree_value(10),
-                    empty_merkle_tree_value(10),
-                    StateValue::Map(committed_map),
-                    StateValue::Map(StorageHashMap::new()),
-                ]
-                .into(),
-            );
-            let state = make_state(root);
+            let state = make_state(election_state_with_committed(&[key1, key2]));
             let ledger = Election::new(state);
 
             let committed = ledger.committed().expect("committed");
@@ -256,17 +253,21 @@ mod synthetic_tests {
         use super::*;
         use crate::tiny::Tiny;
 
-        #[test]
-        fn tiny_value_field() {
-            let field_val = TransientFr::from(12345u64);
-            let root = StateValue::Array(
+        /// Build a 3-element tiny state array with a zero authority.
+        pub(super) fn tiny_state(value: TransientFr, state: u8) -> StateValue<InMemoryDB> {
+            StateValue::Array(
                 vec![
                     StateValue::from(AlignedValue::from([0u8; 32])),
-                    StateValue::from(AlignedValue::from(field_val)),
-                    StateValue::from(AlignedValue::from(0u8)),
+                    StateValue::from(AlignedValue::from(value)),
+                    StateValue::from(AlignedValue::from(state)),
                 ]
                 .into(),
-            );
+            )
+        }
+
+        #[test]
+        fn tiny_value_field() {
+            let root = tiny_state(TransientFr::from(12345u64), 0);
             let state = make_state(root);
             let ledger = Tiny::new(state);
 
@@ -301,14 +302,7 @@ mod synthetic_tests {
             }
 
             for (index, expected) in [(0u8, STATE::Unset), (1, STATE::Set)] {
-                let root = StateValue::Array(
-                    vec![
-                        StateValue::from(AlignedValue::from([0u8; 32])),
-                        StateValue::from(AlignedValue::from(TransientFr::from(0u64))),
-                        StateValue::from(AlignedValue::from(index)),
-                    ]
-                    .into(),
-                );
+                let root = tiny_tests::tiny_state(TransientFr::from(0u64), index);
                 let ledger = Tiny::new(make_state(root));
                 assert_eq!(ledger.state().expect("state"), expected, "STATE {index}");
             }
@@ -394,21 +388,9 @@ mod synthetic_tests {
         use super::*;
         use compact_bindgen::MerkleTreeAccessor;
 
-        /// Build a compound merkle tree StateValue with given depth and first_free.
-        fn make_merkle_tree_state(depth: u8, first_free: u64) -> StateValue<InMemoryDB> {
-            StateValue::Array(
-                vec![
-                    StateValue::BoundedMerkleTree(MerkleTree::blank(depth)),
-                    StateValue::from(first_free),
-                    StateValue::Map(StorageHashMap::new()),
-                ]
-                .into(),
-            )
-        }
-
         #[test]
         fn merkle_tree_with_first_free() {
-            let sv = make_merkle_tree_state(20, 42);
+            let sv = merkle_tree_state(20, 42);
             let accessor = MerkleTreeAccessor::from_state(&sv).expect("from_state");
             assert_eq!(accessor.height(), 20);
             assert_eq!(accessor.first_free(), 42);
@@ -512,25 +494,19 @@ mod golden_encodings {
     use conformance::state_json::aligned_value_from_json;
     use serde_json::Value as Json;
 
-    use crate::queue_grows::conformance_file;
-
-    fn read_json(path: &str) -> Json {
-        let path = conformance_file(path);
-        serde_json::from_str(&std::fs::read_to_string(&path).expect("file readable"))
-            .expect("file is JSON")
-    }
+    use conformance::corpus::{corpus_dir, golden, read_json};
 
     /// The value that the canonical runtime recorded at the JSON `pointer` of
     /// the golden of a case.
     fn golden_value(fixture: &str, case: &str, pointer: &str) -> AlignedValue {
-        let golden = read_json(&format!("expected/{fixture}/{case}.json"));
+        let golden = golden(fixture, case);
         let json = golden.pointer(pointer).expect("the golden has the value");
         aligned_value_from_json(json).expect("the golden value decodes")
     }
 
     /// The tagged fields of the struct argument of the first step of a case.
     fn first_struct_argument(fixture: &str, case: &str) -> Vec<Json> {
-        let case_json = read_json(&format!("cases/{fixture}/{case}.json"));
+        let case_json = read_json(&corpus_dir().join(format!("cases/{fixture}/{case}.json")));
         case_json["steps"][0]["args"][0]["struct"]
             .as_array()
             .expect("the argument is a struct")
@@ -588,31 +564,21 @@ mod golden_encodings {
 /// ran it: each step pushes one value to the front of `queue`.
 #[cfg(test)]
 mod queue_grows {
-    use std::path::{Path, PathBuf};
-
     use compact_bindgen::{InMemoryDB, StateValue, StorageHashMap};
     use conformance::runner::{Fixture, ScriptedWitnesses, run_step, state_from_value};
     use midnight_base_crypto::time::Timestamp;
 
     use crate::containers::Containers;
+    use conformance::corpus::golden;
 
     /// The value that step 0 pushes.
     pub(crate) const FIRST_PUSH: u64 = 11;
     /// The value that step 1 pushes.
     pub(crate) const SECOND_PUSH: u64 = 22;
 
-    pub(crate) fn conformance_file(path: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../conformance")
-            .join(path)
-    }
-
     /// The contract state at the JSON `pointer` of the case's golden.
     fn golden_state(pointer: &str) -> StateValue<InMemoryDB> {
-        let path = conformance_file("expected/containers/queue-grows.json");
-        let golden: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("golden readable"))
-                .expect("golden is JSON");
+        let golden = golden("containers", "queue-grows");
         let json = golden.pointer(pointer).expect("golden has the state");
         conformance::state_json::state_value_from_json(json).expect("golden state decodes")
     }
@@ -633,11 +599,7 @@ mod queue_grows {
     /// The SDK's interpreter runs the pushes. `make conformance` checks it
     /// against the canonical runtime on this case.
     pub(crate) fn state_with_pushes(values: &[u64]) -> StateValue<InMemoryDB> {
-        let ir = std::fs::read_to_string(conformance_file(
-            "fixtures/containers/compiler/analyzed-ir.sexp",
-        ))
-        .expect("fixture readable");
-        let fixture = Fixture::load(&ir).expect("fixture loads");
+        let fixture = Fixture::open("containers").expect("fixture loads");
         let witnesses = ScriptedWitnesses::from_json(None).expect("no witnesses");
         let state = values.iter().fold(
             state_from_value(initial_state(), StorageHashMap::new()),
@@ -691,17 +653,15 @@ mod queue_grows {
 /// field, and the generated `Default` must build that same state.
 #[cfg(test)]
 mod initial_state_defaults {
-    use std::path::Path;
-
     use compact_bindgen::{ContractState, InMemoryDB};
     use conformance::report::state_report_json;
+
+    use conformance::corpus::{corpus_dir, read_json};
 
     /// The golden constructor state of the first case of `fixture`. Every
     /// case of a fixture starts from the same state.
     fn golden_constructor_state(fixture: &str) -> serde_json::Value {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../conformance/expected")
-            .join(fixture);
+        let dir = corpus_dir().join("expected").join(fixture);
         let mut cases: Vec<_> = std::fs::read_dir(&dir)
             .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
             .map(|entry| entry.expect("dir entry").path())
@@ -709,10 +669,7 @@ mod initial_state_defaults {
             .collect();
         cases.sort();
         let case = cases.first().expect("the fixture has a golden");
-        let golden: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(case).expect("golden readable"))
-                .expect("golden is JSON");
-        golden["constructor"]["state"].clone()
+        read_json(case)["constructor"]["state"].clone()
     }
 
     #[test]
@@ -777,7 +734,7 @@ mod lazy_tests {
 
     use compact_bindgen::{
         AlignedValue, InMemoryDB, StateValue,
-        lazy::{StateQuery, StateQueryProvider, StateQueryResult},
+        lazy::{StateQuery, StateQueryProvider, StateQueryResult, StorageKey},
         tagged_serialize,
     };
     use midnight_serialize::Deserializable;
@@ -827,11 +784,13 @@ mod lazy_tests {
 
     /// The node's answer to one path: a hex tagged `StateValue`, no value for
     /// an absent map key, or a per-query error.
-    fn resolve(root: &StateValue<InMemoryDB>, path: &[String]) -> Result<Option<String>, String> {
+    fn resolve(
+        root: &StateValue<InMemoryDB>,
+        path: &[StorageKey],
+    ) -> Result<Option<String>, String> {
         let mut current = root.clone();
         for key in path {
-            let bytes = hex::decode(key).map_err(|e| format!("key hex: {e}"))?;
-            let key = <AlignedValue as Deserializable>::deserialize(&mut bytes.as_slice(), 0)
+            let key = <AlignedValue as Deserializable>::deserialize(&mut key.0.as_slice(), 0)
                 .map_err(|e| format!("failed to deserialize key: {e}"))?;
             current = match &current {
                 StateValue::Array(arr) => {
@@ -898,9 +857,11 @@ mod lazy_tests {
     // ---------------------------------------------------------------
     mod election_lazy {
         use super::*;
-        use crate::election::{ElectionQuery, FIELD_COMMITTED};
-        use crate::synthetic_tests::election_tests::election_state;
-        use compact_bindgen::{Bytes, StorageHashMap};
+        use crate::election::ElectionQuery;
+        use crate::synthetic_tests::election_tests::{
+            election_state, election_state_with_committed,
+        };
+        use compact_bindgen::Bytes;
 
         #[tokio::test]
         async fn lazy_authority() {
@@ -921,15 +882,7 @@ mod lazy_tests {
         #[tokio::test]
         async fn lazy_set_contains() {
             let key = [0x11u8; 32];
-            let state = election_state([0u8; 32], 0, 0, 0);
-            let StateValue::Array(fields) = &state else {
-                panic!("an election state is an array");
-            };
-            let committed = StorageHashMap::new().insert(AlignedValue::from(key), StateValue::Null);
-            let fields = fields
-                .insert(FIELD_COMMITTED, StateValue::Map(committed))
-                .expect("committed is a field");
-            let node = WalkingNode::new(vec![StateValue::Array(fields)]);
+            let node = WalkingNode::new(vec![election_state_with_committed(&[key])]);
             let query = ElectionQuery::new(node, "mock", None);
             assert!(query.committed(Bytes(key)).await.unwrap());
         }

@@ -1,6 +1,6 @@
 # Tagged serialization in midnight-ledger
 
-> Internal reference for SDK developers. Users of midnight-rs don't need to understand this — `call::deserialize_state()` and `call::fetch_state()` handle it automatically.
+> Internal reference for SDK developers. Users of midnight-rs don't need to understand this. `state::fetch_state()` and `state::fetch_state_from_node()` handle it automatically.
 
 ## Overview
 
@@ -32,10 +32,10 @@ The tag is declared via the `#[tag = "..."]` attribute on the `#[derive(Storable
 
 ## How midnight-rs uses it
 
-The `call::deserialize_state(hex)` function:
-1. Hex-decodes the string from the provider
-2. Calls `tagged_deserialize::<ContractState<InMemoryDB>>()` which validates the `"contract-state[v6]:"` tag
-3. Returns the deserialized `ContractState` ready for the interpreter
+`state::fetch_state()` and `state::fetch_state_from_node()`:
+1. Hex-decode the string from the provider.
+2. Call `midnight_typed_state::decode_contract_state`, which reads the tag through `tagged_deserialize` and converts a ledger 8 state.
+3. Return the `ContractState` for the interpreter.
 
 ## tagged_serialize
 
@@ -84,4 +84,4 @@ Binary format:
 
 The `midnight_queryContractState` response uses `tagged_serialize` for individual field values. The `midnight_contractState` response is a hex-encoded `tagged_serialize`'d full `ContractState`.
 
-Both paths produce a hex string that `call::deserialize_state()` can decode.
+`state::fetch_state()` and `state::fetch_state_from_node()` decode the `midnight_contractState` hex string.

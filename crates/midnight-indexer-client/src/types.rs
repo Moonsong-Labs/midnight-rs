@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::error::IndexerError;
+
 // ---------------------------------------------------------------------------
 // GraphQL envelope
 // ---------------------------------------------------------------------------
@@ -10,6 +12,18 @@ pub(crate) struct GraphQLResponse<T> {
     pub data: Option<T>,
     #[serde(default)]
     pub errors: Option<Vec<GraphQLError>>,
+}
+
+impl<T> GraphQLResponse<T> {
+    /// Returns the `data`, or [`IndexerError::GraphQL`] when `errors` is non-empty.
+    ///
+    /// The errors win over a partial result that carries both.
+    pub(crate) fn into_result(self) -> Result<Option<T>, IndexerError> {
+        match self.errors {
+            Some(errors) if !errors.is_empty() => Err(IndexerError::GraphQL(errors)),
+            _ => Ok(self.data),
+        }
+    }
 }
 
 /// A single GraphQL error from the response.
@@ -109,5 +123,25 @@ mod tests {
         assert_eq!(block.protocol_version, Some(1));
         assert_eq!(block.timestamp, Some(1700000000));
         assert_eq!(block.author, Some("node-1".to_string()));
+    }
+
+    #[test]
+    fn graphql_errors_win_over_partial_data() {
+        let partial = GraphQLResponse {
+            data: Some(1),
+            errors: Some(vec![GraphQLError {
+                message: "boom".into(),
+            }]),
+        };
+        assert!(matches!(
+            partial.into_result(),
+            Err(IndexerError::GraphQL(errors)) if errors[0].message == "boom"
+        ));
+
+        let no_errors = GraphQLResponse {
+            data: Some(1),
+            errors: Some(vec![]),
+        };
+        assert!(matches!(no_errors.into_result(), Ok(Some(1))));
     }
 }

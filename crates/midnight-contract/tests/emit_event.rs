@@ -9,31 +9,20 @@
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL or a
 //! missing `MIDNIGHT_LEDGER` panics.
 
+mod common;
+
 mod events {
     compact_bindgen::contract!("../../devnet/contracts/events/compiled/compiler/analyzed-ir.sexp");
 }
 
 use compact_bindgen::Bytes;
-use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::Wallet;
+use midnight_provider::MidnightProvider;
 
-const ZK_KEYS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../devnet/contracts/events/compiled"
-);
-const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 const NAME: [u8; 32] = [0x07; 32];
 
 #[tokio::test]
 async fn a_call_that_emits_an_event_applies_on_chain() {
-    let (Ok(node_url), Ok(indexer_url)) = (
-        std::env::var("MIDNIGHT_NODE_URL"),
-        std::env::var("MIDNIGHT_INDEXER_URL"),
-    ) else {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL is missing under make test-e2e");
-        }
-        eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
     let ledger = std::env::var("MIDNIGHT_LEDGER").unwrap_or_else(|_| {
@@ -43,22 +32,20 @@ async fn a_call_that_emits_an_event_applies_on_chain() {
         "unset".into()
     });
     assert!(
-        std::path::Path::new(ZK_KEYS_DIR).join("keys").is_dir(),
-        "{ZK_KEYS_DIR}/keys is missing; run `make compile-contracts CONTRACTS=events`"
+        std::path::Path::new(events::ZK_CONFIG_DIR)
+            .join("keys")
+            .is_dir(),
+        "{}/keys is missing; run `make compile-contracts CONTRACTS=events`",
+        events::ZK_CONFIG_DIR
     );
 
     let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)
-        .unwrap()
-        .with_network(Network::Undeployed)
-        .sync(&provider)
-        .await
-        .expect("sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let contract = events::Contract::deploy(&provider)
         .with_initial_state(events::LedgerInitialState::default())
-        .with_zk_config(ZK_KEYS_DIR)
+        .with_zk_config(events::ZK_CONFIG_DIR)
         .await
         .unwrap_or_else(|e| panic!("the deploy must apply on ledger {ledger}: {e:?}"));
 

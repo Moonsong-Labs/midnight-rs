@@ -32,6 +32,7 @@
 //! - **Circuit call types** -- `*Call` structs and `*Return` type aliases
 //! - **Pure circuits** -- a `pure_circuits` module, with one function per exported pure circuit that runs it in process with no chain, proof or wallet
 //! - **Simulator** -- `Simulator`, which runs the impure circuits in process with no chain, proof or wallet. The caller sets the block time, the address and the coin public key, and the ledger and the private state carry from call to call.
+//! - **ZK config directory** -- `ZK_CONFIG_DIR`, the compactc output directory to pass to `with_zk_config`, for an artifact at `compiler/analyzed-ir.sexp` (see [`contract!`])
 //!
 //! # Lazy queries
 //!

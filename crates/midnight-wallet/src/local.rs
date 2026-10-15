@@ -3,7 +3,7 @@
 //! modules.
 
 use async_trait::async_trait;
-use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
+use midnight_types::chain_pin::{ChainView, current_pin};
 use midnight_types::hd::Seed;
 use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
@@ -11,9 +11,9 @@ use midnight_types::{
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 use tokio::sync::RwLock;
-use tracing::warn;
 
 use crate::Wallet;
+use crate::sync::require_same_chain;
 
 /// A [`Wallet`] this process owns, shared behind its own lock.
 ///
@@ -111,12 +111,8 @@ impl WalletFacade for LocalWallet {
             )
         };
 
-        // Take the replacement pin before the check, not after the commit. It
-        // is the mark this resync's state belongs to, and a chain replaced at
-        // any point after this reads as replaced next time. Taken afterwards,
-        // a swap during the resync would be stamped with the new chain's own
-        // block, and every later check would pass against a chain this state
-        // never saw.
+        // Take the replacement pin before the check; see
+        // `require_same_chain`.
         let replacement = if pin.is_some() {
             current_pin(chain).await
         } else {
@@ -124,25 +120,7 @@ impl WalletFacade for LocalWallet {
         };
 
         if let Some(pin) = &pin {
-            match verify_pin(chain, pin).await {
-                ChainCheck::SameChain => {}
-                // A node that cannot answer leaves the wallet alone: a pruned
-                // archive must not condemn a healthy one.
-                ChainCheck::Unknown => warn!(
-                    height = pin.height,
-                    "node could not answer for the pinned block; keeping the cached state"
-                ),
-                ChainCheck::Replaced { found } => {
-                    return Err(WalletError::ChainMismatch {
-                        path: snapshot
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_else(|| "the wallet snapshot".to_string()),
-                        pinned_height: pin.height,
-                        pinned_hash: pin.hash.clone(),
-                        found: found.unwrap_or_else(|| "no block".to_string()),
-                    });
-                }
-            }
+            require_same_chain(chain, pin, snapshot.as_deref()).await?;
         }
 
         // The plan is snapshotted under a read lock and the commit applied

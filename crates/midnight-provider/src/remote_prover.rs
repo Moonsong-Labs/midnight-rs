@@ -39,6 +39,33 @@ pub(crate) enum ProofServerError {
     UnsupportedProofVersion(String),
 }
 
+/// POST `body` to the proof server's `endpoint` and return the response body.
+///
+/// A non-2xx status becomes [`ProofServerError::Http`]. A transport failure
+/// passes through as the `reqwest::Error` that [`is_transient`] reads.
+pub(crate) async fn post(
+    http: &reqwest::Client,
+    base_url: &str,
+    endpoint: &'static str,
+    body: Vec<u8>,
+) -> Result<Vec<u8>, anyhow::Error> {
+    let resp = http
+        .post(format!("{base_url}{endpoint}"))
+        .body(body)
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(ProofServerError::Http {
+            endpoint,
+            status: status.as_u16(),
+            body: resp.text().await.unwrap_or_default(),
+        }
+        .into());
+    }
+    Ok(resp.bytes().await?.to_vec())
+}
+
 /// Whether `err` is worth retrying.
 ///
 /// Only a server-side outage or a transport failure is. Everything else is

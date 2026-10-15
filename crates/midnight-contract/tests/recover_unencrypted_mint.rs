@@ -16,110 +16,53 @@
 //! nonce per mint, so the owner can rebuild the coin from chain state.
 //!
 //! Gated on `MIDNIGHT_NODE_URL` / `MIDNIGHT_INDEXER_URL` (a running devnet +
-//! indexer). The compiled contract defaults to the committed fixture
-//! `devnet/contracts/shielded-mint/compiled`; override with `MINT_KEYED_DIR`.
+//! indexer).
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
-};
-use midnight_contract::Contract;
-use midnight_contract::runtime::Value;
-use midnight_wallet::{Seed, Wallet, WalletBuilder};
+mod common;
+
+mod shielded_mint {
+    compact_bindgen::contract!(
+        "../../devnet/contracts/shielded-mint/compiled/compiler/analyzed-ir.sexp"
+    );
+}
+
+use compact_bindgen::Bytes;
+use midnight_wallet::Seed;
 
 #[tokio::test]
 async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
-    let (node_url, indexer_url) = match (
-        std::env::var("MIDNIGHT_NODE_URL").ok(),
-        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
-    ) {
-        (Some(n), Some(i)) => (n, i),
-        _ => {
-            eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
-            return;
-        }
+    let Some((node_url, indexer_url)) = common::devnet_urls() else {
+        return;
     };
-    let keyed = std::env::var("MINT_KEYED_DIR").unwrap_or_else(|_| {
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../devnet/contracts/shielded-mint/compiled"
-        )
-        .to_string()
-    });
-
-    // --- Load the mint circuit IR, helpers, structs, enums, arg-types ---
-    let info_path = format!("{keyed}/compiler/analyzed-ir.sexp");
-    let info_json = std::fs::read_to_string(&info_path).expect("read contract-info");
-    let info: compact_codegen::types::ContractInfo =
-        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
-    let mint = info
-        .circuits
-        .iter()
-        .find(|c| c.name == "mint")
-        .expect("mint circuit");
-    let ir = &mint.def;
-    let program =
-        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
     // --- The recipient's coin public key. Its encryption key is deliberately
     //     never handed to the call, so the mint's output carries no
     //     ciphertext ---
-    let recip_seed =
-        Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000002").unwrap();
+    let recip_seed = Seed::from_hex(common::RECIPIENT_SEED).unwrap();
     let cpk = recip_seed.shielded_recipient().coin_public_key;
 
     // --- Funder wallet deploys the mint contract ---
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet =
-        Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")
-            .unwrap()
-            .with_network(midnight_provider::Network::Undeployed)
-            .sync(&provider)
-            .await
-            .expect("funder sync");
+    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
-    // A mint-only contract has no user ledger fields: an empty array.
-    let initial = ContractState::new(
-        StateValue::Array(vec![].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    let contract = Contract::deploy(provider)
-        .with_initial_state(initial)
-        .with_zk_config(&keyed)
+    let contract = shielded_mint::Contract::deploy(provider)
+        .with_initial_state(shielded_mint::LedgerInitialState)
+        .with_zk_config(shielded_mint::ZK_CONFIG_DIR)
         .await
         .expect("deploy mint contract");
-    let address = contract.address().to_string();
-    eprintln!("deployed mint contract at {address}");
+    eprintln!("deployed mint contract at {}", contract.address());
 
     // --- Call mint(domain_sep, value, nonce, coinPK) with no encryption keys,
     //     once per coin. See `mint_external_recipient` for why the recipient
     //     is a constant `left(...)` in the contract ---
     let domain_sep = [0x11u8; 32];
-    let mints: [([u8; 32], u128); 2] = [([0x33u8; 32], 1000), ([0x44u8; 32], 250)];
+    let mints: [([u8; 32], u64); 2] = [([0x33u8; 32], 1000), ([0x44u8; 32], 250)];
 
     for (nonce, mint_value) in mints {
-        let args = [
-            (
-                "domain_sep",
-                Value::AlignedValue(AlignedValue::from(domain_sep)),
-            ),
-            ("value", Value::Integer(mint_value)),
-            ("nonce", Value::AlignedValue(AlignedValue::from(nonce))),
-            ("coinPK", Value::AlignedValue(AlignedValue::from(cpk.0.0))),
-        ];
-
         contract
-            .call_with(
-                ir,
-                &program,
-                "mint",
-                &args,
-                &midnight_contract::runtime::NoWitnesses,
-                &[],
-                midnight_contract::ShieldedInputs::default(),
-            )
+            .circuits()
+            .mint(Bytes(domain_sep), mint_value, Bytes(nonce), cpk.into())
             .await
             .expect("mint call");
         eprintln!("minted {mint_value} with no discovery ciphertext");
@@ -127,37 +70,25 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
 
     // The coin the recipient has to rebuild: the nonce and value the call
     // used, and the token type the contract mints, `tokenType(domain_sep,
-    // contract_addr)`. The contract address is a 32-byte hex string.
-    let addr_bytes = {
-        let hex = address.strip_prefix("0x").unwrap_or(&address);
-        let v = hex::decode(hex).expect("address hex");
-        let mut a = [0u8; 32];
-        a.copy_from_slice(&v);
-        a
-    };
-    let contract_addr =
-        midnight_contract::ContractAddress(midnight_base_crypto::hash::HashOutput(addr_bytes));
-    let token_type = contract_addr
+    // contract_addr)`.
+    let token_type = midnight_contract::parse_address(contract.address())
+        .expect("contract address")
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
     // --- The recipient syncs and cannot see either coin ---
     let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = WalletBuilder::new(&recip_seed)
-        .with_network(midnight_provider::Network::Undeployed)
-        .sync(&recip_provider)
-        .await
-        .expect("recipient sync");
+    let wallet = common::synced_wallet(&recip_provider, common::RECIPIENT_SEED).await;
     let recip_provider = recip_provider.with_wallet(wallet);
 
     let holds = |coins: &[midnight_provider::SpendableShieldedCoin], nonce: [u8; 32], value| {
         coins
             .iter()
-            .any(|c| c.token_type == token_type && c.value == value && c.nonce == nonce)
+            .any(|c| c.token_type == token_type && c.value == u128::from(value) && c.nonce == nonce)
     };
     let seen = |coins: &[midnight_provider::SpendableShieldedCoin]| {
         coins
             .iter()
-            .map(|c| (hex::encode(c.token_type.0.0), c.value))
+            .map(|c| (c.token_type_hex(), c.value))
             .collect::<Vec<_>>()
     };
 
@@ -180,7 +111,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
             .watch_for_coin(midnight_provider::CoinInfo {
                 nonce: midnight_provider::Nonce(midnight_base_crypto::hash::HashOutput(nonce)),
                 type_: token_type,
-                value,
+                value: u128::from(value),
             })
             .await
             .expect("watch_for_coin");
@@ -193,8 +124,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
             assert!(
                 holds(&after, recovered_nonce, recovered_value),
                 "registering the rebuilt coin must recover it and keep the ones before it \
-                 (token {}, value {recovered_value}); coins seen: {:?}",
-                hex::encode(token_type.0.0),
+                 (token {token_type}, value {recovered_value}); coins seen: {:?}",
                 seen(&after)
             );
         }

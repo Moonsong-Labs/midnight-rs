@@ -15,12 +15,11 @@ use super::helpers::transient_crypto::proofs::{
     KeyLocation, Proof, ProofPreimage, Resolver as ResolverTrait, WrappedIr,
 };
 use super::helpers::{
-    CostModel, DB, PedersenRandomness, ProofMarker, ProofPreimageMarker, ProofProvider, Resolver,
-    Signature, StdRng, Transaction,
+    CostModel, DB, ProofProvider, ProvenTransaction, Resolver, StdRng, UnprovenTransaction,
 };
 use crate::remote_prover::{
     INITIAL_BACKOFF, MAX_BACKOFF, PROOF_SERVER_TIMEOUT, PROVING_PANIC_PREFIX, ProofServerError,
-    RemoteProofServer, is_transient,
+    RemoteProofServer, is_transient, post,
 };
 
 /// Whether a proving attempt failed for a reason another attempt could fix.
@@ -48,11 +47,11 @@ fn is_transient_attempt<D: DB>(err: &TransactionProvingError<D>) -> bool {
 impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
     async fn prove(
         &self,
-        tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, D>,
+        tx: UnprovenTransaction<D>,
         _rng: StdRng,
         resolver: &'static Resolver,
         cost_model: CostModel,
-    ) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
+    ) -> ProvenTransaction<D> {
         info!(url = %self.url, "remote proving");
         let base_url = self.url.clone();
 
@@ -83,12 +82,12 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
 }
 
 async fn prove_with_retries<D: DB + Clone>(
-    tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, D>,
+    tx: UnprovenTransaction<D>,
     base_url: String,
     http: reqwest::Client,
     resolver: &Resolver,
     cost_model: CostModel,
-) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
+) -> ProvenTransaction<D> {
     let start = Instant::now();
     let mut delay = INITIAL_BACKOFF;
     loop {
@@ -200,24 +199,9 @@ impl ProofServerClient<'_> {
         let ser = self
             .check_request_body(&ProofPreimageVersioned::V2(Arc::new(preimage.clone())))
             .await?;
-        let resp = self
-            .http
-            .post(format!("{}/check", self.base_url))
-            .body(ser)
-            .send()
-            .await?;
-        if resp.status().is_success() {
-            let bytes = resp.bytes().await?;
-            let res: Vec<Option<u64>> = tagged_deserialize(&mut bytes.to_vec().as_slice())?;
-            Ok(res.into_iter().map(|i| i.map(|i| i as usize)).collect())
-        } else {
-            Err(ProofServerError::Http {
-                endpoint: "/check",
-                status: resp.status().as_u16(),
-                body: resp.text().await.unwrap_or_default(),
-            }
-            .into())
-        }
+        let bytes = post(&self.http, &self.base_url, "/check", ser).await?;
+        let res: Vec<Option<u64>> = tagged_deserialize(bytes.as_slice())?;
+        Ok(res.into_iter().map(|i| i.map(|i| i as usize)).collect())
     }
 
     /// `ProvingProvider::prove`, over the proof server's `/prove`.
@@ -232,28 +216,11 @@ impl ProofServerClient<'_> {
                 overwrite_binding_input,
             )
             .await?;
-        let resp = self
-            .http
-            .post(format!("{}/prove", self.base_url))
-            .body(ser)
-            .send()
-            .await?;
-        if resp.status().is_success() {
-            let bytes = resp.bytes().await?;
-            let proof: ProofVersioned = tagged_deserialize(&mut bytes.to_vec().as_slice())?;
-            match proof {
-                ProofVersioned::V2(proof) => Ok(proof),
-                other => {
-                    Err(ProofServerError::UnsupportedProofVersion(format!("{other:?}")).into())
-                }
-            }
-        } else {
-            Err(ProofServerError::Http {
-                endpoint: "/prove",
-                status: resp.status().as_u16(),
-                body: resp.text().await.unwrap_or_default(),
-            }
-            .into())
+        let bytes = post(&self.http, &self.base_url, "/prove", ser).await?;
+        let proof: ProofVersioned = tagged_deserialize(bytes.as_slice())?;
+        match proof {
+            ProofVersioned::V2(proof) => Ok(proof),
+            other => Err(ProofServerError::UnsupportedProofVersion(format!("{other:?}")).into()),
         }
     }
 }

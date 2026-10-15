@@ -5,7 +5,7 @@
 
 use std::ops::Range;
 
-use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
+use midnight_typed_state::AlignedValue;
 
 use compact_codegen::ir::{Type, uint_byte_width};
 use num_bigint::BigUint;
@@ -13,16 +13,6 @@ use num_bigint::BigUint;
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
 use crate::error::InterpreterError;
 use crate::value::Value;
-
-/// The `AlignedValue` a `StateValue::Cell` wraps, or `None` for any other
-/// variant. `Null`, `Map`, `Array` and `BoundedMerkleTree` are state-tree
-/// containers with no aligned-value form.
-pub fn cell_aligned_value(sv: &StateValue<InMemoryDB>) -> Option<AlignedValue> {
-    match sv {
-        StateValue::Cell(sp) => Some((**sp).clone()),
-        _ => None,
-    }
-}
 
 /// Precomputed layout of a struct: field name → (atom offset, atom count).
 #[derive(Debug, Clone)]
@@ -43,6 +33,9 @@ impl StructLayout {
 /// Compute the number of FAB atoms a type occupies in an `AlignedValue`
 /// encoding. Used to build struct layouts so `Expr::Field` can slice
 /// `Value::AlignedValue` receivers by offset/length.
+///
+/// Returns `None` for a type with no fixed width, or when the count does not
+/// fit a `usize`.
 pub fn atom_count_for_type(ty: &Type) -> Option<usize> {
     match ty {
         Type::Boolean | Type::Unsigned(_) | Type::Field(_) | Type::Bytes(_) => Some(1),
@@ -53,27 +46,14 @@ pub fn atom_count_for_type(ty: &Type) -> Option<usize> {
             "Scalar<BLS12-381>" => Some(1),
             _ => Some(1),
         },
-        Type::Tuple(types) => {
-            let mut total = 0;
-            for t in types {
-                total += atom_count_for_type(t)?;
-            }
-            Some(total)
-        }
+        Type::Tuple(types) => atoms_of(types),
         Type::Vector { len, ty } => {
-            let per = atom_count_for_type(ty)?;
-            Some(per * (*len as usize))
+            atom_count_for_type(ty)?.checked_mul(usize::try_from(*len).ok()?)
         }
         // Prefer the field list the type carries: it is exact per
         // instantiation, where a name is not. Two instantiations of one
         // generic struct share a name but not a layout.
-        Type::Struct { fields, .. } => {
-            let mut total = 0;
-            for (_, t) in fields {
-                total += atom_count_for_type(t)?;
-            }
-            Some(total)
-        }
+        Type::Struct { fields, .. } => atoms_of(fields.iter().map(|(_, t)| t)),
         Type::Enum { .. } => Some(1),
         Type::Alias { ty, .. } => atom_count_for_type(ty),
         // A contract handle is a single address atom on the wire.
@@ -83,16 +63,22 @@ pub fn atom_count_for_type(ty: &Type) -> Option<usize> {
     }
 }
 
+fn atoms_of<'a>(types: impl IntoIterator<Item = &'a Type>) -> Option<usize> {
+    types.into_iter().try_fold(0usize, |total, t| {
+        total.checked_add(atom_count_for_type(t)?)
+    })
+}
+
 /// Compute a layout straight from a field list, for a type that carries its
 /// own fields instead of being named in a table. Returns `None` when a field's
-/// width cannot be determined.
+/// width cannot be determined, or when an offset does not fit a `usize`.
 pub fn layout_from_fields(fields: &[(String, Type)]) -> Option<StructLayout> {
     let mut out = Vec::with_capacity(fields.len());
     let mut offset = 0usize;
     for (name, ty) in fields {
         let len = atom_count_for_type(ty)?;
         out.push((name.clone(), offset, len));
-        offset += len;
+        offset = offset.checked_add(len)?;
     }
     Some(StructLayout { fields: out })
 }
@@ -136,10 +122,7 @@ pub fn element_atom_range(ty: &Type, i: usize) -> Option<Range<usize>> {
             Some(start..start.checked_add(stride)?)
         }
         Type::Tuple(types) => {
-            let mut start = 0usize;
-            for t in types.get(..i)? {
-                start = start.checked_add(atom_count_for_type(t)?)?;
-            }
+            let start = atoms_of(types.get(..i)?)?;
             let width = atom_count_for_type(types.get(i)?)?;
             Some(start..start.checked_add(width)?)
         }
@@ -196,12 +179,8 @@ pub fn bytes_aligned_value(
 ) -> Result<AlignedValue, InterpreterError> {
     use midnight_base_crypto::fab;
     let byte_len = bytes.len();
-    let mut atom = bytes;
-    while matches!(atom.last(), Some(0)) {
-        atom.pop();
-    }
     fab::AlignedValue::new(
-        fab::Value(vec![fab::ValueAtom(atom)]),
+        fab::Value(vec![fab::ValueAtom::from(bytes)]),
         fab::Alignment::singleton(fab::AlignmentAtom::Bytes {
             length: length as u32,
         }),
@@ -230,6 +209,9 @@ pub fn merkle_leaf_hash(av: AlignedValue) -> AlignedValue {
 /// `Idx` path variables all route through here, so a new type variant only
 /// needs handling in one place.
 ///
+/// A struct accepts a `Value::Struct`, which names its fields, or a
+/// `Value::Tuple`, which gives them in declaration order.
+///
 /// # Why the width matters
 ///
 /// FAB atoms are zero-trimmed little-endian bytes, so the atom for a given
@@ -251,22 +233,9 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
     let unsupported =
         || InterpreterError::TypeError(format!("cannot encode value {val:?} as type {ty:?}"));
 
-    // A `StateValue::Cell` wraps exactly one `AlignedValue`, so unwrapping it is
-    // the encoding; re-dispatch on the flat value so it still has to satisfy the
-    // declared type. The other variants are containers in the state tree with no
-    // aligned-value representation at all (upstream defines only
-    // `From<AlignedValue> for StateValue`, never the reverse, and the canonical
-    // runtime exposes just `asCell()`), so there is nothing to encode and this
-    // reports that rather than substituting an empty value. Mirrors
-    // `midnight_typed_state::nav::cell_value`.
-    if let Value::StateValue(sv) = val {
-        return match cell_aligned_value(sv) {
-            Some(av) => encode_typed(&Value::AlignedValue(av), ty),
-            None => Err(InterpreterError::TypeError(format!(
-                "cannot encode a {} state value: only a Cell holds an aligned value",
-                variant_name(sv)
-            ))),
-        };
+    // A Cell unwraps to its aligned value, which must still satisfy `ty`.
+    if let Value::StateValue(_) = val {
+        return encode_typed(&Value::AlignedValue(val.try_to_aligned_value()?), ty);
     }
 
     match ty {
@@ -314,15 +283,8 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
         Type::Opaque(_) | Type::Point(_) => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
-            // evaluates to Void. The Compact runtime encodes opaque values
-            // as a single Compress-aligned atom and their default as the
-            // empty value (compact-types.ts: CompactTypeOpaqueString /
-            // CompactTypeOpaqueUint8Array), i.e. an empty atom.
-            Value::Void => fab::AlignedValue::new(
-                fab::Value(vec![fab::ValueAtom(Vec::new())]),
-                fab::Alignment::singleton(fab::AlignmentAtom::Compress),
-            )
-            .ok_or_else(unsupported),
+            // evaluates to Void.
+            Value::Void => Ok(empty_opaque()),
             _ => Err(unsupported()),
         },
         // Composite types accept either the structural spelling, which is
@@ -373,12 +335,20 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
         // zero-pads each atom to its declared width, so a wrong width is a wrong
         // digest.
         Type::Struct { name, fields } => {
-            // Already flat: `Expr::New` encodes struct literals eagerly, so a
-            // struct-typed value usually arrives pre-encoded.
-            if let Value::AlignedValue(av) = val {
-                return Ok(av.clone());
-            }
-            match val {
+            let field_count = |n: usize| {
+                if n == fields.len() {
+                    Ok(())
+                } else {
+                    Err(InterpreterError::TypeError(format!(
+                        "struct {name} expects {} fields, got {n}",
+                        fields.len()
+                    )))
+                }
+            };
+            let values: Vec<&Value> = match val {
+                // Already flat: `Expr::New` encodes struct literals eagerly, so a
+                // struct-typed value usually arrives pre-encoded.
+                Value::AlignedValue(av) => return Ok(av.clone()),
                 // Named fields. The map has no inherent order, so declaration
                 // order comes from `fields`; the value only supplies the
                 // per-field contents. Field identity cannot be inferred from the
@@ -386,37 +356,36 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
                 // identical field names and different payload types), which is
                 // why the type has to drive this.
                 Value::Struct(supplied) => {
-                    if supplied.len() != fields.len() {
-                        return Err(InterpreterError::TypeError(format!(
-                            "struct {name} expects {} fields, got {}",
-                            fields.len(),
-                            supplied.len()
-                        )));
-                    }
-                    let parts: Vec<AlignedValue> = fields
+                    field_count(supplied.len())?;
+                    fields
                         .iter()
-                        .map(|(field_name, field_ty)| {
-                            let v = supplied.get(field_name).ok_or_else(|| {
+                        .map(|(field_name, _)| {
+                            supplied.get(field_name).ok_or_else(|| {
                                 InterpreterError::TypeError(format!(
                                     "struct {name} is missing field '{field_name}'"
                                 ))
-                            })?;
-                            encode_typed(v, field_ty)
+                            })
                         })
-                        .collect::<Result<_, _>>()?;
-                    Ok(AlignedValue::concat(parts.iter()))
+                        .collect::<Result<_, _>>()?
                 }
-                // Positional spelling of the same struct.
-                Value::Tuple(elements) if elements.len() == fields.len() => {
-                    let parts: Vec<AlignedValue> = fields
-                        .iter()
-                        .zip(elements)
-                        .map(|((_, field_ty), e)| encode_typed(e, field_ty))
-                        .collect::<Result<_, _>>()?;
-                    Ok(AlignedValue::concat(parts.iter()))
+                Value::Tuple(elements) => {
+                    field_count(elements.len())?;
+                    elements.iter().collect()
                 }
-                _ => Err(unsupported()),
-            }
+                _ => return Err(unsupported()),
+            };
+            let parts: Vec<AlignedValue> = fields
+                .iter()
+                .zip(values)
+                .map(|((field_name, field_ty), v)| {
+                    encode_typed(v, field_ty).map_err(|e| {
+                        InterpreterError::TypeError(format!(
+                            "cannot encode field `{field_name}` of `{name}`: {e}"
+                        ))
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            Ok(AlignedValue::concat(parts.iter()))
         }
         // An enum encodes as its declaration index in a single byte. The
         // compiler derives the width from the highest index, so this holds for
@@ -443,6 +412,14 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
     }
 }
 
+/// The default of an opaque type. The Compact runtime encodes an opaque value as
+/// a single Compress-aligned atom and its default as the empty value
+/// (compact-types.ts: CompactTypeOpaqueString / CompactTypeOpaqueUint8Array),
+/// which is one empty atom.
+fn empty_opaque() -> AlignedValue {
+    AlignedValue::from(Vec::<u8>::new())
+}
+
 /// The compiler's `default<T>`, in the interpreter's value domain.
 ///
 /// The canonical runtime builds a default through the type's descriptor
@@ -460,7 +437,6 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
 ///   does not fit in `usize`, or if a part of the default does not encode at
 ///   its type.
 pub fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
-    use midnight_base_crypto::fab;
     match ty {
         Type::Boolean => Ok(Value::Bool(false)),
         Type::Unsigned(_) | Type::Enum { .. } => Ok(Value::Integer(0)),
@@ -480,28 +456,13 @@ pub fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
         Type::Point(_) => Ok(Value::AlignedValue(AlignedValue::from(
             midnight_transient_crypto::curve::EmbeddedGroupAffine::identity(),
         ))),
-        Type::Opaque(_) => fab::AlignedValue::new(
-            fab::Value(vec![fab::ValueAtom(Vec::new())]),
-            fab::Alignment::singleton(fab::AlignmentAtom::Compress),
-        )
-        .map(Value::AlignedValue)
-        .ok_or_else(|| {
-            InterpreterError::TypeError("empty opaque default is unrepresentable".into())
-        }),
-        // Mirrors `ir::Expr::New`: each field's default encoded at its
-        // declared type, concatenated into the struct's flat FAB encoding.
-        Type::Struct { name, fields } => {
-            let mut parts = Vec::with_capacity(fields.len());
-            for (field_name, field_ty) in fields {
-                let val = default_value(field_ty)?;
-                let av = encode_typed(&val, field_ty).map_err(|e| {
-                    InterpreterError::TypeError(format!(
-                        "cannot encode default field `{field_name}` of `{name}`: {e}"
-                    ))
-                })?;
-                parts.push(av);
-            }
-            Ok(Value::AlignedValue(fab::AlignedValue::concat(parts.iter())))
+        Type::Opaque(_) => Ok(Value::AlignedValue(empty_opaque())),
+        Type::Struct { fields, .. } => {
+            let defaults = fields
+                .iter()
+                .map(|(_, field_ty)| default_value(field_ty))
+                .collect::<Result<Vec<_>, _>>()?;
+            encode_typed(&Value::Tuple(defaults), ty).map(Value::AlignedValue)
         }
         Type::Tuple(types) if types.is_empty() => Ok(Value::Void),
         Type::Tuple(types) => Ok(Value::Tuple(
