@@ -111,11 +111,11 @@ async fn main() -> anyhow::Result<()> {
     // Both balance entry types impl Display; NIGHT renders as "NIGHT: <val>"
     // on the unshielded side, everything else as "<hex8>…: <val>".
     println!("--- Balances ---");
-    println!("Shielded coins: {}", balance.shielded.total_count);
+    println!("Shielded coins:   {}", balance.shielded.total_count);
     for coin in &balance.shielded.coins {
         println!("  {coin}");
     }
-    println!("Unshielded:     {} token type(s)", balance.unshielded.len());
+    println!("Unshielded UTXOs: {}", balance.unshielded.len());
     for utxo in &balance.unshielded {
         println!("  {utxo}");
     }
