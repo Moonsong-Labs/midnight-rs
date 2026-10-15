@@ -49,9 +49,9 @@ pub struct DustSpendBatch {
 /// A transfer whose inputs are selected and whose Dust fee is balanced, but
 /// which is not yet proven.
 ///
-/// The wallet is needed only to produce this. Proving reads the build context
-/// alone, so a caller can reserve what this reports, release the wallet, and
-/// prove afterwards.
+/// Reserve what [`Self::spent_inputs`] reports before you release the wallet.
+/// Proving reads the build context alone, so [`Self::prove`] can run after the
+/// release.
 pub struct PreparedTransfer {
     tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     tx: UnprovenTx,
@@ -342,12 +342,7 @@ impl<'a> TransferBuilder<'a> {
     /// balance in `token_type` rather than by its largest single coin. Sending
     /// the full balance to this wallet's own address therefore consolidates it
     /// into one coin, and sending part of a coin splits it. The spent coins'
-    /// nullifiers are surfaced in [`PreparedTransfer::spent_shielded_inputs`] so
-    /// the caller can reserve them.
-    /// Stops before proving. Reserve the inputs the returned
-    /// [`PreparedTransfer`] reports, then call [`PreparedTransfer::prove`]:
-    /// the transaction bytes exist only after that. Reserving first is what
-    /// stops another build in this process selecting the same inputs.
+    /// nullifiers are in [`PreparedTransfer::spent_shielded_inputs`].
     pub async fn prepare_shielded(
         self,
         token_type: ShieldedTokenType,
@@ -365,8 +360,8 @@ impl<'a> TransferBuilder<'a> {
             .await
     }
 
-    /// Build one half of a native two-party shielded token swap: a proven,
-    /// fee-less Zswap offer that spends `give_amount` of `give_token` and
+    /// Build one half of a native two-party shielded token swap: a fee-less
+    /// Zswap offer that spends `give_amount` of `give_token` and
     /// creates an output for `receive_amount` of `receive_token` payable to
     /// this wallet.
     ///
@@ -383,12 +378,8 @@ impl<'a> TransferBuilder<'a> {
     /// inherently Dustless. Give-side coins are selected up front with
     /// [`InputInfo::coins_to_cover_value`]; the resulting change (if any) goes
     /// back to this wallet, mirroring [`Self::prepare_unshielded`]'s change handling in
-    /// the shielded domain. The spent coins' nullifiers are surfaced in
-    /// [`PreparedTransfer::spent_shielded_inputs`] so the caller can reserve them.
-    /// Stops before proving. Reserve the inputs the returned
-    /// [`PreparedTransfer`] reports, then call [`PreparedTransfer::prove`]:
-    /// the transaction bytes exist only after that. Reserving first is what
-    /// stops another build in this process selecting the same inputs.
+    /// the shielded domain. The spent coins' nullifiers are in
+    /// [`PreparedTransfer::spent_shielded_inputs`].
     pub async fn prepare_shielded_swap(
         self,
         give_token: ShieldedTokenType,
@@ -503,10 +494,6 @@ impl<'a> TransferBuilder<'a> {
     /// When `pay_fees` is false the build skips Dust entirely, yielding a
     /// fee-unbalanced transaction for another wallet to sponsor (the
     /// `.without_dust()` path); see [`Self::prepare_shielded`] for the multi-party flow.
-    /// Stops before proving. Reserve the inputs the returned
-    /// [`PreparedTransfer`] reports, then call [`PreparedTransfer::prove`]:
-    /// the transaction bytes exist only after that. Reserving first is what
-    /// stops another build in this process selecting the same inputs.
     pub async fn prepare_unshielded(
         self,
         token_type: UnshieldedTokenType,
@@ -618,10 +605,6 @@ impl<'a> TransferBuilder<'a> {
     /// `utxo_ctime` is a fallback creation timestamp (seconds since epoch),
     /// used only for UTXOs whose own creation time the indexer did not report.
     /// If `None`, those UTXOs fall back to `now - 1 hour`.
-    /// Stops before proving. Reserve the inputs the returned
-    /// [`PreparedTransfer`] reports, then call [`PreparedTransfer::prove`]:
-    /// the transaction bytes exist only after that. Reserving first is what
-    /// stops another build in this process selecting the same inputs.
     pub async fn prepare_register_dust(
         self,
         utxo_ctime: Option<u64>,
