@@ -134,11 +134,7 @@ async fn held(provider: &MidnightProvider, colour: UnshieldedTokenType) -> u128 
         .balance()
         .await
         .expect("balance")
-        .unshielded
-        .iter()
-        .filter(|u| u.token_type == colour)
-        .map(|u| u.value)
-        .sum()
+        .unshielded_value(colour)
 }
 
 /// [`held`], retried until it reaches `target` or two minutes elapse.

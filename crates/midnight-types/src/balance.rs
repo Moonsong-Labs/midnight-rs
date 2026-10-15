@@ -91,8 +91,8 @@ pub struct ShieldedBalance {
 
 /// A single spendable shielded coin, addressed by its full coin info.
 ///
-/// Unlike [`ShieldedCoinBalance`] (which aggregates by token type and carries no
-/// nonce), this names one concrete coin: the `nonce`, `token_type`, and `value`
+/// Unlike [`ShieldedCoinBalance`], which carries no nonce, this names one
+/// concrete coin: the `nonce`, `token_type`, and `value`
 /// are exactly the `ShieldedCoinInfo { nonce, color, value }` a circuit argument
 /// needs, and `nullifier` pins this exact coin when it is spent as a shielded
 /// input. A circuit like `receiveShielded(coin)` re-commits the coin's exact
@@ -126,4 +126,90 @@ pub struct WalletBalance {
     pub dust: DustBalance,
     pub unshielded: Vec<UnshieldedUtxoInfo>,
     pub shielded: ShieldedBalance,
+}
+
+impl WalletBalance {
+    /// The total value of every coin of `token` in [`Self::shielded`].
+    ///
+    /// The value is in the token's smallest unit. The sum counts every coin of
+    /// `token`, including the coins that a pending build reserves, so a new
+    /// build can draw on less. It is 0 when the wallet holds no coin of `token`,
+    /// and it saturates at `u128::MAX`.
+    pub fn shielded_value(&self, token: ShieldedTokenType) -> u128 {
+        self.shielded
+            .coins
+            .iter()
+            .filter(|coin| coin.token_type == token)
+            .fold(0, |sum, coin| sum.saturating_add(coin.value))
+    }
+
+    /// The total value of every UTXO of `token` in [`Self::unshielded`].
+    ///
+    /// The value is in the token's smallest unit, which is STAR for [`NIGHT`].
+    /// The sum counts every UTXO of `token`, including the UTXOs that a pending
+    /// build reserves, so a new build can draw on less. It is 0 when the wallet
+    /// holds no UTXO of `token`, and it saturates at `u128::MAX`.
+    pub fn unshielded_value(&self, token: UnshieldedTokenType) -> u128 {
+        self.unshielded
+            .iter()
+            .filter(|utxo| utxo.token_type == token)
+            .fold(0, |sum, utxo| sum.saturating_add(utxo.value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use midnight_helpers::HashOutput;
+
+    use super::{
+        ShieldedBalance, ShieldedCoinBalance, ShieldedTokenType, UnshieldedTokenType,
+        UnshieldedUtxoInfo, WalletBalance,
+    };
+
+    fn balance(entries: &[(u8, u128)]) -> WalletBalance {
+        let coins: Vec<_> = entries
+            .iter()
+            .map(|&(id, value)| ShieldedCoinBalance {
+                token_type: ShieldedTokenType(HashOutput([id; 32])),
+                value,
+            })
+            .collect();
+        WalletBalance {
+            unshielded: entries
+                .iter()
+                .map(|&(id, value)| UnshieldedUtxoInfo {
+                    token_type: UnshieldedTokenType(HashOutput([id; 32])),
+                    value,
+                })
+                .collect(),
+            shielded: ShieldedBalance {
+                total_count: coins.len(),
+                coins,
+            },
+            ..WalletBalance::default()
+        }
+    }
+
+    /// Each leg holds one entry per coin, so a sum that skips the filter, or
+    /// takes only the first or the last match, gives another number.
+    #[test]
+    fn a_token_value_sums_every_entry_of_that_token_only() {
+        let balance = balance(&[(1, 5), (2, 100), (1, 7)]);
+        let token = HashOutput([1; 32]);
+        assert_eq!(balance.shielded_value(ShieldedTokenType(token)), 12);
+        assert_eq!(balance.unshielded_value(UnshieldedTokenType(token)), 12);
+    }
+
+    /// The sums have no error channel, so an overflow must neither panic nor
+    /// wrap.
+    #[test]
+    fn a_token_value_saturates_on_overflow() {
+        let balance = balance(&[(1, u128::MAX), (1, 1)]);
+        let token = HashOutput([1; 32]);
+        assert_eq!(balance.shielded_value(ShieldedTokenType(token)), u128::MAX);
+        assert_eq!(
+            balance.unshielded_value(UnshieldedTokenType(token)),
+            u128::MAX
+        );
+    }
 }

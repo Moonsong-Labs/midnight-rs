@@ -132,12 +132,7 @@ async fn main() -> anyhow::Result<()> {
             "Decay rate:      {} SPECK/STAR/sec",
             dust_params.generation_decay_rate
         );
-        let night_value: u128 = balance
-            .unshielded
-            .iter()
-            .filter(|u| u.token_type == NIGHT)
-            .map(|u| u.value)
-            .sum();
+        let night_value = balance.unshielded_value(NIGHT);
         let max_dust = night_value.saturating_mul(dust_params.night_dust_ratio as u128);
         let rate = night_value.saturating_mul(dust_params.generation_decay_rate as u128);
         let time_to_cap = max_dust.checked_div(rate).unwrap_or(0);
