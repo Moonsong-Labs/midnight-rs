@@ -95,15 +95,9 @@ pub struct FsPrivateStateProvider {
     locks: Arc<StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 /// `~/.midnight/private-state/`, the base that holds one store per wallet.
 fn default_dir() -> Option<PathBuf> {
-    home_dir().map(|h| h.join(".midnight").join("private-state"))
+    std::env::home_dir().map(|h| h.join(".midnight").join("private-state"))
 }
 
 /// The on-disk name of `s`: the hex of its sha256.

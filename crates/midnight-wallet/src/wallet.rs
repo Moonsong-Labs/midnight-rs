@@ -54,12 +54,6 @@ macro_rules! each {
     };
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 impl Wallet {
     pub(crate) fn state(&self) -> &State {
         &self.state
@@ -71,7 +65,7 @@ impl Wallet {
 
     /// Default storage directory: `~/.midnight/wallets/`
     pub fn default_storage_dir() -> Option<PathBuf> {
-        home_dir().map(|h| h.join(".midnight").join("wallets"))
+        std::env::home_dir().map(|h| h.join(".midnight").join("wallets"))
     }
 
     /// The ledger generation this wallet's state is in.
