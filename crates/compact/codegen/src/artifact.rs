@@ -347,9 +347,7 @@ fn check_expr(e: &ir::Expr) -> Result<(), ArtifactError> {
         EltRef { expr, .. } | TupleRef { expr, .. } | Return(expr) | Assert { expr, .. } => {
             check_expr(expr)
         }
-        FieldToBytes { expr, .. } | VectorToBytes { expr, .. } | BytesToVector { expr, .. } => {
-            check_expr(expr)
-        }
+        VectorToBytes { expr, .. } | BytesToVector { expr, .. } => check_expr(expr),
         Tuple(ta) | VectorLit(ta) => tuple_args(ta),
         TupleSlice { ty, expr, .. } => {
             check_type(ty)?;
@@ -435,6 +433,9 @@ fn check_expr(e: &ir::Expr) -> Result<(), ArtifactError> {
             check_expr(expr)
         }
         CastFromField {
+            field_type, expr, ..
+        }
+        | FieldToBytes {
             field_type, expr, ..
         } => {
             check_type(&ir::Type::Field(field_type.clone()))?;
