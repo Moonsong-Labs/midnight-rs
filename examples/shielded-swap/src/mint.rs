@@ -39,16 +39,14 @@ pub async fn mint_token_to(
         .await?;
 
     let shielded = recipient.shielded_recipient();
-    let coin_pk = shielded.coin_public_key;
-    let enc_pk = shielded.enc_public_key;
     let domain_sep = Bytes([0x22u8; 32]);
     // Fresh nonce per run so the coin (and the example) stays re-runnable.
     let nonce = Bytes(rand::thread_rng().r#gen::<[u8; 32]>());
     let coin_pk_arg = contract::ZswapCoinPublicKey {
-        bytes: Bytes(coin_pk.0.0),
+        bytes: Bytes(shielded.coin_public_key.0.0),
     };
     mint.circuits()
-        .with_coin_encryption_keys([(coin_pk, enc_pk)])
+        .with_coin_encryption_keys([shielded])
         .mint(domain_sep, amount, nonce, coin_pk_arg)
         .await?;
 

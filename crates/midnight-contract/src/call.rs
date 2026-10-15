@@ -156,10 +156,7 @@ pub(crate) async fn call_funded_with(
     args: &[(&str, runtime::Value)],
     witnesses: &dyn runtime::WitnessProvider,
     private_state: Option<&mut Vec<u8>>,
-    coin_encryption_keys: &[(
-        midnight_types::CoinPublicKey,
-        midnight_types::EncryptionPublicKey,
-    )],
+    coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     // When false, skip Dust funding: the call is built proven but fee-less, for
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).

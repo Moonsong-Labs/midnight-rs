@@ -73,16 +73,12 @@ pub use midnight_provider::{
 // offer `.without_dust()` producing a sponsorable transaction.
 pub use midnight_provider::{DustlessBuilder, DustlessTransaction};
 
-// A shielded offer attached to a deploy (see
-// `DeployBuilder::with_shielded_offer`). `parse_shielded_recipient` decodes a
-// `mn_shield-addr_*` string into the keys a payment pays.
+// Shielded recipients, their keys, and the shielded offer of a deploy.
 pub use midnight_types::address::parse_shielded_recipient;
-pub use midnight_types::{ShieldedRecipient, ShieldedTokenType};
+pub use midnight_types::{
+    CoinPublicKey, EncryptionPublicKey, ShieldedRecipient, ShieldedTokenType,
+};
 pub use offer::{ShieldedOffer, ShieldedPayment};
-// Recipient key types for `Circuits::with_coin_encryption_keys` / `Contract::call_with`: a
-// `coin_public_key -> encryption_public_key` mapping that lets the SDK attach
-// the discovery ciphertext to circuit-created shielded outputs.
-pub use midnight_types::{CoinPublicKey, EncryptionPublicKey};
 // The shielded coin a caller spends, from `MidnightProvider::spendable_shielded_coins`.
 pub use midnight_types::SpendableShieldedCoin;
 

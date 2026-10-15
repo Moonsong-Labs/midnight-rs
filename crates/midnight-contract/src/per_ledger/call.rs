@@ -135,10 +135,7 @@ pub(crate) async fn call_transaction(
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
-    coin_encryption_keys: &[(
-        midnight_types::CoinPublicKey,
-        midnight_types::EncryptionPublicKey,
-    )],
+    coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     pay_fees: bool,
 ) -> Result<Vec<u8>, ContractError> {
@@ -794,30 +791,27 @@ type ShieldedOfferOutput = (helpers::coin_structure::coin::Commitment, MintedCoi
 ///
 /// An output for a user carries a discovery ciphertext when the recipient's
 /// encryption key is known, so the recipient finds the coin through normal
-/// sync (no `watchFor`). `enc_keys` maps coin public keys to encryption public
-/// keys. `wallet_keys` is the calling wallet's pair, and it applies when
-/// `enc_keys` has no entry for that coin public key. Thus a coin that a circuit
-/// sends to `ownPublicKey()` reaches the wallet with no entry from the caller,
-/// as in midnight-js. An output for another user that `enc_keys` leaves out
-/// has no ciphertext.
+/// sync (no `watchFor`). `coin_encryption_keys` gives the encryption key of
+/// each recipient it lists. `wallet_keys` is the calling wallet's pair, and it
+/// applies when `coin_encryption_keys` has no entry for that coin public key.
+/// Thus a coin that a circuit sends to `ownPublicKey()` reaches the wallet with
+/// no entry from the caller, as in midnight-js. An output for another user that
+/// `coin_encryption_keys` leaves out has no ciphertext.
 ///
 /// The commitment is derived with the same coin-structure `Info::commitment` the
 /// on-chain runtime used to record the transcript's claimed effect, so the two
 /// match by construction and the caller can route each output by segment.
 fn build_shielded_offer_outputs(
     zswap_outputs: &[runtime::CircuitZswapOutput],
-    enc_keys: &[(
-        midnight_types::CoinPublicKey,
-        midnight_types::EncryptionPublicKey,
-    )],
+    coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     wallet_keys: (helpers::CoinPublicKey, helpers::EncryptionPublicKey),
 ) -> Result<Vec<ShieldedOfferOutput>, ContractError> {
-    // Index the mappings once so the per-output lookup is O(1); keyed by the
+    // Index the recipients once so the per-output lookup is O(1); keyed by the
     // coin public key's raw bytes (`HashOutput` inner array).
     let mut epk_by_cpk: std::collections::HashMap<[u8; 32], helpers::EncryptionPublicKey> =
-        enc_keys
+        coin_encryption_keys
             .iter()
-            .map(|(cpk, epk)| (cpk.0.0, epk.into_ledger()))
+            .map(|r| (r.coin_public_key.0.0, r.enc_public_key.into_ledger()))
             .collect();
     let (wallet_cpk, wallet_epk) = wallet_keys;
     epk_by_cpk.entry(wallet_cpk.0.0).or_insert(wallet_epk);

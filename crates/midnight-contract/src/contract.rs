@@ -969,7 +969,7 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
+        coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
         // When false, build the call proven but Dustless (fee-less), for another
         // wallet to sponsor via `MidnightProvider::balance_transaction`.
@@ -1026,7 +1026,7 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
+        coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
         pay_fees: bool,
     ) -> Result<BuiltCall, ContractError>
@@ -1081,13 +1081,13 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        // `coin_public_key → encryption_public_key` mappings applied to the
-        // shielded outputs this circuit creates (mints/sends). For each output
-        // whose coin public key is present, the SDK attaches a discovery
-        // ciphertext so the recipient's wallet finds the coin through normal
-        // sync (no `watchFor`). The calling wallet's own coin public key needs
-        // no entry. Pass `&[]` for none.
-        coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
+        // The encryption key of each recipient of the shielded outputs this
+        // circuit creates (mints/sends). Each output whose coin public key
+        // matches a recipient gets a discovery ciphertext, so the recipient's
+        // wallet finds the coin through normal sync (no `watchFor`). The
+        // calling wallet's own coin public key needs no entry. Pass `&[]` for
+        // none.
+        coin_encryption_keys: &[crate::ShieldedRecipient],
         // Shielded (Zswap) coins/offer to attach, funding a circuit's
         // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)
         // from the caller's wallet. Pass `ShieldedInputs::default()` for none.
@@ -1117,7 +1117,7 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
+        coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
     ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
     where

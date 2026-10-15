@@ -1239,10 +1239,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         pub struct Circuits<'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
             contract: &'a midnight_contract::Contract<P>,
             witnesses: Wp,
-            coin_encryption_keys: Vec<(
-                midnight_contract::CoinPublicKey,
-                midnight_contract::EncryptionPublicKey,
-            )>,
+            coin_encryption_keys: Vec<midnight_contract::ShieldedRecipient>,
             shielded: midnight_contract::ShieldedInputs,
         }
 
@@ -1277,27 +1274,23 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             }
 
 
-            /// Attach `coin_public_key -> encryption_public_key` mappings for the
-            /// shielded coins these circuit calls create (e.g. via
-            /// `mintShieldedToken`). The SDK adds a discovery ciphertext to each
-            /// matching output so the recipient's wallet finds the coin through
-            /// normal sync, no `watchFor`. Without a mapping, an external
-            /// recipient would have to scan for the coin explicitly.
+            /// Supply the encryption key of each recipient of the shielded coins
+            /// these circuit calls create (e.g. via `mintShieldedToken`). The
+            /// SDK seals a discovery ciphertext to that key on each output whose
+            /// coin public key matches a recipient. The recipient's wallet then
+            /// finds the coin through normal sync, with no `watchFor`. Without
+            /// an entry, an external recipient has to scan for the coin
+            /// explicitly. `parse_shielded_recipient` reads a recipient from a
+            /// shielded address.
             ///
             /// The calling wallet's own coin public key needs no entry: the SDK
-            /// maps it to the wallet's encryption public key, so a coin sent to
-            /// `ownPublicKey()` reaches the wallet. An entry for that key takes
-            /// priority.
+            /// seals a coin sent to `ownPublicKey()` to the wallet's encryption
+            /// key. An entry for that key takes priority.
             pub fn with_coin_encryption_keys(
                 mut self,
-                keys: impl IntoIterator<
-                    Item = (
-                        midnight_contract::CoinPublicKey,
-                        midnight_contract::EncryptionPublicKey,
-                    ),
-                >,
+                coin_encryption_keys: impl IntoIterator<Item = midnight_contract::ShieldedRecipient>,
             ) -> Self {
-                self.coin_encryption_keys = keys.into_iter().collect();
+                self.coin_encryption_keys = coin_encryption_keys.into_iter().collect();
                 self
             }
         }

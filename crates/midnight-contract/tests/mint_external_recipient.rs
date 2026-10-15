@@ -24,12 +24,10 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         return;
     };
 
-    // --- Recipient (cpk, epk) from a second seed (derived, never synced for
-    //     the mint itself) ---
+    // --- Recipient keys from a second seed (derived, never synced for the
+    //     mint itself) ---
     let recip_seed = Seed::from_hex(common::RECIPIENT_SEED).unwrap();
     let recip = recip_seed.shielded_recipient();
-    let cpk = recip.coin_public_key;
-    let epk = recip.enc_public_key;
 
     // --- Funder wallet deploys the mint contract ---
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
@@ -57,17 +55,17 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     let mint_value: u64 = 1000;
     let nonce = [0x22u8; 32];
 
-    // The coin→enc key mapping is supplied per-call so the SDK attaches the
-    // discovery ciphertext to the circuit-created output.
+    // The recipient is supplied per call so the SDK attaches the discovery
+    // ciphertext to the circuit-created output.
     contract
         .circuits()
-        .with_coin_encryption_keys([(cpk, epk)])
+        .with_coin_encryption_keys([recip])
         .mint(
             Bytes(domain_sep),
             mint_value,
             Bytes(nonce),
             shielded_mint::ZswapCoinPublicKey {
-                bytes: Bytes(cpk.0.0),
+                bytes: Bytes(recip.coin_public_key.0.0),
             },
         )
         .await

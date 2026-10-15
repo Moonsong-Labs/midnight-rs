@@ -2,10 +2,9 @@
 //! coin to an *external* wallet that finds it through normal sync.
 //!
 //! The contract's `mint` circuit calls `mintShieldedToken(..., left(coinPK))`,
-//! creating a shielded output owned by `coinPK`. By attaching the recipient's
-//! `coin_public_key -> encryption_public_key` mapping with
-//! `with_coin_encryption_keys`, the SDK adds the discovery ciphertext to that
-//! output, so the recipient's wallet discovers the coin on its own, no
+//! creating a shielded output owned by `coinPK`. By attaching the recipient
+//! with `with_coin_encryption_keys`, the SDK adds the discovery ciphertext to
+//! that output, so the recipient's wallet discovers the coin on its own, no
 //! `watchFor`, no out-of-band coordination.
 //!
 //! ```bash
@@ -55,8 +54,6 @@ async fn main() -> anyhow::Result<()> {
     //    to get the same.
     let recipient_seed = Seed::from_hex(RECIPIENT_SEED)?;
     let recipient = recipient_seed.shielded_recipient();
-    let coin_pk = recipient.coin_public_key;
-    let enc_pk = recipient.enc_public_key;
     println!(
         "1. Recipient shielded address: {}\n",
         recipient_seed.shielded_address(&network)
@@ -71,9 +68,9 @@ async fn main() -> anyhow::Result<()> {
     let address = contract.address().to_string();
     println!("   address: {address}\n");
 
-    // 3. Mint, attaching the recipient's coin->encryption key mapping for this
-    //    call. The SDK uses the mapping to add the discovery ciphertext to the
-    //    output the `mint` circuit creates.
+    // 3. Mint, attaching the recipient for this call. The SDK seals the
+    //    discovery ciphertext of the output the `mint` circuit creates to the
+    //    recipient's encryption key.
     use midnight_core::compact_bindgen::Bytes;
     use rand::Rng;
     let domain_sep = Bytes([0x11u8; 32]);
@@ -82,13 +79,13 @@ async fn main() -> anyhow::Result<()> {
     // unique nonce keeps each minted coin distinct (and the example re-runnable).
     let nonce = Bytes(rand::thread_rng().r#gen::<[u8; 32]>());
     let coin_pk_arg = shielded_mint::ZswapCoinPublicKey {
-        bytes: Bytes(coin_pk.0.0),
+        bytes: Bytes(recipient.coin_public_key.0.0),
     };
 
     println!("3. Minting {value} units to the recipient...");
     contract
         .circuits()
-        .with_coin_encryption_keys([(coin_pk, enc_pk)])
+        .with_coin_encryption_keys([recipient])
         .mint(domain_sep, value, nonce, coin_pk_arg)
         .await?;
     println!("   minted.\n");
