@@ -966,11 +966,11 @@ mod tests {
     }
 
     /// A coin that a circuit sends to the calling wallet (`ownPublicKey()`)
-    /// must be findable with no entry from the caller. A coin for another
-    /// unmapped user must not be sealed to the wallet's key, which its
+    /// must be findable with no entry from the caller. A coin for another user
+    /// with no entry must not be sealed to the wallet's key, which its
     /// recipient cannot open.
     #[test]
-    fn only_the_wallets_own_coin_is_sealed_without_a_mapping() {
+    fn only_the_wallets_own_coin_is_sealed_without_an_entry() {
         let wallet = a_wallet();
         let coin = |nonce| ZswapCoinInfo {
             nonce: Nonce(HashOutput(nonce)),
