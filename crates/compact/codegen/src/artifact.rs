@@ -70,14 +70,14 @@ pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactE
         helpers.push(c.clone());
     }
 
-    let natives: Vec<ir::Native> = artifact
-        .elements
-        .iter()
-        .filter_map(|e| match e {
-            ir::ProgramElement::Native(n) => Some(n.clone()),
-            _ => None,
-        })
-        .collect();
+    let mut natives = Vec::new();
+    for n in artifact.elements.iter().filter_map(|e| match e {
+        ir::ProgramElement::Native(n) => Some(n),
+        _ => None,
+    }) {
+        check_type(&n.result_type)?;
+        natives.push(n.clone());
+    }
 
     let mut witnesses = Vec::new();
     for w in artifact.elements.iter().filter_map(|e| match e {
