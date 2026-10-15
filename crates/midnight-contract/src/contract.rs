@@ -242,7 +242,7 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 /// # ) -> Result<(), midnight_contract::ContractError> {
 /// let contract = counter::Contract::deploy(&provider)
 ///     .with_initial_state(counter::LedgerInitialState::default())
-///     .with_zk_config("compiled")
+///     .with_zk_config(counter::ZK_CONFIG_DIR)
 ///     .await?;
 /// # Ok(())
 /// # }
@@ -630,7 +630,7 @@ where
 /// # }
 /// # fn connect(provider: midnight_provider::MidnightProvider, address: &str) {
 /// let contract = counter::Contract::at(&provider, address)
-///     .with_zk_config("compiled")
+///     .with_zk_config(counter::ZK_CONFIG_DIR)
 ///     .build();
 /// # }
 /// ```

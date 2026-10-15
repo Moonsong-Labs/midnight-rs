@@ -110,17 +110,16 @@ The container sees only the working directory, at `/src`. Give the source and th
 
 ## Deploy and call a contract
 
-The `contract!` macro generates typed bindings from the compiled contract. The code after the module runs in `main`, with the `provider` of the [Quick start](#quick-start):
+The `contract!` macro generates typed bindings from the compiled contract. It also emits `counter::ZK_CONFIG_DIR`, the directory that `with_zk_config` reads. That path is absolute on the build machine, so a binary that runs on another machine passes its own directory. The code after the module runs in `main`, with the `provider` of the [Quick start](#quick-start):
 
 ```rust,ignore
 mod counter {
     midnight_core::contract!("compiled/counter/compiler/analyzed-ir.sexp");
 }
 
-// `with_zk_config` resolves a relative path against the working directory.
 let contract = counter::Contract::deploy(&provider)
     .with_initial_state(counter::LedgerInitialState::default())
-    .with_zk_config(concat!(env!("CARGO_MANIFEST_DIR"), "/compiled/counter"))
+    .with_zk_config(counter::ZK_CONFIG_DIR)
     .await?;
 
 println!("deployed at {}", contract.address());
@@ -140,7 +139,7 @@ println!("increment_by(5) returned {returned}");
 
 ```rust,ignore
 let contract = counter::Contract::at(&provider, &address)
-    .with_zk_config(concat!(env!("CARGO_MANIFEST_DIR"), "/compiled/counter"))
+    .with_zk_config(counter::ZK_CONFIG_DIR)
     .build();
 
 let returned: u64 = contract.circuits().increment().await?.value;
@@ -155,7 +154,7 @@ The `.await` of a deploy waits for the best block, then reads the contract from 
 ```rust,ignore
 let pending = counter::Contract::deploy(&provider)
     .with_initial_state(counter::LedgerInitialState::default())
-    .with_zk_config(concat!(env!("CARGO_MANIFEST_DIR"), "/compiled/counter"))
+    .with_zk_config(counter::ZK_CONFIG_DIR)
     .send().await?;
 println!("ext: {}", pending.extrinsic_hash_hex());
 let (best, pending)      = pending.wait_best().await?;
