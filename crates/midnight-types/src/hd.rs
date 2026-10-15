@@ -255,9 +255,9 @@ impl Seed {
     /// ownership) and `enc_public_key` (coin discovery).
     ///
     /// [`Self::shielded_address`] bech32-encodes the same public material into a
-    /// string for sharing. This returns the typed keys so you can use them
-    /// directly, e.g. as the recipient of a coin that a circuit mints, as passed
-    /// to `with_coin_encryption_keys`. To recover these keys from someone else's
+    /// string for sharing. This returns the typed keys for direct use, e.g. as
+    /// the recipient of a coin that a circuit mints. Give that recipient to
+    /// `with_coin_encryption_keys`. To recover these keys from someone else's
     /// shared address string, use [`crate::address::parse_shielded_recipient`]
     /// instead.
     pub fn shielded_recipient(&self) -> ShieldedRecipient {
