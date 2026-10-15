@@ -423,8 +423,7 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
         .expect("swap half should build (coin selection + proofs + serialize)");
 
     // The build selects concrete give-side coins up front and surfaces their
-    // nullifiers so the caller can reserve them (unlike a plain transfer, whose
-    // coins the ledger selects internally).
+    // nullifiers so the caller can reserve them.
     assert!(
         !result.spent.shielded.is_empty(),
         "swap half should surface the spent give-side coin nullifiers"
