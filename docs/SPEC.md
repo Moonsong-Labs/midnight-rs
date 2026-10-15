@@ -60,6 +60,8 @@ midnight-core                    meta-crate; re-exports the public API
   ├── midnight-private-state     per-contract private state + maintenance signing keys,
   │                              with password-encrypted export/import
   │
+  ├── midnight-owner-only        0700 directories, 0600 files on Unix, for the wallet and private-state stores
+  │
   ├── midnight-indexer-client    GraphQL client + subscriptions for the wallet sync
   │
   ├── compact-bindgen           `contract!` macro entry point

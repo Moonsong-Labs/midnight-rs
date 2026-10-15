@@ -137,63 +137,24 @@ pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> Path
     base.join(network).join(wallet_id)
 }
 
-/// Create the wallet's storage directory, readable only by its owner on unix.
+/// [`midnight_owner_only::create_dir_all`] for the wallet's storage directory.
 ///
 /// The tree holds the wallet's UTXO set, spend history and reserved
 /// nullifiers. None of that is secret in the key sense, but it is a full
 /// picture of the wallet's activity and there is no reason for another local
-/// user to have it. `mode` applies only to directories this call creates, so
-/// an existing one is narrowed explicitly.
+/// user to have it.
 ///
 /// Only the wallet's own directory is narrowed. An ancestor an earlier version
 /// or another tool created keeps its mode, so the set of wallet ids under a
-/// network may stay listable. Permissions are unchanged on other platforms.
+/// network may stay listable.
 fn create_private_dir(dir: &Path) -> Result<(), WalletError> {
-    #[cfg(unix)]
-    let created = {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .and_then(|()| std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)))
-    };
-    #[cfg(not(unix))]
-    let created = std::fs::create_dir_all(dir);
-    created.map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))
-}
-
-/// Write a file readable only by its owner on unix. See
-/// [`create_private_dir`] for why. Callers write to a temporary path and
-/// rename, and rename preserves the mode, so setting it here covers the final
-/// file too.
-///
-/// Permissions are unchanged on other platforms.
-fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        // `mode` applies only when this call creates the file, so a path left
-        // wider by an earlier version is still wide here. Narrow it before the
-        // contents land rather than after, or they are briefly readable.
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        file.write_all(contents)?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    std::fs::write(path, contents)
+    midnight_owner_only::create_dir_all(dir)
+        .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))
 }
 
 fn write_atomic(dir: &Path, filename: &str, contents: &[u8]) -> Result<(), WalletError> {
     let tmp = dir.join(format!("{filename}.tmp"));
-    write_private(&tmp, contents)
+    midnight_owner_only::write(&tmp, contents)
         .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
     std::fs::rename(&tmp, dir.join(filename))
         .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))

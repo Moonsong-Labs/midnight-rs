@@ -1,0 +1,10 @@
+[package]
+name = "midnight-owner-only"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Owner-only directories and files for the on-disk stores of midnight-rs. Internal use only."
+
+[dev-dependencies]
+tempfile = { workspace = true }

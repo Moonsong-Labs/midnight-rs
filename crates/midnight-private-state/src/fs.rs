@@ -996,59 +996,16 @@ fn read_json_dir<T: DeserializeOwned>(dir: &Path) -> Result<Vec<(PathBuf, T)>, P
     Ok(out)
 }
 
-/// Create `dir` and its missing ancestors owner-only on Unix. `mode` applies
-/// only to directories this call creates, so this call also narrows an
-/// existing `dir`. Other platforms keep their default permissions.
 fn create_private_dir(dir: &Path) -> Result<(), PrivateStateError> {
-    let create_err =
-        |e: std::io::Error| PrivateStateError::Io(format!("create dir {}: {e}", dir.display()));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .map_err(create_err)?;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| {
-            PrivateStateError::Io(format!("set mode 0700 on dir {}: {e}", dir.display()))
-        })?;
-    }
-    #[cfg(not(unix))]
-    fs::create_dir_all(dir).map_err(create_err)?;
-    Ok(())
-}
-
-/// Write a file readable only by its owner on Unix. Callers write to a
-/// temporary path and rename, and rename keeps the mode, so the final file is
-/// owner-only too. Permissions are unchanged on other platforms.
-fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        // `mode` applies only when this call creates the file, so a stale
-        // temporary file keeps its wider mode. Narrow it before the contents
-        // land, or they are briefly readable.
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        file.write_all(contents)?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    fs::write(path, contents)
+    midnight_owner_only::create_dir_all(dir)
+        .map_err(|e| PrivateStateError::Io(format!("create dir {}: {e}", dir.display())))
 }
 
 /// Write `contents` to a `.tmp` sibling of `path`, then rename it into place
 /// (see the module docs).
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), PrivateStateError> {
     let tmp = path.with_extension("tmp");
-    write_private(&tmp, contents)
+    midnight_owner_only::write(&tmp, contents)
         .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
     fs::rename(&tmp, path)
         .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))
