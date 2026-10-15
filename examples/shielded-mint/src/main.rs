@@ -78,15 +78,12 @@ async fn main() -> anyhow::Result<()> {
     // A fresh nonce per mint: the coin commitment is derived from it, so a
     // unique nonce keeps each minted coin distinct (and the example re-runnable).
     let nonce = Bytes(rand::thread_rng().r#gen::<[u8; 32]>());
-    let coin_pk_arg = shielded_mint::ZswapCoinPublicKey {
-        bytes: Bytes(recipient.coin_public_key.0.0),
-    };
 
     println!("3. Minting {value} units to the recipient...");
     contract
         .circuits()
         .with_coin_encryption_keys([recipient])
-        .mint(domain_sep, value, nonce, coin_pk_arg)
+        .mint(domain_sep, value, nonce, recipient.coin_public_key.into())
         .await?;
     println!("   minted.\n");
 

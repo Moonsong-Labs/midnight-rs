@@ -62,6 +62,9 @@ fn collect_types(node: &Type, emitted: &mut HashSet<String>, tokens: &mut Vec<To
                 if is_maybe_struct(name, fields) {
                     tokens.push(emit_maybe_into_option(&ident, fields));
                 }
+                if is_zswap_coin_public_key(name, fields) {
+                    tokens.push(emit_coin_public_key_from(&ident));
+                }
             }
         }
         Type::Enum { name, variants } => {
@@ -103,6 +106,22 @@ fn is_maybe_struct(name: &str, fields: &[(String, Type)]) -> bool {
         && fields[0].0 == "is_some"
         && matches!(fields[0].1, Type::Boolean)
         && fields[1].0 == "value"
+}
+
+/// Returns true if this struct is the standard library's `ZswapCoinPublicKey`:
+/// a single field `bytes: Bytes<32>`.
+fn is_zswap_coin_public_key(name: &str, fields: &[(String, Type)]) -> bool {
+    name == "ZswapCoinPublicKey" && matches!(fields, [(field, Type::Bytes(32))] if field == "bytes")
+}
+
+fn emit_coin_public_key_from(ident: &Ident) -> TokenStream {
+    quote! {
+        impl From<midnight_contract::CoinPublicKey> for #ident {
+            fn from(key: midnight_contract::CoinPublicKey) -> Self {
+                Self { bytes: Bytes(key.0.0) }
+            }
+        }
+    }
 }
 
 fn emit_struct(name: &Ident, elements: &[(String, Type)]) -> TokenStream {

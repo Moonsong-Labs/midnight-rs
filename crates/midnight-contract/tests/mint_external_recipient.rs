@@ -64,9 +64,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
             Bytes(domain_sep),
             mint_value,
             Bytes(nonce),
-            shielded_mint::ZswapCoinPublicKey {
-                bytes: Bytes(recip.coin_public_key.0.0),
-            },
+            recip.coin_public_key.into(),
         )
         .await
         .expect("mint call");

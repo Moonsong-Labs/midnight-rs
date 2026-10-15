@@ -412,6 +412,27 @@ mod tests {
         );
     }
 
+    /// `ContractAddress` has the same shape as the standard library's coin key,
+    /// so only the name keeps a coin key from converting into a contract address.
+    #[test]
+    fn only_the_coin_key_struct_converts_from_the_sdk_coin_key() {
+        let info =
+            load_fixture("../../../tests/fixtures/compiled/mint-probe/compiler/analyzed-ir.sexp");
+        let generated = generated_source(&info, "MintProbe");
+
+        assert!(generated.contains("pub struct ContractAddress"));
+        assert_eq!(
+            generated
+                .matches("impl From<midnight_contract::CoinPublicKey> for")
+                .count(),
+            1
+        );
+        assert!(
+            generated
+                .contains("impl From<midnight_contract::CoinPublicKey> for ZswapCoinPublicKey")
+        );
+    }
+
     #[test]
     fn generate_counter_crate() {
         let info = load_fixture(

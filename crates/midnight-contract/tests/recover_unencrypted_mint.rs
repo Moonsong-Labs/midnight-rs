@@ -62,14 +62,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     for (nonce, mint_value) in mints {
         contract
             .circuits()
-            .mint(
-                Bytes(domain_sep),
-                mint_value,
-                Bytes(nonce),
-                shielded_mint::ZswapCoinPublicKey {
-                    bytes: Bytes(cpk.0.0),
-                },
-            )
+            .mint(Bytes(domain_sep), mint_value, Bytes(nonce), cpk.into())
             .await
             .expect("mint call");
         eprintln!("minted {mint_value} with no discovery ciphertext");
