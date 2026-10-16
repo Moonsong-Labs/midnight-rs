@@ -28,9 +28,11 @@ pub use types::{Health, TransactionHash};
 // so callers don't need separate deps for it. The implementation types
 // (`Wallet`, `LocalWallet`, `WalletBuilder`) live in midnight-wallet; this
 // crate never names them.
+/// The chain's 32-byte hash. Its `Display` abbreviates: see [`midnight_types::H256`].
+pub use midnight_types::H256;
 pub use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
-    DustParameters, EncryptionPublicKey, H256, HashOutput, LedgerVersion, NIGHT, Nonce, Nullifier,
+    DustParameters, EncryptionPublicKey, HashOutput, LedgerVersion, NIGHT, Nonce, Nullifier,
     SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, UnshieldedTokenType,
 };
 

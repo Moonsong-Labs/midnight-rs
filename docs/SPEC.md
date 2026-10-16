@@ -30,7 +30,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     └── (deps) midnight-types, midnight-wallet-facade, subxt (node RPC)
   │
   ├── midnight-types       implementation-free vocabulary and toolkit; a function of
-  │     │                        midnight-helpers + the indexer client + BIP-32/BIP-39
+  │     │                        midnight-helpers + the indexer client + H256 + BIP-32/BIP-39
   │     ├── ledger_version.rs    LedgerVersion, read from the tag of chain data
   │     ├── coin.rs              token types, nullifiers, coins, keys: one type for both
   │     ├── transfer.rs          TransferRequest, SpentInputs, TransferResult

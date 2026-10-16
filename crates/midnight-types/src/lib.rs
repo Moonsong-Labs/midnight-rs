@@ -1,12 +1,12 @@
 //! Implementation-free vocabulary and toolkit for Midnight wallets.
 //!
 //! Everything here is a function of `midnight-helpers`, the indexer client's
-//! response types, and the BIP-32 and BIP-39 seed derivation: the wallet
-//! [`Seed`](hd::Seed) and its HD derivation, the network and address model, the
-//! balance readings, the transfer requests and results, and [`WalletError`]. No
-//! wallet implementation lives here, and none is depended on, so a wallet, a
-//! provider, and a contract builder can all share this vocabulary without
-//! sharing an implementation.
+//! response types, the [`H256`] of `primitive-types`, and the BIP-32 and BIP-39
+//! seed derivation: the wallet [`Seed`](hd::Seed) and its HD derivation, the
+//! network and address model, the balance readings, the transfer requests and
+//! results, and [`WalletError`]. No wallet implementation lives here, and none
+//! is depended on, so a wallet, a provider, and a contract builder can all
+//! share this vocabulary without sharing an implementation.
 //!
 //! The vocabulary is the same for every ledger generation. The transfer
 //! machinery is per generation: [`ledger_8`] and [`ledger_9`] compile one
@@ -53,7 +53,6 @@ pub use parameters::{ChainParameters, DustParameters};
 ///
 /// `Display` abbreviates it to `0x1234…cdef`. Format it with `{:x}`, or with
 /// `{:#x}` for a `0x` prefix, to get the whole digest.
-#[doc(inline)]
 pub use primitive_types::H256;
 pub use sync::{SyncCursors, TrackedUtxo};
 pub use transfer::{
