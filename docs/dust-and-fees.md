@@ -222,7 +222,18 @@ So after the fork, no NIGHT that existed before it generates Dust, and a wallet 
 
 A wallet that crosses the fork resets the registration flags of the UTXOs it held, because the chain no longer holds those registrations. A wallet that syncs from genesis after the fork reads the same flags from the indexer.
 
-Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. A wallet with one registered UTXO holds one Dust UTXO. Its first fee-paying transaction reserves that UTXO, and the next build fails with "insufficient DUST" until the indexer serves the Dust change. Register every NIGHT UTXO, or wait for the indexer, before a second fee-paying build. [`ledger-generations.md`](ledger-generations.md) shows the registration loop.
+Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. A wallet with one registered UTXO holds one Dust UTXO. Its first fee-paying transaction reserves that UTXO, and the next build fails with `WalletError::InsufficientDust` until the indexer serves the Dust change. Register every NIGHT UTXO, or wait for the indexer, before a second fee-paying build. [`ledger-generations.md`](ledger-generations.md) shows the registration loop.
+
+## Dust Shortfalls
+
+A build whose funding wallets cannot pay its fee fails with [`WalletError::InsufficientDust`](../crates/midnight-types/src/error.rs). Its `required` field is the Dust that the build asks for, and `available` is the Dust that the funding wallets can give, both in SPECK. A build through `MidnightProvider` resyncs the wallet first, so a build after a wait reads the new state.
+
+Read the wallet's `DustBalance` (`provider.balance().await?.dust`) to find the next step:
+
+- When `spendable_speck` is less than `balance_speck`, a pending build holds Dust. Wait for its transaction to finalize, then build again. A build that never reaches the chain holds its Dust until a release hands it back, or until its TTL ends. A caller that holds the build's `SpentInputs` can release them with `MidnightProvider::release` (see [Pending reservations](wallet.md#pending-reservations)).
+- When `unregistered_night_utxos` is above 0 and `night_generates_dust` is false, no tNIGHT generates Dust. Register one tNIGHT UTXO with `register_dust` (see [Dust Registration](#dust-registration)). A registration has no funding wallets, so its shortfall reads an `available` of 0. It pays only from the generationless Dust of the tNIGHT it spends, and that Dust grows with the age of the UTXO. So when the registration itself falls short, wait, then register again.
+- When the wallet holds no tNIGHT, no Dust accrues. The wallet must receive tNIGHT first.
+- Otherwise, Dust accrues with time, so build again later.
 
 ## Wallet Sync Phases
 

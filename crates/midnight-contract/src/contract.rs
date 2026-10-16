@@ -171,7 +171,7 @@ async fn settle_call(
         }
         Err(source) => Err(ContractError::SubmissionWait {
             transaction_hash: Box::new(transaction_hash),
-            extrinsic_hash: hex::encode(extrinsic_hash),
+            extrinsic_hash: hex::encode(extrinsic_hash).into(),
             source,
             snapshot_written: store.is_some(),
         }),
@@ -1224,7 +1224,7 @@ impl<P: Provider> Contract<P> {
             Err(_elapsed) => {
                 return Err(ContractError::FinalizeTimeout {
                     transaction_hash: Box::new(transaction_hash),
-                    extrinsic_hash: hex::encode(extrinsic_hash),
+                    extrinsic_hash: hex::encode(extrinsic_hash).into(),
                     timeout: DEFAULT_TX_FINALIZE_TIMEOUT,
                     snapshot_written: pending_snapshot_written,
                 });
