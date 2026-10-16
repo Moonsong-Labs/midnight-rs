@@ -118,10 +118,10 @@ pub(crate) const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// # }
 /// ```
 ///
-/// A failed proof unwinds `prove` with a `String` message and does not run the
-/// panic hook, as [`WalletError::Proving`](crate::WalletError::Proving) states.
-/// A build through `with_proof_provider` returns that error. A caller of
-/// `prove` outside a build must catch the unwind (for example with
+/// A failed proof unwinds `prove` with a `String` message. A build through
+/// `with_proof_provider` returns that message as
+/// [`WalletError::Proving`](crate::WalletError::Proving). A caller of `prove`
+/// outside a build must catch the unwind (for example with
 /// `FutureExt::catch_unwind`) to get the message.
 pub struct RemoteProofServer {
     pub(crate) url: String,

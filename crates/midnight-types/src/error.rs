@@ -122,10 +122,6 @@ pub enum WalletError {
     /// task.
     ///
     /// The catch converts any unwind of the proving future, whatever its
-    /// message. The remote backend (`RemoteProofServer` in midnight-provider)
-    /// unwinds with `std::panic::resume_unwind`, which does not run the panic
-    /// hook. The default local backend panics through an upstream `.expect`,
-    /// so its failure still runs the panic hook and carries the upstream
     /// message.
     #[error("proving failed: {0}")]
     Proving(String),
