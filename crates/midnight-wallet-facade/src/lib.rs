@@ -67,6 +67,14 @@ pub trait WalletFacade: Send + Sync {
 
     /// What this wallet can spend, across shielded coins, unshielded UTXOs and
     /// Dust.
+    ///
+    /// An implementation fills [`DustBalance::spendable_speck`] and
+    /// [`DustBalance::spendable_utxos`] with the Dust that a new build can draw
+    /// on, which leaves out the Dust that its pending builds reserve. A field
+    /// left at its `Default` reads as no spendable Dust.
+    ///
+    /// [`DustBalance::spendable_speck`]: midnight_types::DustBalance::spendable_speck
+    /// [`DustBalance::spendable_utxos`]: midnight_types::DustBalance::spendable_utxos
     async fn balance(&self) -> WalletBalance;
 
     /// The shielded coins this wallet can spend, each with the nullifier that
