@@ -6,9 +6,6 @@ pub enum ProviderError {
     #[error("RPC error: {0}")]
     Rpc(String),
 
-    #[error("RPC connection timed out")]
-    RpcTimeout,
-
     /// An operation requiring a synced wallet was invoked on a provider
     /// without one. Sync a wallet (`Wallet::from_seed(..)?.sync(&provider)`
     /// in `midnight-wallet`) and attach it with
@@ -25,15 +22,10 @@ pub enum ProviderError {
     #[error(transparent)]
     Wallet(#[from] WalletError),
 
-    /// Transaction submission failed (connect, build, submit, or watch).
-    /// Match the inner [`SubmitError`] to pick a recovery path:
-    /// [`Invalid`](SubmitError::Invalid) is a definitive rejection (safe to
-    /// rebuild and resubmit), [`Dropped`](SubmitError::Dropped) and
-    /// [`NodeError`](SubmitError::NodeError) are not (the tx may
-    /// still land; resubmitting the same inputs risks a double spend), and
-    /// [`WatchStream`](SubmitError::WatchStream) /
-    /// [`SubmitRpc`](SubmitError::SubmitRpc) /
-    /// [`NotSubmitted`](SubmitError::NotSubmitted) are transport-level.
+    /// The submission of a transaction, or the wait for it, failed.
+    ///
+    /// Match the inner [`SubmitError`], whose variant docs give the retry rule
+    /// for each failure.
     #[error("submission: {0}")]
     Submission(#[from] SubmitError),
 
