@@ -84,7 +84,11 @@ pub enum WalletError {
         value: String,
     },
 
-    /// Indexer client error (HTTP / GraphQL / deserialization).
+    /// The sync gave up on the indexer.
+    ///
+    /// [`IndexerError::is_retryable`] tells whether a later sync can succeed.
+    ///
+    /// [`IndexerError::is_retryable`]: midnight_indexer_client::IndexerError::is_retryable
     #[error("indexer: {0}")]
     Indexer(#[from] midnight_indexer_client::IndexerError),
 

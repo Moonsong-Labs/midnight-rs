@@ -4,7 +4,7 @@
 //! generation to apply, and the unshielded replay, whose events are JSON in
 //! every ledger generation.
 
-use midnight_indexer_client::SubscriptionClient;
+use midnight_indexer_client::{IndexerError, SubscriptionClient};
 use midnight_types::TrackedUtxo;
 use serde::Deserialize;
 use tokio::sync::mpsc;
@@ -220,14 +220,14 @@ pub(crate) async fn latest_block(
                 warn!(retries, error = %with_causes(&e), "fetch latest block failed, retrying");
                 tokio::time::sleep(reconnect_delay(retries)).await;
             }
-            Err(e) => {
-                return Err(WalletError::Sync(format!(
-                    "fetch latest block: {}",
-                    with_causes(&e)
-                )));
-            }
+            Err(e) => return Err(gave_up("latest block", e)),
         }
     }
+}
+
+fn gave_up(request: &'static str, error: IndexerError) -> WalletError {
+    warn!(request, error = %with_causes(&error), "giving up on the indexer");
+    WalletError::Indexer(error)
 }
 
 /// `error` with the causes its own message leaves out, such as the
@@ -259,14 +259,6 @@ impl LedgerStream {
         match self {
             Self::Zswap => "zswap",
             Self::Dust => "dust",
-        }
-    }
-
-    /// The subscription field that carries the stream's events.
-    fn field(self) -> &'static str {
-        match self {
-            Self::Zswap => "zswapLedgerEvents",
-            Self::Dust => "dustLedgerEvents",
         }
     }
 
@@ -348,12 +340,7 @@ pub(crate) async fn replay_ledger_events(
                 tokio::time::sleep(reconnect_delay(retries)).await;
                 continue 'reconnect;
             }
-            Err(e) => {
-                return Err(WalletError::Sync(format!(
-                    "subscribe {}: {e}",
-                    stream.field()
-                )));
-            }
+            Err(e) => return Err(gave_up(kind, e)),
         };
         // Highest id delivered on *this* connection; see `order_regression`.
         let mut conn_high: Option<i64> = None;
@@ -429,11 +416,7 @@ pub(crate) async fn replay_ledger_events(
                     tokio::time::sleep(reconnect_delay(retries)).await;
                     continue 'reconnect;
                 }
-                Ok(Some(Err(e))) => {
-                    return Err(WalletError::Sync(format!(
-                        "{kind} subscription error during replay: {e}"
-                    )));
-                }
+                Ok(Some(Err(e))) => return Err(gave_up(kind, e)),
                 Ok(None) => {
                     if resuming && count == 0 {
                         info!(last_id, "{kind} already at tip");
@@ -448,10 +431,13 @@ pub(crate) async fn replay_ledger_events(
                         tokio::time::sleep(reconnect_delay(retries)).await;
                         continue 'reconnect;
                     }
-                    return Err(WalletError::Sync(format!(
-                        "{kind} subscription ended before replay completed \
-                         (after {RECONNECT_MAX_RETRIES} reconnect attempts)"
-                    )));
+                    return Err(gave_up(
+                        kind,
+                        IndexerError::Transport(format!(
+                            "{kind} subscription ended before replay completed \
+                             (after {RECONNECT_MAX_RETRIES} reconnect attempts)"
+                        )),
+                    ));
                 }
                 Err(_) => {
                     if resuming && count == 0 {
@@ -459,9 +445,10 @@ pub(crate) async fn replay_ledger_events(
                         send_progress(&progress, stream.complete(0));
                         break 'reconnect;
                     }
-                    return Err(WalletError::Sync(format!(
-                        "timeout waiting for {kind} events"
-                    )));
+                    return Err(gave_up(
+                        kind,
+                        IndexerError::Transport(format!("timeout waiting for {kind} events")),
+                    ));
                 }
             }
         }
@@ -522,11 +509,7 @@ pub(crate) async fn replay_unshielded_events(
                 tokio::time::sleep(reconnect_delay(retries)).await;
                 continue 'reconnect;
             }
-            Err(e) => {
-                return Err(WalletError::Sync(format!(
-                    "subscribe unshieldedTransactions: {e}"
-                )));
-            }
+            Err(e) => return Err(gave_up("unshielded", e)),
         };
         // Highest tx id delivered on *this* connection; see
         // `order_regression`. Events without a transaction id cannot be
@@ -650,11 +633,7 @@ pub(crate) async fn replay_unshielded_events(
                     tokio::time::sleep(reconnect_delay(retries)).await;
                     continue 'reconnect;
                 }
-                Ok(Some(Err(e))) => {
-                    return Err(WalletError::Sync(format!(
-                        "unshielded subscription error during sync: {e}"
-                    )));
-                }
+                Ok(Some(Err(e))) => return Err(gave_up("unshielded", e)),
                 Ok(None) => {
                     // Mid-sync stream end: treat as a dropped connection and
                     // resume from the cursor.
@@ -664,10 +643,13 @@ pub(crate) async fn replay_unshielded_events(
                         tokio::time::sleep(reconnect_delay(retries)).await;
                         continue 'reconnect;
                     }
-                    return Err(WalletError::Sync(format!(
-                        "unshielded subscription ended before sync completed \
-                         (after {RECONNECT_MAX_RETRIES} reconnect attempts)"
-                    )));
+                    return Err(gave_up(
+                        "unshielded",
+                        IndexerError::Transport(format!(
+                            "unshielded subscription ended before sync completed \
+                             (after {RECONNECT_MAX_RETRIES} reconnect attempts)"
+                        )),
+                    ));
                 }
                 Err(_) => {
                     // A resume rarely gets here: the indexer answers the
@@ -678,8 +660,9 @@ pub(crate) async fn replay_unshielded_events(
                         info!(last_seen_tx_id, "unshielded already at tip");
                         return Ok((utxos, last_seen_tx_id, last_height, spent_keys));
                     }
-                    return Err(WalletError::Sync(
-                        "timeout waiting for unshielded sync".into(),
+                    return Err(gave_up(
+                        "unshielded",
+                        IndexerError::Transport("timeout waiting for unshielded sync".into()),
                     ));
                 }
             }
@@ -823,10 +806,14 @@ mod tests {
 
         // `None` drops every connection unanswered.
         let cases = [
-            (Some(r#"{"errors":[{"message":"no such field"}]}"#), 1),
-            (None, 1 + RECONNECT_MAX_RETRIES as usize),
+            (
+                Some(r#"{"errors":[{"message":"no such field"}]}"#),
+                1,
+                false,
+            ),
+            (None, 1 + RECONNECT_MAX_RETRIES as usize, true),
         ];
-        for (answer, expected) in cases {
+        for (answer, expected, retryable) in cases {
             let (listener, url) = bind().await;
             let connections = Arc::new(AtomicUsize::new(0));
             let server_connections = Arc::clone(&connections);
@@ -843,11 +830,15 @@ mod tests {
             });
             let fetch =
                 tokio::time::timeout(std::time::Duration::from_secs(30), latest_block(&url));
-            fetch
+            let err = fetch
                 .await
                 .expect("the fetch gives up")
                 .expect_err("no connection serves a block");
             server.abort();
+            assert!(
+                matches!(&err, WalletError::Indexer(e) if e.is_retryable() == retryable),
+                "answer: {answer:?}, got: {err:?}"
+            );
             assert_eq!(
                 connections.load(Ordering::SeqCst),
                 expected,
@@ -1016,7 +1007,7 @@ mod tests {
     /// provider test suites.
     mod reconnect_ws {
         use midnight_indexer_client::testutil::{
-            accept_subscriber, bind, next_json, send_next, subscription_variable,
+            accept_subscriber, bind, next_json, send_json, send_next, subscription_variable,
             unshielded_progress,
         };
         use serde_json::json;
@@ -1084,30 +1075,38 @@ mod tests {
 
         #[tokio::test]
         async fn unshielded_replay_fails_after_max_consecutive_failures() {
-            let (listener, url) = bind().await;
-            let attempts = 1 + RECONNECT_MAX_RETRIES as usize;
-            let server = tokio::spawn(async move {
-                // Complete the subscribe handshake, then drop, for every
-                // allowed attempt. The client must give up afterwards.
-                let mut connections = 0usize;
-                for _ in 0..attempts {
-                    let (ws, _sub) = accept_subscriber(&listener).await;
-                    connections += 1;
-                    drop(ws);
-                }
-                connections
-            });
+            // A dropped socket reaches the replay as a read error, and a
+            // completed subscription as the end of the stream.
+            for complete in [false, true] {
+                let (listener, url) = bind().await;
+                let attempts = 1 + RECONNECT_MAX_RETRIES as usize;
+                let server = tokio::spawn(async move {
+                    // Complete the subscribe handshake, then end the
+                    // connection, for every allowed attempt. The client must
+                    // give up afterwards.
+                    let mut connections = 0usize;
+                    for _ in 0..attempts {
+                        let (mut ws, sub) = accept_subscriber(&listener).await;
+                        connections += 1;
+                        if complete {
+                            send_json(&mut ws, &json!({"type": "complete", "id": sub["id"]})).await;
+                            while next_json(&mut ws).await.is_some() {}
+                        }
+                    }
+                    connections
+                });
 
-            let sub_client = SubscriptionClient::new(&url);
-            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
-                .await
-                .expect_err("must fail after exhausting reconnect attempts");
-            assert!(
-                matches!(&err, WalletError::Sync(msg) if msg.contains("unshielded")),
-                "got: {err:?}"
-            );
+                let sub_client = SubscriptionClient::new(&url);
+                let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
+                    .await
+                    .expect_err("must fail after exhausting reconnect attempts");
+                assert!(
+                    matches!(&err, WalletError::Indexer(e) if e.is_retryable()),
+                    "complete: {complete}, got: {err:?}"
+                );
 
-            assert_eq!(server.await.unwrap(), attempts);
+                assert_eq!(server.await.unwrap(), attempts, "complete: {complete}");
+            }
         }
 
         #[tokio::test]
@@ -1152,7 +1151,7 @@ mod tests {
                 .await
                 .expect_err("duplicate-only re-deliveries must not reset the bound");
             assert!(
-                matches!(&err, WalletError::Sync(msg) if msg.contains("unshielded")),
+                matches!(&err, WalletError::Indexer(e) if e.is_retryable()),
                 "got: {err:?}"
             );
 
