@@ -880,36 +880,6 @@ impl Provider for MidnightProvider {
     }
 }
 
-/// A node block hash as lower-case `0x` hex.
-///
-/// Through `LowerHex`, the trait that promises hex, and not through `Debug`.
-/// They agree today only because `fixed-hash` writes `Debug` as `{:#x}`, while
-/// `Display` on the same type truncates to `0x1234…5678`. A stored hash has to
-/// survive a dependency bump.
-fn hash_hex(hash: &H256) -> String {
-    format!("{hash:#x}")
-}
-
-#[cfg(test)]
-mod hash_hex_tests {
-    use super::*;
-
-    /// The rendering is persisted in a wallet snapshot and compared on the
-    /// next resume, so a dependency bump that changed it would make every
-    /// stored pin stop matching and every persisted wallet refuse to sync.
-    #[test]
-    fn a_hash_renders_as_full_lowercase_hex() {
-        let hash = H256::from([0xab; 32]);
-        let rendered = hash_hex(&hash);
-        assert_eq!(rendered, format!("0x{}", "ab".repeat(32)));
-        assert_eq!(rendered.len(), 66, "0x plus 64 hex digits");
-        assert!(
-            !rendered.contains('\u{2026}'),
-            "an abbreviated hash would still look like one and never match"
-        );
-    }
-}
-
 /// The network a `MidnightRuntimeApi::get_network_id` answer names. `None`
 /// for the empty id that a node with no network id set returns.
 fn network_from_runtime_id(id: String) -> Option<Network> {
@@ -1401,11 +1371,8 @@ impl Drop for HeldInputs {
 /// own resync checks pins through the same answers.
 #[async_trait]
 impl midnight_types::chain_pin::ChainView for MidnightProvider {
-    async fn block_hashes_at(&self, height: u64) -> Option<Vec<String>> {
-        self.get_block_hashes_by_height(height)
-            .await
-            .ok()
-            .map(|hs| hs.iter().map(hash_hex).collect())
+    async fn block_hashes_at(&self, height: u64) -> Option<Vec<H256>> {
+        self.get_block_hashes_by_height(height).await.ok()
     }
 
     async fn finalized_height(&self) -> Option<u64> {

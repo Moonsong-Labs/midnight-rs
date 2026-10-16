@@ -24,7 +24,7 @@ use midnight_indexer_client::testutil::{
     ServerWs, bind, ledger_event, next_json, read_http_request, send_next, subscriber_handshake,
     unshielded_progress, write_json_response,
 };
-use midnight_provider::MidnightProvider;
+use midnight_provider::{H256, MidnightProvider};
 use midnight_wallet::{
     LocalWallet, Network, SyncHandle, SyncProgress, Wallet, WalletBuilder, WalletError,
     WalletFacade,
@@ -328,8 +328,9 @@ async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
 /// A chain that can be replaced under the wallet, on command, served by the
 /// mock indexer at `indexer_url`.
 ///
-/// Chain A holds `0xaa<height>` and is 100 blocks tall; chain B replaced it,
-/// holds `0xbb<height>` at every height, and is taller.
+/// Chain A's hashes start with `0xaa` and end with the height, and it is 100
+/// blocks tall. Chain B replaced it, its hashes start with `0xbb`, and it is
+/// taller.
 struct SwappableChain {
     indexer_url: String,
     replaced: AtomicBool,
@@ -350,13 +351,14 @@ impl SwappableChain {
 
 #[async_trait::async_trait]
 impl midnight_wallet::chain_pin::ChainView for SwappableChain {
-    async fn block_hashes_at(&self, height: u64) -> Option<Vec<String>> {
-        let chain = if self.replaced.load(Ordering::SeqCst) {
-            "bb"
+    async fn block_hashes_at(&self, height: u64) -> Option<Vec<H256>> {
+        let mut hash = H256::from_low_u64_be(height);
+        hash.0[0] = if self.replaced.load(Ordering::SeqCst) {
+            0xbb
         } else {
-            "aa"
+            0xaa
         };
-        Some(vec![format!("0x{chain}{height:04}")])
+        Some(vec![hash])
     }
 
     async fn finalized_height(&self) -> Option<u64> {
