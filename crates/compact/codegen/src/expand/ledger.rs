@@ -244,7 +244,7 @@ pub(crate) fn emit_ledger_wrapper(
             }
 
             /// The hash of the submitted extrinsic.
-            pub fn extrinsic_hash(&self) -> [u8; 32] {
+            pub fn extrinsic_hash(&self) -> midnight_contract::H256 {
                 self.0.extrinsic_hash()
             }
 
@@ -317,7 +317,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// Pin queries to the block `hash`. Default is the node's best block.
             /// Both circuit calls and lazy ledger queries honour the pin through the
             /// node RPC, and a circuit call runs at the time of that block.
-            pub fn at_block(self, hash: midnight_contract::NodeBlockHash) -> Self {
+            pub fn at_block(self, hash: midnight_contract::H256) -> Self {
                 Self(self.0.at_block(hash))
             }
 
@@ -767,13 +767,13 @@ pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> To
         pub struct #struct_name<P: lazy::StateQueryProvider> {
             address: String,
             provider: P,
-            at_block_hash: Option<midnight_contract::NodeBlockHash>,
+            at_block_hash: Option<midnight_contract::H256>,
         }
 
         impl<P: lazy::StateQueryProvider> #struct_name<P> {
             /// Create a new lazy query handle for the given contract address:
             /// a hex string or a typed `ContractAddress`.
-            pub fn new(provider: P, address: impl midnight_contract::IntoAddress, at_block_hash: Option<midnight_contract::NodeBlockHash>) -> Self {
+            pub fn new(provider: P, address: impl midnight_contract::IntoAddress, at_block_hash: Option<midnight_contract::H256>) -> Self {
                 Self {
                     address: midnight_contract::IntoAddress::into_address_string(address),
                     provider,
@@ -1489,9 +1489,7 @@ pub(super) fn circuit_setup(ledger_name: &Ident, circuit: &Circuit) -> TokenStre
 /// circuit's raw result into that value.
 ///
 /// Every generated path that reads the circuit's result defines and calls
-/// `__decode`, so all of them read it the same way. It is a `fn` item: a
-/// closure returning `ContractError` trips clippy's `result_large_err` in the
-/// caller's crate.
+/// `__decode`, so all of them read it the same way.
 pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
     if super::circuit_calls::is_void_type(circuit.result_type()) {
         let decode = quote! {

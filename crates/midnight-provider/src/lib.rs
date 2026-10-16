@@ -15,7 +15,7 @@ mod types;
 
 pub use error::ProviderError;
 pub use proof_providers::ProofProviders;
-pub use provider::{Builds, HeldInputs, MidnightProvider, NodeBlockHash, NodeHeader};
+pub use provider::{Builds, HeldInputs, MidnightProvider, NodeHeader};
 pub use remote_prover::RemoteProofServer;
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{
@@ -30,7 +30,7 @@ pub use types::{Health, TransactionHash};
 // crate never names them.
 pub use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
-    DustParameters, EncryptionPublicKey, HashOutput, LedgerVersion, NIGHT, Nonce, Nullifier,
+    DustParameters, EncryptionPublicKey, H256, HashOutput, LedgerVersion, NIGHT, Nonce, Nullifier,
     SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, UnshieldedTokenType,
 };
 
@@ -81,7 +81,7 @@ pub trait Provider: Send + Sync {
     async fn get_contract_state(
         &self,
         address: &str,
-        at: Option<NodeBlockHash>,
+        at: Option<H256>,
     ) -> Result<Option<String>, ProviderError>;
 
     /// Query specific fields/keys in a contract's state tree without
@@ -104,7 +104,7 @@ impl StateQueryProvider for MidnightProvider {
         &self,
         address: &str,
         queries: Vec<StateQuery>,
-        at_block_hash: Option<NodeBlockHash>,
+        at_block_hash: Option<H256>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         self.query_contract_state_at(address, queries, at_block_hash)
             .await
@@ -122,7 +122,7 @@ macro_rules! delegate_provider {
             async fn get_contract_state(
                 &self,
                 address: &str,
-                at: Option<NodeBlockHash>,
+                at: Option<H256>,
             ) -> Result<Option<String>, ProviderError> {
                 (**self).get_contract_state(address, at).await
             }
@@ -155,7 +155,7 @@ mod tests {
         async fn get_contract_state(
             &self,
             address: &str,
-            at: Option<NodeBlockHash>,
+            at: Option<H256>,
         ) -> Result<Option<String>, ProviderError> {
             Ok(Some(format!("{address}@{at:?}")))
         }
@@ -171,7 +171,7 @@ mod tests {
     #[tokio::test]
     async fn blanket_impl_arc() {
         let p = Arc::new(DummyProvider);
-        let at = Some(NodeBlockHash::repeat_byte(0xab));
+        let at = Some(H256::repeat_byte(0xab));
         assert_eq!(
             p.get_contract_state("a", at).await.unwrap(),
             DummyProvider.get_contract_state("a", at).await.unwrap()
@@ -181,7 +181,7 @@ mod tests {
     #[tokio::test]
     async fn blanket_impl_box() {
         let p: Box<dyn Provider> = Box::new(DummyProvider);
-        let at = Some(NodeBlockHash::repeat_byte(0xab));
+        let at = Some(H256::repeat_byte(0xab));
         assert_eq!(
             p.get_contract_state("a", at).await.unwrap(),
             DummyProvider.get_contract_state("a", at).await.unwrap()

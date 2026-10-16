@@ -663,7 +663,7 @@ fn execute_all_compiled_circuits() {
 /// Requires a devnet + indexer (MIDNIGHT_NODE_URL, MIDNIGHT_INDEXER_URL).
 #[tokio::test]
 async fn governance_deploy_then_apply_both_updates() {
-    use midnight_contract::{Contract, NodeBlockHash, SigningKey};
+    use midnight_contract::{Contract, SigningKey};
     use midnight_onchain_runtime::state::EntryPointBuf;
 
     let Some((node_url, indexer_url)) = common::devnet_urls() else {
@@ -763,7 +763,7 @@ async fn governance_deploy_then_apply_both_updates() {
     eprintln!("governance: authority rotated on-chain ✓");
 
     let pinned = Contract::at(&provider, &address)
-        .at_block(NodeBlockHash::from(batch.block_hash))
+        .at_block(batch.block_hash)
         .build()
         .maintenance_authority()
         .await

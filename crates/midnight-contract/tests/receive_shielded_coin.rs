@@ -29,7 +29,7 @@ mod common;
 use compact_bindgen::AlignedValue;
 use midnight_contract::runtime::Value;
 use midnight_contract::{
-    CallOutcome, Contract, ContractError, ShieldedInputs, SpendableShieldedCoin,
+    CallOutcome, Contract, ContractError, H256, ShieldedInputs, SpendableShieldedCoin,
 };
 use midnight_provider::MidnightProvider;
 
@@ -69,11 +69,13 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
     // it, so a caller can log it or look it up. These used to be observable
     // only when the call failed.
     assert_ne!(
-        outcome.extrinsic_hash, [0u8; 32],
+        outcome.extrinsic_hash,
+        H256::zero(),
         "a successful call must expose its extrinsic hash"
     );
     assert_ne!(
-        outcome.block_hash, [0u8; 32],
+        outcome.block_hash,
+        H256::zero(),
         "a successful call must expose the block it landed in"
     );
     eprintln!(
@@ -122,7 +124,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
     let (deployed, outcome) = deploy_and_receive(provider, &dir, coin, received)
         .await
         .expect("partially funded circuit call");
-    assert_ne!(outcome.extrinsic_hash, [0u8; 32]);
+    assert_ne!(outcome.extrinsic_hash, H256::zero());
 
     // The change is a fresh coin, so it only shows up once the indexer replays
     // the transaction's zswap events.

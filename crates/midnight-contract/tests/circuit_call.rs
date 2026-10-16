@@ -562,10 +562,6 @@ fn interpreter_runs_mint_shielded_token_circuit() {
 }
 
 /// The mint circuit's call, through the low-level `build_unproven_call_tx`.
-#[expect(
-    clippy::result_large_err,
-    reason = "it hands the tests the result of `build_unproven_call_tx` unchanged"
-)]
 fn build_unproven_mint_call() -> Result<call::UnprovenCallTx, midnight_contract::ContractError> {
     let info = mint_probe_info();
     let mint = common::exported_circuit(&info, "mint");

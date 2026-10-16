@@ -12,6 +12,7 @@
 
 use midnight_base_crypto::time::Timestamp;
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::H256;
 
 use crate::error::ContractError;
 
@@ -33,7 +34,7 @@ pub async fn fetch_state<P: midnight_provider::Provider>(
 pub async fn fetch_state_from_node(
     provider: &midnight_provider::MidnightProvider,
     address: &str,
-    at_block_hash: Option<midnight_provider::NodeBlockHash>,
+    at_block_hash: Option<H256>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
     Ok(node_state(provider, address, at_block_hash).await?.1)
 }
@@ -44,7 +45,7 @@ pub async fn fetch_state_from_node(
 pub(crate) async fn node_state<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
-    at_block_hash: Option<midnight_provider::NodeBlockHash>,
+    at_block_hash: Option<H256>,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     let hex = provider
         .get_contract_state(address, at_block_hash)
@@ -69,7 +70,7 @@ pub(crate) struct StateAtBlock {
     /// checks.
     pub(crate) time: Timestamp,
     /// The hash of the block.
-    pub(crate) hash: [u8; 32],
+    pub(crate) hash: H256,
 }
 
 /// Read a contract's state and the block time at one block: `at_block` when
@@ -80,7 +81,7 @@ pub(crate) struct StateAtBlock {
 pub(crate) async fn state_at_block(
     provider: &midnight_provider::MidnightProvider,
     address: &str,
-    at_block: Option<midnight_provider::NodeBlockHash>,
+    at_block: Option<H256>,
 ) -> Result<StateAtBlock, ContractError> {
     let hash = match at_block {
         Some(hash) => hash,
@@ -92,7 +93,7 @@ pub(crate) async fn state_at_block(
         bytes,
         view,
         time: Timestamp::from_secs(time.as_secs()),
-        hash: hash.0,
+        hash,
     })
 }
 

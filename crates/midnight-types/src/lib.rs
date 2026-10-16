@@ -49,6 +49,12 @@ pub use ledger_version::{LedgerVersion, UnknownLedger};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::Network;
 pub use parameters::{ChainParameters, DustParameters};
+/// The chain's 32-byte hash: a block hash or an extrinsic hash.
+///
+/// `Display` abbreviates it to `0x1234…cdef`. Format it with `{:x}`, or with
+/// `{:#x}` for a `0x` prefix, to get the whole digest.
+#[doc(inline)]
+pub use primitive_types::H256;
 pub use sync::{SyncCursors, TrackedUtxo};
 pub use transfer::{
     SpentInputs, SpentUtxoKey, TransferKind, TransferRequest, TransferResult, panic_message,

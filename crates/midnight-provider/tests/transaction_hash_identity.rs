@@ -12,7 +12,7 @@
 #[expect(dead_code, reason = "this test needs no synced_provider")]
 mod common;
 
-use midnight_provider::{MidnightProvider, NIGHT, NodeBlockHash};
+use midnight_provider::{MidnightProvider, NIGHT};
 
 #[tokio::test]
 async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
@@ -46,7 +46,7 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
     let events = subxt::OnlineClient::<subxt::SubstrateConfig>::from_url(&node_url)
         .await
         .expect("connect to the node")
-        .at_block(NodeBlockHash::from(in_block.block_hash))
+        .at_block(in_block.block_hash)
         .await
         .expect("the inclusion block")
         .events()

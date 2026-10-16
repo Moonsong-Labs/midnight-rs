@@ -11,7 +11,6 @@ mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
-use midnight_contract::NodeBlockHash;
 use midnight_provider::MidnightProvider;
 
 #[tokio::test]
@@ -52,7 +51,7 @@ async fn a_simulated_call_returns_the_value_and_the_next_ledger_with_no_wallet()
 
     // A zero hash, or the hash of a block before the deploy, fails this read.
     let round_at_run = counter::Contract::at(&reader, contract.address())
-        .at_block(NodeBlockHash::from(simulated.block_hash))
+        .at_block(simulated.block_hash)
         .build()
         .ledger()
         .await

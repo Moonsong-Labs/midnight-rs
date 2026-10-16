@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use midnight_provider::{NotApplied, ProviderError, TransactionHash, TxInBlock};
+use midnight_provider::{NotApplied, ProviderError, SubmitError, TransactionHash, TxInBlock};
+use midnight_types::H256;
 
 /// Reconciliation guidance appended to the Display of
 /// [`ContractError::SubmissionWait`] and [`ContractError::FinalizeTimeout`]
@@ -77,10 +78,8 @@ pub enum ContractError {
     ///
     /// A failed wait does **not** retract the transaction, so it can still
     /// land. A wait that reads a verdict other than `Success` gives
-    /// [`TransactionFailed`](ContractError::TransactionFailed) instead, so
-    /// `source` is always a [`ProviderError::Submission`] that carries a
-    /// [`SubmitError`](midnight_provider::SubmitError). Match the inner kind
-    /// to choose the recovery:
+    /// [`TransactionFailed`](ContractError::TransactionFailed) instead. Match
+    /// the [`SubmitError`] kind in `source` to choose the recovery:
     ///
     /// - `Invalid`: the node rejected the transaction, and the rejection is
     ///   final. Mark any pending private-state snapshot failed, then build
@@ -102,11 +101,10 @@ pub enum ContractError {
     ///
     /// ```rust
     /// # use midnight_contract::{ContractError, SubmitError};
-    /// # use midnight_provider::ProviderError;
     /// # fn handle(err: ContractError) {
     /// match err {
     ///     ContractError::SubmissionWait {
-    ///         source: ProviderError::Submission(SubmitError::Invalid { .. }),
+    ///         source: SubmitError::Invalid { .. },
     ///         snapshot_written,
     ///         ..
     ///     } => { /* definitive rejection: if snapshot_written, mark_failed;
@@ -129,24 +127,19 @@ pub enum ContractError {
     ///
     /// [`VerdictFetch`]: midnight_provider::SubmitError::VerdictFetch
     #[error(
-        "transaction {transaction_hash} (extrinsic {extrinsic_hash}): the wait for \
+        "transaction {transaction_hash} (extrinsic {extrinsic_hash:x}): the wait for \
          finality failed: {source}.{}",
         if *snapshot_written { PENDING_SNAPSHOT_HINT } else { "" }
     )]
     SubmissionWait {
         /// The Midnight transaction hash. See
         /// [`PendingTx::transaction_hash`](midnight_provider::PendingTx::transaction_hash).
-        // Boxed: unboxed, this variant takes `ContractError` past clippy's
-        // `result_large_err` limit, and every `Result` here pays that size.
-        transaction_hash: Box<TransactionHash>,
-        /// Hex extrinsic hash (no `0x` prefix) of the in-flight transaction.
-        /// The pending private-state snapshot uses it as its key.
-        // `Box<str>`, not `String`, for the same limit.
-        extrinsic_hash: Box<str>,
-        /// The provider error the wait surfaced: always
-        /// [`ProviderError::Submission`] carrying a
-        /// [`SubmitError`](midnight_provider::SubmitError).
-        source: ProviderError,
+        transaction_hash: TransactionHash,
+        /// The extrinsic hash of the in-flight transaction. The pending
+        /// private-state snapshot uses it as its key.
+        extrinsic_hash: H256,
+        /// The failure the wait surfaced.
+        source: SubmitError,
         /// Whether a pending private-state snapshot was recorded for this
         /// transaction. When `true`, the Display appends reconciliation
         /// guidance for the on-disk snapshot.
@@ -165,7 +158,7 @@ pub enum ContractError {
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     #[error(
-        "transaction {transaction_hash} (extrinsic {extrinsic_hash}) did not \
+        "transaction {transaction_hash} (extrinsic {extrinsic_hash:x}) did not \
          finalize within {timeout:?}. It can be in the mempool, or in a block \
          that is not final yet. The timeout does not retract it, so it can \
          still land.{}",
@@ -174,13 +167,10 @@ pub enum ContractError {
     FinalizeTimeout {
         /// The Midnight transaction hash. See
         /// [`PendingTx::transaction_hash`](midnight_provider::PendingTx::transaction_hash).
-        // Boxed like `SubmissionWait::transaction_hash`, so one or-pattern
-        // binds the field of both variants. The same holds for
-        // `extrinsic_hash`.
-        transaction_hash: Box<TransactionHash>,
-        /// Hex extrinsic hash (no `0x` prefix) of the in-flight transaction.
-        /// The pending private-state snapshot uses it as its key.
-        extrinsic_hash: Box<str>,
+        transaction_hash: TransactionHash,
+        /// The extrinsic hash of the in-flight transaction. The pending
+        /// private-state snapshot uses it as its key.
+        extrinsic_hash: H256,
         /// The deadline the finalization wait was bounded by.
         timeout: Duration,
         /// Whether a pending private-state snapshot was recorded for this
@@ -260,14 +250,13 @@ pub enum ContractError {
     /// stopped before the submit. Nothing reached the chain, and no snapshot
     /// exists. Fix the store error in `source`, then call again.
     #[error(
-        "`append_pending` failed for extrinsic {extrinsic_hash}: {source}. The \
+        "`append_pending` failed for extrinsic {extrinsic_hash:x}: {source}. The \
          transaction was not submitted, and nothing reached the chain: fix the \
          store error, then call again."
     )]
     PendingSnapshotFailed {
-        /// Hex extrinsic hash (no `0x` prefix) of the transaction that the call
-        /// did not submit.
-        extrinsic_hash: String,
+        /// The extrinsic hash of the transaction that the call did not submit.
+        extrinsic_hash: H256,
         /// The private-state store error that prevented the snapshot.
         source: midnight_provider::PrivateStateError,
     },
@@ -288,11 +277,12 @@ impl From<ProviderError> for ContractError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_provider::{PrivateStateError, SubmitError};
+    use midnight_provider::PrivateStateError;
 
     /// The call wait errors name the transaction hash, which the chain's
     /// `TxApplied` event names. A snapshot failure says that the call did not
-    /// submit the transaction.
+    /// submit the transaction. Each names the whole extrinsic hash, the key of
+    /// the snapshot.
     /// thiserror does not warn when a Display leaves out a field. A snapshot
     /// failure that says "submitted" sends the caller to look for a
     /// transaction that never left the process.
@@ -301,23 +291,23 @@ mod tests {
         // Distinct bytes, so a Display that prints only the extrinsic hash
         // does not match the transaction hash.
         let transaction_hash = TransactionHash::from([0xab; 32]);
-        let extrinsic_hash = hex::encode([0xcd; 32]);
+        let extrinsic_hash = H256::repeat_byte(0xcd);
         let cases = [
             (
                 ContractError::SubmissionWait {
-                    transaction_hash: Box::new(transaction_hash),
-                    extrinsic_hash: extrinsic_hash.as_str().into(),
-                    source: ProviderError::Submission(SubmitError::Dropped {
+                    transaction_hash,
+                    extrinsic_hash,
+                    source: SubmitError::Dropped {
                         message: "pool full".into(),
-                    }),
+                    },
                     snapshot_written: false,
                 },
                 transaction_hash.to_string(),
             ),
             (
                 ContractError::FinalizeTimeout {
-                    transaction_hash: Box::new(transaction_hash),
-                    extrinsic_hash: extrinsic_hash.as_str().into(),
+                    transaction_hash,
+                    extrinsic_hash,
                     timeout: Duration::from_secs(60),
                     snapshot_written: false,
                 },
@@ -336,6 +326,10 @@ mod tests {
             assert!(
                 message.contains(&expected),
                 "expected {expected:?} in: {message}"
+            );
+            assert!(
+                message.contains(&format!("{extrinsic_hash:x}")),
+                "expected the whole extrinsic hash in: {message}"
             );
         }
     }

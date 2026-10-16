@@ -24,7 +24,8 @@ pub mod zk_config;
 // Hidden from rustdoc because they're not part of the user-facing API.
 #[doc(hidden)]
 pub use compact_codegen;
-pub use midnight_provider::{NodeBlockHash, Provider};
+pub use midnight_provider::Provider;
+pub use midnight_types::H256;
 
 // Primary API: deploy / connect / call.
 pub use call::ShieldedInputs;
