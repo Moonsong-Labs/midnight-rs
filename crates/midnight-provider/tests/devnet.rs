@@ -6,7 +6,7 @@
 mod common;
 
 use midnight_indexer_client::{BlockOffset, IndexerClient};
-use midnight_provider::{H256, LedgerVersion, MidnightProvider, Provider};
+use midnight_provider::{BlockHash, LedgerVersion, MidnightProvider, Provider};
 
 fn provider() -> Option<MidnightProvider> {
     let (node, indexer) = common::devnet_urls()?;
@@ -85,7 +85,10 @@ async fn header_round_trips_the_finalized_height_and_nulls_unknown_hashes() {
         "the header's number must round-trip the height its hash was resolved from"
     );
     assert!(
-        p.get_block_header(H256::zero()).await.unwrap().is_none(),
+        p.get_block_header(BlockHash::zero())
+            .await
+            .unwrap()
+            .is_none(),
         "an unknown hash must resolve to no header"
     );
 }

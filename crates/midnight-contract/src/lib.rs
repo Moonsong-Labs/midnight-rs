@@ -25,8 +25,7 @@ pub mod zk_config;
 #[doc(hidden)]
 pub use compact_codegen;
 pub use midnight_provider::Provider;
-/// The chain's 32-byte hash. Its `Display` abbreviates: see [`midnight_types::H256`].
-pub use midnight_types::H256;
+pub use midnight_types::{BlockHash, ExtrinsicHash};
 
 // Primary API: deploy / connect / call.
 pub use call::ShieldedInputs;

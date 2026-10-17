@@ -130,7 +130,7 @@ pub(crate) async fn deployed_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_types::H256;
+    use midnight_types::{BlockHash, ExtrinsicHash};
 
     /// The read gets only the time that the block wait left of the deploy
     /// deadline, whether it hangs or fails. The timeout keeps the inclusion
@@ -149,8 +149,8 @@ mod tests {
             ("a node URL that does not parse", "not a url".to_owned()),
         ];
         let applied = TxInBlock {
-            block_hash: H256::repeat_byte(1),
-            extrinsic_hash: H256::repeat_byte(2),
+            block_hash: BlockHash::repeat_byte(1),
+            extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),
             verdict: midnight_provider::Verdict::Success,
         };

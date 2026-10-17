@@ -491,7 +491,7 @@ pub(crate) async fn require_same_chain(
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use midnight_types::{H256, LedgerVersion};
+    use midnight_types::{BlockHash, LedgerVersion};
 
     use super::*;
     use crate::storage::{StoredMetadata, read_metadata, save_snapshot, wallet_storage_id};
@@ -503,7 +503,7 @@ mod tests {
     fn stored_pin() -> ChainPin {
         ChainPin {
             height: 42,
-            hash: format!("{:#x}", H256::repeat_byte(0xaa)),
+            hash: format!("{:#x}", BlockHash::repeat_byte(0xaa)),
         }
     }
 
@@ -544,12 +544,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ChainView for Node {
-        async fn block_hashes_at(&self, height: u64) -> Option<Vec<H256>> {
+        async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>> {
             self.questions.fetch_add(1, Ordering::SeqCst);
             if self.same_chain && height == stored_pin().height {
-                return Some(vec![H256::repeat_byte(0xaa)]);
+                return Some(vec![BlockHash::repeat_byte(0xaa)]);
             }
-            Some(vec![H256::repeat_byte(0xbb)])
+            Some(vec![BlockHash::repeat_byte(0xbb)])
         }
 
         async fn finalized_height(&self) -> Option<u64> {
@@ -591,7 +591,7 @@ mod tests {
         };
         let fresh = ChainPin {
             height: 100,
-            hash: format!("{:#x}", H256::repeat_byte(0xbb)),
+            hash: format!("{:#x}", BlockHash::repeat_byte(0xbb)),
         };
         assert_eq!(plan.chain_pin, Some(fresh));
     }

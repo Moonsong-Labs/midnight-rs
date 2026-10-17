@@ -17,8 +17,8 @@ use crate::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, H256, LedgerVersion, Network,
-    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
+    BlockHash, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion,
+    Network, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
     TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
@@ -866,7 +866,7 @@ impl Provider for MidnightProvider {
     async fn get_contract_state(
         &self,
         address: &str,
-        at: Option<H256>,
+        at: Option<BlockHash>,
     ) -> Result<Option<String>, ProviderError> {
         self.get_state_from_node(address, at).await
     }
@@ -974,7 +974,7 @@ impl MidnightProvider {
     /// [`get_state_from_node`](Self::get_state_from_node) with `None`, reads
     /// at the best block at the moment of that read. Pass this hash to such
     /// reads to keep two of them at one block.
-    pub async fn best_block_hash(&self) -> Result<H256, ProviderError> {
+    pub async fn best_block_hash(&self) -> Result<BlockHash, ProviderError> {
         let conn = self.get_or_connect().await?;
 
         legacy_rpc(&conn)
@@ -1011,7 +1011,7 @@ impl MidnightProvider {
     pub async fn get_block_hashes_by_height(
         &self,
         height: u64,
-    ) -> Result<Vec<H256>, ProviderError> {
+    ) -> Result<Vec<BlockHash>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
         let height = usize::try_from(height)
@@ -1025,7 +1025,10 @@ impl MidnightProvider {
     /// Get the header of the block with `hash` (`archive_v1_header`), or
     /// `None` when the node does not know the hash. The SCALE-encoded
     /// response decodes into the config-derived [`NodeHeader`].
-    pub async fn get_block_header(&self, hash: H256) -> Result<Option<NodeHeader>, ProviderError> {
+    pub async fn get_block_header(
+        &self,
+        hash: BlockHash,
+    ) -> Result<Option<NodeHeader>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
         archive_rpc(&conn)
@@ -1040,7 +1043,7 @@ impl MidnightProvider {
     /// Reads `Timestamp::Now` in that block's state. Genesis sets no
     /// timestamp, so it reads as zero. Errors when the node does not know
     /// `hash`, or no longer holds the state at it.
-    pub async fn get_block_timestamp(&self, hash: H256) -> Result<Duration, ProviderError> {
+    pub async fn get_block_timestamp(&self, hash: BlockHash) -> Result<Duration, ProviderError> {
         let conn = self.get_or_connect().await?;
 
         let millis = conn
@@ -1190,7 +1193,7 @@ impl MidnightProvider {
     pub async fn get_state_from_node(
         &self,
         address: &str,
-        at_block_hash: Option<H256>,
+        at_block_hash: Option<BlockHash>,
     ) -> Result<Option<String>, ProviderError> {
         let conn = self.get_or_connect().await?;
         match conn
@@ -1215,7 +1218,7 @@ impl MidnightProvider {
         &self,
         address: &str,
         queries: Vec<StateQuery>,
-        at_block_hash: Option<H256>,
+        at_block_hash: Option<BlockHash>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         let conn = self.get_or_connect().await?;
         conn.rpc
@@ -1371,7 +1374,7 @@ impl Drop for HeldInputs {
 /// own resync checks pins through the same answers.
 #[async_trait]
 impl midnight_types::chain_pin::ChainView for MidnightProvider {
-    async fn block_hashes_at(&self, height: u64) -> Option<Vec<H256>> {
+    async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>> {
         self.get_block_hashes_by_height(height).await.ok()
     }
 

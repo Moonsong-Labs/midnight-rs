@@ -7,7 +7,7 @@ use std::time::Duration;
 use midnight_base_crypto::signatures::VerifyingKey;
 use midnight_provider::{MidnightProvider, Provider};
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::H256;
+use midnight_types::{BlockHash, ExtrinsicHash};
 
 use crate::address::IntoAddress;
 use crate::deploy::{deploy_funded, deployed_state};
@@ -30,12 +30,12 @@ pub struct CallOutcome<T> {
     /// The circuit's return value.
     pub value: T,
     /// Hash of the extrinsic that carried the call.
-    pub extrinsic_hash: H256,
+    pub extrinsic_hash: ExtrinsicHash,
     /// Hash of the Midnight transaction the extrinsic carried, the identity
     /// the indexer keys on. See [`PendingTx::transaction_hash`].
     pub transaction_hash: TransactionHash,
     /// Hash of the block it landed in.
-    pub block_hash: H256,
+    pub block_hash: BlockHash,
 }
 
 impl<T> CallOutcome<T> {
@@ -64,7 +64,7 @@ pub struct Simulated<T, L> {
     /// The contract's ledger state after the call.
     pub ledger: L,
     /// The block whose state and time the run read.
-    pub block_hash: H256,
+    pub block_hash: BlockHash,
 }
 
 /// A circuit call built and proven, before it is submitted.
@@ -150,7 +150,7 @@ fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersi
 async fn settle_call(
     store: Option<&dyn PrivateStateProvider>,
     address: &str,
-    extrinsic_hash: H256,
+    extrinsic_hash: ExtrinsicHash,
     transaction_hash: TransactionHash,
     waited: Result<TxInBlock, ProviderError>,
 ) -> Result<TxInBlock, ContractError> {
@@ -482,7 +482,7 @@ impl<P> PendingDeploy<P> {
     }
 
     /// The hash of the submitted extrinsic.
-    pub fn extrinsic_hash(&self) -> H256 {
+    pub fn extrinsic_hash(&self) -> ExtrinsicHash {
         self.pending.extrinsic_hash()
     }
 
@@ -642,7 +642,7 @@ pub struct ConnectBuilder<P> {
     provider: P,
     address: String,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
-    at_block: Option<H256>,
+    at_block: Option<BlockHash>,
     declares_witnesses: bool,
 }
 
@@ -677,7 +677,7 @@ impl<P> ConnectBuilder<P> {
     /// Pin queries to the block `hash`. Default is the node's best block.
     /// Both circuit calls and lazy ledger queries honour the pin through the
     /// node RPC, and a circuit call runs at the time of that block.
-    pub fn at_block(mut self, hash: H256) -> Self {
+    pub fn at_block(mut self, hash: BlockHash) -> Self {
         self.at_block = Some(hash);
         self
     }
@@ -714,7 +714,7 @@ pub struct Contract<P> {
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
     provider: P,
     /// Optional block pin for queries. `None` means latest.
-    at_block: Option<H256>,
+    at_block: Option<BlockHash>,
     /// Whether the compiled contract declares witnesses, and so needs a
     /// private-state provider for its calls to be meaningful.
     declares_witnesses: bool,
@@ -780,7 +780,7 @@ impl<P: Provider> Contract<P> {
     }
 
     /// The block pin for queries. `None` means latest.
-    pub fn at_block(&self) -> Option<H256> {
+    pub fn at_block(&self) -> Option<BlockHash> {
         self.at_block
     }
 
@@ -1281,7 +1281,7 @@ mod tests {
         async fn get_contract_state(
             &self,
             _address: &str,
-            _at: Option<H256>,
+            _at: Option<BlockHash>,
         ) -> Result<Option<String>, ProviderError> {
             Ok(None)
         }
@@ -1305,7 +1305,7 @@ mod tests {
     #[test]
     fn at_with_block_hash() {
         let provider = MockProvider::new();
-        let hash = H256::repeat_byte(0xab);
+        let hash = BlockHash::repeat_byte(0xab);
         let contract = Contract::at(provider, "addr1").at_block(hash).build();
         assert_eq!(contract.address(), "addr1");
         assert_eq!(contract.at_block(), Some(hash));
@@ -1341,8 +1341,8 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let store = midnight_provider::FsPrivateStateProvider::new(dir.path());
         let call = TxInBlock {
-            block_hash: H256::repeat_byte(1),
-            extrinsic_hash: H256::repeat_byte(2),
+            block_hash: BlockHash::repeat_byte(1),
+            extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),
             verdict: midnight_provider::Verdict::Success,
         };

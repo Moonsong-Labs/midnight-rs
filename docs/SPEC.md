@@ -332,7 +332,7 @@ One auto-reconnecting websocket carries everything the node serves: raw Substrat
 `MidnightProvider::submit` wraps `tx_bytes` as an unsigned `Midnight::send_mn_transaction` extrinsic, calls `submit_and_watch`, and hands back:
 
 - `PendingTx` — owns the watch stream.
-  - `extrinsic_hash() → H256`, `extrinsic_hash_hex() → String`
+  - `extrinsic_hash() → ExtrinsicHash`, `extrinsic_hash_hex() → String`
   - `transaction_hash() → TransactionHash`: the ledger's own identity for the tx
   - `wait_best(self) → Result<(TxInBlock, Self), _>`: consumes & returns self; its verdict is provisional
   - `wait_finalized(self) → Result<(TxInBlock, Self), _>`: same; may be called without prior `wait_best`; its verdict is final

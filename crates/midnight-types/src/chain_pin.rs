@@ -19,7 +19,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{H256, Network};
+use crate::{BlockHash, Network};
 
 /// A finalized block a wallet snapshot saw, kept so a later resume can ask
 /// whether it is still looking at the same chain.
@@ -44,7 +44,7 @@ pub enum ChainCheck {
     SameChain,
     /// The chain no longer holds the pinned block, so the cursors describe a
     /// chain that is gone.
-    Replaced { found: Option<H256> },
+    Replaced { found: Option<BlockHash> },
     /// The node could not answer. Says nothing either way, so the caller
     /// carries on: a pruned or partial archive must not condemn a healthy
     /// wallet.
@@ -59,7 +59,7 @@ pub enum ChainCheck {
 #[async_trait::async_trait]
 pub trait ChainView: Send + Sync {
     /// The hashes the node holds at `height`; `None` when it cannot answer.
-    async fn block_hashes_at(&self, height: u64) -> Option<Vec<H256>>;
+    async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>>;
 
     /// The finalized height the node reports now; `None` when it cannot
     /// answer.
@@ -107,7 +107,7 @@ pub async fn verify_pin(view: &dyn ChainView, pin: &ChainPin) -> ChainCheck {
 /// `hashes` is `None` when the node could not answer at all. An empty slice
 /// is an answer: the chain has no block at that height, so it is shorter than
 /// the one the snapshot saw.
-pub fn check_chain_pin(pin: &ChainPin, hashes: Option<&[H256]>) -> ChainCheck {
+pub fn check_chain_pin(pin: &ChainPin, hashes: Option<&[BlockHash]>) -> ChainCheck {
     let Some(hashes) = hashes else {
         return ChainCheck::Unknown;
     };
@@ -123,7 +123,7 @@ pub fn check_chain_pin(pin: &ChainPin, hashes: Option<&[H256]>) -> ChainCheck {
 }
 
 /// The form of [`ChainPin::hash`].
-fn pin_hash(hash: &H256) -> String {
+fn pin_hash(hash: &BlockHash) -> String {
     format!("{hash:#x}")
 }
 
@@ -134,7 +134,7 @@ mod tests {
     fn pin() -> ChainPin {
         ChainPin {
             height: 42,
-            hash: pin_hash(&H256::repeat_byte(0xab)),
+            hash: pin_hash(&BlockHash::repeat_byte(0xab)),
         }
     }
 
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn a_hash_renders_as_full_lowercase_hex() {
         assert_eq!(
-            pin_hash(&H256::repeat_byte(0xab)),
+            pin_hash(&BlockHash::repeat_byte(0xab)),
             format!("0x{}", "ab".repeat(32)),
             "an abbreviated hash would still look like one and never match"
         );
@@ -171,11 +171,11 @@ mod tests {
 
     #[test]
     fn a_different_block_at_that_height_means_the_chain_was_replaced() {
-        let hashes = [H256::repeat_byte(0xde)];
+        let hashes = [BlockHash::repeat_byte(0xde)];
         assert_eq!(
             check_chain_pin(&pin(), Some(&hashes)),
             ChainCheck::Replaced {
-                found: Some(H256::repeat_byte(0xde))
+                found: Some(BlockHash::repeat_byte(0xde))
             }
         );
     }
@@ -199,7 +199,7 @@ mod tests {
     /// finalized, so finding it among them is enough.
     #[test]
     fn the_pinned_block_at_that_height_is_the_same_chain() {
-        let hashes = [H256::repeat_byte(0xde), H256::repeat_byte(0xab)];
+        let hashes = [BlockHash::repeat_byte(0xde), BlockHash::repeat_byte(0xab)];
         assert_eq!(
             check_chain_pin(&pin(), Some(&hashes)),
             ChainCheck::SameChain

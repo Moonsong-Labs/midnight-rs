@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::types::TransactionHash;
 
-use midnight_types::{H256, SpentInputs};
+use midnight_types::{BlockHash, ExtrinsicHash, SpentInputs};
 use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
 use subxt::tx::{TransactionInBlock, TransactionStatus};
@@ -176,8 +176,8 @@ impl SubmitError {
 /// dispatch errored entirely. See [`Verdict`].
 #[derive(Debug, Clone, Copy)]
 pub struct TxInBlock {
-    pub block_hash: H256,
-    pub extrinsic_hash: H256,
+    pub block_hash: BlockHash,
+    pub extrinsic_hash: ExtrinsicHash,
     /// The Midnight transaction the extrinsic carried, the ledger's own
     /// identity for it. The chain names this hash in its `TxApplied` /
     /// `TxPartialSuccess` events, and the indexer keys transactions by it.
@@ -348,7 +348,7 @@ impl PendingTx {
     }
 
     /// The hash of the submitted extrinsic.
-    pub fn extrinsic_hash(&self) -> H256 {
+    pub fn extrinsic_hash(&self) -> ExtrinsicHash {
         self.progress.extrinsic_hash()
     }
 
@@ -490,7 +490,7 @@ impl PreparedTx {
     /// The hash subxt will report for this extrinsic once submitted,
     /// computed here from the encoded transaction without contacting the
     /// node. Identical to the eventual [`PendingTx::extrinsic_hash`].
-    pub fn extrinsic_hash(&self) -> H256 {
+    pub fn extrinsic_hash(&self) -> ExtrinsicHash {
         self.tx.hash()
     }
 
@@ -698,8 +698,8 @@ mod tests {
 
     fn in_block(verdict: Verdict) -> TxInBlock {
         TxInBlock {
-            block_hash: H256::repeat_byte(1),
-            extrinsic_hash: H256::repeat_byte(2),
+            block_hash: BlockHash::repeat_byte(1),
+            extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),
             verdict,
         }

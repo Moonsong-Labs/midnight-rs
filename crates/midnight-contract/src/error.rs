@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use midnight_provider::{NotApplied, ProviderError, SubmitError, TransactionHash, TxInBlock};
-use midnight_types::H256;
+use midnight_types::ExtrinsicHash;
 
 /// Reconciliation guidance appended to the Display of
 /// [`ContractError::SubmissionWait`] and [`ContractError::FinalizeTimeout`]
@@ -137,7 +137,7 @@ pub enum ContractError {
         transaction_hash: TransactionHash,
         /// The extrinsic hash of the in-flight transaction. The pending
         /// private-state snapshot uses it as its key.
-        extrinsic_hash: H256,
+        extrinsic_hash: ExtrinsicHash,
         /// The failure the wait surfaced.
         source: SubmitError,
         /// Whether a pending private-state snapshot was recorded for this
@@ -170,7 +170,7 @@ pub enum ContractError {
         transaction_hash: TransactionHash,
         /// The extrinsic hash of the in-flight transaction. The pending
         /// private-state snapshot uses it as its key.
-        extrinsic_hash: H256,
+        extrinsic_hash: ExtrinsicHash,
         /// The deadline the finalization wait was bounded by.
         timeout: Duration,
         /// Whether a pending private-state snapshot was recorded for this
@@ -256,7 +256,7 @@ pub enum ContractError {
     )]
     PendingSnapshotFailed {
         /// The extrinsic hash of the transaction that the call did not submit.
-        extrinsic_hash: H256,
+        extrinsic_hash: ExtrinsicHash,
         /// The private-state store error that prevented the snapshot.
         source: midnight_provider::PrivateStateError,
     },
@@ -291,7 +291,7 @@ mod tests {
         // Distinct bytes, so a Display that prints only the extrinsic hash
         // does not match the transaction hash.
         let transaction_hash = TransactionHash::from([0xab; 32]);
-        let extrinsic_hash = H256::repeat_byte(0xcd);
+        let extrinsic_hash = ExtrinsicHash::repeat_byte(0xcd);
         let cases = [
             (
                 ContractError::SubmissionWait {

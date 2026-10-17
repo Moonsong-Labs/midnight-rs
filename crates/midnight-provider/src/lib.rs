@@ -28,12 +28,11 @@ pub use types::{Health, TransactionHash};
 // so callers don't need separate deps for it. The implementation types
 // (`Wallet`, `LocalWallet`, `WalletBuilder`) live in midnight-wallet; this
 // crate never names them.
-/// The chain's 32-byte hash. Its `Display` abbreviates: see [`midnight_types::H256`].
-pub use midnight_types::H256;
 pub use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
-    DustParameters, EncryptionPublicKey, HashOutput, LedgerVersion, NIGHT, Nonce, Nullifier,
-    SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, UnshieldedTokenType,
+    BlockHash, ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
+    DustParameters, EncryptionPublicKey, ExtrinsicHash, HashOutput, LedgerVersion, NIGHT, Nonce,
+    Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType,
+    UnshieldedTokenType,
 };
 
 // The wallet's API, so a caller attaching one (or implementing one) needs no
@@ -83,7 +82,7 @@ pub trait Provider: Send + Sync {
     async fn get_contract_state(
         &self,
         address: &str,
-        at: Option<H256>,
+        at: Option<BlockHash>,
     ) -> Result<Option<String>, ProviderError>;
 
     /// Query specific fields/keys in a contract's state tree without
@@ -106,7 +105,7 @@ impl StateQueryProvider for MidnightProvider {
         &self,
         address: &str,
         queries: Vec<StateQuery>,
-        at_block_hash: Option<H256>,
+        at_block_hash: Option<BlockHash>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         self.query_contract_state_at(address, queries, at_block_hash)
             .await
@@ -124,7 +123,7 @@ macro_rules! delegate_provider {
             async fn get_contract_state(
                 &self,
                 address: &str,
-                at: Option<H256>,
+                at: Option<BlockHash>,
             ) -> Result<Option<String>, ProviderError> {
                 (**self).get_contract_state(address, at).await
             }
@@ -157,7 +156,7 @@ mod tests {
         async fn get_contract_state(
             &self,
             address: &str,
-            at: Option<H256>,
+            at: Option<BlockHash>,
         ) -> Result<Option<String>, ProviderError> {
             Ok(Some(format!("{address}@{at:?}")))
         }
@@ -173,7 +172,7 @@ mod tests {
     #[tokio::test]
     async fn blanket_impl_arc() {
         let p = Arc::new(DummyProvider);
-        let at = Some(H256::repeat_byte(0xab));
+        let at = Some(BlockHash::repeat_byte(0xab));
         assert_eq!(
             p.get_contract_state("a", at).await.unwrap(),
             DummyProvider.get_contract_state("a", at).await.unwrap()
@@ -183,7 +182,7 @@ mod tests {
     #[tokio::test]
     async fn blanket_impl_box() {
         let p: Box<dyn Provider> = Box::new(DummyProvider);
-        let at = Some(H256::repeat_byte(0xab));
+        let at = Some(BlockHash::repeat_byte(0xab));
         assert_eq!(
             p.get_contract_state("a", at).await.unwrap(),
             DummyProvider.get_contract_state("a", at).await.unwrap()

@@ -29,6 +29,7 @@ pub mod ledger_9;
 mod balance;
 mod coin;
 mod error;
+mod hash;
 mod ledger_version;
 mod network;
 mod parameters;
@@ -45,11 +46,12 @@ pub use coin::{
     UnshieldedTokenType,
 };
 pub use error::{WalletError, refuse_repeated_nullifiers};
+pub use hash::{BlockHash, ExtrinsicHash};
 pub use ledger_version::{LedgerVersion, UnknownLedger};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::Network;
 pub use parameters::{ChainParameters, DustParameters};
-/// The chain's 32-byte hash: a block hash or an extrinsic hash.
+/// The chain's 32-byte hash, under the names [`BlockHash`] and [`ExtrinsicHash`].
 ///
 /// `Display` abbreviates it to `0x1234…cdef`. Format it with `{:x}`, or with
 /// `{:#x}` for a `0x` prefix, to get the whole digest.
