@@ -125,6 +125,19 @@ fn the_base_contract_call_methods_return_small_futures() {
         ),
     );
     assert_small(
+        "Contract::send_call_with",
+        contract.send_call_with(
+            circuit,
+            &program,
+            "increment",
+            &[],
+            &NoWitnesses,
+            &[],
+            ShieldedInputs::default(),
+            Ok,
+        ),
+    );
+    assert_small(
         "Contract::build_call_with",
         contract.build_call_with(
             circuit,

@@ -74,18 +74,21 @@ pub enum ContractError {
     #[error("invalid address: {0}")]
     InvalidAddress(String),
 
-    /// The SDK submitted a circuit-call transaction, but the wait for finality failed.
+    /// The SDK submitted a circuit-call transaction, or tried to, and got no verdict.
     ///
-    /// A failed wait does **not** retract the transaction, so it can still
-    /// land. A wait that reads a verdict other than `Success` gives
+    /// A failed submit or wait does **not** retract the transaction, so it can
+    /// still land. A wait that reads a verdict other than `Success` gives
     /// [`TransactionFailed`](ContractError::TransactionFailed) instead. Match
     /// the [`SubmitError`] kind in `source` to choose the recovery:
     ///
     /// - `Invalid`: the node rejected the transaction, and the rejection is
     ///   final. Mark any pending private-state snapshot failed, then build
     ///   again.
-    /// - `Dropped`, `NodeError` or `WatchStream`: the fate of the transaction
-    ///   is unknown, and it can still land until its TTL passes.
+    /// - `SubmitRpc`, `Dropped`, `NodeError` or `WatchStream`: the fate of the
+    ///   transaction is unknown, and it can still land until its TTL passes. A
+    ///   `SubmitRpc` comes from the submit call, before any wait. It does not
+    ///   say whether the node holds the transaction (see
+    ///   [`SubmitRpc`](SubmitError::SubmitRpc)).
     /// - [`VerdictFetch`]: the transaction is in a block, and only its verdict
     ///   is unknown. Do not resubmit. Find the verdict with the check below.
     ///
@@ -97,7 +100,9 @@ pub enum ContractError {
     /// later than the TTL, and no finalized block names the transaction in a
     /// `TxApplied` event, the transaction did not apply. If `snapshot_written`
     /// is true, call `confirm` when it applied, or `mark_failed` when it did
-    /// not, with `extrinsic_hash`.
+    /// not, with `extrinsic_hash`. Until you reconcile the snapshot, the next
+    /// call on this contract builds on it. A `mark_failed` of it then also
+    /// drops the snapshots of the later calls.
     ///
     /// ```rust
     /// # use midnight_contract::{ContractError, SubmitError};
@@ -127,8 +132,8 @@ pub enum ContractError {
     ///
     /// [`VerdictFetch`]: midnight_provider::SubmitError::VerdictFetch
     #[error(
-        "transaction {transaction_hash} (extrinsic {extrinsic_hash:x}): the wait for \
-         finality failed: {source}.{}",
+        "transaction {transaction_hash} (extrinsic {extrinsic_hash:x}) has no verdict: \
+         {source}.{}",
         if *snapshot_written { PENDING_SNAPSHOT_HINT } else { "" }
     )]
     SubmissionWait {
@@ -138,7 +143,7 @@ pub enum ContractError {
         /// The extrinsic hash of the in-flight transaction. The pending
         /// private-state snapshot uses it as its key.
         extrinsic_hash: ExtrinsicHash,
-        /// The failure the wait surfaced.
+        /// The failure of the submit or of the wait.
         source: SubmitError,
         /// Whether a pending private-state snapshot was recorded for this
         /// transaction. When `true`, the Display appends reconciliation
@@ -154,7 +159,9 @@ pub enum ContractError {
     /// Do not build or submit again from the same inputs before you know its
     /// fate. Find the fate with the check that [`SubmissionWait`] describes.
     /// Then, if `snapshot_written` is true, call `confirm` (the transaction
-    /// applied) or `mark_failed` (it did not) with `extrinsic_hash`.
+    /// applied) or `mark_failed` (it did not) with `extrinsic_hash`. Until you
+    /// reconcile the snapshot, the next call on this contract builds on it. A
+    /// `mark_failed` of it then also drops the snapshots of the later calls.
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     #[error(
@@ -185,9 +192,9 @@ pub enum ContractError {
     /// phase committed, at least one fallible segment failed) and
     /// [`Verdict::Failure`] (the dispatch errored entirely, so no phase ran).
     /// Unlike [`SubmissionWait`] and [`FinalizeTimeout`], the chain gave a
-    /// verdict. For `Contract::call_with`, the orphan `Pending` snapshot (when
-    /// one was recorded) has already been cascade-dropped via `mark_failed` by
-    /// the time the caller sees this error.
+    /// verdict. `Contract::call_with` and `PendingCall::wait_finalized` drop the
+    /// orphan `Pending` snapshot, when the call recorded one, with `mark_failed`
+    /// before they return this error.
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     /// [`FinalizeTimeout`]: ContractError::FinalizeTimeout

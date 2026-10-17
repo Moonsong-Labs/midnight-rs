@@ -92,6 +92,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
+| `PendingCall<T>` | contract | A submitted circuit call and its decoded result. `wait_finalized()` waits with no SDK deadline and settles the private-state snapshot by the verdict. A drop leaves the snapshot `Pending`. |
 | `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. |
 | `ProofProvider` | helpers | Proof backend trait, one per ledger generation. |
 | `ProofProviders` | provider | One `ProofProvider` per generation. Set on the provider with `with_proof_provider`. `ProofProviders::local()` (in-process) is the default. |
@@ -243,8 +244,18 @@ Contract::at(&provider, address)              // ConnectBuilder<P>
 ### Call a circuit (on-chain)
 
 ```
-contract.circuits().increment_by(5).await
-  ↓
+contract.circuits().increment_by(5)                      // IncrementByCallBuilder
+
+  .await                                                 // IntoFuture: Contract::call_with, then decode
+    │
+    └─ .send().await   →  PendingCall<T>                 // explicit form: Contract::send_call_with
+         ├─ .transaction_hash() / .extrinsic_hash()
+         └─ .wait_finalized().await   → CallOutcome<T>   // no SDK deadline; .await bounds it to 60 s
+```
+
+Internally:
+
+```
 read the state and the block time at one block (per call):
   state_at_block(address, at_block)           // the at_block pin, else best_block_hash();
                                               // the state through midnight_contractState,
@@ -286,10 +297,22 @@ if pay_fees: builds.balance_transaction(bytes)
      then the fee is proved on its own and merged in at its own intent segment,
      so the circuit proof is not redone
   ↓
-prepared.submit().await → PendingTx → wait_finalized (bounded by DEFAULT_TX_FINALIZE_TIMEOUT)
-  └─ settle: Ok confirms the snapshot; NotApplied marks it failed → TransactionFailed
+provider.prepare(tx_bytes) → PreparedTx                   // the extrinsic hash, before the submit
   ↓
-decode typed return value from ExecutionResult.result → caller
+.send() only: decode the typed return value from ExecutionResult.result
+  ↓
+append the Pending private-state snapshot, if the witnesses changed the state
+  ↓
+prepared.submit().await → PendingTx → PendingCall<T>      // .send() returns here
+  └─ SubmitRpc: SubmissionWait, and the snapshot stays Pending
+  ↓
+PendingCall::wait_finalized → PendingTx::wait_finalized   // .await bounds it by DEFAULT_TX_FINALIZE_TIMEOUT
+  ↓
+settle the result of the wait:
+  ├─ Ok: confirm the snapshot, if the call recorded one
+  └─ NotApplied (PartialSuccess or Failure): mark_failed that snapshot, then TransactionFailed
+  ↓
+.await only: decode the typed return value from ExecutionResult.result → caller
 ```
 
 `Contract<P>` is not mutated; the new state is discarded because the next call will fetch fresh state anyway.
@@ -341,7 +364,7 @@ One auto-reconnecting websocket carries everything the node serves: raw Substrat
 - `NotApplied(TxInBlock)`: a transaction that landed but did not apply
 - `Verdict`: `Success` (`TxApplied`), `PartialSuccess` (`TxPartialSuccess`: the guaranteed phase committed, a fallible segment did not), or `Failure`.
 
-Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures with no verdict surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection; `NotSubmitted`: never left the process) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a wait/decode issue that leaves the tx in flight (`WatchStream`: transport-only; `VerdictFetch`: landed but events undecodable; re-query the chain rather than resubmit). `SubmitRpc` splits on the underlying failure (clean refusal is safe; transport mid-call is ambiguous).
+Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures with no verdict surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection; `NotSubmitted`: never left the process) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a wait/decode issue that leaves the tx in flight (`WatchStream`: transport-only; `VerdictFetch`: landed but events undecodable; re-query the chain rather than resubmit). `SubmitRpc` does not say whether the node holds the tx, so a resubmit after it also risks a double spend.
 
 `MidnightProvider::prepare` stops one step earlier: it builds the unsigned `send_mn_transaction` extrinsic locally from the node's metadata and returns a `PreparedTx` whose extrinsic hash is already known, so a caller can durably record state keyed by that hash before the transaction reaches the mempool. The metadata checks only the call's shape, so the node validates the transaction only at submit. `PreparedTx::submit` then hands back the same `PendingTx`.
 

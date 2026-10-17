@@ -36,9 +36,9 @@ pub(crate) fn rejection_is_definitive(err: &SubmitError) -> bool {
 /// so the inputs it reserved are safe to hand back immediately.
 ///
 /// Only [`SubmitError::NotSubmitted`] says that: it failed before the RPC call.
-/// [`SubmitError::SubmitRpc`] is ambiguous, since a transport failure mid-call
-/// may still have delivered the transaction, and every other variant is
-/// reported by a wait rather than by submission.
+/// [`SubmitError::SubmitRpc`] does not say whether the node holds the
+/// transaction (see its docs). A wait, not the submit, reports every other
+/// variant.
 pub(crate) fn never_reached_the_node(err: &ProviderError) -> bool {
     matches!(
         err,
@@ -66,11 +66,19 @@ pub enum SubmitError {
     #[error("not submitted: {message}")]
     NotSubmitted { message: String },
 
-    /// The `submit_and_watch` RPC call itself failed. On a clean error
-    /// response the node refused the transaction at submission and it is
-    /// not in the pool (safe to rebuild and resubmit); on a transport
-    /// failure mid-call the node may have received it anyway — confirm
-    /// via the chain before resubmitting.
+    /// The `submit_and_watch` call failed, and the node can still hold the
+    /// transaction.
+    ///
+    /// The error does not say whether the node received the transaction.
+    /// subxt's `CombinedBackend` sends it through each of its RPC backends,
+    /// one after the other, until one call succeeds. This variant
+    /// carries the error of the last backend. So an earlier backend can have
+    /// delivered the transaction, and a transport failure can lose the node's
+    /// answer.
+    ///
+    /// Treat the fate as unknown. Before you build again from the same inputs,
+    /// make sure that the chain does not hold the transaction. You can also
+    /// wait until its TTL passes.
     #[error("submit RPC: {message}")]
     SubmitRpc { message: String },
 
@@ -290,11 +298,14 @@ impl std::fmt::Display for Verdict {
 ///
 /// # Timeouts and cancellation
 ///
-/// Neither wait method imposes a deadline. If the node accepts the
-/// transaction but the chain stalls (no block production, or no
-/// finalization after inclusion), the underlying subxt stream stays open
-/// and the wait future blocks indefinitely. Callers that need a deadline
-/// should wrap the wait in [`tokio::time::timeout`]:
+/// The SDK sets no deadline on either wait method, but subxt can end a wait.
+/// On a node that offers the `chainHead_v1` RPC methods, as the Midnight node
+/// does, subxt has a transaction timeout. The timeout starts at the submit,
+/// and it is 240 s by default. When it passes, subxt ends the watch, and the
+/// wait fails with [`SubmitError::WatchStream`]. subxt checks the timeout only
+/// when a block arrives, so a chain that produces no blocks keeps the wait
+/// open. Callers that need a deadline should wrap the wait in
+/// [`tokio::time::timeout`]:
 ///
 /// ```rust,no_run
 /// # async fn f(pending: midnight_provider::PendingTx) -> anyhow::Result<()> {
@@ -500,9 +511,13 @@ impl PreparedTx {
         self.transaction_hash
     }
 
-    /// Submit the prepared transaction and return a [`PendingTx`] for
-    /// awaiting inclusion / finalization. On failure the transaction never
-    /// reached the node (or its fate is ambiguous per [`SubmitError`]).
+    /// Submit the prepared transaction and return a [`PendingTx`] that waits for
+    /// inclusion and finalization.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Submission`] with [`SubmitError::SubmitRpc`] when the
+    /// submit call fails. The node can still hold the transaction.
     pub async fn submit(self) -> Result<PendingTx, ProviderError> {
         let progress = self
             .tx

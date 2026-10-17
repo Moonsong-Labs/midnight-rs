@@ -197,8 +197,8 @@ pub(crate) fn emit_ledger_wrapper(
             ///
             /// The deadline starts when `into_contract` starts, after `send` returns.
             /// It bounds the best-block wait that `into_contract` does when no wait
-            /// ran before it, and then the read of the deployed contract. An explicit
-            /// `wait_best` or `wait_finalized` has no deadline. See
+            /// ran before it, and then the read of the deployed contract. The SDK sets
+            /// no deadline on an explicit `wait_best` or `wait_finalized`. See
             /// `midnight_contract::PendingTx` to bound one with `tokio::time::timeout`.
             pub fn with_deploy_timeout(self, timeout: std::time::Duration) -> Self {
                 Self(self.0.with_deploy_timeout(timeout))
@@ -1001,8 +1001,8 @@ fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
 
 fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) -> TokenStream {
     // Per circuit we emit a constructor on `Circuits` (returns a call builder)
-    // plus a standalone call struct with `build()`, `simulate()` and an
-    // `IntoFuture` impl.
+    // plus a standalone call struct with `build()`, `send()`, `simulate()` and
+    // an `IntoFuture` impl.
     let mut constructors = Vec::new();
     let mut call_items = Vec::new();
     let send_bounds = quote! {
@@ -1027,18 +1027,22 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         let doc = format!(
             "Start a call to the `{}` circuit.\n\n\
-             Returns a call builder: `.await` it to execute and submit (returning the \
-             circuit's result), `.build().await` to build and prove the transaction \
-             and get its bytes back *without* submitting (to merge with other \
-             transactions and submit yourself), or `.simulate().await` to run the \
-             circuit with no proof, fee or transaction.",
+             Returns a call builder. `.await` it to submit the call, wait for finality \
+             and get the circuit's result. `.send().await` submits the call and returns \
+             a `PendingCall` before the chain's verdict. `.build().await` builds and \
+             proves the transaction and returns its bytes *without* a submit, to merge \
+             with other transactions. `.simulate().await` runs the circuit with no \
+             proof, fee or transaction.",
             circuit.name
         );
         let call_doc = format!(
-            "Pending call to the `{}` circuit. `.await` submits; [`build`](Self::build) \
-             returns the proven transaction bytes without submitting; \
-             [`simulate`](Self::simulate) runs the circuit and returns its value and the \
-             ledger after it, with no proof, fee or transaction.",
+            "Call builder for the `{}` circuit.\n\n\
+             `.await` submits the call, waits for finality and returns the circuit's \
+             result. [`send`](Self::send) submits the call and returns a `PendingCall` \
+             before the chain's verdict. [`build`](Self::build) returns the proven \
+             transaction bytes without a submit. [`simulate`](Self::simulate) runs the \
+             circuit and returns its value and the ledger after it, with no proof, fee \
+             or transaction.",
             circuit.name
         );
 
@@ -1091,11 +1095,12 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         });
 
         // The call builder: `.await` (via `IntoFuture`) submits and returns the
-        // circuit's result; `.build().await` returns the proven bytes;
-        // `.simulate().await` returns the value and the post-call ledger.
+        // circuit's result; `.send().await` returns the pending call;
+        // `.build().await` returns the proven bytes; `.simulate().await`
+        // returns the value and the post-call ledger.
         call_items.push(quote! {
             #[doc = #call_doc]
-            #[must_use = "does nothing until awaited, built or simulated"]
+            #[must_use = "does nothing until awaited, sent, built or simulated"]
             pub struct #call_ty<'c, 'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
                 circuits: &'c mut Circuits<'a, P, Wp>
                 #params
@@ -1117,6 +1122,27 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         #open
                         let __bytes = __circuits.contract.build_call_with(#call_args, true).await?;
                         ::core::result::Result::Ok(__bytes)
+                    })
+                    .await
+                }
+
+                /// Submit the call, and return a `midnight_contract::PendingCall` before
+                /// the chain's verdict.
+                ///
+                /// Read the transaction's hashes from the handle. Then call its
+                /// `wait_finalized` to settle the private state and get the `CallOutcome`.
+                /// See `midnight_contract::Contract::send_call_with`.
+                pub async fn send(
+                    self,
+                ) -> ::core::result::Result<
+                    midnight_contract::PendingCall<#value_ty>,
+                    midnight_contract::ContractError,
+                > {
+                    // Boxed for the same reason `without_dust` below is.
+                    ::std::boxed::Box::pin(async move {
+                        #open
+                        #decode
+                        __circuits.contract.send_call_with(#call_args, __decode).await
                     })
                     .await
                 }

@@ -143,13 +143,13 @@ impl MidnightProvider {
     ///
     /// Optional: contracts whose witnesses are stateless never need it. When
     /// attached, a circuit call loads the contract's private state before
-    /// execution, threads it through the witnesses via `WitnessContext`, and
-    /// persists the updated state after the transaction lands (see
-    /// `docs/private-state.md`).
+    /// execution and threads it through the witnesses via `WitnessContext`. It
+    /// records the state after the call as a `Pending` snapshot before the
+    /// submit. It then settles the snapshot by the chain's verdict.
     ///
-    /// The load-execute-submit-persist window is not locked: concurrent calls to
-    /// the same contract start from the same baseline and the last to persist
-    /// wins. Serialize calls to one contract if you fan them out.
+    /// Start the next call on a contract only after the snapshot of the earlier
+    /// call is no longer `Pending`. `docs/private-state.md` describes the
+    /// journal and this rule.
     ///
     /// A store holds one wallet's private state, so open it for the unshielded
     /// address of the wallet that makes the calls.
