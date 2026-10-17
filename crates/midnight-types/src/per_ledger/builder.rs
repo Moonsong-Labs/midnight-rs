@@ -16,10 +16,10 @@ use helpers::{
     DefaultDB, DustActions, DustLocalState, DustRegistration, DustRegistrationBuilder, DustSpend,
     DustWallet, FromContext, HashMapStorage, InputInfo, Intent, IntentInfo, LedgerParameters,
     NIGHT, Nullifier, OfferInfo, OutputInfo, ProofPreimageMarker, ProofProvider, Segment,
-    ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng, StandardTransactionInfo,
-    StdRng, Timestamp, TokenType, Transaction, TransactionSigningKey, UnshieldedOffer,
-    UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo,
-    WalletAddress,
+    ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng,
+    StandardTransactionInfo, StdRng, Timestamp, TokenType, Transaction, TransactionSigningKey,
+    UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo,
+    UtxoSelectionError, UtxoSpendInfo, WalletAddress,
 };
 
 use crate::hd::Seed;
@@ -181,6 +181,59 @@ fn sdk_nullifiers(nullifiers: &[Nullifier]) -> Vec<crate::Nullifier> {
 /// step.
 fn transfer_err<E: std::fmt::Debug>(ctx: &str) -> impl FnOnce(E) -> WalletError + '_ {
     move |e| WalletError::Transfer(format!("{ctx}: {e:?}"))
+}
+
+/// Type a shielded coin selection that fell short, with what the seed holds of
+/// the token in the funding view the selection read.
+fn shielded_selection_error(context: &BuildContext, e: ShieldedCoinSelectionError) -> WalletError {
+    match e {
+        ShieldedCoinSelectionError::InsufficientBalance {
+            required,
+            token_type,
+            seed,
+        } => {
+            let available = context.with_wallet_from_seed(seed, |wallet| {
+                wallet
+                    .shielded
+                    .state
+                    .coins
+                    .iter()
+                    .filter(|(_, coin)| coin.type_ == token_type)
+                    .fold(0u128, |sum, (_, coin)| sum.saturating_add(coin.value))
+            });
+            WalletError::InsufficientShielded {
+                token_type: token_type.into_sdk(),
+                required,
+                available,
+            }
+        }
+        e => WalletError::Transfer(format!("shielded coin selection: {e}")),
+    }
+}
+
+/// Type an unshielded UTXO selection that fell short, with what the seed holds
+/// of the token in the funding view the selection read.
+async fn utxo_selection_error(context: &BuildContext, e: UtxoSelectionError) -> WalletError {
+    match e {
+        UtxoSelectionError::InsufficientBalance {
+            required,
+            token_type,
+            seed,
+        } => {
+            let available = context
+                .unshielded_utxos(seed)
+                .await
+                .into_iter()
+                .filter(|(utxo, _)| utxo.type_ == token_type)
+                .fold(0u128, |sum, (utxo, _)| sum.saturating_add(utxo.value));
+            WalletError::InsufficientUnshielded {
+                token_type: token_type.into_sdk(),
+                required,
+                available,
+            }
+        }
+        e => WalletError::Transfer(format!("utxo selection: {e}")),
+    }
 }
 
 pub async fn prove_tx_no_validate(
@@ -425,7 +478,7 @@ impl<'a> TransferBuilder<'a> {
             spend_token,
             self.coin_selection,
         )
-        .map_err(|e| WalletError::Transfer(format!("shielded coin selection: {e}")))?;
+        .map_err(|e| shielded_selection_error(&self.context, e))?;
 
         // Every input from `coins_to_cover_value` carries a pinned nullifier;
         // error rather than drop one silently, since a missing nullifier would
@@ -504,15 +557,18 @@ impl<'a> TransferBuilder<'a> {
         let from_seed = self.state.seed().into_ledger();
         let recipient_wallet = parse_unshielded_recipient(recipient, self.state.network())?;
 
-        let (spend_infos, change) = UtxoSpendInfo::utxos_to_cover_value(
+        let selected = UtxoSpendInfo::utxos_to_cover_value(
             self.context.clone(),
             from_seed.clone(),
             amount,
             token_type,
             self.coin_selection,
         )
-        .await
-        .map_err(|e| WalletError::Transfer(format!("utxo selection: {e}")))?;
+        .await;
+        let (spend_infos, change) = match selected {
+            Ok(selected) => selected,
+            Err(e) => return Err(utxo_selection_error(&self.context, e).await),
+        };
 
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = spend_infos
             .iter()
@@ -1127,9 +1183,12 @@ fn gather_dust_spends(
         });
     }
     if remaining > 0 {
-        Err(WalletError::Transfer(format!(
-            "insufficient DUST (trying to spend {required_amount}, need {remaining} more)"
-        )))
+        // A remainder means `speculative_spend` drew on every unreserved Dust
+        // UTXO, so the spends hold all that the funding wallets can give.
+        Err(WalletError::InsufficientDust {
+            required: required_amount,
+            available: required_amount - remaining,
+        })
     } else {
         Ok(batches)
     }

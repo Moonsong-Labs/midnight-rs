@@ -31,8 +31,8 @@ pub enum ProviderError {
 
     /// The transaction landed in a block, but the chain did not apply it.
     /// The [`NotApplied`] holds the inclusion and its verdict.
-    // Boxed: unboxed, it makes `ProviderError` so large that an error holding
-    // one inline is larger than clippy's `result_large_err` limit.
+    // Boxed: unboxed, it is the largest variant, and every `Result` that
+    // carries a `ProviderError` pays its size.
     #[error(transparent)]
     NotApplied(Box<NotApplied>),
 

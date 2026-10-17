@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use midnight_provider::{Builds, MidnightProvider, NodeBlockHash, TxInBlock};
+use midnight_provider::{Builds, MidnightProvider, TxInBlock};
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::ContractAddress;
 
@@ -98,7 +98,7 @@ pub(crate) async fn deployed_state(
     remaining: Duration,
     timeout: Duration,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let at = NodeBlockHash::from(in_block.block_hash);
+    let at = in_block.block_hash;
     let mut last_error = None;
     let read = async {
         loop {
@@ -130,6 +130,7 @@ pub(crate) async fn deployed_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use midnight_types::{BlockHash, ExtrinsicHash};
 
     /// The read gets only the time that the block wait left of the deploy
     /// deadline, whether it hangs or fails. The timeout keeps the inclusion
@@ -148,8 +149,8 @@ mod tests {
             ("a node URL that does not parse", "not a url".to_owned()),
         ];
         let applied = TxInBlock {
-            block_hash: [1; 32],
-            extrinsic_hash: [2; 32],
+            block_hash: BlockHash::repeat_byte(1),
+            extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),
             verdict: midnight_provider::Verdict::Success,
         };

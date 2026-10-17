@@ -482,7 +482,7 @@ pub(crate) async fn require_same_chain(
             ),
             pinned_height: pin.height,
             pinned_hash: pin.hash.clone(),
-            found: found.unwrap_or_else(|| "no block".to_string()),
+            found: found.map_or_else(|| "no block".to_string(), |h| format!("{h:#x}")),
         }),
     }
 }
@@ -491,7 +491,7 @@ pub(crate) async fn require_same_chain(
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use midnight_types::LedgerVersion;
+    use midnight_types::{BlockHash, LedgerVersion};
 
     use super::*;
     use crate::storage::{StoredMetadata, read_metadata, save_snapshot, wallet_storage_id};
@@ -503,7 +503,7 @@ mod tests {
     fn stored_pin() -> ChainPin {
         ChainPin {
             height: 42,
-            hash: "0xaa".to_string(),
+            hash: format!("{:#x}", BlockHash::repeat_byte(0xaa)),
         }
     }
 
@@ -531,7 +531,7 @@ mod tests {
         .unwrap();
     }
 
-    /// A node whose chain holds the block `0xbb` at every height. With
+    /// A node whose chain holds the block `0xbbbb…` at every height. With
     /// `same_chain`, it is the snapshot's own chain: it holds `stored_pin()`
     /// at that pin's height. It reports `network` as the network it runs. It
     /// counts the questions it gets, the network question included.
@@ -544,13 +544,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ChainView for Node {
-        async fn block_hashes_at(&self, height: u64) -> Option<Vec<String>> {
+        async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>> {
             self.questions.fetch_add(1, Ordering::SeqCst);
-            let stored = stored_pin();
-            if self.same_chain && height == stored.height {
-                return Some(vec![stored.hash]);
+            if self.same_chain && height == stored_pin().height {
+                return Some(vec![BlockHash::repeat_byte(0xaa)]);
             }
-            Some(vec!["0xbb".to_string()])
+            Some(vec![BlockHash::repeat_byte(0xbb)])
         }
 
         async fn finalized_height(&self) -> Option<u64> {
@@ -592,7 +591,7 @@ mod tests {
         };
         let fresh = ChainPin {
             height: 100,
-            hash: "0xbb".to_string(),
+            hash: format!("{:#x}", BlockHash::repeat_byte(0xbb)),
         };
         assert_eq!(plan.chain_pin, Some(fresh));
     }

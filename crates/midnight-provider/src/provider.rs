@@ -17,8 +17,8 @@ use crate::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
-    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
+    BlockHash, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion,
+    Network, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
     TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
@@ -866,7 +866,7 @@ impl Provider for MidnightProvider {
     async fn get_contract_state(
         &self,
         address: &str,
-        at: Option<NodeBlockHash>,
+        at: Option<BlockHash>,
     ) -> Result<Option<String>, ProviderError> {
         self.get_state_from_node(address, at).await
     }
@@ -877,39 +877,6 @@ impl Provider for MidnightProvider {
         queries: Vec<StateQuery>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         self.query_contract_state_at(address, queries, None).await
-    }
-}
-
-/// The node's block-hash type under the chain's Substrate config.
-pub type NodeBlockHash = subxt::config::HashFor<subxt::SubstrateConfig>;
-
-/// A node block hash as lower-case `0x` hex.
-///
-/// Through `LowerHex`, the trait that promises hex, and not through `Debug`.
-/// They agree today only because `fixed-hash` writes `Debug` as `{:#x}`, while
-/// `Display` on the same type truncates to `0x1234…5678`. A stored hash has to
-/// survive a dependency bump.
-fn hash_hex(hash: &NodeBlockHash) -> String {
-    format!("{hash:#x}")
-}
-
-#[cfg(test)]
-mod hash_hex_tests {
-    use super::*;
-
-    /// The rendering is persisted in a wallet snapshot and compared on the
-    /// next resume, so a dependency bump that changed it would make every
-    /// stored pin stop matching and every persisted wallet refuse to sync.
-    #[test]
-    fn a_hash_renders_as_full_lowercase_hex() {
-        let hash = NodeBlockHash::from([0xab; 32]);
-        let rendered = hash_hex(&hash);
-        assert_eq!(rendered, format!("0x{}", "ab".repeat(32)));
-        assert_eq!(rendered.len(), 66, "0x plus 64 hex digits");
-        assert!(
-            !rendered.contains('\u{2026}'),
-            "an abbreviated hash would still look like one and never match"
-        );
     }
 }
 
@@ -1007,7 +974,7 @@ impl MidnightProvider {
     /// [`get_state_from_node`](Self::get_state_from_node) with `None`, reads
     /// at the best block at the moment of that read. Pass this hash to such
     /// reads to keep two of them at one block.
-    pub async fn best_block_hash(&self) -> Result<NodeBlockHash, ProviderError> {
+    pub async fn best_block_hash(&self) -> Result<BlockHash, ProviderError> {
         let conn = self.get_or_connect().await?;
 
         legacy_rpc(&conn)
@@ -1044,7 +1011,7 @@ impl MidnightProvider {
     pub async fn get_block_hashes_by_height(
         &self,
         height: u64,
-    ) -> Result<Vec<NodeBlockHash>, ProviderError> {
+    ) -> Result<Vec<BlockHash>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
         let height = usize::try_from(height)
@@ -1060,7 +1027,7 @@ impl MidnightProvider {
     /// response decodes into the config-derived [`NodeHeader`].
     pub async fn get_block_header(
         &self,
-        hash: NodeBlockHash,
+        hash: BlockHash,
     ) -> Result<Option<NodeHeader>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
@@ -1076,10 +1043,7 @@ impl MidnightProvider {
     /// Reads `Timestamp::Now` in that block's state. Genesis sets no
     /// timestamp, so it reads as zero. Errors when the node does not know
     /// `hash`, or no longer holds the state at it.
-    pub async fn get_block_timestamp(
-        &self,
-        hash: NodeBlockHash,
-    ) -> Result<Duration, ProviderError> {
+    pub async fn get_block_timestamp(&self, hash: BlockHash) -> Result<Duration, ProviderError> {
         let conn = self.get_or_connect().await?;
 
         let millis = conn
@@ -1229,7 +1193,7 @@ impl MidnightProvider {
     pub async fn get_state_from_node(
         &self,
         address: &str,
-        at_block_hash: Option<NodeBlockHash>,
+        at_block_hash: Option<BlockHash>,
     ) -> Result<Option<String>, ProviderError> {
         let conn = self.get_or_connect().await?;
         match conn
@@ -1254,7 +1218,7 @@ impl MidnightProvider {
         &self,
         address: &str,
         queries: Vec<StateQuery>,
-        at_block_hash: Option<NodeBlockHash>,
+        at_block_hash: Option<BlockHash>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         let conn = self.get_or_connect().await?;
         conn.rpc
@@ -1410,11 +1374,8 @@ impl Drop for HeldInputs {
 /// own resync checks pins through the same answers.
 #[async_trait]
 impl midnight_types::chain_pin::ChainView for MidnightProvider {
-    async fn block_hashes_at(&self, height: u64) -> Option<Vec<String>> {
-        self.get_block_hashes_by_height(height)
-            .await
-            .ok()
-            .map(|hs| hs.iter().map(hash_hex).collect())
+    async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>> {
+        self.get_block_hashes_by_height(height).await.ok()
     }
 
     async fn finalized_height(&self) -> Option<u64> {

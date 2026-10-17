@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use midnight_base_crypto::signatures::VerifyingKey;
-use midnight_provider::{MidnightProvider, NodeBlockHash, Provider};
+use midnight_provider::{MidnightProvider, Provider};
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::{BlockHash, ExtrinsicHash};
 
 use crate::address::IntoAddress;
 use crate::deploy::{deploy_funded, deployed_state};
@@ -29,12 +30,12 @@ pub struct CallOutcome<T> {
     /// The circuit's return value.
     pub value: T,
     /// Hash of the extrinsic that carried the call.
-    pub extrinsic_hash: [u8; 32],
+    pub extrinsic_hash: ExtrinsicHash,
     /// Hash of the Midnight transaction the extrinsic carried, the identity
     /// the indexer keys on. See [`PendingTx::transaction_hash`].
     pub transaction_hash: TransactionHash,
     /// Hash of the block it landed in.
-    pub block_hash: [u8; 32],
+    pub block_hash: BlockHash,
 }
 
 impl<T> CallOutcome<T> {
@@ -63,7 +64,7 @@ pub struct Simulated<T, L> {
     /// The contract's ledger state after the call.
     pub ledger: L,
     /// The block whose state and time the run read.
-    pub block_hash: [u8; 32],
+    pub block_hash: BlockHash,
 }
 
 /// A circuit call built and proven, before it is submitted.
@@ -142,13 +143,14 @@ fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersi
 /// `None` when the call recorded none. An applied call confirms the snapshot.
 /// A call that did not apply drops it with `mark_failed` before
 /// [`ContractError::TransactionFailed`] returns, so the orphan snapshot never
-/// becomes the next call's witness baseline. Any other wait error returns
-/// [`ContractError::SubmissionWait`] and keeps the snapshot for the caller to
-/// reconcile (see that variant).
+/// becomes the next call's witness baseline. A wait that fails with a
+/// [`SubmitError`](midnight_provider::SubmitError), the only other failure of
+/// [`PendingTx::wait_finalized`], returns [`ContractError::SubmissionWait`] and
+/// keeps the snapshot for the caller to reconcile (see that variant).
 async fn settle_call(
     store: Option<&dyn PrivateStateProvider>,
     address: &str,
-    extrinsic_hash: [u8; 32],
+    extrinsic_hash: ExtrinsicHash,
     transaction_hash: TransactionHash,
     waited: Result<TxInBlock, ProviderError>,
 ) -> Result<TxInBlock, ContractError> {
@@ -158,23 +160,24 @@ async fn settle_call(
                 // No height: subxt reports only the block hash, which alone
                 // identifies the block.
                 store
-                    .confirm(address, extrinsic_hash, None, applied.block_hash)
+                    .confirm(address, extrinsic_hash.0, None, applied.block_hash.0)
                     .await?;
             }
             Ok(applied)
         }
         Err(error @ ProviderError::NotApplied(_)) => {
             if let Some(store) = store {
-                store.mark_failed(address, extrinsic_hash).await?;
+                store.mark_failed(address, extrinsic_hash.0).await?;
             }
             Err(error.into())
         }
-        Err(source) => Err(ContractError::SubmissionWait {
-            transaction_hash: Box::new(transaction_hash),
-            extrinsic_hash: hex::encode(extrinsic_hash),
+        Err(ProviderError::Submission(source)) => Err(ContractError::SubmissionWait {
+            transaction_hash,
+            extrinsic_hash,
             source,
             snapshot_written: store.is_some(),
         }),
+        Err(other) => Err(other.into()),
     }
 }
 
@@ -479,7 +482,7 @@ impl<P> PendingDeploy<P> {
     }
 
     /// The hash of the submitted extrinsic.
-    pub fn extrinsic_hash(&self) -> [u8; 32] {
+    pub fn extrinsic_hash(&self) -> ExtrinsicHash {
         self.pending.extrinsic_hash()
     }
 
@@ -639,7 +642,7 @@ pub struct ConnectBuilder<P> {
     provider: P,
     address: String,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
-    at_block: Option<NodeBlockHash>,
+    at_block: Option<BlockHash>,
     declares_witnesses: bool,
 }
 
@@ -674,7 +677,7 @@ impl<P> ConnectBuilder<P> {
     /// Pin queries to the block `hash`. Default is the node's best block.
     /// Both circuit calls and lazy ledger queries honour the pin through the
     /// node RPC, and a circuit call runs at the time of that block.
-    pub fn at_block(mut self, hash: NodeBlockHash) -> Self {
+    pub fn at_block(mut self, hash: BlockHash) -> Self {
         self.at_block = Some(hash);
         self
     }
@@ -711,7 +714,7 @@ pub struct Contract<P> {
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
     provider: P,
     /// Optional block pin for queries. `None` means latest.
-    at_block: Option<NodeBlockHash>,
+    at_block: Option<BlockHash>,
     /// Whether the compiled contract declares witnesses, and so needs a
     /// private-state provider for its calls to be meaningful.
     declares_witnesses: bool,
@@ -777,7 +780,7 @@ impl<P: Provider> Contract<P> {
     }
 
     /// The block pin for queries. `None` means latest.
-    pub fn at_block(&self) -> Option<NodeBlockHash> {
+    pub fn at_block(&self) -> Option<BlockHash> {
         self.at_block
     }
 
@@ -1179,10 +1182,10 @@ impl<P: Provider> Contract<P> {
                     // submitted yet, so we surface the error and stop before
                     // anything hits the wire.
                     store
-                        .append_pending(&self.address, extrinsic_hash, depends_on, &private_state)
+                        .append_pending(&self.address, extrinsic_hash.0, depends_on, &private_state)
                         .await
                         .map_err(|e| ContractError::PendingSnapshotFailed {
-                            extrinsic_hash: hex::encode(extrinsic_hash),
+                            extrinsic_hash,
                             source: e,
                         })?;
                     pending_snapshot_written = true;
@@ -1200,7 +1203,7 @@ impl<P: Provider> Contract<P> {
                     // Best-effort: the tx didn't go out, so dropping the
                     // entry restores the pre-call leaf. A failure here just
                     // leaves a provisional entry that reconciliation handles.
-                    let _ = store.mark_failed(&self.address, extrinsic_hash).await;
+                    let _ = store.mark_failed(&self.address, extrinsic_hash.0).await;
                 }
                 return Err(e.into());
             }
@@ -1223,8 +1226,8 @@ impl<P: Provider> Contract<P> {
             Ok(waited) => waited.map(|(in_block, _pending)| in_block),
             Err(_elapsed) => {
                 return Err(ContractError::FinalizeTimeout {
-                    transaction_hash: Box::new(transaction_hash),
-                    extrinsic_hash: hex::encode(extrinsic_hash),
+                    transaction_hash,
+                    extrinsic_hash,
                     timeout: DEFAULT_TX_FINALIZE_TIMEOUT,
                     snapshot_written: pending_snapshot_written,
                 });
@@ -1278,7 +1281,7 @@ mod tests {
         async fn get_contract_state(
             &self,
             _address: &str,
-            _at: Option<NodeBlockHash>,
+            _at: Option<BlockHash>,
         ) -> Result<Option<String>, ProviderError> {
             Ok(None)
         }
@@ -1302,7 +1305,7 @@ mod tests {
     #[test]
     fn at_with_block_hash() {
         let provider = MockProvider::new();
-        let hash = NodeBlockHash::repeat_byte(0xab);
+        let hash = BlockHash::repeat_byte(0xab);
         let contract = Contract::at(provider, "addr1").at_block(hash).build();
         assert_eq!(contract.address(), "addr1");
         assert_eq!(contract.at_block(), Some(hash));
@@ -1338,8 +1341,8 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let store = midnight_provider::FsPrivateStateProvider::new(dir.path());
         let call = TxInBlock {
-            block_hash: [1; 32],
-            extrinsic_hash: [2; 32],
+            block_hash: BlockHash::repeat_byte(1),
+            extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),
             verdict: midnight_provider::Verdict::Success,
         };
@@ -1348,7 +1351,12 @@ mod tests {
             .await
             .unwrap();
         store
-            .append_pending(CALL_ADDRESS, call.extrinsic_hash, Some(LAST_GOOD), b"after")
+            .append_pending(
+                CALL_ADDRESS,
+                call.extrinsic_hash.0,
+                Some(LAST_GOOD),
+                b"after",
+            )
             .await
             .unwrap();
         (dir, store, call)
@@ -1449,7 +1457,7 @@ mod tests {
         );
         assert_eq!(
             store.head_extrinsic(CALL_ADDRESS).await.unwrap(),
-            Some(call.extrinsic_hash)
+            Some(call.extrinsic_hash.0)
         );
     }
 

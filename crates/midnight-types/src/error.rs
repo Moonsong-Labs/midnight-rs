@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use crate::{LedgerVersion, Network, UnknownLedger};
+use crate::{LedgerVersion, Network, ShieldedTokenType, UnknownLedger, UnshieldedTokenType};
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]
@@ -95,6 +95,66 @@ pub enum WalletError {
     /// Transfer transaction failed.
     #[error("transfer failed: {0}")]
     Transfer(String),
+
+    /// The wallets that fund the fee hold too little spendable Dust.
+    ///
+    /// A build through `MidnightProvider` resyncs the wallet first, so a later
+    /// build reads the Dust that the wallet has gained since. The wallet's
+    /// [`DustBalance`](crate::DustBalance) tells which next step applies: see
+    /// [Dust shortfalls] in `docs/dust-and-fees.md`.
+    ///
+    /// [Dust shortfalls]: https://github.com/Moonsong-Labs/midnight-rs/blob/main/docs/dust-and-fees.md#dust-shortfalls
+    #[error("insufficient Dust: the build asks for {required} SPECK, {available} SPECK spendable")]
+    InsufficientDust {
+        /// The Dust the build asks its funding wallets for, in SPECK.
+        ///
+        /// The build prices the transaction with a margin for price rises, so
+        /// this can be more than the fee the chain charges. A Dust registration
+        /// asks only for the part of its fee past the generationless Dust of
+        /// the tNIGHT it spends.
+        ///
+        /// It is a lower bound on what the build needs: the Dust spends that
+        /// pay the fee make the transaction larger, and a larger transaction
+        /// costs more.
+        required: u128,
+        /// The Dust the funding wallets can give now, in SPECK, less what
+        /// pending builds reserve.
+        ///
+        /// A Dust registration has no funding wallets, so it reads 0.
+        available: u128,
+    },
+
+    /// The wallet holds too little of a shielded token for the transfer.
+    ///
+    /// When a pending build spends coins of this token, wait for its
+    /// transaction to finalize, then build again. Otherwise the wallet must
+    /// receive more of the token.
+    #[error("insufficient shielded token {token_type}: need {required}, {available} spendable")]
+    InsufficientShielded {
+        /// The token the transfer spends.
+        token_type: ShieldedTokenType,
+        /// The amount the transfer spends.
+        required: u128,
+        /// The amount the wallet can spend now, less the coins that pending
+        /// builds reserve.
+        available: u128,
+    },
+
+    /// The wallet holds too little of an unshielded token for the transfer.
+    ///
+    /// When a pending build spends UTXOs of this token, wait for its
+    /// transaction to finalize, then build again. Otherwise the wallet must
+    /// receive more of the token.
+    #[error("insufficient unshielded token {token_type}: need {required}, {available} spendable")]
+    InsufficientUnshielded {
+        /// The token the transfer spends.
+        token_type: UnshieldedTokenType,
+        /// The amount the transfer spends.
+        required: u128,
+        /// The amount the wallet can spend now, less the UTXOs that pending
+        /// builds reserve.
+        available: u128,
+    },
 
     /// A build named an input that another build already holds.
     #[error("{held} is reserved by a build that has not confirmed yet")]

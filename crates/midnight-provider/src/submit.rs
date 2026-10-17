@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::types::TransactionHash;
 
-use midnight_types::SpentInputs;
+use midnight_types::{BlockHash, ExtrinsicHash, SpentInputs};
 use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
 use subxt::tx::{TransactionInBlock, TransactionStatus};
@@ -176,8 +176,8 @@ impl SubmitError {
 /// dispatch errored entirely. See [`Verdict`].
 #[derive(Debug, Clone, Copy)]
 pub struct TxInBlock {
-    pub block_hash: [u8; 32],
-    pub extrinsic_hash: [u8; 32],
+    pub block_hash: BlockHash,
+    pub extrinsic_hash: ExtrinsicHash,
     /// The Midnight transaction the extrinsic carried, the ledger's own
     /// identity for it. The chain names this hash in its `TxApplied` /
     /// `TxPartialSuccess` events, and the indexer keys transactions by it.
@@ -348,13 +348,13 @@ impl PendingTx {
     }
 
     /// The hash of the submitted extrinsic.
-    pub fn extrinsic_hash(&self) -> [u8; 32] {
-        self.progress.extrinsic_hash().0
+    pub fn extrinsic_hash(&self) -> ExtrinsicHash {
+        self.progress.extrinsic_hash()
     }
 
     /// The extrinsic hash formatted as a hex string (no `0x` prefix).
     pub fn extrinsic_hash_hex(&self) -> String {
-        hex::encode(self.extrinsic_hash())
+        format!("{:x}", self.extrinsic_hash())
     }
 
     /// The hash of the Midnight transaction the extrinsic carries.
@@ -439,8 +439,8 @@ async fn tx_in_block_with_verdict(
     in_block: &InBlock,
     transaction_hash: TransactionHash,
 ) -> Result<TxInBlock, ProviderError> {
-    let block_hash = in_block.block_hash().0;
-    let extrinsic_hash = in_block.extrinsic_hash().0;
+    let block_hash = in_block.block_hash();
+    let extrinsic_hash = in_block.extrinsic_hash();
     let events = in_block
         .fetch_events()
         .await
@@ -490,8 +490,8 @@ impl PreparedTx {
     /// The hash subxt will report for this extrinsic once submitted,
     /// computed here from the encoded transaction without contacting the
     /// node. Identical to the eventual [`PendingTx::extrinsic_hash`].
-    pub fn extrinsic_hash(&self) -> [u8; 32] {
-        self.tx.hash().0
+    pub fn extrinsic_hash(&self) -> ExtrinsicHash {
+        self.tx.hash()
     }
 
     /// The hash of the Midnight transaction these bytes carry, known before
@@ -698,8 +698,8 @@ mod tests {
 
     fn in_block(verdict: Verdict) -> TxInBlock {
         TxInBlock {
-            block_hash: [1; 32],
-            extrinsic_hash: [2; 32],
+            block_hash: BlockHash::repeat_byte(1),
+            extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),
             verdict,
         }

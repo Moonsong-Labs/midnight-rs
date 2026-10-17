@@ -19,7 +19,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::Network;
+use crate::{BlockHash, Network};
 
 /// A finalized block a wallet snapshot saw, kept so a later resume can ask
 /// whether it is still looking at the same chain.
@@ -44,7 +44,7 @@ pub enum ChainCheck {
     SameChain,
     /// The chain no longer holds the pinned block, so the cursors describe a
     /// chain that is gone.
-    Replaced { found: Option<String> },
+    Replaced { found: Option<BlockHash> },
     /// The node could not answer. Says nothing either way, so the caller
     /// carries on: a pruned or partial archive must not condemn a healthy
     /// wallet.
@@ -59,7 +59,7 @@ pub enum ChainCheck {
 #[async_trait::async_trait]
 pub trait ChainView: Send + Sync {
     /// The hashes the node holds at `height`; `None` when it cannot answer.
-    async fn block_hashes_at(&self, height: u64) -> Option<Vec<String>>;
+    async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>>;
 
     /// The finalized height the node reports now; `None` when it cannot
     /// answer.
@@ -90,7 +90,10 @@ pub trait SyncSource: ChainView {
 pub async fn current_pin(view: &dyn ChainView) -> Option<ChainPin> {
     let height = view.finalized_height().await?;
     let hash = view.block_hashes_at(height).await?.into_iter().next()?;
-    Some(ChainPin { height, hash })
+    Some(ChainPin {
+        height,
+        hash: pin_hash(&hash),
+    })
 }
 
 /// Judge `pin` against what the chain holds at its height.
@@ -104,16 +107,24 @@ pub async fn verify_pin(view: &dyn ChainView, pin: &ChainPin) -> ChainCheck {
 /// `hashes` is `None` when the node could not answer at all. An empty slice
 /// is an answer: the chain has no block at that height, so it is shorter than
 /// the one the snapshot saw.
-pub fn check_chain_pin(pin: &ChainPin, hashes: Option<&[String]>) -> ChainCheck {
+pub fn check_chain_pin(pin: &ChainPin, hashes: Option<&[BlockHash]>) -> ChainCheck {
     let Some(hashes) = hashes else {
         return ChainCheck::Unknown;
     };
-    if hashes.iter().any(|h| h.eq_ignore_ascii_case(&pin.hash)) {
+    if hashes
+        .iter()
+        .any(|h| pin_hash(h).eq_ignore_ascii_case(&pin.hash))
+    {
         return ChainCheck::SameChain;
     }
     ChainCheck::Replaced {
-        found: hashes.first().cloned(),
+        found: hashes.first().copied(),
     }
+}
+
+/// The form of [`ChainPin::hash`].
+fn pin_hash(hash: &BlockHash) -> String {
+    format!("{hash:#x}")
 }
 
 #[cfg(test)]
@@ -123,8 +134,20 @@ mod tests {
     fn pin() -> ChainPin {
         ChainPin {
             height: 42,
-            hash: "0xabc".to_string(),
+            hash: pin_hash(&BlockHash::repeat_byte(0xab)),
         }
+    }
+
+    /// The rendering is persisted in a wallet snapshot and compared on the
+    /// next resume, so a dependency bump that changed it would make every
+    /// stored pin stop matching and every persisted wallet refuse to sync.
+    #[test]
+    fn a_hash_renders_as_full_lowercase_hex() {
+        assert_eq!(
+            pin_hash(&BlockHash::repeat_byte(0xab)),
+            format!("0x{}", "ab".repeat(32)),
+            "an abbreviated hash would still look like one and never match"
+        );
     }
 
     /// The message is the whole recovery instruction, so it has to name the
@@ -148,11 +171,11 @@ mod tests {
 
     #[test]
     fn a_different_block_at_that_height_means_the_chain_was_replaced() {
-        let hashes = ["0xdef".to_string()];
+        let hashes = [BlockHash::repeat_byte(0xde)];
         assert_eq!(
             check_chain_pin(&pin(), Some(&hashes)),
             ChainCheck::Replaced {
-                found: Some("0xdef".to_string())
+                found: Some(BlockHash::repeat_byte(0xde))
             }
         );
     }
@@ -176,7 +199,7 @@ mod tests {
     /// finalized, so finding it among them is enough.
     #[test]
     fn the_pinned_block_at_that_height_is_the_same_chain() {
-        let hashes = ["0xdef".to_string(), "0xabc".to_string()];
+        let hashes = [BlockHash::repeat_byte(0xde), BlockHash::repeat_byte(0xab)];
         assert_eq!(
             check_chain_pin(&pin(), Some(&hashes)),
             ChainCheck::SameChain
