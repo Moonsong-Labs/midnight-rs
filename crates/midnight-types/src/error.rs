@@ -143,8 +143,12 @@ pub enum WalletError {
     /// The wallet holds too little of an unshielded token for the transfer.
     ///
     /// When a pending build spends UTXOs of this token, wait for its
-    /// transaction to finalize, then build again. Otherwise the wallet must
-    /// receive more of the token.
+    /// transaction to finalize. Then wait until the wallet sees its spends.
+    /// For a transfer or a Dust registration, pass its
+    /// `PendingTx::spent_inputs` to `MidnightProvider::wait_observed`. Then
+    /// build again.
+    ///
+    /// Otherwise the wallet must receive more of the token.
     #[error("insufficient unshielded token {token_type}: need {required}, {available} spendable")]
     InsufficientUnshielded {
         /// The token the transfer spends.

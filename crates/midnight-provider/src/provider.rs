@@ -26,6 +26,13 @@ use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The pause between two rounds of [`MidnightProvider::wait_observed`] and
+/// [`MidnightProvider::resync_until`].
+///
+/// On a devnet, a wallet sees a transaction about a second after
+/// `wait_finalized` returns, so the round after this pause usually sees it.
+const EFFECT_POLL: Duration = Duration::from_secs(1);
+
 /// Cached node connection over a single auto-reconnecting websocket: the
 /// subxt `RpcClient` carries every raw RPC (standard Substrate and custom
 /// `midnight_*` methods alike), and the `OnlineClient` on top of it serves
@@ -215,7 +222,8 @@ impl MidnightProvider {
     /// such as [`Self::balance`], returns the state of the last sync or
     /// resync and does not resync. [`Self::builds`], and so every build,
     /// resyncs first. For a fresh read, call [`Self::resync_wallet`] before
-    /// it, for example on a timer in a UI.
+    /// it, for example on a timer in a UI. To wait until the wallet sees a
+    /// transaction, call [`Self::wait_observed`] or [`Self::resync_until`].
     pub fn with_wallet(mut self, wallet: impl IntoWalletFacade) -> Self {
         let wallet = Arc::new(wallet.into_facade());
         self.wallet = Some(AttachedWallet {
@@ -346,6 +354,11 @@ impl MidnightProvider {
     /// briefly to snapshot the replay inputs (read) and to commit the result
     /// (write). Concurrent `resync_wallet` calls are serialized on an
     /// internal mutex.
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping the future leaves the wallet at the state before the call, or
+    /// at the whole commit of this resync. See [`WalletFacade::resync`].
     pub async fn resync_wallet(&self) -> Result<(), ProviderError> {
         // Boxed so the replay stays off the caller's frame. A debug build
         // makes this future tens of kilobytes, and an inlined one is carried
@@ -370,6 +383,121 @@ impl MidnightProvider {
         // pin; this provider is only the node view those checks ask.
         wallet.resync(self).await?;
         Ok(())
+    }
+
+    /// Resync the attached wallet until its confirmed state holds none of the
+    /// inputs in `spent`.
+    ///
+    /// A finalized transaction reaches the wallet only through a resync, and a
+    /// resync can end before it sees the transaction. Each round resyncs, asks
+    /// [`WalletFacade::has_observed`], and pauses for about a second when the
+    /// answer is no.
+    ///
+    /// Pass the spends of a transaction that applied. With the spends of a
+    /// transaction that did not apply, the wait does not end. For a transfer
+    /// or a Dust registration, pass its [`PendingTx::spent_inputs`] after an
+    /// `Ok` from [`PendingTx::wait_finalized`]. For a `.build()` result that
+    /// you submit yourself, pass `&result.spent`.
+    ///
+    /// The wait covers the spends only. The outputs of the same transaction
+    /// can arrive in a later resync. To wait for an output, call
+    /// [`Self::resync_until`]. A `spent` that names no input gives `Ok` after
+    /// one resync.
+    ///
+    /// The wait has no deadline. Wrap it in [`tokio::time::timeout`]:
+    ///
+    /// ```rust,no_run
+    /// # async fn f(
+    /// #     provider: midnight_provider::MidnightProvider,
+    /// #     recipient: String,
+    /// # ) -> anyhow::Result<()> {
+    /// use std::time::Duration;
+    ///
+    /// use anyhow::Context;
+    /// use midnight_provider::NIGHT;
+    ///
+    /// let pending = provider.transfer_unshielded(NIGHT, 1, &recipient).await?;
+    /// let (_, pending) = pending.wait_finalized().await?;
+    /// let spent = pending.spent_inputs().context("a transfer carries its spent inputs")?;
+    /// tokio::time::timeout(Duration::from_secs(60), provider.wait_observed(spent)).await??;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping the future is safe. The wallet keeps the state of its last
+    /// sync or resync, as [`Self::resync_wallet`] says.
+    ///
+    /// # Errors
+    ///
+    /// - The error of a failed resync, such as [`ProviderError::Wallet`] when
+    ///   the sync gives up. It ends the wait, which does not retry.
+    /// - [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn wait_observed(&self, spent: &SpentInputs) -> Result<(), ProviderError> {
+        let wallet = &self.attached()?.facade;
+        loop {
+            self.resync_wallet().await?;
+            if wallet.has_observed(spent).await {
+                return Ok(());
+            }
+            tokio::time::sleep(EFFECT_POLL).await;
+        }
+    }
+
+    /// Resync the attached wallet until `done` holds for its balance, and
+    /// return that balance.
+    ///
+    /// Each round resyncs, reads [`Self::balance`] and calls `done`. It pauses
+    /// for about a second when `done` returns false. So `done` always sees the
+    /// state of a resync that started after the call.
+    ///
+    /// Use it for an effect that [`Self::wait_observed`] does not cover. One
+    /// example is an output, such as a coin that another wallet sends to this
+    /// one. Another is the spends of a transaction whose handle carries no
+    /// spent inputs. A deploy, a contract call, a contract maintenance update
+    /// and a sponsored transaction from [`Self::submit`] are such
+    /// transactions. To wait until no build holds Dust, pass
+    /// `|b| b.dust.spendable_speck == b.dust.balance_speck`. That also waits
+    /// for every other build in flight that holds Dust.
+    ///
+    /// The wait has no deadline. Wrap it in [`tokio::time::timeout`]:
+    ///
+    /// ```rust,no_run
+    /// # async fn f(provider: midnight_provider::MidnightProvider) -> anyhow::Result<()> {
+    /// use std::time::Duration;
+    ///
+    /// let balance = tokio::time::timeout(
+    ///     Duration::from_secs(60),
+    ///     provider.resync_until(|b| b.dust.spendable_speck == b.dust.balance_speck),
+    /// )
+    /// .await??;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping the future is safe. The wallet keeps the state of its last
+    /// sync or resync, as [`Self::resync_wallet`] says.
+    ///
+    /// # Errors
+    ///
+    /// - The error of a failed resync. It ends the wait, which does not retry.
+    /// - [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn resync_until<F>(&self, mut done: F) -> Result<WalletBalance, ProviderError>
+    where
+        F: FnMut(&WalletBalance) -> bool + Send,
+    {
+        let wallet = &self.attached()?.facade;
+        loop {
+            self.resync_wallet().await?;
+            let balance = wallet.balance().await;
+            if done(&balance) {
+                return Ok(balance);
+            }
+            tokio::time::sleep(EFFECT_POLL).await;
+        }
     }
 
     /// Register a coin the wallet owns but cannot discover, then replay the
