@@ -1157,8 +1157,7 @@ impl<P: Provider> Contract<P> {
         // call would build on a stale baseline. The trade is benign: if the
         // process dies after the append but before submit, the tx never
         // reached the mempool, leaving a provisional pending entry that
-        // reconciliation resolves; and if submit itself fails we roll the
-        // entry back below.
+        // reconciliation resolves.
         let prepared = provider.prepare(&tx_bytes).await?;
         let extrinsic_hash = prepared.extrinsic_hash();
         let transaction_hash = prepared.transaction_hash();
@@ -1193,20 +1192,19 @@ impl<P: Provider> Contract<P> {
             }
         }
 
-        // Submit now that the journal record (if any) is durable. If submit
-        // fails the tx never reached the mempool, so roll back the
-        // speculative pending entry to keep the journal consistent.
+        // Keep the snapshot on a failed submit: a `SubmitRpc` does not say
+        // whether the node holds the tx.
         let pending = match prepared.submit().await {
             Ok(pending) => pending,
-            Err(e) => {
-                if pending_snapshot_written && let Some(store) = &ps_store {
-                    // Best-effort: the tx didn't go out, so dropping the
-                    // entry restores the pre-call leaf. A failure here just
-                    // leaves a provisional entry that reconciliation handles.
-                    let _ = store.mark_failed(&self.address, extrinsic_hash.0).await;
-                }
-                return Err(e.into());
+            Err(ProviderError::Submission(source)) => {
+                return Err(ContractError::SubmissionWait {
+                    transaction_hash,
+                    extrinsic_hash,
+                    source,
+                    snapshot_written: pending_snapshot_written,
+                });
             }
+            Err(other) => return Err(other.into()),
         };
 
         // Wait for the chain to finalize the tx, bounded by
