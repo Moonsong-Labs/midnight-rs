@@ -15,7 +15,10 @@ mod shielded_mint {
     );
 }
 
+use std::time::Duration;
+
 use compact_bindgen::Bytes;
+use midnight_provider::ShieldedCoinBalance;
 use midnight_wallet::Seed;
 
 #[tokio::test]
@@ -80,34 +83,26 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     let wallet = common::synced_wallet(&recip_provider, common::RECIPIENT_SEED).await;
     let recip_provider = recip_provider.with_wallet(wallet);
 
-    // The call above returns once the chain finalized the mint, which is
-    // before the indexer has served its zswap event. A sync ends at the
-    // indexer's current tip, so read once and the coin may not be there yet.
-    // There is no way to wait for the indexer to reach a given block (#164),
-    // so resync until it appears.
-    let mut coins = Vec::new();
-    for _ in 0..60 {
-        recip_provider
-            .resync_wallet()
-            .await
-            .expect("recipient resync");
-        coins = recip_provider
-            .balance()
-            .await
-            .expect("recipient balance")
-            .shielded
-            .coins;
-        if coins
-            .iter()
-            .any(|c| c.token_type == expected_tt && c.value == u128::from(mint_value))
-        {
-            eprintln!("recipient discovered the minted coin via sync ✓");
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // A sync can end before it sees the mint. On a timeout, the assertion
+    // below reads the last resync.
+    let minted =
+        |c: &ShieldedCoinBalance| c.token_type == expected_tt && c.value == u128::from(mint_value);
+    if let Ok(waited) = tokio::time::timeout(
+        Duration::from_secs(120),
+        recip_provider.resync_until(|b| b.shielded.coins.iter().any(minted)),
+    )
+    .await
+    {
+        waited.expect("recipient resync");
     }
-
-    panic!(
+    let coins = recip_provider
+        .balance()
+        .await
+        .expect("recipient balance")
+        .shielded
+        .coins;
+    assert!(
+        coins.iter().any(minted),
         "recipient wallet did not discover the minted coin (type {expected_tt}, \
          value {mint_value}); shielded coins seen: {:?}",
         coins
@@ -115,4 +110,5 @@ async fn mint_to_external_recipient_discovered_by_sync() {
             .map(|c| (c.token_type_hex(), c.value))
             .collect::<Vec<_>>()
     );
+    eprintln!("recipient discovered the minted coin via sync ✓");
 }

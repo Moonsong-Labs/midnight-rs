@@ -7,6 +7,8 @@
 //!   MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 MIDNIGHT_INDEXER_URL=http://127.0.0.1:8088 \
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
+use std::time::Duration;
+
 use midnight_provider::{Builds, MidnightProvider};
 use midnight_wallet::{LedgerVersion, Wallet};
 
@@ -235,6 +237,11 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
         .into_iter()
         .map(|c| c.nullifier)
         .collect();
+    let before_value = payee
+        .balance()
+        .await
+        .expect("payee balance")
+        .shielded_value(DEFAULT_SHIELDED_TOKEN);
 
     let pending = provider
         .transfer_shielded(DEFAULT_SHIELDED_TOKEN, AMOUNT, &recipient)
@@ -243,24 +250,23 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
     let (_best, pending) = pending.wait_best().await.expect("wait_best");
     let (_finalized, _) = pending.wait_finalized().await.expect("wait_finalized");
 
-    // The payee learns of the coin through its discovery ciphertext, so wait
-    // for the indexer to replay the transaction rather than assuming.
-    let mut received = None;
-    for _ in 0..20 {
-        payee.resync_wallet().await.expect("payee resync");
-        received = payee
-            .spendable_shielded_coins()
-            .await
-            .expect("payee coins")
-            .into_iter()
-            .find(|c| c.token_type == DEFAULT_SHIELDED_TOKEN && !before.contains(&c.nullifier));
-        if received.is_some() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    // The payee sees the coin only through a resync. On a timeout, the
+    // assertion below reads the last resync.
+    if let Ok(waited) = tokio::time::timeout(
+        Duration::from_secs(60),
+        payee.resync_until(|b| b.shielded_value(DEFAULT_SHIELDED_TOKEN) >= before_value + AMOUNT),
+    )
+    .await
+    {
+        waited.expect("payee resync");
     }
-
-    let received = received.expect("payee must receive a new coin of the transferred token");
+    let received = payee
+        .spendable_shielded_coins()
+        .await
+        .expect("payee coins")
+        .into_iter()
+        .find(|c| c.token_type == DEFAULT_SHIELDED_TOKEN && !before.contains(&c.nullifier))
+        .expect("payee must receive a new coin of the transferred token");
     assert_eq!(
         received.value, AMOUNT,
         "the recipient must receive the requested amount, not the sender's change"
