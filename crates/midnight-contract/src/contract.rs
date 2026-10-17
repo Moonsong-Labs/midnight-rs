@@ -293,11 +293,12 @@ impl<T> PendingCall<T> {
     /// chain applied confirms its snapshot. A call that the chain did not apply
     /// drops its snapshot with `mark_failed` before the error returns.
     ///
-    /// The wait has no deadline, like [`PendingTx::wait_finalized`]. To bound
-    /// it, wrap it in [`tokio::time::timeout`]. Read the hashes before you call
-    /// it, because a timeout drops the handle. [`Contract::call_with`] and the
-    /// `.await` of a generated call builder bound the wait for finality to
-    /// 60 s. They settle the snapshot after that wait.
+    /// The SDK sets no deadline on the wait. subxt can end it: see the
+    /// [timeouts of `PendingTx`](PendingTx#timeouts-and-cancellation). To bound
+    /// the wait, wrap it in [`tokio::time::timeout`]. Read the hashes before
+    /// you call it, because a timeout drops the handle. [`Contract::call_with`]
+    /// and the `.await` of a generated call builder bound the wait for
+    /// finality to 60 s. They settle the snapshot after that wait.
     ///
     /// # Errors
     ///
@@ -1343,6 +1344,9 @@ impl<P: Provider> Contract<P> {
     ///   [`SubmitError::SubmitRpc`](midnight_provider::SubmitError::SubmitRpc).
     ///   The `Pending` snapshot stays, because the node can still hold the
     ///   transaction. The variant says how to reconcile it.
+    ///
+    /// An error after the build keeps the wallet inputs that the build
+    /// reserved until their TTL passes (see [`MidnightProvider::release`]).
     #[expect(
         clippy::too_many_arguments,
         reason = "the arguments of `call_with`, plus the decoder"

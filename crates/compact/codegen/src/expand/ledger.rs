@@ -197,8 +197,8 @@ pub(crate) fn emit_ledger_wrapper(
             ///
             /// The deadline starts when `into_contract` starts, after `send` returns.
             /// It bounds the best-block wait that `into_contract` does when no wait
-            /// ran before it, and then the read of the deployed contract. An explicit
-            /// `wait_best` or `wait_finalized` has no deadline. See
+            /// ran before it, and then the read of the deployed contract. The SDK sets
+            /// no deadline on an explicit `wait_best` or `wait_finalized`. See
             /// `midnight_contract::PendingTx` to bound one with `tokio::time::timeout`.
             pub fn with_deploy_timeout(self, timeout: std::time::Duration) -> Self {
                 Self(self.0.with_deploy_timeout(timeout))

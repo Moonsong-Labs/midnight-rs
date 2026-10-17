@@ -70,8 +70,8 @@ pub enum SubmitError {
     /// transaction.
     ///
     /// The error does not say whether the node received the transaction.
-    /// subxt's `CombinedBackend` sends it through each RPC backend that the
-    /// node offers, one after the other, until one call succeeds. This variant
+    /// subxt's `CombinedBackend` sends it through each of its RPC backends,
+    /// one after the other, until one call succeeds. This variant
     /// carries the error of the last backend. So an earlier backend can have
     /// delivered the transaction, and a transport failure can lose the node's
     /// answer.
@@ -298,11 +298,14 @@ impl std::fmt::Display for Verdict {
 ///
 /// # Timeouts and cancellation
 ///
-/// Neither wait method imposes a deadline. If the node accepts the
-/// transaction but the chain stalls (no block production, or no
-/// finalization after inclusion), the underlying subxt stream stays open
-/// and the wait future blocks indefinitely. Callers that need a deadline
-/// should wrap the wait in [`tokio::time::timeout`]:
+/// The SDK sets no deadline on either wait method, but subxt can end a wait.
+/// On a node that offers the `chainHead_v1` RPC methods, as the Midnight node
+/// does, subxt has a transaction timeout. The timeout starts at the submit,
+/// and it is 240 s by default. When it passes, subxt ends the watch, and the
+/// wait fails with [`SubmitError::WatchStream`]. subxt checks the timeout only
+/// when a block arrives, so a chain that produces no blocks keeps the wait
+/// open. Callers that need a deadline should wrap the wait in
+/// [`tokio::time::timeout`]:
 ///
 /// ```rust,no_run
 /// # async fn f(pending: midnight_provider::PendingTx) -> anyhow::Result<()> {
