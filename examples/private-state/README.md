@@ -49,6 +49,8 @@ Run the example:
 cargo run -p example-private-state
 ```
 
+The first call uses `.send()`. It returns a `PendingCall`, which shows the transaction hash before the chain's verdict. Its `wait_finalized` then confirms the private-state snapshot.
+
 Output:
 
 ```
@@ -62,6 +64,8 @@ Output:
    on-chain total = 0
 
 2. Calling contribute()...
+   submitted transaction ...
+   finalized; the private-state snapshot is Confirmed
    witness disclosed 1; on-chain total = 1
 3. Calling contribute()...
    witness disclosed 2; on-chain total = 3

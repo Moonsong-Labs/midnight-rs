@@ -192,9 +192,9 @@ pub enum ContractError {
     /// phase committed, at least one fallible segment failed) and
     /// [`Verdict::Failure`] (the dispatch errored entirely, so no phase ran).
     /// Unlike [`SubmissionWait`] and [`FinalizeTimeout`], the chain gave a
-    /// verdict. For `Contract::call_with`, the orphan `Pending` snapshot (when
-    /// one was recorded) has already been cascade-dropped via `mark_failed` by
-    /// the time the caller sees this error.
+    /// verdict. `Contract::call_with` and `PendingCall::wait_finalized` drop the
+    /// orphan `Pending` snapshot, when the call recorded one, with `mark_failed`
+    /// before they return this error.
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     /// [`FinalizeTimeout`]: ContractError::FinalizeTimeout
