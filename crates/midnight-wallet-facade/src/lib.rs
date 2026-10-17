@@ -105,6 +105,23 @@ pub trait WalletFacade: Send + Sync {
     /// two reservations carry different `reserved_at` stamps.
     async fn release(&self, spent: &SpentInputs);
 
+    /// Whether the confirmed state holds none of the inputs in `spent`.
+    ///
+    /// The confirmed state is what the last sync or resync committed. The
+    /// answer never reads a reservation. A release or a TTL ends a reservation
+    /// with no spend on chain. A resync does not end a shielded reservation
+    /// when the spend confirms.
+    ///
+    /// The state holds an unshielded input when it tracks a UTXO with that
+    /// key. It holds a shielded input or a Dust input when it holds an entry
+    /// under that nullifier. A `spent` that names no input gives `true`.
+    ///
+    /// Pass the spends of a transaction that applied. An input of a
+    /// transaction that did not apply can stay in the confirmed state, and the
+    /// answer then stays `false`. `MidnightProvider::wait_observed` resyncs
+    /// until this holds.
+    async fn has_observed(&self, spent: &SpentInputs) -> bool;
+
     /// Resume the event streams from this wallet's cursors and apply what they
     /// deliver.
     ///
@@ -118,6 +135,12 @@ pub trait WalletFacade: Send + Sync {
     /// attached while the chain is replaced would otherwise replay onto the
     /// fresh chain and keep serving the old one's balance. An implementation
     /// that pins its snapshot checks it here and moves it forward afterwards.
+    ///
+    /// Dropping the future must leave the wallet at the state before the
+    /// call, or at the whole commit of this one. A drop after the commit can
+    /// skip the move of the pin, which the next resync makes.
+    /// `MidnightProvider` relies on this when a caller drops a wait, for
+    /// example at the end of `tokio::time::timeout`.
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError>;
 
     /// Replay the shielded event stream from its first event and rebuild the
@@ -213,6 +236,10 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
 
     async fn release(&self, spent: &SpentInputs) {
         (**self).release(spent).await
+    }
+
+    async fn has_observed(&self, spent: &SpentInputs) -> bool {
+        (**self).has_observed(spent).await
     }
 
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {

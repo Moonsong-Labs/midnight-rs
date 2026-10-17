@@ -74,6 +74,10 @@ impl WalletFacade for StubWallet {
 
     async fn release(&self, _spent: &SpentInputs) {}
 
+    async fn has_observed(&self, _spent: &SpentInputs) -> bool {
+        unimplemented!("this wallet has synced no chain state")
+    }
+
     async fn resync(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
         Ok(())
     }
