@@ -13,7 +13,11 @@
 //! make dev-down   # from the repo root
 //! ```
 
+use std::time::Duration;
+
 use anyhow::bail;
+use midnight_core::contract::parse_address;
+use midnight_core::provider::{HashOutput, ShieldedCoinBalance};
 use midnight_core::{MidnightProvider, Seed, Wallet, WalletBuilder};
 
 mod shielded_mint {
@@ -31,6 +35,9 @@ fn env_or(name: &str, default: &str) -> String {
 const MINTER_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 /// A separate wallet that will *receive* the minted coin.
 const RECIPIENT_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000002";
+
+/// How long the recipient waits to see the minted coin.
+const EFFECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -73,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     //    recipient's encryption key.
     use midnight_core::compact_bindgen::Bytes;
     use rand::Rng;
-    let domain_sep = Bytes([0x11u8; 32]);
+    let domain_sep = [0x11u8; 32];
     let value: u64 = 1000;
     // A fresh nonce per mint: the coin commitment is derived from it, so a
     // unique nonce keeps each minted coin distinct (and the example re-runnable).
@@ -83,7 +90,12 @@ async fn main() -> anyhow::Result<()> {
     contract
         .circuits()
         .with_coin_encryption_keys([recipient])
-        .mint(domain_sep, value, nonce, recipient.coin_public_key.into())
+        .mint(
+            Bytes(domain_sep),
+            value,
+            nonce,
+            recipient.coin_public_key.into(),
+        )
         .await?;
     println!("   minted.\n");
 
@@ -94,13 +106,23 @@ async fn main() -> anyhow::Result<()> {
         .sync(&recipient_provider)
         .await?;
     let recipient_provider = recipient_provider.with_wallet(wallet);
-    let balance = recipient_provider.balance().await?;
 
-    let minted = balance
-        .shielded
-        .coins
-        .iter()
-        .find(|c| c.value == value as u128);
+    let token_type = parse_address(&address)?.custom_shielded_token_type(HashOutput(domain_sep));
+    let is_minted =
+        |c: &ShieldedCoinBalance| c.token_type == token_type && c.value == u128::from(value);
+    // A sync can end before it sees the mint. On a timeout, the check below
+    // reads the last resync.
+    let balance = match tokio::time::timeout(
+        EFFECT_TIMEOUT,
+        recipient_provider.resync_until(|b| b.shielded.coins.iter().any(is_minted)),
+    )
+    .await
+    {
+        Ok(waited) => waited?,
+        Err(_) => recipient_provider.balance().await?,
+    };
+
+    let minted = balance.shielded.coins.iter().find(|c| is_minted(c));
     match minted {
         Some(coin) => {
             println!(

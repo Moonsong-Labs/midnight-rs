@@ -8,4 +8,4 @@ publish = false
 midnight-core = { workspace = true }
 anyhow = { workspace = true }
 rand = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }

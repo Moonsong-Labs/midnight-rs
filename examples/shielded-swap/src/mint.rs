@@ -8,7 +8,8 @@
 //! trade.
 
 use anyhow::Context;
-use midnight_core::provider::{ShieldedCoinBalance, ShieldedTokenType};
+use midnight_core::contract::parse_address;
+use midnight_core::provider::{HashOutput, ShieldedTokenType};
 use midnight_core::{MidnightProvider, Seed};
 
 mod contract {
@@ -39,21 +40,26 @@ pub async fn mint_token_to(
         .await?;
 
     let shielded = recipient.shielded_recipient();
-    let domain_sep = Bytes([0x22u8; 32]);
+    let domain_sep = [0x22u8; 32];
     // Fresh nonce per run so the coin (and the example) stays re-runnable.
     let nonce = Bytes(rand::thread_rng().r#gen::<[u8; 32]>());
     mint.circuits()
         .with_coin_encryption_keys([shielded])
-        .mint(domain_sep, amount, nonce, shielded.coin_public_key.into())
+        .mint(
+            Bytes(domain_sep),
+            amount,
+            nonce,
+            shielded.coin_public_key.into(),
+        )
         .await?;
 
-    let minted = |c: &ShieldedCoinBalance| c.value == amount as u128;
-    crate::resync_until(recipient_provider, |b| b.shielded.coins.iter().any(minted))
-        .await?
-        .shielded
-        .coins
-        .iter()
-        .find(|c| minted(c))
-        .map(|c| c.token_type)
-        .context("recipient did not discover the minted token")
+    let token_type =
+        parse_address(mint.address())?.custom_shielded_token_type(HashOutput(domain_sep));
+    tokio::time::timeout(
+        crate::EFFECT_TIMEOUT,
+        recipient_provider.resync_until(|b| b.shielded_value(token_type) == u128::from(amount)),
+    )
+    .await
+    .context("the recipient did not discover the minted token")??;
+    Ok(token_type)
 }

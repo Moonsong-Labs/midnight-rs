@@ -32,6 +32,8 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
+use std::time::Duration;
+
 use anyhow::{Context, bail};
 use midnight_core::provider::DustlessBuilder;
 use midnight_core::{MidnightProvider, Wallet};
@@ -52,6 +54,9 @@ const SEED_B: &str = "0000000000000000000000000000000000000000000000000000000000
 
 /// Shielded units A seeds B with, so B has a coin to transfer.
 const SHIELDED_TO_B: u128 = 3;
+
+/// How long a wallet waits to see the effect of a finalized transaction.
+const EFFECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -95,12 +100,20 @@ async fn main() -> anyhow::Result<()> {
         .cloned()
         .context("wallet A has no shielded coins. Is this a fresh local devnet?")?;
     println!("2. A sends B a shielded coin...");
+    // B can hold this token from an earlier run, so B waits for its total to
+    // grow, not for any coin of the token.
+    let b_before = provider_b.balance().await?.shielded_value(coin.token_type);
     provider_a
         .transfer_shielded(coin.token_type, SHIELDED_TO_B, &address_b)
         .await?
         .wait_finalized()
         .await?;
-    provider_b.resync_wallet().await?;
+    tokio::time::timeout(
+        EFFECT_TIMEOUT,
+        provider_b.resync_until(|b| b.shielded_value(coin.token_type) >= b_before + SHIELDED_TO_B),
+    )
+    .await
+    .context("B did not see the coin from A")??;
     println!("   B holds a coin (and no Dust).\n");
 
     // --- B builds its two Dustless transactions (it pays nothing) ---
