@@ -163,7 +163,7 @@ Before the replay, the sync asks the node which network it runs. Without `.with_
 
 The pin is the chain-reset guard, and every sync takes one by default. A snapshot's cursors are counts, so a snapshot from a replaced chain resumes cleanly and reports the dead chain's balance. To catch this, the sync checks a stored snapshot's pin against the chain before it replays. A replaced chain fails the sync with `WalletError::ChainMismatch`. The sync also gives the wallet a fresh pin, which every later resync checks again.
 
-A node that cannot answer for the pin does not fail the sync. The sync continues without a fresh pin, and keeps a stored snapshot's pin. When the node is down, each question waits for the provider's connect timeout first.
+A node that cannot answer for the pin does not fail the sync. The sync continues without a fresh pin, and keeps a stored snapshot's pin. When the node is down, each question waits ten seconds at most.
 
 `.unpinned()` is the opt-out: it skips the network check and the pin. With a named network, the sync then asks the node nothing. With no network named, the sync still asks the node for its network, and nothing else. The sync still keeps a stored snapshot's pin, and every later resync checks that pin.
 

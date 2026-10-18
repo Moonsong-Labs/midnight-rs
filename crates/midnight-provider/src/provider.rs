@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use subxt::OnlineClient;
+use subxt::backend::CombinedBackend;
 use subxt::config::RpcConfigFor;
+use subxt::ext::futures::StreamExt;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
 use subxt::rpcs::client::{RpcClient, RpcParams, rpc_params};
 use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
@@ -25,6 +27,11 @@ use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Bound each chain question. While the node is down, the reconnecting
+/// client holds a call with no deadline. A question that takes longer than
+/// this bound gives no answer.
+const QUESTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Cached node connection over a single auto-reconnecting websocket: the
 /// subxt `RpcClient` carries every raw RPC (standard Substrate and custom
@@ -808,6 +815,9 @@ impl MidnightProvider {
     /// cache invalidation. The initial dial is bounded by [`RPC_TIMEOUT`]
     /// (the reconnecting client would otherwise retry a misconfigured URL
     /// forever instead of failing fast).
+    ///
+    /// A caller can drop the connect at any await. The connection then
+    /// closes when its pending requests end.
     async fn get_or_connect(&self) -> Result<NodeConnection, ProviderError> {
         {
             let guard = self.conn.read().await;
@@ -831,17 +841,29 @@ impl MidnightProvider {
         .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         let rpc = RpcClient::new(reconnecting);
         // The runtime-aware client shares the same auto-reconnecting
-        // transport; building it fetches metadata, so it is part of the
-        // one-time connection cost.
-        let client = OnlineClient::<subxt::SubstrateConfig>::from_rpc_client(rpc.clone())
+        // transport.
+        let (backend, mut driver) = CombinedBackend::builder()
+            .build(rpc.clone())
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("building the node backend: {e}")))?;
+        let client = OnlineClient::<subxt::SubstrateConfig>::from_backend(Arc::new(backend))
             .await
             .map_err(|e| ProviderError::Rpc(format!("building the runtime client: {e}")))?;
 
         let mut guard = self.conn.write().await;
-        if guard.is_none() {
-            *guard = Some(NodeConnection { rpc, client });
-        }
-        Ok(guard.as_ref().unwrap().clone())
+        let conn = guard.get_or_insert_with(|| {
+            // Spawn the follow driver only for the kept connection: the
+            // driver holds the client open until a hard error.
+            tokio::spawn(async move {
+                while let Some(res) = driver.next().await {
+                    if let Err(e) = res {
+                        debug!(error = %e, "chainHead follow error");
+                    }
+                }
+            });
+            NodeConnection { rpc, client }
+        });
+        Ok(conn.clone())
     }
 
     async fn call_runtime_api<R: subxt::ext::scale_decode::DecodeAsType>(
@@ -1372,17 +1394,31 @@ impl Drop for HeldInputs {
 /// The node facts a chain pin asks for. A wallet sync asks them through
 /// [`SyncSource`](midnight_types::chain_pin::SyncSource), and the provider's
 /// own resync checks pins through the same answers.
+///
+/// Each answer comes within ten seconds, the connect included. A question
+/// that the node does not answer in that time gives `None`, as a failed
+/// question does. A timeout during the first connect drops that connect,
+/// and the next question dials again. After the first connect, the timeout
+/// ends only the wait. While the node is down, the reconnecting client keeps
+/// the question in its queue. The client sends it after the reconnect and
+/// drops the late answer.
 #[async_trait]
 impl midnight_types::chain_pin::ChainView for MidnightProvider {
     async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>> {
-        self.get_block_hashes_by_height(height).await.ok()
+        ask_within_bound(self.get_block_hashes_by_height(height))
+            .await
+            .ok()
     }
 
     async fn finalized_height(&self) -> Option<u64> {
-        self.get_finalized_block_height().await.ok()
+        ask_within_bound(self.get_finalized_block_height())
+            .await
+            .ok()
     }
 }
 
+/// The node's network comes within ten seconds, as the `ChainView` answers of
+/// this provider do.
 #[async_trait]
 impl midnight_types::chain_pin::SyncSource for MidnightProvider {
     fn indexer_url(&self) -> &str {
@@ -1390,7 +1426,7 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
     }
 
     async fn network(&self) -> Option<Network> {
-        match self.ledger_network_id().await {
+        match ask_within_bound(self.ledger_network_id()).await {
             Ok(network) => network,
             Err(e) => {
                 warn!(error = %e, "could not read the node's network");
@@ -1398,6 +1434,20 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
             }
         }
     }
+}
+
+/// The answer to a chain `question`, or an error when the node gives none
+/// within [`QUESTION_TIMEOUT`].
+async fn ask_within_bound<T>(
+    question: impl Future<Output = Result<T, ProviderError>>,
+) -> Result<T, ProviderError> {
+    tokio::time::timeout(QUESTION_TIMEOUT, question)
+        .await
+        .unwrap_or_else(|_| {
+            Err(ProviderError::Rpc(format!(
+                "the node gave no answer within {QUESTION_TIMEOUT:?}"
+            )))
+        })
 }
 
 /// Typed view over a connection's raw client for the new JSON-RPC spec
@@ -1424,6 +1474,9 @@ fn rpc_error(method: &'static str) -> impl FnOnce(subxt::rpcs::Error) -> Provide
 #[cfg(test)]
 mod tests {
     use super::*;
+    use midnight_indexer_client::testutil;
+    use serde_json::{Value, json};
+    use tokio::sync::oneshot;
 
     fn test_provider() -> MidnightProvider {
         MidnightProvider::new("ws://test", "http://test")
@@ -1471,5 +1524,116 @@ mod tests {
         let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1");
         let health = provider.health().await.unwrap();
         assert!(!health.node_connected);
+    }
+
+    /// A mock node: a listener and the `ws://` URL that dials it.
+    async fn bind_node() -> (tokio::net::TcpListener, String) {
+        let (listener, url) = testutil::bind().await;
+        (listener, url.replacen("http://", "ws://", 1))
+    }
+
+    /// Answer the JSON-RPC request `request` with `result`.
+    async fn answer(ws: &mut testutil::ServerWs, request: &Value, result: Value) {
+        let response = json!({"jsonrpc": "2.0", "id": request["id"], "result": result});
+        testutil::send_json(ws, &response).await;
+    }
+
+    /// A chain question on a live connection that the node never answers
+    /// gives no answer within the bound. With no bound on the question, it
+    /// waits for the client's 60 s request timeout. A bound on the dial, or
+    /// on the whole connect, does not help, because the connect completes
+    /// here. The test takes about ten seconds: paused time does not work with
+    /// real sockets.
+    #[tokio::test]
+    async fn a_chain_question_that_the_node_never_answers_gives_none() {
+        use midnight_types::chain_pin::ChainView;
+
+        let (listener, node_url) = bind_node().await;
+        let (asked_tx, mut asked_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = testutil::accept_ws(stream).await;
+            let mut asked_tx = Some(asked_tx);
+            while let Some(request) = testutil::next_json(&mut ws).await {
+                match request["method"].as_str() {
+                    Some("rpc_methods") => answer(&mut ws, &request, json!({"methods": []})).await,
+                    Some("chain_getBlockHash") => {
+                        let genesis = format!("0x{}", "00".repeat(32));
+                        answer(&mut ws, &request, json!(genesis)).await;
+                    }
+                    Some("archive_v1_finalizedHeight") => {
+                        if let Some(tx) = asked_tx.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let provider = MidnightProvider::new(&node_url, "http://127.0.0.1:1");
+
+        let answer = tokio::time::timeout(
+            Duration::from_secs(30),
+            ChainView::finalized_height(&provider),
+        )
+        .await;
+
+        assert!(
+            asked_rx.try_recv().is_ok(),
+            "the node never got the question, so a failed connect can explain the answer"
+        );
+        assert_eq!(answer, Ok(None));
+    }
+
+    /// A connect that its caller drops in the middle of the runtime-client
+    /// build closes its connection. `OnlineClient::from_rpc_client` spawns
+    /// the follow driver before it asks for the genesis hash. A drop between
+    /// the two leaves that driver to hold the connection open.
+    #[tokio::test]
+    async fn a_connect_dropped_during_the_build_closes_its_connection() {
+        let (listener, node_url) = bind_node().await;
+        let (genesis_asked_tx, genesis_asked_rx) = oneshot::channel();
+        let (answer_genesis_tx, answer_genesis_rx) = oneshot::channel::<()>();
+        let (closed_tx, closed_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = testutil::accept_ws(stream).await;
+            let genesis_request = loop {
+                let request = testutil::next_json(&mut ws).await.expect("a request");
+                match request["method"].as_str() {
+                    Some("rpc_methods") => {
+                        let methods = json!({"methods": ["chainHead_v1_follow"]});
+                        answer(&mut ws, &request, methods).await;
+                    }
+                    Some("chainSpec_v1_genesisHash") => break request,
+                    _ => {}
+                }
+            };
+            genesis_asked_tx.send(()).unwrap();
+            answer_genesis_rx.await.unwrap();
+            let genesis = format!("0x{}", "00".repeat(32));
+            answer(&mut ws, &genesis_request, json!(genesis)).await;
+            let closed = tokio::time::timeout(Duration::from_secs(5), async {
+                while testutil::next_json(&mut ws).await.is_some() {}
+            })
+            .await
+            .is_ok();
+            let _ = closed_tx.send(closed);
+        });
+        let provider = MidnightProvider::new(&node_url, "http://127.0.0.1:1");
+
+        tokio::select! {
+            connect = provider.get_or_connect() => {
+                panic!("the connect ended before the genesis answer: {:?}", connect.err())
+            }
+            asked = genesis_asked_rx => asked.unwrap(),
+        }
+        // The pending genesis request keeps the connection open until it ends.
+        answer_genesis_tx.send(()).unwrap();
+
+        assert!(
+            closed_rx.await.unwrap(),
+            "the connection stayed open after its connect was dropped"
+        );
     }
 }
