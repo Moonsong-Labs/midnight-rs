@@ -13,8 +13,14 @@
 //! make dev-down   # from the repo root
 //! ```
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::bail;
-use midnight_core::{MidnightProvider, Seed, Wallet, WalletBuilder};
+use midnight_core::contract::parse_address;
+use midnight_core::provider::{HashOutput, ShieldedCoinBalance};
+use midnight_core::wallet::LocalWallet;
+use midnight_core::{MidnightProvider, Seed, Wallet};
 
 mod shielded_mint {
     midnight_core::contract!(
@@ -31,6 +37,13 @@ fn env_or(name: &str, default: &str) -> String {
 const MINTER_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 /// A separate wallet that will *receive* the minted coin.
 const RECIPIENT_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000002";
+
+/// The pause between two passes of the recipient's background sync. A short
+/// pause ends the wait soon after the indexer serves the mint.
+const SYNC_PAUSE: Duration = Duration::from_secs(1);
+
+/// How long the recipient waits to see the minted coin.
+const EFFECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -73,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
     //    recipient's encryption key.
     use midnight_core::compact_bindgen::Bytes;
     use rand::Rng;
-    let domain_sep = Bytes([0x11u8; 32]);
+    let domain_sep = [0x11u8; 32];
     let value: u64 = 1000;
     // A fresh nonce per mint: the coin commitment is derived from it, so a
     // unique nonce keeps each minted coin distinct (and the example re-runnable).
@@ -83,24 +96,42 @@ async fn main() -> anyhow::Result<()> {
     contract
         .circuits()
         .with_coin_encryption_keys([recipient])
-        .mint(domain_sep, value, nonce, recipient.coin_public_key.into())
+        .mint(
+            Bytes(domain_sep),
+            value,
+            nonce,
+            recipient.coin_public_key.into(),
+        )
         .await?;
     println!("   minted.\n");
 
     // 4. The recipient syncs from scratch and finds the coin — no watchFor.
     println!("4. Recipient syncing to discover the coin...");
     let recipient_provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = WalletBuilder::new(recipient_seed)
-        .sync(&recipient_provider)
-        .await?;
-    let recipient_provider = recipient_provider.with_wallet(wallet);
+    let wallet = Arc::new(LocalWallet::new(
+        Wallet::from_seed(RECIPIENT_SEED)?
+            .sync(&recipient_provider)
+            .await?,
+    ));
+    let recipient_provider = Arc::new(recipient_provider.with_wallet(Arc::clone(&wallet)));
+    let sync = wallet.sync_in_background(recipient_provider.clone(), SYNC_PAUSE);
+
+    let token_type = parse_address(&address)?.custom_shielded_token_type(HashOutput(domain_sep));
+    let is_minted =
+        |c: &ShieldedCoinBalance| c.token_type == token_type && c.value == u128::from(value);
+    // The first sync can end before it sees the mint. On a timeout, the check
+    // below reads the last commit.
+    if let Ok(waited) = tokio::time::timeout(
+        EFFECT_TIMEOUT,
+        sync.wait_until(|w| w.balance().shielded.coins.iter().any(is_minted)),
+    )
+    .await
+    {
+        waited?;
+    }
     let balance = recipient_provider.balance().await?;
 
-    let minted = balance
-        .shielded
-        .coins
-        .iter()
-        .find(|c| c.value == value as u128);
+    let minted = balance.shielded.coins.iter().find(|c| is_minted(c));
     match minted {
         Some(coin) => {
             println!(

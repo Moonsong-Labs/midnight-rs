@@ -65,7 +65,7 @@ Output:
 === Done: recipient found the coin through normal sync ===
 ```
 
-The minter and recipient are two independent wallets (genesis seeds `...0001` and `...0002`). The recipient never watches for the contract or the coin; it just syncs and the coin is there.
+The minter and recipient are two independent wallets (genesis seeds `...0001` and `...0002`). The recipient never watches for the contract or the coin. It waits on its background sync until the coin is there.
 
 Stop the devnet (from the repo root):
 

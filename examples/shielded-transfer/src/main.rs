@@ -8,14 +8,24 @@
 //! spends. See `docs/tokens.md` for the asset model.
 
 use std::env;
+use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
+use midnight_core::wallet::LocalWallet;
 use midnight_core::{MidnightProvider, Network, Wallet};
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded with shielded test tokens at genesis on the
 /// local devnet. Do NOT use in production.
 const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+
+/// The pause between two passes of the background sync. A short pause ends a
+/// wait soon after the indexer serves the transaction.
+const SYNC_PAUSE: Duration = Duration::from_secs(1);
+
+/// How long the wallet waits to see the effect of a finalized transaction.
+const EFFECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn required_env(name: &str) -> String {
     env::var(name).unwrap_or_else(|_| {
@@ -54,7 +64,9 @@ async fn main() -> anyhow::Result<()> {
         .sync(&provider)
         .await?;
     let address = wallet.shielded_address();
-    let provider = provider.with_wallet(wallet);
+    let wallet = Arc::new(LocalWallet::new(wallet));
+    let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));
+    let sync = wallet.sync_in_background(provider.clone(), SYNC_PAUSE);
     println!("Sync complete.");
     println!("Shielded address:  {address}\n");
 
@@ -83,23 +95,26 @@ async fn main() -> anyhow::Result<()> {
     println!("Submitted: ext hash {}", pending.extrinsic_hash_hex());
     let (best, pending) = pending.wait_best().await?;
     println!("Best:      {}", hex::encode(best.block_hash));
-    let (finalized, _) = pending.wait_finalized().await?;
+    let (finalized, pending) = pending.wait_finalized().await?;
     println!("Finalized: {}\n", hex::encode(finalized.block_hash));
 
-    // The transfer reaches the indexer, which a resync reads, a moment after
-    // the node finalizes it, so resync until the spent coin leaves the set.
-    println!("Resyncing...");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let post = loop {
-        provider.resync_wallet().await?;
-        let post = provider.balance().await?;
-        if post.shielded.coins.len() != balance.shielded.coins.len()
-            || std::time::Instant::now() >= deadline
-        {
-            break post;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    };
+    println!("Waiting for the wallet to see the spends...");
+    let spent = pending
+        .spent_inputs()
+        .context("a transfer carries its spent inputs")?;
+    tokio::time::timeout(EFFECT_TIMEOUT, sync.wait_until(|w| w.has_observed(spent)))
+        .await
+        .context("the wallet did not see the spends")??;
+
+    // The outputs can arrive in a later commit than the spends.
+    println!("Waiting for the wallet to see the outputs...");
+    tokio::time::timeout(
+        EFFECT_TIMEOUT,
+        sync.wait_until(|w| w.balance().shielded.total_count > balance.shielded.total_count),
+    )
+    .await
+    .context("the wallet did not see the outputs")??;
+    let post = provider.balance().await?;
     println!("\n--- Post-transfer shielded balance ---");
     for c in &post.shielded.coins {
         println!("  {c}");

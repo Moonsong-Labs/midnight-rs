@@ -27,9 +27,12 @@
 
 mod mint;
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::{Context, ensure};
-use midnight_core::provider::WalletBalance;
-use midnight_core::{MidnightProvider, Seed, Wallet, WalletBuilder};
+use midnight_core::wallet::LocalWallet;
+use midnight_core::{MidnightProvider, Seed, Wallet};
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
@@ -46,26 +49,12 @@ const MINT_Y: u64 = 1000;
 const DX: u128 = 2;
 const DY: u128 = 5;
 
-/// Resync `provider` until `seen` holds for its balance, and return that
-/// balance.
-///
-/// A finalized transaction reaches the indexer, which a resync reads, a moment
-/// after the node reports it, so a single resync can miss it. Polling for the
-/// effect needs no promise about when the indexer catches up.
-async fn resync_until(
-    provider: &MidnightProvider,
-    seen: impl Fn(&WalletBalance) -> bool,
-) -> anyhow::Result<WalletBalance> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    loop {
-        provider.resync_wallet().await?;
-        let balance = provider.balance().await?;
-        if seen(&balance) || std::time::Instant::now() >= deadline {
-            return Ok(balance);
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-}
+/// The pause between two passes of each background sync. A short pause ends a
+/// wait soon after the indexer serves the transaction.
+const SYNC_PAUSE: Duration = Duration::from_secs(1);
+
+/// How long a wallet waits to see the effect of a finalized transaction.
+const EFFECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -77,11 +66,17 @@ async fn main() -> anyhow::Result<()> {
     let seed_b = Seed::from_hex(SEED_B)?;
 
     let provider_a = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(SEED_A)?.sync(&provider_a).await?;
-    let provider_a = provider_a.with_wallet(wallet);
+    let wallet_a = Arc::new(LocalWallet::new(
+        Wallet::from_seed(SEED_A)?.sync(&provider_a).await?,
+    ));
+    let provider_a = Arc::new(provider_a.with_wallet(Arc::clone(&wallet_a)));
+    let sync_a = wallet_a.sync_in_background(provider_a.clone(), SYNC_PAUSE);
     let provider_b = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = WalletBuilder::new(&seed_b).sync(&provider_b).await?;
-    let provider_b = provider_b.with_wallet(wallet);
+    let wallet_b = Arc::new(LocalWallet::new(
+        Wallet::from_seed(SEED_B)?.sync(&provider_b).await?,
+    ));
+    let provider_b = Arc::new(provider_b.with_wallet(Arc::clone(&wallet_b)));
+    let sync_b = wallet_b.sync_in_background(provider_b.clone(), SYNC_PAUSE);
 
     // Setup: two tokens to trade. X is A's genesis shielded token; Y is a fresh
     // token A mints to B (see `mint`). Not part of the swap.
@@ -93,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
         .first()
         .map(|c| c.token_type)
         .context("wallet A has no shielded coins (is this a fresh local devnet?)")?;
-    let token_y = mint::mint_token_to(&provider_a, &seed_b, &provider_b, MINT_Y).await?;
+    let token_y = mint::mint_token_to(&provider_a, &seed_b, &sync_b, MINT_Y).await?;
     println!("Setup: A holds token X, B holds token Y (minted).\n");
 
     // Snapshot both wallets so the final check proves both tokens actually moved.
@@ -129,9 +124,30 @@ async fn main() -> anyhow::Result<()> {
         hex::encode(finalized.block_hash)
     );
 
-    // Both wallets resync and the balances reflect the exchange.
-    let a_after = resync_until(&provider_a, |b| b.shielded_value(token_y) != a_y0).await?;
-    let b_after = resync_until(&provider_b, |b| b.shielded_value(token_x) != b_x0).await?;
+    // Each wallet waits until its background sync sees both of its tokens
+    // move. One commit can hold only some coins of the swap.
+    let (a_x_want, a_y_want) = (a_x0 - DX, a_y0 + DY);
+    let (b_x_want, b_y_want) = (b_x0 + DX, b_y0 - DY);
+    tokio::time::timeout(
+        EFFECT_TIMEOUT,
+        sync_a.wait_until(|w| {
+            let b = w.balance();
+            b.shielded_value(token_x) == a_x_want && b.shielded_value(token_y) == a_y_want
+        }),
+    )
+    .await
+    .with_context(|| format!("A did not reach X={a_x_want}, Y={a_y_want}"))??;
+    tokio::time::timeout(
+        EFFECT_TIMEOUT,
+        sync_b.wait_until(|w| {
+            let b = w.balance();
+            b.shielded_value(token_x) == b_x_want && b.shielded_value(token_y) == b_y_want
+        }),
+    )
+    .await
+    .with_context(|| format!("B did not reach X={b_x_want}, Y={b_y_want}"))??;
+    let a_after = provider_a.balance().await?;
+    let b_after = provider_b.balance().await?;
     let (a_x1, a_y1) = (
         a_after.shielded_value(token_x),
         a_after.shielded_value(token_y),
@@ -146,10 +162,10 @@ async fn main() -> anyhow::Result<()> {
         ensure!(got == want, "{label}: expected {want}, got {got}");
         Ok(())
     };
-    expect("A's X", a_x1, a_x0 - DX)?;
-    expect("A's Y", a_y1, a_y0 + DY)?;
-    expect("B's X", b_x1, b_x0 + DX)?;
-    expect("B's Y", b_y1, b_y0 - DY)?;
+    expect("A's X", a_x1, a_x_want)?;
+    expect("A's Y", a_y1, a_y_want)?;
+    expect("B's X", b_x1, b_x_want)?;
+    expect("B's Y", b_y1, b_y_want)?;
 
     println!("\n=== Done: A traded {DX} X for {DY} Y, B did the mirror ===");
     Ok(())
