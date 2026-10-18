@@ -3,6 +3,8 @@
 //!
 //! - `resync_wallet` must not hold the wallet lock across the replay I/O:
 //!   reads (`balance`) complete while a stalled resync replay is in flight.
+//! - `LocalWallet` serializes its own sync methods: a forget waits for a
+//!   resync in flight.
 //! - `WalletBuilder::sync_with_progress` must not leak the spawned sync task:
 //!   dropping the progress receiver or the `SyncHandle` tears down the
 //!   indexer WebSocket subscriptions promptly.
@@ -26,8 +28,8 @@ use midnight_indexer_client::testutil::{
 };
 use midnight_provider::{BlockHash, MidnightProvider};
 use midnight_wallet::{
-    LocalWallet, Network, SyncHandle, SyncProgress, Wallet, WalletBuilder, WalletError,
-    WalletFacade,
+    CoinInfo, HashOutput, LocalWallet, Network, Nonce, ShieldedTokenType, SyncHandle, SyncProgress,
+    Wallet, WalletBuilder, WalletError, WalletFacade,
 };
 use serde_json::json;
 use tokio::net::TcpStream;
@@ -169,15 +171,18 @@ fn provider(url: &str) -> MidnightProvider {
     MidnightProvider::new("ws://127.0.0.1:1", url)
 }
 
+/// Fast mode: sync an unpinned wallet in milliseconds.
+async fn synced_wallet(url: &str) -> Wallet {
+    builder()
+        .unpinned()
+        .sync(&provider(url))
+        .await
+        .expect("initial sync against the mock indexer")
+}
+
 /// Fast mode: attach a synced wallet in milliseconds.
 async fn synced_provider(url: &str) -> MidnightProvider {
-    let provider = provider(url);
-    let wallet = builder()
-        .unpinned()
-        .sync(&provider)
-        .await
-        .expect("initial sync against the mock indexer");
-    provider.with_wallet(wallet)
+    provider(url).with_wallet(synced_wallet(url).await)
 }
 
 /// Stall mode: start a streamed sync, then wait until the mock holds its
@@ -248,6 +253,40 @@ async fn balance_completes_while_resync_replay_is_in_flight() {
         .await
         .expect("balance() must not block while a resync replay is in flight")
         .expect("balance() must succeed");
+
+    resync.abort();
+}
+
+/// A forget waits for a resync in flight. Otherwise the commit of that resync
+/// brings the forgotten registration back, and nothing reports it.
+#[tokio::test]
+async fn forget_coins_waits_for_a_resync_in_flight() {
+    let (url, state) = spawn_mock().await;
+    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+
+    state.stall.store(true, Ordering::SeqCst);
+    let resync = tokio::spawn({
+        let wallet = Arc::clone(&wallet);
+        let chain = provider(&url);
+        async move { wallet.resync(&chain).await }
+    });
+    wait_until("resync replay subscriptions", || {
+        state.stalled_subs.load(Ordering::SeqCst) >= 3
+    })
+    .await;
+
+    let coin = CoinInfo {
+        nonce: Nonce(HashOutput([1; 32])),
+        type_: ShieldedTokenType(HashOutput([2; 32])),
+        value: 1,
+    };
+    // Keep this under the resume idle bound, around ten seconds. At that bound
+    // the stalled replay ends on its own and the resync commits.
+    let forget = tokio::time::timeout(Duration::from_millis(500), wallet.forget_coins(vec![coin]));
+    assert!(
+        forget.await.is_err(),
+        "forget_coins must wait for the resync in flight"
+    );
 
     resync.abort();
 }

@@ -518,7 +518,7 @@ impl Wallet {
     /// [`Self::shielded_rescan_plan`] → [`ShieldedRescanPlan::run`] →
     /// [`Self::commit_shielded_rescan`]. It holds `&mut self` across the
     /// replay I/O; callers that share the wallet behind a lock should drive
-    /// the three steps themselves, as `MidnightProvider::rescan_shielded`
+    /// the three steps themselves, as [`LocalWallet`](crate::LocalWallet)
     /// does.
     pub async fn rescan_shielded(&mut self, indexer_url: &str) -> Result<(), WalletError> {
         let commit = self.shielded_rescan_plan().run(indexer_url).await?;
@@ -577,11 +577,11 @@ impl Wallet {
 /// `&Wallet` by [`Wallet::resync_plan`].
 ///
 /// Exists so callers that share a wallet across tasks (notably
-/// `midnight_provider::MidnightProvider`, which reaches it through an
-/// `Arc<dyn WalletFacade>`) can run the slow replay I/O **without holding any
-/// wallet lock**: snapshot under a brief read lock, [`ResyncPlan::run`] the
-/// replays lock-free, then apply the validated result under a brief write
-/// lock via [`Wallet::commit_resync`]. Single-task callers can keep using
+/// [`LocalWallet`](crate::LocalWallet)) can run the slow replay I/O while
+/// reads and builds still reach the wallet: snapshot under a brief read lock,
+/// [`ResyncPlan::run`] the replays with no read or write lock held, then apply
+/// the validated result under a brief write lock via
+/// [`Wallet::commit_resync`]. Single-task callers can keep using
 /// [`Wallet::resync`], which composes the same three steps.
 ///
 /// The fields are clones of the wallet's cursors and replay state; taking a
@@ -619,8 +619,9 @@ impl ResyncPlan {
     ///
     /// Callers that release the wallet lock between plan and commit must
     /// serialize resyncs themselves (two concurrent runs would replay from
-    /// the same cursors and race their commits); the provider holds a
-    /// dedicated resync mutex across plan → run → commit for this.
+    /// the same cursors and race their commits).
+    /// [`LocalWallet`](crate::LocalWallet) holds a mutex across plan → run →
+    /// commit for this.
     ///
     /// When the chain moved to a later generation since the wallet's last
     /// sync, the replay crosses the fork. It applies the shielded events up
@@ -736,9 +737,9 @@ enum ResyncCommitKind {
 ///
 /// The plan / run / commit split mirrors [`ResyncPlan`], and for the same
 /// reason: a caller that shares the wallet across tasks snapshots under a
-/// brief read lock, runs the replay lock-free, and applies the result under a
-/// brief write lock. Single-task callers can use [`Wallet::rescan_shielded`],
-/// which composes the three steps.
+/// brief read lock, runs the replay with no read or write lock held, and
+/// applies the result under a brief write lock. Single-task callers can use
+/// [`Wallet::rescan_shielded`], which composes the three steps.
 #[must_use = "run the plan with ShieldedRescanPlan::run, then apply it with Wallet::commit_shielded_rescan"]
 pub struct ShieldedRescanPlan {
     seed: Seed,
@@ -762,8 +763,9 @@ impl ShieldedRescanPlan {
     ///
     /// Callers that release the wallet lock between plan and commit must
     /// serialize this against resyncs (a resync committing its own cursor and
-    /// state in the middle would overwrite the rebuilt state); the provider
-    /// holds its resync mutex across plan → run → commit for this.
+    /// state in the middle would overwrite the rebuilt state).
+    /// [`LocalWallet`](crate::LocalWallet) holds a mutex across plan → run →
+    /// commit for this.
     ///
     /// A stream that starts in an earlier generation than the wallet's is
     /// replayed from that generation, and the state crosses each fork on the

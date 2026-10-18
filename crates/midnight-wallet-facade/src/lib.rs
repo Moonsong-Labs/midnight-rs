@@ -13,12 +13,13 @@
 //! source compiled for each generation. A wallet that serves both implements
 //! both, and a build dispatches on [`WalletFacade::ledger_version`].
 //!
-//! Serializing the sync methods against each other is the caller's job.
-//! [`WalletFacade::resync`], [`WalletFacade::rescan_shielded`],
-//! [`WalletFacade::watch_for_coins`] and [`WalletFacade::forget_coins`] each
-//! release the wallet between what they read and what they commit, so two that
-//! interleave can lose one's work. `MidnightProvider` holds a mutex across
-//! them.
+//! An implementation must serialize [`WalletFacade::resync`],
+//! [`WalletFacade::rescan_shielded`], [`WalletFacade::watch_for_coins`] and
+//! [`WalletFacade::forget_coins`] against each other. A resync or a rescan
+//! releases the wallet between what it reads and what it commits. A sync
+//! method that runs in that window can lose its work, or the work of the
+//! other one. No caller holds a lock across them: `MidnightProvider` and every
+//! handle on a shared wallet call them directly.
 
 use std::sync::Arc;
 
@@ -108,7 +109,7 @@ pub trait WalletFacade: Send + Sync {
     /// Resume the event streams from this wallet's cursors and apply what they
     /// deliver.
     ///
-    /// The replay runs without the wallet's lock, so reads keep completing
+    /// The replay holds no lock that reads take, so reads keep completing
     /// while it is in flight. Which indexer it resumes against is the
     /// wallet's own business: the cursors are event counts, so only the
     /// server that produced them can continue them.
@@ -160,15 +161,9 @@ where
 /// A shared wallet is a wallet: every call forwards to the one inside.
 ///
 /// This lets a caller keep a handle on the wallet it attaches instead of
-/// giving ownership away, and lets one implementation stand behind several
-/// readers. A handle on a wallet that a provider holds is for reads. Run
-/// resyncs, rescans, coin watches, forgets and builds through the provider.
-///
-/// One wallet behind two `MidnightProvider`s is not among the uses. Nothing
-/// here serializes the sync methods against each other, and the provider does
-/// that with a mutex of its own, so two of them hold two different ones. Their
-/// resyncs would snapshot the same cursors and race their commits, and the
-/// slower replay would land last and walk the cursors backwards.
+/// giving ownership away, and lets several callers share one implementation.
+/// A handle can call every method, from any number of tasks or providers,
+/// because the implementation serializes its sync methods.
 #[async_trait]
 impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
     async fn network(&self) -> Network {

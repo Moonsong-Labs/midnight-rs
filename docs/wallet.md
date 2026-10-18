@@ -8,7 +8,7 @@ The SDK's wallet covers Midnight's three asset legs:
 
 `Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` or `Wallet::from_mnemonic` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts.
 
-The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`).
+The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`). Such an implementation must serialize its own `resync`, `rescan_shielded`, `watch_for_coins` and `forget_coins` against each other, because the provider holds no lock across them.
 
 ```rust
 use std::sync::Arc;
@@ -20,7 +20,7 @@ let provider = provider.with_wallet(Arc::clone(&wallet));
 let balance = wallet.balance().await;
 ```
 
-The handle is for reads. Run resyncs, rescans, coin watches, forgets and builds through the provider. It serializes resyncs, rescans, coin watches and forgets on the mutex of `resync_wallet`.
+The wallet serializes its own resyncs, rescans, coin watches and forgets. So the handle can run them too, from any number of tasks or providers.
 
 ## Seeds
 
@@ -198,7 +198,7 @@ let provider = provider.with_wallet(wallet);
 
 The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally. For a sync without progress events, use `.sync(&provider)`.
 
-To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. For a fresh read, call `resync_wallet()` before it, for example on a timer in a UI. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
+To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. For a fresh read, call `resync_wallet()` before it, for example on a timer in a UI. A resync takes the wallet's read/write lock only briefly, at its start (to snapshot replay inputs) and at its end (to commit). So reads like `balance()` keep completing while one is in flight. The wallet serializes concurrent resyncs.
 
 ### Across a hard fork
 
@@ -374,7 +374,7 @@ To check the outcome, look for the coin in `provider.spendable_shielded_coins()`
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). Both provider methods serialize against resyncs internally. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
+Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). The wallet serializes each step of the two provider methods against resyncs: the registration, and each replay. A resync that runs between the registration and the replay keeps the registration. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
 
 ## Pending reservations
 

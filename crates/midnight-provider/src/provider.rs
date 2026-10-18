@@ -7,7 +7,7 @@ use subxt::config::RpcConfigFor;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
 use subxt::rpcs::client::{RpcClient, RpcParams, rpc_params};
 use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
@@ -60,11 +60,6 @@ pub struct MidnightProvider {
     /// witnesses are stateless.
     private_state: Option<Arc<dyn PrivateStateProvider>>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
-    /// Serializes [`Self::resync_wallet`] runs. The resync's replay phase
-    /// runs without the wallet lock (so reads keep flowing); this mutex is
-    /// what keeps two concurrent resyncs from replaying the same cursors
-    /// and racing their commits. Held across plan → replay → commit.
-    resync_lock: Mutex<()>,
 }
 
 impl MidnightProvider {
@@ -96,7 +91,6 @@ impl MidnightProvider {
             proof_provider: None,
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
-            resync_lock: Mutex::new(()),
         }
     }
 
@@ -185,8 +179,7 @@ impl MidnightProvider {
         &self.indexer_url
     }
 
-    /// Attach a wallet, and become the single entry point for its resync and
-    /// transaction-context construction.
+    /// Attach a wallet, and build transaction contexts from it.
     ///
     /// A synced `Wallet` from `midnight-wallet` goes in behind a `LocalWallet`.
     /// Anything else that implements [`WalletFacade`],
@@ -207,9 +200,8 @@ impl MidnightProvider {
     /// # }
     /// ```
     ///
-    /// The handle is for reads. Run resyncs, rescans, coin watches, forgets
-    /// and builds through the provider. It serializes resyncs, rescans, coin
-    /// watches and forgets on the mutex of [`Self::resync_wallet`].
+    /// The wallet serializes its own resyncs, rescans, coin watches and
+    /// forgets, so the handle can run them too.
     ///
     /// The provider runs no sync task of its own. Every read of the wallet,
     /// such as [`Self::balance`], returns the state of the last sync or
@@ -344,8 +336,7 @@ impl MidnightProvider {
     /// concurrent reads ([`Self::balance`], [`Self::dust_synced`], ...) keep
     /// completing while a resync is in flight; the wallet lock is only taken
     /// briefly to snapshot the replay inputs (read) and to commit the result
-    /// (write). Concurrent `resync_wallet` calls are serialized on an
-    /// internal mutex.
+    /// (write). The wallet serializes concurrent resyncs.
     pub async fn resync_wallet(&self) -> Result<(), ProviderError> {
         // Boxed so the replay stays off the caller's frame. A debug build
         // makes this future tens of kilobytes, and an inlined one is carried
@@ -357,15 +348,6 @@ impl MidnightProvider {
     async fn resync_wallet_inner(&self) -> Result<(), ProviderError> {
         let wallet = &self.attached()?.facade;
 
-        // Serialize resyncs across plan → replay → commit: the replay below
-        // runs without the wallet lock, so without this guard two concurrent
-        // resyncs would replay from the same cursors and race their commits.
-        let _resync_guard = self.resync_lock.lock().await;
-
-        // The replay is the long part, and it runs with the wallet free:
-        // reads (and even transfer builds, which block on the resync mutex via
-        // their own resync) proceed against the pre-resync state meanwhile.
-        //
         // The wallet resumes against its own indexer and checks its own chain
         // pin; this provider is only the node view those checks ask.
         wallet.resync(self).await?;
@@ -422,9 +404,9 @@ impl MidnightProvider {
     /// [`Self::rescan_shielded`] rather than registering again.
     ///
     /// Locking matches [`Self::resync_wallet`]: the replay runs without the
-    /// wallet lock, and the same internal mutex serializes this against
-    /// resyncs. Recording the registration holds the wallet's write lock
-    /// across a full state save, which blocks readers for as long as that
+    /// wallet lock, and the wallet serializes the registration and the replay
+    /// against resyncs. Recording the registration holds the wallet's write
+    /// lock across a full state save, which blocks readers for as long as that
     /// write takes.
     pub async fn watch_for_coin(&self, coin: CoinInfo) -> Result<(), ProviderError> {
         self.watch_for_coins([coin]).await
@@ -442,9 +424,10 @@ impl MidnightProvider {
         if coins.is_empty() {
             return Ok(());
         }
-        let _resync_guard = self.resync_lock.lock().await;
         wallet.watch_for_coins(coins).await?;
-        self.rescan_shielded_serialized(wallet).await
+        // A resync between the two calls keeps the registration: its commit
+        // carries the registrations over.
+        self.rescan_across_fork(wallet).await
     }
 
     /// Drop a registration [`Self::watch_for_coin`] made, for a coin that
@@ -463,10 +446,6 @@ impl MidnightProvider {
         coins: impl IntoIterator<Item = CoinInfo> + Send,
     ) -> Result<(), ProviderError> {
         let wallet = &self.attached()?.facade;
-        // Serialized against resyncs: a resync commits the state its plan
-        // snapshotted, which still carries a registration dropped after that
-        // snapshot, so an unserialized forget would come back.
-        let _resync_guard = self.resync_lock.lock().await;
         wallet.forget_coins(coins.into_iter().collect()).await?;
         Ok(())
     }
@@ -480,14 +459,12 @@ impl MidnightProvider {
     /// Dust state, unshielded state, and their cursors are left alone.
     pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
         let wallet = &self.attached()?.facade;
-        let _resync_guard = self.resync_lock.lock().await;
-        self.rescan_shielded_serialized(wallet).await
+        self.rescan_across_fork(wallet).await
     }
 
-    /// The rescan's plan → run → commit sequence. The caller must already
-    /// hold `resync_lock`: a resync interleaving here would commit its own
-    /// cursor over the rebuilt state.
-    async fn rescan_shielded_serialized(
+    /// Rescan the wallet's shielded state, also across a fork that the wallet
+    /// has not crossed.
+    async fn rescan_across_fork(
         &self,
         wallet: &Arc<dyn WalletFacade>,
     ) -> Result<(), ProviderError> {
