@@ -198,7 +198,7 @@ let provider = provider.with_wallet(wallet);
 
 The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally. For a sync without progress events, use `.sync(&provider)`.
 
-To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. To keep the reads fresh, run a [background sync](#background-sync). For one fresh read, call `resync_wallet()` before it. A resync takes the wallet's read/write lock only briefly, at its start (to snapshot replay inputs) and at its end (to commit). So reads like `balance()` keep completing while one is in flight. The wallet serializes concurrent resyncs.
+To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. To keep the reads fresh, run a [background sync](#background-sync). For one fresh read, call `resync_wallet()` before it. To wait until the wallet sees a transaction, read [Waiting for the wallet to see a transaction](#waiting-for-the-wallet-to-see-a-transaction). A resync takes the wallet's read/write lock only briefly, at its start (to snapshot replay inputs) and at its end (to commit). So reads like `balance()` keep completing while one is in flight. The wallet serializes concurrent resyncs.
 
 ### Background sync
 
@@ -217,6 +217,8 @@ let sync = wallet.sync_in_background(provider.clone(), Duration::from_secs(5));
 The first pass starts one pause after the call, because the wallet is synced when you make it. Each later pass starts one pause after the one before it ends, so passes never overlap. The wallet serializes each pass with its other sync methods. So a build waits for a pass in flight, and reads keep completing during one.
 
 A failed pass does not stop the sync. The task logs the error, and the next pass runs after the pause. `sync.last_error()` returns the error of the last pass, and `None` after a pass commits. A pass that panics ends the task, and `last_error()` then returns `WalletError::SyncTaskJoin`. Read `last_error()` to show a wallet that does not sync, such as a wallet on a replaced chain (`WalletError::ChainMismatch`).
+
+`sync.wait_until(done)` waits until `done` holds for the state of the wallet. It checks again after each commit of a resync or a shielded rescan, from this sync or from any other caller. [Waiting for the wallet to see a transaction](#waiting-for-the-wallet-to-see-a-transaction) shows how to use it.
 
 Dropping the handle stops the sync at the task's next await, and closes the subscriptions of a pass in flight. The wallet then keeps its state from before that pass, or the whole commit of the pass. Bind the handle to a named variable. `let _ = wallet.sync_in_background(..)` drops it at once, and `#[must_use]` does not warn about `let _ =`. The task holds the provider and the wallet until the handle drops. Start one background sync for each wallet.
 
@@ -363,6 +365,30 @@ Both waits return `Ok` only when the chain applied the transaction. When the tra
 
 When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch variants come from the submit: after `NotSubmitted` the tx never left the process, and after `SubmitRpc` the node can still hold it.
 
+### Waiting for the wallet to see a transaction
+
+A finalized transaction reaches the wallet only through a resync, and a resync can end before it sees the transaction. So a read or a build right after `wait_finalized` can still show the inputs that the transaction spent. `Wallet::has_observed(spent)` holds when the confirmed state of the wallet holds none of the inputs in `spent`. Wait for it on the handle of the [background sync](#background-sync). Pass the `PendingTx::spent_inputs` of a transfer or a Dust registration, after an `Ok` from `wait_finalized`:
+
+```rust
+use std::time::Duration;
+
+use anyhow::Context;
+
+let (_, pending) = pending.wait_finalized().await?;
+let spent = pending.spent_inputs().context("a transfer carries its spent inputs")?;
+tokio::time::timeout(Duration::from_secs(60), sync.wait_until(|w| w.has_observed(spent))).await??;
+```
+
+The closure runs on the state at the call. It runs again after each commit of a resync or a shielded rescan. The commit can come from a pass of the background sync, from the resync of a build, or from a direct call. It runs under the read lock of the wallet, so keep it short and do not block in it.
+
+Pass the spends of a transaction that applied. With the spends of a transaction that did not apply, the wait does not end. For a `.build()` result that you submit yourself, pass `&result.spent`. A handle from `provider.submit` or `PreparedTx::submit` carries no spent inputs, and its `spent_inputs` returns `None`.
+
+`has_observed` covers the spends only. The outputs of the same transaction can arrive in a later commit. For an output, such as a coin that another wallet sends to this one, wait on the balance, for example `|w| w.balance().shielded.total_count > count`.
+
+The handle of a deploy, a contract call, a contract maintenance update or a sponsored transaction carries no spent inputs. To wait until the wallet sees the Dust that such a transaction spent, wait until no build holds Dust: `|w| { let dust = w.balance().dust; dust.spendable_speck == dust.balance_speck }`. That predicate also waits for the Dust of every other build in flight.
+
+The wait has no deadline, so wrap it in `tokio::time::timeout`. A failed pass does not end the wait, because a later pass can commit. After a timeout, `sync.last_error()` tells whether the passes fail. When the background task has ended, the wait fails with `WalletError::SyncTaskJoin`. Dropping the wait is safe, because it holds no lock across an await.
+
 ## Recovering a coin the wallet cannot discover
 
 A shielded coin reaches its owner through the discovery ciphertext on its output. That channel fails when the party that built the transaction attached no ciphertext, or sealed it to a key the owner does not hold. The coin still exists, the owner's coin public key still owns it, and it stays spendable, as long as the owner can rebuild its `CoinInfo` (nonce, token type, value) from somewhere else. A contract that evolves one public nonce per mint is such a case: the owner reads the nonce from chain state.
@@ -427,6 +453,7 @@ provider.with_wallet(wallet)
   provider.parameters() / .sync_cursors() / .unshielded_utxos()
   provider.resync_wallet()               incremental refresh + re-persist
   wallet.sync_in_background(provider, pause)   resync in a task until the handle drops (an Arc<LocalWallet>)
+      sync.wait_until(done)              wait until done holds (at the call or after a commit)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
@@ -435,6 +462,7 @@ provider.with_wallet(wallet)
        │     .build().await → TransferResult (escape hatch, no submit)
        │
        └─ PendingTx
+            │ .spent_inputs()          what the build spent, for Wallet::has_observed
             │ .wait_best().await
             └ .wait_finalized().await
 ```

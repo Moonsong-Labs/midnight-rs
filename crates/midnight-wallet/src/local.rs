@@ -13,7 +13,7 @@ use midnight_types::{
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, watch};
 
 use crate::Wallet;
 use crate::background::{self, BackgroundSync};
@@ -21,8 +21,10 @@ use crate::sync::require_same_chain;
 
 /// A [`Wallet`] this process owns, shared behind its own lock.
 ///
-/// The lock is a private field and no method hands it out, so a consumer that
-/// holds a `LocalWallet` cannot block a sync by keeping a guard alive.
+/// The lock is a private field, and no method hands a guard out.
+/// [`BackgroundSync::wait_until`] runs its closure under the read lock, so
+/// that closure must not block. A closure that blocks delays every commit and
+/// every build.
 ///
 /// `LocalWallet` serializes its resyncs, rescans, coin watches and forgets
 /// against each other. [`Self::sync_in_background`] resyncs it in a
@@ -33,6 +35,9 @@ pub struct LocalWallet {
     /// `inner`. Reads and builds take `inner` alone, so the order cannot
     /// invert.
     sync: Mutex<()>,
+    /// Changes at each commit of a resync or a shielded rescan. A commit
+    /// whose save fails changes it too, because the state in memory changed.
+    commits: watch::Sender<()>,
 }
 
 impl LocalWallet {
@@ -45,6 +50,7 @@ impl LocalWallet {
         Self {
             inner: RwLock::new(wallet),
             sync: Mutex::new(()),
+            commits: watch::Sender::new(()),
         }
     }
 
@@ -108,6 +114,11 @@ impl LocalWallet {
 
     pub(crate) fn inner(&self) -> &RwLock<Wallet> {
         &self.inner
+    }
+
+    /// A receiver that sees each commit after this call.
+    pub(crate) fn subscribe_commits(&self) -> watch::Receiver<()> {
+        self.commits.subscribe()
     }
 }
 
@@ -201,15 +212,18 @@ impl WalletFacade for LocalWallet {
         let plan = self.inner.read().await.resync_plan();
         let commit = plan.run(&indexer_url).await?;
         let mut wallet = self.inner.write().await;
-        wallet.commit_resync(commit)?;
+        let committed = wallet.commit_resync(commit);
 
         // Move the pin forward with the commit, so a wallet that runs for a
         // long time keeps a recent mark rather than one an archive has since
         // pruned, which would leave every later check inconclusive.
-        if let Some(fresh) = replacement {
+        if committed.is_ok()
+            && let Some(fresh) = replacement
+        {
             wallet.set_chain_pin(fresh);
         }
-        Ok(())
+        self.commits.send_replace(());
+        committed
     }
 
     async fn rescan_shielded(&self) -> Result<(), WalletError> {
@@ -222,7 +236,10 @@ impl WalletFacade for LocalWallet {
             )
         };
         let commit = plan.run(&indexer_url).await?;
-        self.inner.write().await.commit_shielded_rescan(commit)
+        let mut wallet = self.inner.write().await;
+        let committed = wallet.commit_shielded_rescan(commit);
+        self.commits.send_replace(());
+        committed
     }
 
     async fn watch_for_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {

@@ -378,6 +378,24 @@ impl PendingTx {
         self.transaction_hash
     }
 
+    /// What the build of this transaction spent, which the build reserved in
+    /// the wallet.
+    ///
+    /// After an `Ok` from [`Self::wait_finalized`], wait until
+    /// `Wallet::has_observed` holds for these spends, with
+    /// `BackgroundSync::wait_until`. `None` for a handle from
+    /// [`MidnightProvider::submit`] or [`PreparedTx::submit`], because those
+    /// take finished bytes and carry no reservation. A contract maintenance
+    /// update also returns a handle with `None`. For a `.build()` result that
+    /// you submit yourself, use `result.spent`.
+    ///
+    /// [`MidnightProvider::submit`]: crate::MidnightProvider::submit
+    pub fn spent_inputs(&self) -> Option<&SpentInputs> {
+        self.reservation
+            .as_ref()
+            .map(|reservation| &reservation.spent)
+    }
+
     /// Drive the watch stream until the transaction lands in the best block,
     /// and return the inclusion when the chain applied it there.
     ///

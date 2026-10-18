@@ -165,6 +165,28 @@ impl Wallet {
         each!(&mut self.state, w => w.release(spent))
     }
 
+    /// Whether the confirmed state holds none of the inputs in `spent`.
+    ///
+    /// The confirmed state is what the last sync, resync or rescan committed.
+    /// The answer never reads a reservation. A release or a TTL ends a
+    /// reservation with no spend on chain. A resync does not end a shielded
+    /// reservation when the spend confirms.
+    ///
+    /// The state holds an unshielded input when it tracks a UTXO with that
+    /// key. It holds a shielded input or a Dust input when it holds an entry
+    /// under that nullifier. A `spent` that names no input gives `true`.
+    ///
+    /// Pass the spends of a transaction that applied. An input of a
+    /// transaction that did not apply can stay in the confirmed state, and the
+    /// answer then stays `false`. The spends say nothing about the outputs of
+    /// the same transaction, which a later commit can apply.
+    ///
+    /// To wait until this holds for a shared wallet, use
+    /// [`BackgroundSync::wait_until`](crate::BackgroundSync::wait_until).
+    pub fn has_observed(&self, spent: &SpentInputs) -> bool {
+        each!(&self.state, w => w.has_observed(spent))
+    }
+
     /// Save the current wallet state to disk.
     ///
     /// Writes the confirmed-state files (`metadata.json`, `zswap-N.bin`,
@@ -385,7 +407,9 @@ impl Wallet {
     ///
     /// Call this after a transaction is finalized to pick up the on-chain
     /// effects (spent dust UTXOs, new coins, etc.) before building the
-    /// next transaction.
+    /// next transaction. One resync can end before it sees a finalized
+    /// transaction. To wait for the spends of a transaction, resync until
+    /// [`Self::has_observed`] holds.
     ///
     /// When the chain crossed a hard fork since the last sync or resync, the
     /// resync carries the wallet across it, as a sync does. The shielded
