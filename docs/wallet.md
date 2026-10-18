@@ -6,7 +6,7 @@ The SDK's wallet covers Midnight's three asset legs:
 - **Unshielded UTXOs**: public UTXO-model balances (NIGHT lives here)
 - **Dust**: fee-token, generated continuously from NIGHT holdings
 
-`Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` or `Wallet::from_mnemonic` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts.
+`Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` or `Wallet::from_mnemonic` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts. The wallet can also resync itself in a background task (see [Background sync](#background-sync)).
 
 The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`). Such an implementation must serialize its own `resync`, `rescan_shielded`, `watch_for_coins` and `forget_coins` against each other, because the provider holds no lock across them.
 
@@ -198,7 +198,27 @@ let provider = provider.with_wallet(wallet);
 
 The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally. For a sync without progress events, use `.sync(&provider)`.
 
-To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. For a fresh read, call `resync_wallet()` before it, for example on a timer in a UI. A resync takes the wallet's read/write lock only briefly, at its start (to snapshot replay inputs) and at its end (to commit). So reads like `balance()` keep completing while one is in flight. The wallet serializes concurrent resyncs.
+To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. To keep the reads fresh, run a [background sync](#background-sync). For one fresh read, call `resync_wallet()` before it. A resync takes the wallet's read/write lock only briefly, at its start (to snapshot replay inputs) and at its end (to commit). So reads like `balance()` keep completing while one is in flight. The wallet serializes concurrent resyncs.
+
+### Background sync
+
+`LocalWallet::sync_in_background` resyncs the wallet in a background task until you drop the handle that it returns. Each pass is one resync against the chain view that you give. So the pass resumes the replay from the wallet's cursors. When the wallet holds a chain pin, the pass checks that pin. Give `sync_in_background` the provider that the wallet is attached to:
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+use midnight_core::wallet::LocalWallet;
+
+let wallet = Arc::new(LocalWallet::new(wallet));
+let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));
+let sync = wallet.sync_in_background(provider.clone(), Duration::from_secs(5));
+```
+
+The first pass starts one pause after the call, because the wallet is synced when you make it. Each later pass starts one pause after the one before it ends, so passes never overlap. The wallet serializes each pass with its other sync methods. So a build waits for a pass in flight, and reads keep completing during one.
+
+A failed pass does not stop the sync. The task logs the error, and the next pass runs after the pause. `sync.last_error()` returns the error of the last pass, and `None` after a pass commits. A pass that panics ends the task, and `last_error()` then returns `WalletError::SyncTaskJoin`. Read `last_error()` to show a wallet that does not sync, such as a wallet on a replaced chain (`WalletError::ChainMismatch`).
+
+Dropping the handle stops the sync at the task's next await, and closes the subscriptions of a pass in flight. The wallet then keeps its state from before that pass, or the whole commit of the pass. Bind the handle to a named variable. `let _ = wallet.sync_in_background(..)` drops it at once, and `#[must_use]` does not warn about `let _ =`. The task holds the provider and the wallet until the handle drops. Start one background sync for each wallet.
 
 ### Across a hard fork
 
@@ -406,6 +426,7 @@ provider.with_wallet(wallet)
   provider.balance()                     read-only
   provider.parameters() / .sync_cursors() / .unshielded_utxos()
   provider.resync_wallet()               incremental refresh + re-persist
+  wallet.sync_in_background(provider, pause)   resync in a task until the handle drops (an Arc<LocalWallet>)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded

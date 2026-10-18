@@ -203,11 +203,12 @@ impl MidnightProvider {
     /// The wallet serializes its own resyncs, rescans, coin watches and
     /// forgets, so the handle can run them too.
     ///
-    /// The provider runs no sync task of its own. Every read of the wallet,
-    /// such as [`Self::balance`], returns the state of the last sync or
-    /// resync and does not resync. [`Self::builds`], and so every build,
-    /// resyncs first. For a fresh read, call [`Self::resync_wallet`] before
-    /// it, for example on a timer in a UI.
+    /// Every read of the wallet, such as [`Self::balance`], returns the state
+    /// of the last sync or resync and does not resync. [`Self::builds`], and
+    /// so every build, resyncs first. To keep the reads fresh, start
+    /// `LocalWallet::sync_in_background` on the handle, with this provider in
+    /// an `Arc` as its chain. For one fresh read, call [`Self::resync_wallet`]
+    /// before it.
     pub fn with_wallet(mut self, wallet: impl IntoWalletFacade) -> Self {
         let wallet = Arc::new(wallet.into_facade());
         self.wallet = Some(AttachedWallet {

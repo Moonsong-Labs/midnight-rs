@@ -17,8 +17,14 @@ use crate::{HeldInputs, MidnightProvider, ProviderError};
 /// The attached wallet's builds on this generation.
 ///
 /// [`MidnightProvider::builds`] hands one out after a resync, for the
-/// generation the wallet's state is in. It reads the wallet's view as that
-/// resync left it, so take a fresh one for a build that starts later.
+/// generation the wallet's state is in. Each method that uses the wallet
+/// reads its state when the method runs. A background sync of the wallet can
+/// commit while a `Builds` is in use, so two calls can read different states.
+/// A commit that crosses a hard fork makes each of those methods fail with
+/// [`WalletError::LedgerMismatch`](midnight_types::WalletError::LedgerMismatch)
+/// in [`ProviderError::Wallet`]. [`MidnightProvider::builds`] resyncs first
+/// and picks the wallet's generation. So take a fresh one for a build that
+/// starts later.
 pub struct Builds<'a> {
     provider: &'a MidnightProvider,
     wallet: Arc<dyn WalletBuilds>,

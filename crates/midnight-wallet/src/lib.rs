@@ -13,9 +13,11 @@
 //! a lock.
 //!
 //! Once a wallet is attached, `midnight_provider::MidnightProvider` starts
-//! its resyncs and rescans and builds its transactions. The wallet runs each
-//! replay against the indexer that it synced from. The provider holds the
-//! wallet as an `Arc<dyn WalletFacade>`.
+//! its resyncs and rescans and builds its transactions. Every build resyncs
+//! the wallet first. When asked, the wallet also resyncs itself in a
+//! background task ([`LocalWallet::sync_in_background`]). The wallet runs
+//! each replay against the indexer that it synced from. The provider holds
+//! the wallet as an `Arc<dyn WalletFacade>`.
 //!
 //! For callers that only need an address (no synced state), use
 //! [`Seed::unshielded_address`] and [`Seed::shielded_address`].
@@ -59,6 +61,7 @@
 //! # }
 //! ```
 
+mod background;
 mod ledger_8;
 #[expect(
     clippy::duplicate_mod,
@@ -86,6 +89,7 @@ pub use midnight_types::{
 // midnight-wallet-facade either.
 pub use midnight_wallet_facade::WalletFacade;
 
+pub use background::BackgroundSync;
 pub use local::LocalWallet;
 pub use midnight_types::hd::{self, AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use sync::{SyncHandle, SyncProgress, WalletBuilder};
