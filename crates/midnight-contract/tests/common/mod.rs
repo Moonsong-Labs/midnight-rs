@@ -4,6 +4,7 @@
 #![allow(dead_code, reason = "each test binary uses a subset of the helpers")]
 
 use std::path::Path;
+use std::time::Duration;
 
 use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
@@ -15,6 +16,7 @@ use midnight_base_crypto::repr::BinaryHashRepr;
 use midnight_base_crypto::time::Timestamp;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::WitnessProvider;
+use midnight_contract::{ShieldedTokenType, SpendableShieldedCoin};
 use midnight_provider::{MidnightProvider, Network};
 use midnight_transient_crypto::fab::ValueReprAlignedValue;
 use midnight_wallet::Wallet;
@@ -65,6 +67,48 @@ pub(crate) async fn synced_wallet(provider: &MidnightProvider, seed: &str) -> Wa
         .sync(provider)
         .await
         .unwrap_or_else(|e| panic!("sync of seed {seed}: {e:?}"))
+}
+
+/// Resync the wallet of `provider` until it holds a coin of `token_type`
+/// worth `value`, and return that coin.
+///
+/// A coin shows up only when the indexer serves its zswap event, which can be
+/// after the call that pays it returns. No API waits for the indexer to reach
+/// a given block (#164).
+///
+/// # Panics
+///
+/// When no such coin shows up within two minutes. The message names the coin
+/// as `what`.
+pub(crate) async fn wait_for_coin(
+    provider: &MidnightProvider,
+    token_type: ShieldedTokenType,
+    value: u128,
+    what: &str,
+) -> SpendableShieldedCoin {
+    let mut coins = Vec::new();
+    for _ in 0..60 {
+        provider.resync_wallet().await.expect("resync");
+        coins = provider
+            .spendable_shielded_coins()
+            .await
+            .expect("spendable coins");
+        if let Some(index) = coins
+            .iter()
+            .position(|c| c.token_type == token_type && c.value == value)
+        {
+            return coins.swap_remove(index);
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    panic!(
+        "the wallet does not hold {what} (token {token_type}, value {value}); \
+         shielded coins seen: {:?}",
+        coins
+            .iter()
+            .map(|c| (c.token_type_hex(), c.value))
+            .collect::<Vec<_>>()
+    );
 }
 
 /// The compactc output directory of the devnet contract `contract`, which
