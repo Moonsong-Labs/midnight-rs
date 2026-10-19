@@ -1,0 +1,13 @@
+name: Devnet contracts
+description: >-
+  Put the compiled devnet contracts in place, as devnet/contracts/<contract>/compiled/.
+  The contracts job of the CI workflow compiles them and uploads the artifact,
+  so a job that uses this action needs that job.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: devnet-contracts
+        path: devnet/contracts
