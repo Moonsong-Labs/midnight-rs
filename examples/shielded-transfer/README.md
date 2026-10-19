@@ -1,6 +1,6 @@
 # Shielded Transfer Example
 
-Self-transfer of 1 unit of a shielded token, end to end: sync wallet → start a background sync → build → submit → wait for finalization → wait for the spends → wait for the outputs → print the post-balance.
+Self-transfer of 1 unit of a shielded token, end to end: sync wallet → start a background sync → build → submit → wait for finalization → wait for the outputs → print the post-balance.
 
 **Local devnet only.** The public preprod faucet only funds *unshielded* addresses (NIGHT), and the SDK has no `unshielded → shielded` conversion helper. The local dev preset of `midnightntwrk/midnight-node` mints several shielded test tokens to the hardcoded dev seed at genesis. The example spends one of them, so it needs no external funding step. For the full token model see [`docs/tokens.md`](../../docs/tokens.md).
 
@@ -56,7 +56,6 @@ Submitted: ext hash ...
 Best:      ...
 Finalized: ...
 
-Waiting for the wallet to see the spends...
 Waiting for the wallet to see the outputs...
 
 --- Post-transfer shielded balance ---
@@ -83,7 +82,6 @@ balance: ... SPECK, spendable UTXOs: ...
 - `MidnightProvider::transfer_shielded(token_type, amount, recipient)`: builds a proven zswap transfer and submits it
 - `PendingTx::wait_best` + `wait_finalized`: the submission lifecycle
 - `LocalWallet::sync_in_background`: resync the attached wallet in a background task until the handle drops
-- `PendingTx::spent_inputs` + `BackgroundSync::wait_until` with `Wallet::has_observed`: wait until the wallet sees the spends of the transfer
 - `BackgroundSync::wait_until` with a balance check: wait until the wallet sees the outputs of the transfer
 
 For the wallet API reference (sync, balances, transfers, Dust, persistence), see [`docs/wallet.md`](../../docs/wallet.md).

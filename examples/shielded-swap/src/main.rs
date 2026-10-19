@@ -124,14 +124,12 @@ async fn main() -> anyhow::Result<()> {
         hex::encode(finalized.block_hash)
     );
 
-    // Each wallet waits until its background sync sees both of its tokens
-    // move. One commit can hold only some coins of the swap.
+    // Each wallet waits until its background sync sees both tokens move.
     let (a_x_want, a_y_want) = (a_x0 - DX, a_y0 + DY);
     let (b_x_want, b_y_want) = (b_x0 + DX, b_y0 - DY);
     tokio::time::timeout(
         EFFECT_TIMEOUT,
-        sync_a.wait_until(|w| {
-            let b = w.balance();
+        sync_a.wait_until(|b| {
             b.shielded_value(token_x) == a_x_want && b.shielded_value(token_y) == a_y_want
         }),
     )
@@ -139,8 +137,7 @@ async fn main() -> anyhow::Result<()> {
     .with_context(|| format!("A did not reach X={a_x_want}, Y={a_y_want}"))??;
     tokio::time::timeout(
         EFFECT_TIMEOUT,
-        sync_b.wait_until(|w| {
-            let b = w.balance();
+        sync_b.wait_until(|b| {
             b.shielded_value(token_x) == b_x_want && b.shielded_value(token_y) == b_y_want
         }),
     )

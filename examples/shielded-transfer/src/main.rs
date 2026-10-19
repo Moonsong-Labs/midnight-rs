@@ -95,22 +95,15 @@ async fn main() -> anyhow::Result<()> {
     println!("Submitted: ext hash {}", pending.extrinsic_hash_hex());
     let (best, pending) = pending.wait_best().await?;
     println!("Best:      {}", hex::encode(best.block_hash));
-    let (finalized, pending) = pending.wait_finalized().await?;
+    let (finalized, _) = pending.wait_finalized().await?;
     println!("Finalized: {}\n", hex::encode(finalized.block_hash));
 
-    println!("Waiting for the wallet to see the spends...");
-    let spent = pending
-        .spent_inputs()
-        .context("a transfer carries its spent inputs")?;
-    tokio::time::timeout(EFFECT_TIMEOUT, sync.wait_until(|w| w.has_observed(spent)))
-        .await
-        .context("the wallet did not see the spends")??;
-
-    // The outputs can arrive in a later commit than the spends.
+    // The self-transfer spends one coin and outputs 1 unit plus the change, so
+    // the wallet holds one more coin once a pass sees it.
     println!("Waiting for the wallet to see the outputs...");
     tokio::time::timeout(
         EFFECT_TIMEOUT,
-        sync.wait_until(|w| w.balance().shielded.total_count > balance.shielded.total_count),
+        sync.wait_until(|b| b.shielded.total_count > balance.shielded.total_count),
     )
     .await
     .context("the wallet did not see the outputs")??;

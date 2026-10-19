@@ -118,9 +118,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     tokio::time::timeout(
         EFFECT_TIMEOUT,
-        sync_b.wait_until(|w| {
-            w.balance().shielded_value(coin.token_type) >= b_before + SHIELDED_TO_B
-        }),
+        sync_b.wait_until(|b| b.shielded_value(coin.token_type) >= b_before + SHIELDED_TO_B),
     )
     .await
     .context("B did not see the coin from A")??;

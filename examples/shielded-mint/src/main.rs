@@ -123,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
     // below reads the last commit.
     if let Ok(waited) = tokio::time::timeout(
         EFFECT_TIMEOUT,
-        sync.wait_until(|w| w.balance().shielded.coins.iter().any(is_minted)),
+        sync.wait_until(|b| b.shielded.coins.iter().any(is_minted)),
     )
     .await
     {

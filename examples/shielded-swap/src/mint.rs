@@ -59,7 +59,7 @@ pub async fn mint_token_to(
         parse_address(mint.address())?.custom_shielded_token_type(HashOutput(domain_sep));
     tokio::time::timeout(
         crate::EFFECT_TIMEOUT,
-        recipient_sync.wait_until(|w| w.balance().shielded_value(token_type) == u128::from(amount)),
+        recipient_sync.wait_until(|b| b.shielded_value(token_type) == u128::from(amount)),
     )
     .await
     .context("the recipient did not discover the minted token")??;

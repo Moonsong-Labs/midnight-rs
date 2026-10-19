@@ -12,13 +12,8 @@
 
 mod common;
 
-use std::sync::Arc;
-use std::time::Duration;
-
-use midnight_provider::{MidnightProvider, Network, ProviderError, Seed};
-use midnight_wallet::{
-    HashOutput, LocalWallet, NIGHT, ShieldedTokenType, UnshieldedTokenType, WalletError,
-};
+use midnight_provider::{Network, ProviderError, Seed};
+use midnight_wallet::{HashOutput, NIGHT, ShieldedTokenType, UnshieldedTokenType, WalletError};
 
 /// Enough tNIGHT that the coin carries real generationless dust.
 const SEND: u128 = 5_000_000_000_000;
@@ -63,22 +58,17 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
             .expect("funding finalized");
     }
 
-    let fresh = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Arc::new(LocalWallet::new(common::synced_wallet(&fresh, &seed).await));
-    let fresh = Arc::new(fresh.with_wallet(Arc::clone(&wallet)));
-    let sync = wallet.sync_in_background(fresh.clone(), Duration::from_secs(1));
+    let fresh = common::synced_provider(&node_url, &indexer_url, &seed).await;
 
-    // The first sync can end before it sees the funding. On a timeout, the
-    // assertions below read the last commit.
-    if let Ok(waited) = tokio::time::timeout(
-        Duration::from_secs(60),
-        sync.wait_until(|w| w.balance().dust.unregistered_night_utxos >= 3),
-    )
-    .await
-    {
-        waited.expect("background sync");
+    // Finalized on chain is not yet visible through the indexer, which the
+    // fresh wallet syncs from. Poll rather than assume, as below.
+    let mut dust = fresh.balance().await.expect("balance").dust;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while dust.unregistered_night_utxos < 3 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        fresh.resync_wallet().await.expect("resync");
+        dust = fresh.balance().await.expect("balance").dust;
     }
-    let dust = fresh.balance().await.expect("balance").dust;
     assert_eq!(
         dust.unregistered_night_utxos, 3,
         "the fresh address must hold the three tNIGHT UTXOs this test funded"
@@ -166,20 +156,18 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
         .await
         .expect("the node must accept a registration that spends one tNIGHT input");
 
-    // The wallet sees the registration only through a commit. On a timeout,
-    // the assertions below read the last commit.
-    if let Ok(waited) = tokio::time::timeout(
-        Duration::from_secs(60),
-        sync.wait_until(|w| {
-            let dust = w.balance().dust;
-            dust.night_generates_dust && dust.spendable_utxos > 0
-        }),
-    )
-    .await
+    // Finalized on chain is not yet visible through the indexer, and the
+    // wallet only learns UTXO state by replaying what the indexer serves. Poll
+    // rather than assume, so a slow indexer reads as slow and not as broken.
+    let mut after = fresh.balance().await.expect("balance").dust;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !(after.night_generates_dust && after.spendable_utxos > 0)
+        && std::time::Instant::now() < deadline
     {
-        waited.expect("background sync");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        fresh.resync_wallet().await.expect("resync");
+        after = fresh.balance().await.expect("balance").dust;
     }
-    let after = fresh.balance().await.expect("balance").dust;
 
     assert!(
         after.night_generates_dust,
