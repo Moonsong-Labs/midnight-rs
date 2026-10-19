@@ -4,14 +4,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use midnight_types::WalletError;
 use midnight_types::chain_pin::ChainView;
+use midnight_types::{WalletBalance, WalletError};
 use midnight_wallet_facade::WalletFacade;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::{LocalWallet, Wallet};
+use crate::LocalWallet;
 
 /// The background sync of a [`LocalWallet`], from
 /// [`LocalWallet::sync_in_background`].
@@ -40,13 +40,12 @@ impl BackgroundSync {
         self.status.borrow().clone()
     }
 
-    /// Wait until `done` holds for the state of this wallet.
+    /// Wait until `done` holds for the balance of this wallet.
     ///
-    /// `done` runs on the state at the call. It runs again after each commit
-    /// of a resync or a shielded rescan. That commit can come from this sync,
-    /// from the resync of a build through the provider, or from a direct call.
-    /// It runs under the read lock of the wallet, so keep it short and do not
-    /// block in it.
+    /// `done` runs at the call and after each pass of this background sync.
+    /// It runs outside the lock of the wallet, so it cannot delay a sync or a
+    /// build. A commit from another caller, such as the resync of a build,
+    /// shows at the check after the next pass.
     ///
     /// A failed pass does not end the wait, because a later pass can commit.
     /// The wait has no deadline, so wrap it in `tokio::time::timeout`. After a
@@ -57,23 +56,14 @@ impl BackgroundSync {
     /// ```rust,no_run
     /// use std::time::Duration;
     ///
-    /// use midnight_provider::MidnightProvider;
-    /// use midnight_wallet::{BackgroundSync, SpentInputs};
+    /// use midnight_wallet::BackgroundSync;
     ///
-    /// # async fn example(
-    /// #     provider: &MidnightProvider,
-    /// #     sync: &BackgroundSync,
-    /// #     spent: &SpentInputs,
-    /// # ) -> Result<(), Box<dyn std::error::Error>> {
-    /// // `spent` holds the spends of a transaction that applied.
-    /// tokio::time::timeout(Duration::from_secs(60), sync.wait_until(|w| w.has_observed(spent)))
-    ///     .await??;
-    ///
-    /// // Wait for a new shielded coin.
-    /// let count = provider.balance().await?.shielded.total_count;
+    /// # async fn example(sync: &BackgroundSync) -> Result<(), Box<dyn std::error::Error>> {
+    /// // After a fee-paying transaction finalizes, wait until a pass sees its
+    /// // Dust spend and no build holds Dust.
     /// tokio::time::timeout(
     ///     Duration::from_secs(60),
-    ///     sync.wait_until(|w| w.balance().shielded.total_count > count),
+    ///     sync.wait_until(|b| b.dust.spendable_speck == b.dust.balance_speck),
     /// )
     /// .await??;
     /// # Ok(())
@@ -91,24 +81,18 @@ impl BackgroundSync {
     /// Dropping the future is safe, because it holds no lock across an await.
     pub async fn wait_until<F>(&self, mut done: F) -> Result<(), WalletError>
     where
-        F: FnMut(&Wallet) -> bool,
+        F: FnMut(&WalletBalance) -> bool,
     {
-        // Subscribe before the first check, so a commit between a check and
-        // the select below still wakes the wait.
-        let mut commits = self.wallet.subscribe_commits();
-        let mut status = self.status.clone();
+        let mut passes = self.status.clone();
+        // The first check reads the commits of the passes so far, so only a
+        // later pass wakes the wait.
+        passes.borrow_and_update();
         loop {
-            let holds = done(&*self.wallet.inner().read().await);
-            if holds {
+            if done(&self.wallet.balance().await) {
                 return Ok(());
             }
-            tokio::select! {
-                Ok(()) = commits.changed() => {}
-                ended = status.changed() => {
-                    if ended.is_err() {
-                        return Err(stopped());
-                    }
-                }
+            if passes.changed().await.is_err() {
+                return Err(stopped());
             }
         }
     }
