@@ -200,14 +200,13 @@ impl WalletFacade for LocalWallet {
         // free.
         let plan = self.inner.read().await.resync_plan();
         let commit = plan.run(&indexer_url).await?;
-        let mut wallet = self.inner.write().await;
-        wallet.commit_resync(commit)?;
+        self.inner.write().await.commit_resync(commit)?;
 
         // Move the pin forward with the commit, so a wallet that runs for a
         // long time keeps a recent mark rather than one an archive has since
         // pruned, which would leave every later check inconclusive.
         if let Some(fresh) = replacement {
-            wallet.set_chain_pin(fresh);
+            self.inner.write().await.set_chain_pin(fresh);
         }
         Ok(())
     }

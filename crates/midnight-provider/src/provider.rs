@@ -428,7 +428,7 @@ impl MidnightProvider {
         wallet.watch_for_coins(coins).await?;
         // A resync between the two calls keeps the registration: its commit
         // carries the registrations over.
-        self.rescan_across_fork(wallet).await
+        self.rescan_shielded().await
     }
 
     /// Drop a registration [`Self::watch_for_coin`] made, for a coin that
@@ -460,15 +460,6 @@ impl MidnightProvider {
     /// Dust state, unshielded state, and their cursors are left alone.
     pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
         let wallet = &self.attached()?.facade;
-        self.rescan_across_fork(wallet).await
-    }
-
-    /// Rescan the wallet's shielded state, also across a fork that the wallet
-    /// has not crossed.
-    async fn rescan_across_fork(
-        &self,
-        wallet: &Arc<dyn WalletFacade>,
-    ) -> Result<(), ProviderError> {
         match wallet.rescan_shielded().await {
             // The chain crossed a fork the wallet has not. A resync crosses
             // it, and the rescan then replays across the fork.
