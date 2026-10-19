@@ -19,3 +19,7 @@ tests/conformance/fixtures/*/contract/
 # the compiler fork at COMPACT_REV. Only the driver installs it, and the target
 # builds it again on demand.
 tests/conformance/ts-driver/vendor/
+
+# The compiled devnet contracts. The make targets that need them compile the
+# missing ones, and CI compiles them from source on every run.
+devnet/contracts/*/compiled/

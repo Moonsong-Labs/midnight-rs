@@ -37,7 +37,7 @@ make dev-up   # from the repo root
 Run the example:
 
 ```bash
-cargo run -p example-counter
+make run-counter   # from the repo root
 ```
 
 Output:
@@ -80,7 +80,7 @@ make dev-down
 
 ## Recompile the contract
 
-The contract source and its compiled artifacts live in [`devnet/contracts/counter`](../../devnet/contracts/counter). Other examples use the same contract, as [`devnet/contracts/README.md`](../../devnet/contracts/README.md) shows. If you change `counter.compact`, recompile it with the Compact compiler fork that `COMPACT_REV` in the root [`Makefile`](../../Makefile) names. The `Makefile` runs that compiler from its image, so the command needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). From the root of the repository:
+The contract source lives in [`devnet/contracts/counter`](../../devnet/contracts/counter). Other examples use the same contract, as [`devnet/contracts/README.md`](../../devnet/contracts/README.md) shows. `make run-counter` compiles the contract when its `compiled/` directory is missing. If you change `counter.compact`, recompile it with the Compact compiler fork that `COMPACT_REV` in the root [`Makefile`](../../Makefile) names. The `Makefile` runs that compiler from its image, so the command needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). From the root of the repository:
 
 ```bash
 make compile-contracts  # recompile every contract in devnet/contracts

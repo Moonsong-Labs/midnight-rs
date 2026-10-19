@@ -32,7 +32,7 @@ make dev-up   # from the repo root
 Run the example:
 
 ```bash
-cargo run -p example-contract-maintenance
+make run-contract-maintenance   # from the repo root
 ```
 
 Output:

@@ -46,7 +46,7 @@ make dev-up   # from the repo root
 Run the example:
 
 ```bash
-cargo run -p example-private-state
+make run-private-state   # from the repo root
 ```
 
 The first call uses `.send()`. It returns a `PendingCall`, which shows the transaction hash before the chain's verdict. Its `wait_finalized` then confirms the private-state snapshot.
@@ -90,7 +90,7 @@ make dev-down
 
 ## Recompile the contract
 
-The contract source and its compiled artifacts live in [`devnet/contracts/secret-counter`](../../devnet/contracts/secret-counter). If you change `secret_counter.compact`, recompile it with the Compact compiler fork that `COMPACT_REV` in the root [`Makefile`](../../Makefile) names. The `Makefile` runs that compiler from its image, so the command needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). From the root of the repository:
+The contract source lives in [`devnet/contracts/secret-counter`](../../devnet/contracts/secret-counter). `make run-private-state` compiles the contract when its `compiled/` directory is missing. If you change `secret_counter.compact`, recompile it with the Compact compiler fork that `COMPACT_REV` in the root [`Makefile`](../../Makefile) names. The `Makefile` runs that compiler from its image, so the command needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). From the root of the repository:
 
 ```bash
 make compile-contracts  # recompile every contract in devnet/contracts

@@ -1,6 +1,6 @@
 # Devnet example contracts
 
-The Compact contracts that the examples and the devnet tests deploy to the local devnet. Each directory holds the contract source and a `compiled/` directory with the compiler output.
+The Compact contracts that the examples and the devnet tests deploy to the local devnet. Each directory holds the contract source. `make compile-contracts` writes the compiler output to a `compiled/` directory beside the source, and git ignores it.
 
 This directory holds only contract assets. It is not a Rust crate. It sits outside `examples/`, so the `examples/*` glob of the workspace does not see it as a crate.
 
@@ -42,12 +42,18 @@ let contract = counter::Contract::deploy(&provider)
     .await?;
 ```
 
-## Recompile
+## Compile
 
-Only a fork of the Compact compiler writes `compiler/analyzed-ir.sexp`, when it runs with `--analyzed-ir`. The root [`Makefile`](../../Makefile) runs that compiler from its image, `ghcr.io/romarq/compactc:<COMPACT_REV>`, so a recompile needs Docker. `COMPACT_REV` in the `Makefile` names the commit of the fork. From the root of the repository:
+Only a fork of the Compact compiler writes `compiler/analyzed-ir.sexp`, when it runs with `--analyzed-ir`. The root [`Makefile`](../../Makefile) runs that compiler from its image, `ghcr.io/romarq/compactc:<COMPACT_REV>`, so a compile needs Docker. `COMPACT_REV` in the `Makefile` names the commit of the fork.
+
+The `make` targets that build or run a crate that uses these contracts, such as `make check`, `make clippy` and `make test`, first run `make contracts`. It compiles each contract that has no `compiled/compiler/analyzed-ir.sexp`. A plain `cargo` command compiles no contract, so run `make contracts` before it. CI compiles every contract from source in one job and gives the output to the other jobs.
+
+`make contracts` compiles only a missing output. After you edit a `.compact` file, or change `COMPACT_REV`, recompile from the root of the repository:
 
 ```bash
 make compile-contracts  # recompile each contract here into its compiled/ directory
 ```
+
+To add a contract, add its directory here and its name to `CONTRACTS` in the `Makefile`.
 
 To compile a contract outside this repository, follow [Compile a contract](../../README.md#compile-a-contract). To use your own build of the fork, set `COMPACTC=<path>`.

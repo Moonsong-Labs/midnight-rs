@@ -40,7 +40,7 @@ make dev-up   # from the repo root
 Run the example:
 
 ```bash
-cargo run -p example-shielded-mint
+make run-shielded-mint   # from the repo root
 ```
 
 Output:
@@ -83,7 +83,7 @@ make dev-down && make dev-up
 
 ## Recompile the contract
 
-The contract source and its compiled artifacts live in [`devnet/contracts/shielded-mint`](../../devnet/contracts/shielded-mint). If you change `shielded-mint.compact`, recompile it with the Compact compiler fork that `COMPACT_REV` in the root [`Makefile`](../../Makefile) names. Only that fork writes the analyzed IR that the interpreter runs. The `Makefile` runs that compiler from its image, so the command needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). From the root of the repository:
+The contract source lives in [`devnet/contracts/shielded-mint`](../../devnet/contracts/shielded-mint). `make run-shielded-mint` compiles the contract when its `compiled/` directory is missing. If you change `shielded-mint.compact`, recompile it with the Compact compiler fork that `COMPACT_REV` in the root [`Makefile`](../../Makefile) names. Only that fork writes the analyzed IR that the interpreter runs. The `Makefile` runs that compiler from its image, so the command needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). From the root of the repository:
 
 ```bash
 make compile-contracts  # recompile every contract in devnet/contracts
