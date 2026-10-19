@@ -78,9 +78,9 @@ pub(crate) async fn synced_wallet(provider: &MidnightProvider, seed: &str) -> Wa
 ///
 /// # Panics
 ///
-/// When no such coin shows up within two minutes. The message names the coin
-/// as `what`.
-pub(crate) async fn wait_for_coin(
+/// When no such coin shows up after the last resync. The message names the
+/// coin as `what`.
+pub(crate) async fn resync_until_coin(
     provider: &MidnightProvider,
     token_type: ShieldedTokenType,
     value: u128,

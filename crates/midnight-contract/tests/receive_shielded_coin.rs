@@ -3,10 +3,10 @@
 //!
 //! The `deposit` circuit of the `receive-shielded` devnet contract does
 //! `receiveShielded(coin)`. The call builds its `ShieldedCoinInfo` argument
-//! from one wallet coin and attaches that coin with `with_shielded_inputs`, so
-//! the SDK spends that exact coin to fund the receive. The circuit receives
-//! less than the coin holds, so the wallet must get the difference back as a
-//! change coin.
+//! from one wallet coin and attaches that coin with `with_shielded_inputs`.
+//! The SDK then spends that exact coin to fund the receive. The circuit
+//! receives less than the coin holds, so the wallet must get the rest back as
+//! change.
 //!
 //! The test mints its coin of a fresh token to the dev wallet first. The
 //! genesis coins of the dev wallet stay for the other tests and the examples.
@@ -33,7 +33,7 @@ use midnight_contract::ExtrinsicHash;
 use midnight_provider::MidnightProvider;
 
 #[tokio::test]
-async fn a_call_spends_the_callers_coin_and_returns_the_surplus() {
+async fn a_call_spends_the_callers_coin_and_returns_the_change() {
     let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
@@ -67,7 +67,7 @@ async fn a_call_spends_the_callers_coin_and_returns_the_surplus() {
     let token_type = midnight_contract::parse_address(mint_contract.address())
         .expect("contract address")
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
-    let coin = common::wait_for_coin(
+    let coin = common::resync_until_coin(
         &provider,
         token_type,
         u128::from(minted),
@@ -108,7 +108,7 @@ async fn a_call_spends_the_callers_coin_and_returns_the_surplus() {
         "a successful call must name the block it landed in"
     );
 
-    common::wait_for_coin(
+    common::resync_until_coin(
         &provider,
         token_type,
         expected_change,

@@ -80,7 +80,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     let wallet = common::synced_wallet(&recip_provider, common::RECIPIENT_SEED).await;
     let recip_provider = recip_provider.with_wallet(wallet);
 
-    common::wait_for_coin(
+    common::resync_until_coin(
         &recip_provider,
         expected_tt,
         u128::from(mint_value),
