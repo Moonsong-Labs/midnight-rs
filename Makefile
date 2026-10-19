@@ -134,7 +134,7 @@ help:
 	@echo "    e2e           dev-up, run those examples, dev-down"
 	@echo ""
 	@echo "  Contracts (compactc runs in $(COMPACTC_IMAGE))"
-	@echo "    contracts           compile each devnet contract that has no compiled/ output (needs Docker)"
+	@echo "    contracts           compile each devnet contract whose compiled/ output is missing or stale (needs Docker)"
 	@echo "    compile-contracts   recompile devnet/contracts/*, with keys (needs Docker)"
 	@echo "    regen-test-fixtures recompile the interpreter and codegen test fixtures (needs Docker)"
 	@echo "    regen-conformance-fixtures  recompile the conformance corpus (needs Docker)"
@@ -349,9 +349,13 @@ e2e: contracts dev-up
 # Compile each devnet contract whose output is missing, or whose fingerprint
 # differs from the one its output carries. A checksum, not an mtime: in CI the
 # output comes from another job, so its mtime says nothing about its source.
+# The analyzed IR is checked too: a checkout of a commit that tracks compiled/
+# can leave the untracked fingerprint behind with no output.
 contracts:
 	@for c in $(CONTRACTS); do \
-		[ "$$($(CONTRACT_CKSUM))" = "$$(cat devnet/contracts/$$c/compiled/source.cksum 2>/dev/null)" ] \
+		out="devnet/contracts/$$c/compiled"; \
+		[ -f "$$out/compiler/analyzed-ir.sexp" ] \
+			&& [ "$$($(CONTRACT_CKSUM))" = "$$(cat "$$out/source.cksum" 2>/dev/null)" ] \
 			|| $(MAKE) --no-print-directory compile-contracts CONTRACTS=$$c || exit 1; \
 	done
 
