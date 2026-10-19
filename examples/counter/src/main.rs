@@ -2,7 +2,7 @@
 //!
 //! ```bash
 //! make dev-up   # from the repo root: starts the devnet and waits for a block
-//! cargo run -p example-counter
+//! make run-counter   # from the repo root
 //! make dev-down   # from the repo root
 //! ```
 

@@ -19,9 +19,8 @@ name: Codegen drift
 # runtime. The job runs nightly and on a change to the Makefile, the driver or
 # the goldens, rather than on every pull request.
 #
-# The devnet contracts stay out of it. `make compile-contracts` also generates
-# proving keys, which the fixture targets skip with `--skip-zk`, and that is the
-# slow part of a contract build.
+# The devnet contracts stay out of it: the CI workflow compiles them from
+# source on every run, so no committed copy can drift.
 
 on:
   schedule:
