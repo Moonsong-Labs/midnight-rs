@@ -61,6 +61,7 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
 EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shielded-swap
 CONTRACTS := call-context counter events receive-shielded secret-counter shielded-mint unshielded-payout
+CONTRACT_IRS := $(foreach c,$(CONTRACTS),devnet/contracts/$(c)/compiled/compiler/analyzed-ir.sexp)
 
 # Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
 # Each one carries its source `.compact` alongside the regenerated
@@ -93,7 +94,7 @@ COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
         dev-up dev-wait dev-settle dev-down dev-status dev-logs \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         fork-up fork-upgrade fork-test fork-down \
-        compile-contracts regen-test-fixtures \
+        contracts compile-contracts regen-test-fixtures \
         conformance conformance-regen regen-conformance-fixtures \
         vendor-compact-runtime compact-natives
 
@@ -131,6 +132,7 @@ help:
 	@echo "    e2e           dev-up, run those examples, dev-down"
 	@echo ""
 	@echo "  Contracts (compactc runs in $(COMPACTC_IMAGE))"
+	@echo "    contracts           compile each devnet contract that has no compiled/ output (needs Docker)"
 	@echo "    compile-contracts   recompile devnet/contracts/*, with keys (needs Docker)"
 	@echo "    regen-test-fixtures recompile the interpreter and codegen test fixtures (needs Docker)"
 	@echo "    regen-conformance-fixtures  recompile the conformance corpus (needs Docker)"
@@ -149,23 +151,23 @@ fmt:
 fmt-check:
 	$(CARGO) fmt --all --check
 
-clippy:
+clippy: contracts
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 # Rustdoc's own lints: a link to an item that moved or was renamed, a public
 # doc pointing at a private item, a bare URL. `cargo check` and `cargo clippy`
 # see none of them, so without this gate they only surface for whoever next
 # builds the docs.
-doc:
+doc: contracts
 	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps
 
-check:
+check: contracts
 	$(CARGO) check --workspace
 
-test:
+test: contracts
 	$(CARGO) test --workspace
 
-build:
+build: contracts
 	$(CARGO) build --workspace
 
 # cargo audit checks the lockfile against the RustSec advisory database.
@@ -271,7 +273,7 @@ fork-upgrade:
 		--rpc-url ws://node:9944 --signer-key //Alice
 
 # The crossing test forks the chain itself, so it runs once per `fork-up`.
-fork-test:
+fork-test: contracts
 	$(E2E_ENV) MIDNIGHT_FORK_UPGRADE_CMD="$(MAKE) -C $(CURDIR) --no-print-directory fork-upgrade" \
 		$(CARGO) test -p midnight-contract --test fork_crossing -- --show-output
 
@@ -286,7 +288,7 @@ E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDN
 	MIDNIGHT_LEDGER=$(DEVNET_LEDGER)
 
 # The devnet integration tests.
-test-e2e:
+test-e2e: contracts
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test node_e2e -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-wallet --test integration -- --show-output --test-threads=1
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test balance_bare_call -- --show-output
@@ -324,17 +326,17 @@ run-wallet-sync:
 		MIDNIGHT_WALLET_SEED=$(DEV_SEED) $(CARGO) run -p example-wallet-sync
 
 # Run any other example: `make run-counter`, `make run-private-state`, ...
-run-%:
+run-%: contracts
 	$(CARGO) run -p example-$*
 
-examples:
+examples: contracts
 	@for ex in $(EXAMPLES); do \
 		echo "=== example-$$ex ==="; \
 		$(MAKE) --no-print-directory dev-settle || exit 1; \
 		$(CARGO) run -p example-$$ex || exit 1; \
 	done
 
-e2e: dev-up
+e2e: contracts dev-up
 	@$(MAKE) --no-print-directory examples
 	@$(MAKE) --no-print-directory dev-down
 
@@ -342,22 +344,32 @@ e2e: dev-up
 # Contracts (Compact, compiled in the compiler image)
 # ============================================================
 
+# Compile each devnet contract whose analyzed IR is missing. A missing file is
+# the only trigger: in CI the output comes from another job, so its mtime says
+# nothing about its source. After an edit to a source, run compile-contracts.
+contracts: $(CONTRACT_IRS)
+
+devnet/contracts/%/compiled/compiler/analyzed-ir.sexp:
+	@$(MAKE) --no-print-directory compile-contracts CONTRACTS=$*
+
 # Recompile each contract into its compiled/ directory, in the layout the
 # compiler writes: compiler/analyzed-ir.sexp, keys/ and zkir/. The contract!
 # macro reads the artifact, and with_zk_config takes compiled/. The SDK reads
 # none of the compiler's other output, such as the TS contract/ directory, so
-# the target drops it.
+# the target drops it. The analyzed IR moves last, so it exists only when the
+# whole output does: the contracts target looks for that file.
 compile-contracts:
 	@mkdir -p "$(ZK_PARAMS)"
-	@for c in $(CONTRACTS); do \
+	@set -e; \
+	for c in $(CONTRACTS); do \
 		dir="devnet/contracts/$$c"; \
 		echo "Compiling $$dir ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		$(COMPACTC) --analyzed-ir "$$dir"/*.compact "$$dir/compiled.tmp" || exit 1; \
+		$(COMPACTC) --analyzed-ir "$$dir"/*.compact "$$dir/compiled.tmp"; \
 		rm -rf "$$dir/compiled"; \
 		mkdir -p "$$dir/compiled/compiler"; \
-		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiled/compiler/"; \
 		mv "$$dir/compiled.tmp/keys" "$$dir/compiled.tmp/zkir" "$$dir/compiled/"; \
+		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiled/compiler/"; \
 		rm -rf "$$dir/compiled.tmp"; \
 	done; \
 	echo "OK: contracts compiled"
