@@ -22,10 +22,11 @@ Each `compiled/` directory keeps the layout that compactc writes:
 compiled/
 ├── compiler/analyzed-ir.sexp   the artifact that the contract! macro reads
 ├── keys/                       the prover and verifier keys of each circuit
-└── zkir/                       the circuit IR that the prover reads
+├── zkir/                       the circuit IR that the prover reads
+└── source.cksum                the checksum of the source and COMPACT_REV that make contracts compares
 ```
 
-The SDK reads no other compiler output, so `make compile-contracts` drops the rest, for example the TypeScript `contract/` directory.
+The SDK reads no other compiler output, so `make compile-contracts` drops the rest, for example the TypeScript `contract/` directory. It writes `source.cksum` last, so the file exists only beside a whole output.
 
 ## Use a contract from a crate
 
@@ -46,9 +47,9 @@ let contract = counter::Contract::deploy(&provider)
 
 Only a fork of the Compact compiler writes `compiler/analyzed-ir.sexp`, when it runs with `--analyzed-ir`. The root [`Makefile`](../../Makefile) runs that compiler from its image, `ghcr.io/romarq/compactc:<COMPACT_REV>`, so a compile needs Docker. `COMPACT_REV` in the `Makefile` names the commit of the fork.
 
-The `make` targets that build or run a crate that uses these contracts, such as `make check`, `make clippy` and `make test`, first run `make contracts`. It compiles each contract that has no `compiled/compiler/analyzed-ir.sexp`. A plain `cargo` command compiles no contract, so run `make contracts` before it. CI compiles every contract from source in one job and gives the output to the other jobs.
+The `make` targets that build or run a crate that uses these contracts, such as `make check`, `make clippy` and `make test`, first run `make contracts`. It compiles each contract whose output is missing, or whose `compiled/source.cksum` does not match its source and `COMPACT_REV`. So an edit, a pull or a branch switch that changes a contract takes effect on the next run. A plain `cargo` command compiles no contract, so run `make contracts` before it. CI compiles every contract from source in one job and gives the output to the other jobs.
 
-`make contracts` compiles only a missing output. After you edit a `.compact` file, or change `COMPACT_REV`, recompile from the root of the repository:
+To recompile every contract, run this from the root of the repository:
 
 ```bash
 make compile-contracts  # recompile each contract here into its compiled/ directory

@@ -20,6 +20,8 @@ tests/conformance/fixtures/*/contract/
 # builds it again on demand.
 tests/conformance/ts-driver/vendor/
 
-# The compiled devnet contracts. The make targets that need them compile the
-# missing ones, and CI compiles them from source on every run.
+# The compiled devnet contracts, and the scratch directory of a compile. The
+# make targets that need them compile each missing or stale one, and CI
+# compiles them from source on every run.
 devnet/contracts/*/compiled/
+devnet/contracts/*/compiled.tmp/

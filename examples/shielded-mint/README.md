@@ -83,7 +83,7 @@ make dev-down && make dev-up
 
 ## Recompile the contract
 
-The contract source lives in [`devnet/contracts/shielded-mint`](../../devnet/contracts/shielded-mint). `make run-shielded-mint` compiles the contract when its `compiled/` directory is missing. If you change `shielded-mint.compact`, recompile it with the Compact compiler fork that `COMPACT_REV` in the root [`Makefile`](../../Makefile) names. Only that fork writes the analyzed IR that the interpreter runs. The `Makefile` runs that compiler from its image, so the command needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). From the root of the repository:
+The contract source lives in [`devnet/contracts/shielded-mint`](../../devnet/contracts/shielded-mint). `make run-shielded-mint` first compiles each devnet contract whose output is missing or out of date. So a change to `shielded-mint.compact` or to `COMPACT_REV` in the root [`Makefile`](../../Makefile) takes effect on the next run. The `Makefile` runs the Compact compiler fork that `COMPACT_REV` names from its image, so that step needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). Only that fork writes the analyzed IR that the interpreter runs. To recompile every contract, run this from the root of the repository:
 
 ```bash
 make compile-contracts  # recompile every contract in devnet/contracts

@@ -61,7 +61,9 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
 EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shielded-swap
 CONTRACTS := call-context counter events receive-shielded secret-counter shielded-mint unshielded-payout
-CONTRACT_IRS := $(foreach c,$(CONTRACTS),devnet/contracts/$(c)/compiled/compiler/analyzed-ir.sexp)
+# The fingerprint of contract $$c: its source under the compiler at COMPACT_REV.
+# POSIX cksum, so a fingerprint from the Linux CI job matches on macOS.
+CONTRACT_CKSUM = { echo $(COMPACT_REV); cat devnet/contracts/$$c/*.compact; } | cksum
 
 # Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
 # Each one carries its source `.compact` alongside the regenerated
@@ -101,7 +103,7 @@ COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
 help:
 	@echo "midnight-rs make targets:"
 	@echo ""
-	@echo "  Lint / build / test (no infra)"
+	@echo "  Lint / build / test (a missing or stale devnet contract compiles first, in Docker)"
 	@echo "    fmt           cargo fmt --all"
 	@echo "    fmt-check     cargo fmt --all --check"
 	@echo "    clippy        cargo clippy --workspace --all-targets -- -D warnings"
@@ -344,20 +346,21 @@ e2e: contracts dev-up
 # Contracts (Compact, compiled in the compiler image)
 # ============================================================
 
-# Compile each devnet contract whose analyzed IR is missing. A missing file is
-# the only trigger: in CI the output comes from another job, so its mtime says
-# nothing about its source. After an edit to a source, run compile-contracts.
-contracts: $(CONTRACT_IRS)
-
-devnet/contracts/%/compiled/compiler/analyzed-ir.sexp:
-	@$(MAKE) --no-print-directory compile-contracts CONTRACTS=$*
+# Compile each devnet contract whose output is missing, or whose fingerprint
+# differs from the one its output carries. A checksum, not an mtime: in CI the
+# output comes from another job, so its mtime says nothing about its source.
+contracts:
+	@for c in $(CONTRACTS); do \
+		[ "$$($(CONTRACT_CKSUM))" = "$$(cat devnet/contracts/$$c/compiled/source.cksum 2>/dev/null)" ] \
+			|| $(MAKE) --no-print-directory compile-contracts CONTRACTS=$$c || exit 1; \
+	done
 
 # Recompile each contract into its compiled/ directory, in the layout the
 # compiler writes: compiler/analyzed-ir.sexp, keys/ and zkir/. The contract!
 # macro reads the artifact, and with_zk_config takes compiled/. The SDK reads
 # none of the compiler's other output, such as the TS contract/ directory, so
-# the target drops it. The analyzed IR moves last, so it exists only when the
-# whole output does: the contracts target looks for that file.
+# the target drops it. The fingerprint is written last, so it exists only
+# beside a whole output.
 compile-contracts:
 	@mkdir -p "$(ZK_PARAMS)"
 	@set -e; \
@@ -371,6 +374,7 @@ compile-contracts:
 		mv "$$dir/compiled.tmp/keys" "$$dir/compiled.tmp/zkir" "$$dir/compiled/"; \
 		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiled/compiler/"; \
 		rm -rf "$$dir/compiled.tmp"; \
+		$(CONTRACT_CKSUM) > "$$dir/compiled/source.cksum"; \
 	done; \
 	echo "OK: contracts compiled"
 
