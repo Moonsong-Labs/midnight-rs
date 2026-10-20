@@ -26,10 +26,10 @@ use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Bound each chain question. While the node is down, the reconnecting
-/// client holds a call with no deadline. A question that takes longer than
+/// Bound each chain query. While the node is down, the reconnecting
+/// client holds a call with no deadline. A query that takes longer than
 /// this bound gives no answer.
-const QUESTION_TIMEOUT: Duration = Duration::from_secs(10);
+const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Cached node connection over a single auto-reconnecting websocket: the
 /// subxt `RpcClient` carries every raw RPC (standard Substrate and custom
@@ -1378,24 +1378,24 @@ impl Drop for HeldInputs {
 /// [`SyncSource`](midnight_types::chain_pin::SyncSource), and the provider's
 /// own resync checks pins through the same answers.
 ///
-/// A question connects to the node first, and a failed connect gives `None`.
-/// After the connect, each answer comes within ten seconds. A question that
-/// the node does not answer in that time gives `None`, as a failed question
+/// A query connects to the node first, and a failed connect gives `None`.
+/// After the connect, each answer comes within ten seconds. A query that
+/// the node does not answer in that time gives `None`, as a failed query
 /// does. The timeout ends only the wait. While the node is down, the
-/// reconnecting client keeps the question in its queue. The client sends it
+/// reconnecting client keeps the query in its queue. The client sends it
 /// after the reconnect and drops the late answer.
 #[async_trait]
 impl midnight_types::chain_pin::ChainView for MidnightProvider {
     async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>> {
         self.get_or_connect().await.ok()?;
-        ask_within_bound(self.get_block_hashes_by_height(height))
+        query_within_timeout(self.get_block_hashes_by_height(height))
             .await
             .ok()
     }
 
     async fn finalized_height(&self) -> Option<u64> {
         self.get_or_connect().await.ok()?;
-        ask_within_bound(self.get_finalized_block_height())
+        query_within_timeout(self.get_finalized_block_height())
             .await
             .ok()
     }
@@ -1411,7 +1411,7 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
 
     async fn network(&self) -> Option<Network> {
         let answer = match self.get_or_connect().await {
-            Ok(_) => ask_within_bound(self.ledger_network_id()).await,
+            Ok(_) => query_within_timeout(self.ledger_network_id()).await,
             Err(e) => Err(e),
         };
         match answer {
@@ -1424,19 +1424,19 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
     }
 }
 
-/// The answer to a chain `question`, or an error when the node gives none
-/// within [`QUESTION_TIMEOUT`].
+/// The answer to a chain `query`, or an error when the node gives none
+/// within [`QUERY_TIMEOUT`].
 ///
-/// Connect before the question. A timeout that drops a connect in the middle
+/// Connect before the query. A timeout that drops a connect in the middle
 /// of its build can leave that connection open.
-async fn ask_within_bound<T>(
-    question: impl Future<Output = Result<T, ProviderError>>,
+async fn query_within_timeout<T>(
+    query: impl Future<Output = Result<T, ProviderError>>,
 ) -> Result<T, ProviderError> {
-    tokio::time::timeout(QUESTION_TIMEOUT, question)
+    tokio::time::timeout(QUERY_TIMEOUT, query)
         .await
         .unwrap_or_else(|_| {
             Err(ProviderError::Rpc(format!(
-                "the node gave no answer within {QUESTION_TIMEOUT:?}"
+                "the node gave no answer within {QUERY_TIMEOUT:?}"
             )))
         })
 }
@@ -1529,15 +1529,15 @@ mod tests {
         testutil::send_json(ws, &response).await;
     }
 
-    /// A chain question during a node outage gives no answer within the
+    /// A chain query during a node outage gives no answer within the
     /// bound. After the first connect, the reconnecting client keeps the
-    /// question in its queue until a reconnect succeeds, and the reconnect
-    /// never stops. With no bound, the question waits for the whole outage.
+    /// query in its queue until a reconnect succeeds, and the reconnect
+    /// never stops. With no bound, the query waits for the whole outage.
     /// The client's request timeout covers only a request on a live socket,
     /// so it does not end the wait. The test takes about ten seconds: paused
     /// time does not work with real sockets.
     #[tokio::test]
-    async fn a_chain_question_during_a_node_outage_gives_none() {
+    async fn a_chain_query_during_a_node_outage_gives_none() {
         use midnight_types::chain_pin::ChainView;
 
         let (listener, node_url) = bind_node().await;
@@ -1565,7 +1565,7 @@ mod tests {
             }
             drop(ws);
             // The client dials again only after it sees the close. From then
-            // on, it keeps each question in its queue.
+            // on, it keeps each query in its queue.
             let _reconnect = listener.accept().await.unwrap();
         });
         let provider = MidnightProvider::new(&node_url, "http://127.0.0.1:1");
