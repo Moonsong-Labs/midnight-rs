@@ -547,7 +547,7 @@ async fn a_failed_pass_is_recorded_and_the_next_pass_clears_it() {
     wait_until("a pass that commits", || sync.last_error().is_none()).await;
 }
 
-/// A node view whose finalized-height question panics.
+/// A node view whose finalized-height query panics.
 struct PanickingChain;
 
 #[async_trait::async_trait]
