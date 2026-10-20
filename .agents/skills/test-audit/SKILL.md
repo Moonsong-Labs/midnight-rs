@@ -203,7 +203,7 @@ A test that runs nowhere does not get the outcome **delete** for that reason alo
 
 - Add its route.
 - Build the fixture it needs in CI.
-- Commit the compiled fixture, as `devnet/contracts/counter/compiled` is, when CI cannot build it.
+- Add the devnet contract it needs: put the source in a new directory under `devnet/contracts`, and add its name to `CONTRACTS` in the `Makefile`. CI compiles it for every job that needs it.
 - Let the test create its own state.
 
 Delete it only when another test proves the contract, or when no contract exists.
@@ -231,6 +231,8 @@ Prefer a net-negative line count in production code. Do not add replacement test
 ## Validation
 
 Do not edit source or tests while a cargo build or test runs in the same checkout. Its result then covers an unknown mix of old and new code.
+
+Run `make contracts` before a plain `cargo` command. Git does not track the compiled devnet contracts, and cargo does not compile them. The target compiles each contract whose output is missing or out of date.
 
 1. Run the owner and sibling tests. Name a unit test by its full path from the crate root, such as `tests::<name>` for a test module in `lib.rs`: `cargo test -p <crate> --lib -- --exact <test-path>`. For an integration test, run `cargo test -p <crate> --test <file> <name>`. Make sure that the `running N tests` line shows a count above zero, because a filter that matches nothing also passes. With no devnet, a devnet test skips and still reports `ok`, so use step 2 for it. For interpreter changes, also run `make conformance`.
 2. For a devnet test, use a fresh devnet. CI always starts one, and an older chain can change which branch a test takes.

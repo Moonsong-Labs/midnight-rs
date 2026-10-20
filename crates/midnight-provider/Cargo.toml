@@ -29,11 +29,6 @@ anyhow = { workspace = true }
 # The devnet tests sync a real wallet with `midnight-wallet`; the library
 # itself never names the implementation.
 midnight-wallet = { workspace = true }
-# The devnet integration tests (tests/node_e2e.rs, tests/lazy_query.rs) drive
-# the bindgen `contract!` macro against compiled fixtures. Cycle (midnight-
-# bindgen depends on midnight-provider transitively) is fine because dev-deps
-# only join the graph when building this crate's own tests.
-compact-bindgen = { workspace = true }
 # `test-util`: the shared mock indexer server (`testutil`).
 midnight-indexer-client = { workspace = true, features = ["test-util"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "sync"] }

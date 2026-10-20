@@ -1,0 +1,8 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// Receive a shielded coin from the caller. The caller funds it with shielded
+// inputs of the coin's token that cover its value.
+export circuit deposit(coin: ShieldedCoinInfo): [] {
+  receiveShielded(disclose(coin));
+}

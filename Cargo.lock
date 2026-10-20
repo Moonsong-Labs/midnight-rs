@@ -3389,7 +3389,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "compact-bindgen",
  "hex",
  "midnight-helpers",
  "midnight-indexer-client",
