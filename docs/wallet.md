@@ -155,7 +155,7 @@ A `WalletBuilder` holds no connection and does no work until a sync step runs. `
 
 Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress is checkpointed to disk after each batch when `with_storage(...)` is set, so subsequent runs resume from the last cursor.
 
-The provider is the sync's source: the sync replays the provider's indexer, and the provider's node reports its network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the indexer URL and the node's network to the two-question `ChainView`.
+The provider is the sync's source: the sync replays the provider's indexer, and the provider's node reports its network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the indexer URL and the node's network to the two-query `ChainView`.
 
 Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. The sync then fails with `WalletError::NetworkUnknown` when the node cannot answer, reports no network, or reports a name that fails `Network::is_valid_name`. A valid name has 1 to 68 characters, each a lowercase ASCII letter, a digit, `-` or `_`. Such a name is safe in an address prefix and in the storage path.
 
@@ -163,7 +163,7 @@ Before the replay, the sync asks the node which network it runs. Without `.with_
 
 The pin is the chain-reset guard, and every sync takes one by default. A snapshot's cursors are counts, so a snapshot from a replaced chain resumes cleanly and reports the dead chain's balance. To catch this, the sync checks a stored snapshot's pin against the chain before it replays. A replaced chain fails the sync with `WalletError::ChainMismatch`. The sync also gives the wallet a fresh pin, which every later resync checks again.
 
-A node that cannot answer for the pin does not fail the sync. The sync continues without a fresh pin, and keeps a stored snapshot's pin. When the node is down, each question waits for the provider's connect timeout first.
+A node that cannot answer for the pin does not fail the sync. The sync continues without a fresh pin, and keeps a stored snapshot's pin. When the node is down, each query waits ten seconds at most.
 
 `.unpinned()` is the opt-out: it skips the network check and the pin. With a named network, the sync then asks the node nothing. With no network named, the sync still asks the node for its network, and nothing else. The sync still keeps a stored snapshot's pin, and every later resync checks that pin.
 
