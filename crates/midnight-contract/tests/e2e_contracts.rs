@@ -5,9 +5,9 @@
 //! accessors — the same way application code would use the SDK.
 //!
 //! The submission tests need MIDNIGHT_NODE_URL and MIDNIGHT_INDEXER_URL.
-//! Everything else runs against artifacts committed in this repo; see
-//! [`fixtures_dir`] and [`counter_zk_dir`] for the two layouts and the
-//! variables that override them.
+//! Everything else runs against the interpreter fixtures of this crate and the
+//! compiled devnet counter; see [`fixtures_dir`] and [`counter_zk_dir`] for the
+//! two layouts and the variables that override them.
 
 mod common;
 
@@ -54,7 +54,7 @@ fn fixtures_dir() -> String {
 
 /// A compiled counter directory holding `keys/` and `zkir/`, which is a
 /// different layout from [`fixtures_dir`] and cannot be served by the same
-/// path. Defaults to the committed devnet artifacts.
+/// path. Defaults to the compiled devnet counter.
 fn counter_zk_dir() -> String {
     common::env_dir("COUNTER_KEYED_DIR").unwrap_or_else(|| common::compiled_dir("counter"))
 }

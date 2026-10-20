@@ -9,7 +9,7 @@
 //!
 //! ```bash
 //! make dev-up   # from the repo root: starts the devnet and waits for a block
-//! cargo run -p example-shielded-mint
+//! make run-shielded-mint   # from the repo root
 //! make dev-down   # from the repo root
 //! ```
 

@@ -191,3 +191,5 @@ make test-e2e        # devnet integration tests
 make examples        # run the examples of the EXAMPLES list against the devnet
 make conformance     # check the circuit interpreter against the TypeScript Compact runtime
 ```
+
+Git does not track the compiled output of the contracts in [`devnet/contracts`](devnet/contracts). The targets that build or run the workspace, such as `make check` and `make test`, first run `make contracts`. It compiles each contract whose output is missing, or was compiled from another source or `COMPACT_REV`, so that step needs Docker. A plain `cargo` command compiles no contract, so run `make contracts` before it.
