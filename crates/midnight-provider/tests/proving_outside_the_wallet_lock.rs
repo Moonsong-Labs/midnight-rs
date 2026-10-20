@@ -199,9 +199,9 @@ async fn the_wallet_is_readable_while_a_build_proves() {
 /// tNIGHT UTXO. Nothing local fails: the loser is rejected on chain.
 ///
 /// This drives [`LocalWallet`] directly rather than the provider. Every
-/// provider build path resyncs first, and the resync mutex serializes two
-/// builds long before they reach the wallet, which hides the race the hold
-/// exists to stop.
+/// provider build path resyncs first, and the wallet's sync mutex serializes
+/// those resyncs. That staggers two builds and hides the race the hold exists
+/// to stop.
 ///
 /// Neither preparation proves or submits. Both release what they reserved.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -10,7 +10,7 @@ use midnight_types::{
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::Wallet;
 use crate::sync::require_same_chain;
@@ -19,8 +19,15 @@ use crate::sync::require_same_chain;
 ///
 /// The lock is a private field and no method hands it out, so a consumer that
 /// holds a `LocalWallet` cannot block a sync by keeping a guard alive.
+///
+/// `LocalWallet` serializes its resyncs, rescans, coin watches and forgets
+/// against each other.
 pub struct LocalWallet {
     inner: RwLock<Wallet>,
+    /// Held across each resync, rescan, coin watch and forget. Take it before
+    /// `inner`. Reads and builds take `inner` alone, so the order cannot
+    /// invert.
+    sync: Mutex<()>,
 }
 
 impl LocalWallet {
@@ -32,6 +39,7 @@ impl LocalWallet {
     pub fn new(wallet: Wallet) -> Self {
         Self {
             inner: RwLock::new(wallet),
+            sync: Mutex::new(()),
         }
     }
 
@@ -102,6 +110,7 @@ impl WalletFacade for LocalWallet {
     }
 
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
+        let _sync = self.sync.lock().await;
         let (pin, snapshot, indexer_url) = {
             let wallet = self.inner.read().await;
             (
@@ -140,6 +149,7 @@ impl WalletFacade for LocalWallet {
     }
 
     async fn rescan_shielded(&self) -> Result<(), WalletError> {
+        let _sync = self.sync.lock().await;
         let (plan, indexer_url) = {
             let wallet = self.inner.read().await;
             (
@@ -152,10 +162,15 @@ impl WalletFacade for LocalWallet {
     }
 
     async fn watch_for_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {
+        let _sync = self.sync.lock().await;
         self.inner.write().await.watch_for_coins(coins)
     }
 
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {
+        // Wait for a resync in flight, although this is one write. That resync
+        // commits the state its plan read, so a registration dropped here would
+        // come back.
+        let _sync = self.sync.lock().await;
         self.inner.write().await.forget_coins(coins)
     }
 }
