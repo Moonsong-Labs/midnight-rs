@@ -25,6 +25,7 @@ After a change of `COMPACT_REV`, re-emit the artifact from the in-place sources.
 
 ```bash
 make regen-test-fixtures # recompiles every <name>/compiler/analyzed-ir.sexp
+make contracts           # the tests also read the devnet contracts
 cargo test -p midnight-contract  # verify
 ```
 

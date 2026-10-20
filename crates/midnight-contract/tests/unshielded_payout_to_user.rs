@@ -12,11 +12,7 @@
 //! for; asserting only that the call returned would pass on a transaction that
 //! paid nobody.
 //!
-//! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`) and
-//! on the contract beside it having been compiled, which `make
-//! compile-contracts` does. The keys are generated rather than committed, so
-//! this skips wherever compactc has not run. Override the directory with
-//! `PAYOUT_KEYED_DIR`.
+//! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
 mod common;
 
@@ -35,14 +31,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
-    let keyed = common::env_dir("PAYOUT_KEYED_DIR")
-        .unwrap_or_else(|| common::compiled_dir("unshielded-payout"));
-    let artifact = format!("{keyed}/compiler/analyzed-ir.sexp");
-    if !std::path::Path::new(&artifact).exists() {
-        eprintln!("skipping: {artifact} is missing; run `make compile-contracts` first");
-        return;
-    }
-
+    let keyed = common::compiled_dir("unshielded-payout");
     let info = common::load_compiled(&keyed);
     let program = common::program(&info);
 
