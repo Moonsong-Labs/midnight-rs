@@ -114,7 +114,7 @@ pub trait WalletFacade: Send + Sync {
     /// wallet's own business: the cursors are event counts, so only the
     /// server that produced them can continue them.
     ///
-    /// `chain` answers the two questions a chain pin asks. The cursors say
+    /// `chain` answers the two queries that a chain pin makes. The cursors say
     /// nothing about which chain produced them, so a wallet that stays
     /// attached while the chain is replaced would otherwise replay onto the
     /// fresh chain and keep serving the old one's balance. An implementation

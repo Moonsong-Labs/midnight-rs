@@ -13,7 +13,7 @@
 //! not that a fork won. That reasoning holds on any network, which is why
 //! this needs no "only on a dev chain" gate.
 //!
-//! The node answers the question. The pin is compared against what the node
+//! The node answers the query. The pin is compared against what the node
 //! reports for that height, never against the indexer, which is a projection
 //! of the chain rather than the chain.
 
@@ -54,7 +54,7 @@ pub enum ChainCheck {
 /// The two things a chain pin asks a node.
 ///
 /// `MidnightProvider` implements this over its node RPCs; anything else that
-/// can answer the two questions serves as well. [`current_pin`] and
+/// can answer the two queries serves as well. [`current_pin`] and
 /// [`verify_pin`] are the operations built on it.
 #[async_trait::async_trait]
 pub trait ChainView: Send + Sync {
@@ -85,7 +85,7 @@ pub trait SyncSource: ChainView {
 
 /// The finalized block the chain reports now, to pin against later.
 ///
-/// `None` when the node cannot answer either question. Refusing to check a
+/// `None` when the node cannot answer either query. Refusing to check a
 /// pin is already harmless, so refusing to make one cannot be fatal.
 pub async fn current_pin(view: &dyn ChainView) -> Option<ChainPin> {
     let height = view.finalized_height().await?;

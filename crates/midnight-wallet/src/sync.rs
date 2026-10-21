@@ -286,7 +286,7 @@ impl WalletBuilder {
 
     /// Skip the network check and the pin at sync time.
     ///
-    /// The sync then asks the node only one question: the network it runs,
+    /// The sync then sends the node only one query: the network it runs,
     /// and only when [`with_network`](Self::with_network) names none. The
     /// sync still keeps a stored snapshot's pin, and every later resync
     /// checks that pin. A wallet synced unpinned with no stored pin stays
@@ -534,18 +534,18 @@ mod tests {
     /// A node whose chain holds the block `0xbbbb…` at every height. With
     /// `same_chain`, it is the snapshot's own chain: it holds `stored_pin()`
     /// at that pin's height. It reports `network` as the network it runs. It
-    /// counts the questions it gets, the network question included.
+    /// counts the queries it gets, the network query included.
     #[derive(Default)]
     struct Node {
         same_chain: bool,
         network: Option<Network>,
-        questions: AtomicUsize,
+        queries: AtomicUsize,
     }
 
     #[async_trait::async_trait]
     impl ChainView for Node {
         async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>> {
-            self.questions.fetch_add(1, Ordering::SeqCst);
+            self.queries.fetch_add(1, Ordering::SeqCst);
             if self.same_chain && height == stored_pin().height {
                 return Some(vec![BlockHash::repeat_byte(0xaa)]);
             }
@@ -553,7 +553,7 @@ mod tests {
         }
 
         async fn finalized_height(&self) -> Option<u64> {
-            self.questions.fetch_add(1, Ordering::SeqCst);
+            self.queries.fetch_add(1, Ordering::SeqCst);
             Some(100)
         }
     }
@@ -566,7 +566,7 @@ mod tests {
         }
 
         async fn network(&self) -> Option<Network> {
-            self.questions.fetch_add(1, Ordering::SeqCst);
+            self.queries.fetch_add(1, Ordering::SeqCst);
             self.network.clone()
         }
     }
@@ -645,7 +645,7 @@ mod tests {
             Ok(plan) => plan,
             Err(err) => panic!("an unpinned sync with a network refuses nothing, got {err:?}"),
         };
-        assert_eq!(node.questions.load(Ordering::SeqCst), 0);
+        assert_eq!(node.queries.load(Ordering::SeqCst), 0);
         assert_eq!(plan.chain_pin, None);
     }
 
@@ -685,9 +685,9 @@ mod tests {
                     // Before the pin: on a stored snapshot, a `ChainMismatch`
                     // would tell the user to remove a valid cache.
                     assert_eq!(
-                        node.questions.load(Ordering::SeqCst),
+                        node.queries.load(Ordering::SeqCst),
                         1,
-                        "a refused sync asks the node only the network question"
+                        "a refused sync sends the node only the network query"
                     );
                 }
                 (Ok(_), None) => {}
@@ -699,7 +699,7 @@ mod tests {
 
     /// A wallet with no network takes the node's, pinned or not, and its
     /// address follows that network. Unpinned, the sync asks the node only
-    /// that question and takes no pin. A node that reports none leaves no
+    /// that query and takes no pin. A node that reports none leaves no
     /// network to take. The sync also refuses a node that reports `..`: it is
     /// a valid HRP, so only the refusal keeps the wallet's files in the
     /// storage dir.
@@ -725,12 +725,8 @@ mod tests {
                 "pin {pin}"
             );
             assert_eq!(plan.chain_pin.is_some(), pin, "pin {pin}");
-            let questions = if pin { 3 } else { 1 };
-            assert_eq!(
-                node.questions.load(Ordering::SeqCst),
-                questions,
-                "pin {pin}"
-            );
+            let queries = if pin { 3 } else { 1 };
+            assert_eq!(node.queries.load(Ordering::SeqCst), queries, "pin {pin}");
 
             let silent = Node::default();
             match builder().prepare(&silent).await {

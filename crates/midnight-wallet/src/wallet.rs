@@ -357,7 +357,9 @@ impl Wallet {
     ///
     /// This drops the registration only. A coin the wallet already claimed is
     /// untouched, and stays spendable: it is held now, not watched for.
-    /// Forgetting a coin that was never registered does nothing.
+    /// Forgetting a coin that was never registered changes no registration.
+    /// When the last save failed, this call still saves, and can return
+    /// [`WalletError::Storage`].
     pub fn forget_coin(&mut self, coin: CoinInfo) -> Result<(), WalletError> {
         each!(&mut self.state, w => w.forget_coin(coin))
     }
@@ -407,7 +409,8 @@ impl Wallet {
     /// reservation cleared, parameters unchanged), since resyncs run before
     /// every build and a no-op must not rewrite the generation files. A
     /// persistence failure surfaces as [`WalletError::Storage`] with the
-    /// in-memory state already updated.
+    /// in-memory state already updated. The next commit then saves, even
+    /// when it changes no durable state.
     ///
     /// This is the single-task composition of the three-step resync API:
     /// [`Self::resync_plan`] → [`ResyncPlan::run`] → [`Self::commit_resync`].
@@ -438,11 +441,11 @@ impl Wallet {
         })
     }
 
-    /// Apply validated resync results to `self` and persist when (and only
-    /// when) durable state changed. Separate from [`ResyncPlan::run`], which
-    /// performs the I/O and validation, so this sequence is unit-testable
-    /// without an indexer and so lock-sharing callers can scope their write
-    /// lock to this call alone.
+    /// Apply validated resync results to `self`, and persist when they change
+    /// durable state. A commit also persists when the last save failed.
+    /// Separate from [`ResyncPlan::run`], which performs the I/O and
+    /// validation, so this sequence is unit-testable without an indexer and
+    /// so lock-sharing callers can scope their write lock to this call alone.
     ///
     /// Commit-time semantics, relevant when the wallet was mutated between
     /// [`Self::resync_plan`] and this call (callers must still prevent
@@ -480,13 +483,10 @@ impl Wallet {
                 if let Some(pin) = w8.chain_pin() {
                     w9.set_chain_pin(pin.clone());
                 }
-                let dir = w9.storage_dir().map(Path::to_path_buf);
+                let saved = w9.persist(true);
                 self.state = State::Ledger9(*w9);
                 info!("the wallet crossed to ledger 9");
-                match dir {
-                    Some(dir) => self.save(&dir),
-                    None => Ok(()),
-                }
+                saved
             }
             (_, commit) => Err(WalletError::LedgerMismatch {
                 expected: self.ledger_version(),
