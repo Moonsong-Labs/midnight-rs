@@ -26,6 +26,11 @@ use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Bound each chain query. While the node is down, the reconnecting
+/// client holds a call with no deadline. A query that takes longer than
+/// this bound gives no answer.
+const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Cached node connection over a single auto-reconnecting websocket: the
 /// subxt `RpcClient` carries every raw RPC (standard Substrate and custom
 /// `midnight_*` methods alike), and the `OnlineClient` on top of it serves
@@ -1341,17 +1346,32 @@ impl Drop for HeldInputs {
 /// The node facts a chain pin asks for. A wallet sync asks them through
 /// [`SyncSource`](midnight_types::chain_pin::SyncSource), and the provider's
 /// own resync checks pins through the same answers.
+///
+/// A query connects to the node first, and a failed connect gives `None`.
+/// After the connect, each answer comes within ten seconds. A query that
+/// the node does not answer in that time gives `None`, as a failed query
+/// does. The timeout ends only the wait. While the node is down, the
+/// reconnecting client keeps the query in its queue. The client sends it
+/// after the reconnect and drops the late answer.
 #[async_trait]
 impl midnight_types::chain_pin::ChainView for MidnightProvider {
     async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>> {
-        self.get_block_hashes_by_height(height).await.ok()
+        self.get_or_connect().await.ok()?;
+        query_within_timeout(self.get_block_hashes_by_height(height))
+            .await
+            .ok()
     }
 
     async fn finalized_height(&self) -> Option<u64> {
-        self.get_finalized_block_height().await.ok()
+        self.get_or_connect().await.ok()?;
+        query_within_timeout(self.get_finalized_block_height())
+            .await
+            .ok()
     }
 }
 
+/// The node's network has the same connect and the same bound as the
+/// `ChainView` answers of this provider.
 #[async_trait]
 impl midnight_types::chain_pin::SyncSource for MidnightProvider {
     fn indexer_url(&self) -> &str {
@@ -1359,7 +1379,11 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
     }
 
     async fn network(&self) -> Option<Network> {
-        match self.ledger_network_id().await {
+        let answer = match self.get_or_connect().await {
+            Ok(_) => query_within_timeout(self.ledger_network_id()).await,
+            Err(e) => Err(e),
+        };
+        match answer {
             Ok(network) => network,
             Err(e) => {
                 warn!(error = %e, "could not read the node's network");
@@ -1367,6 +1391,23 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
             }
         }
     }
+}
+
+/// The answer to a chain `query`, or an error when the node gives none
+/// within [`QUERY_TIMEOUT`].
+///
+/// Connect before the query. A timeout that drops a connect in the middle
+/// of its build can leave that connection open.
+async fn query_within_timeout<T>(
+    query: impl Future<Output = Result<T, ProviderError>>,
+) -> Result<T, ProviderError> {
+    tokio::time::timeout(QUERY_TIMEOUT, query)
+        .await
+        .unwrap_or_else(|_| {
+            Err(ProviderError::Rpc(format!(
+                "the node gave no answer within {QUERY_TIMEOUT:?}"
+            )))
+        })
 }
 
 /// Typed view over a connection's raw client for the new JSON-RPC spec
@@ -1393,6 +1434,9 @@ fn rpc_error(method: &'static str) -> impl FnOnce(subxt::rpcs::Error) -> Provide
 #[cfg(test)]
 mod tests {
     use super::*;
+    use midnight_indexer_client::testutil;
+    use serde_json::{Value, json};
+    use tokio::sync::oneshot;
 
     fn test_provider() -> MidnightProvider {
         MidnightProvider::new("ws://test", "http://test")
@@ -1440,5 +1484,73 @@ mod tests {
         let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1");
         let health = provider.health().await.unwrap();
         assert!(!health.node_connected);
+    }
+
+    /// A mock node: a listener and the `ws://` URL that dials it.
+    async fn bind_node() -> (tokio::net::TcpListener, String) {
+        let (listener, url) = testutil::bind().await;
+        (listener, url.replacen("http://", "ws://", 1))
+    }
+
+    /// Answer the JSON-RPC request `request` with `result`.
+    async fn answer(ws: &mut testutil::ServerWs, request: &Value, result: Value) {
+        let response = json!({"jsonrpc": "2.0", "id": request["id"], "result": result});
+        testutil::send_json(ws, &response).await;
+    }
+
+    /// A chain query during a node outage gives no answer within the
+    /// bound. After the first connect, the reconnecting client keeps the
+    /// query in its queue until a reconnect succeeds, and the reconnect
+    /// never stops. With no bound, the query waits for the whole outage.
+    /// The client's request timeout covers only a request on a live socket,
+    /// so it does not end the wait. The test takes about ten seconds: paused
+    /// time does not work with real sockets.
+    #[tokio::test]
+    async fn a_chain_query_during_a_node_outage_gives_none() {
+        use midnight_types::chain_pin::ChainView;
+
+        let (listener, node_url) = bind_node().await;
+        let (outage_tx, outage_rx) = oneshot::channel::<()>();
+        let node = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = testutil::accept_ws(stream).await;
+            let answer_connect = async {
+                while let Some(request) = testutil::next_json(&mut ws).await {
+                    match request["method"].as_str() {
+                        Some("rpc_methods") => {
+                            answer(&mut ws, &request, json!({"methods": []})).await;
+                        }
+                        Some("chain_getBlockHash") => {
+                            let genesis = format!("0x{}", "00".repeat(32));
+                            answer(&mut ws, &request, json!(genesis)).await;
+                        }
+                        _ => {}
+                    }
+                }
+            };
+            tokio::select! {
+                () = answer_connect => {}
+                _ = outage_rx => {}
+            }
+            drop(ws);
+            // The client dials again only after it sees the close. From then
+            // on, it keeps each query in its queue.
+            let _reconnect = listener.accept().await.unwrap();
+        });
+        let provider = MidnightProvider::new(&node_url, "http://127.0.0.1:1");
+        provider.get_or_connect().await.expect("the connect");
+        outage_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), node)
+            .await
+            .expect("the client dials again after the close")
+            .unwrap();
+
+        let height = tokio::time::timeout(
+            Duration::from_secs(30),
+            ChainView::finalized_height(&provider),
+        )
+        .await;
+
+        assert_eq!(height, Ok(None));
     }
 }

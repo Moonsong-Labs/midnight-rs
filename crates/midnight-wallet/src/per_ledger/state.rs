@@ -75,6 +75,10 @@ pub struct Wallet {
     /// `pending.json` without the caller re-supplying the path.
     storage_dir: Option<PathBuf>,
 
+    /// Whether the last save to `storage_dir` failed, so the disk is behind
+    /// the memory.
+    save_failed: bool,
+
     /// The indexer this wallet synced against.
     ///
     /// The cursors are event counts, so they mean nothing against a different
@@ -676,6 +680,7 @@ impl Wallet {
             block_context,
             pending,
             storage_dir: storage_dir.map(Path::to_path_buf),
+            save_failed: false,
             indexer_url: indexer_url.to_string(),
         };
 
@@ -792,14 +797,15 @@ impl Wallet {
     /// multi-MB confirmed-state files. The write is best-effort, because the
     /// caller changes the in-memory set for a build that already exists, and
     /// an error cannot undo that build. The in-memory set still protects the
-    /// running process, and the same disk fault fails loudly at the next
-    /// resync's hard `save`. Crash-safety is degraded until then, hence the
-    /// error-level log.
-    fn persist_pending(&self) {
+    /// running process. A failure marks the save as failed, so the next
+    /// commit saves the whole state and reports the same disk fault.
+    /// Crash-safety is degraded until then, hence the error-level log.
+    fn persist_pending(&mut self) {
         if let Some(dir) = self.storage_dir.as_deref()
             && let Err(err) = self.pending.save(dir, &self.network_id, &self.storage_id())
         {
             error!(error = %err, "failed to persist pending reservations; in-memory set is ahead of pending.json");
+            self.save_failed = true;
         }
     }
 
@@ -845,6 +851,23 @@ impl Wallet {
             },
         )?;
         self.pending.save(base, &self.network_id, &wallet_id)
+    }
+
+    /// Save to the storage directory when `changed` is true or the last save
+    /// failed. A wallet with no storage directory saves nothing.
+    ///
+    /// A failed save leaves the memory ahead of the disk, so the next call
+    /// retries it even when nothing changed.
+    pub(crate) fn persist(&mut self, changed: bool) -> Result<(), WalletError> {
+        if !(changed || self.save_failed) {
+            return Ok(());
+        }
+        let Some(dir) = self.storage_dir() else {
+            return Ok(());
+        };
+        let saved = self.save(dir);
+        self.save_failed = saved.is_err();
+        saved
     }
 
     /// The ledger state a build executes against: the chain's parameters and
@@ -1220,16 +1243,10 @@ impl Wallet {
         // parameters, cleared pending set) so a crash before the next sync
         // resumes from here. Must run after `clear_confirmed` above: `save`
         // rewrites (or removes) `pending.json` from the in-memory set.
-        // Skipped entirely on no-op resyncs (see the dirty-check above):
-        // pre-build resyncs are frequent and must not rewrite the
-        // generation files when nothing moved.
-        if (cursors_advanced || parameters_changed || pending_changed)
-            && let Some(dir) = self.storage_dir.as_deref()
-        {
-            self.save(dir)?;
-        }
-
-        Ok(())
+        // No-op resyncs skip this save (see the dirty-check above and
+        // `persist`): pre-build resyncs are frequent and must not rewrite
+        // the generation files.
+        self.persist(cursors_advanced || parameters_changed || pending_changed)
     }
 
     // -------------------------------------------------------------------------
@@ -1243,7 +1260,7 @@ impl Wallet {
 
     /// [`Self::watch_for_coin`] for several coins, persisting once.
     ///
-    /// Registering nothing writes nothing.
+    /// Registering nothing writes nothing, unless the last save failed.
     pub fn watch_for_coins(
         &mut self,
         coins: impl IntoIterator<Item = crate::CoinInfo>,
@@ -1256,10 +1273,7 @@ impl Wallet {
                 .watch_for(&coin_public_key, &coin.into_ledger());
             registered = true;
         }
-        match self.storage_dir.as_deref() {
-            Some(dir) if registered => self.save(dir),
-            _ => Ok(()),
-        }
+        self.persist(registered)
     }
 
     /// See [`crate::Wallet::forget_coin`].
@@ -1282,10 +1296,7 @@ impl Wallet {
                 forgot = true;
             }
         }
-        match self.storage_dir.as_deref() {
-            Some(dir) if forgot => self.save(dir),
-            _ => Ok(()),
-        }
+        self.persist(forgot)
     }
 
     /// See [`crate::Wallet::watched_coins`].
@@ -1397,10 +1408,7 @@ impl Wallet {
         self.zswap_state = zswap_state;
         self.zswap_event_id = zswap_event_id;
         self.carry_registrations(registrations);
-        if let Some(dir) = self.storage_dir.as_deref() {
-            self.save(dir)?;
-        }
-        Ok(())
+        self.persist(true)
     }
 }
 
@@ -1739,6 +1747,7 @@ mod tests {
             block_context: None,
             pending: PendingReservations::default(),
             storage_dir,
+            save_failed: false,
             indexer_url: "http://indexer.invalid".into(),
         }
     }
@@ -2300,6 +2309,40 @@ mod tests {
         );
     }
 
+    /// A failed save leaves the memory ahead of the disk. The next commit
+    /// must save even when it moves nothing, and then skip no-op saves again.
+    #[test]
+    fn resync_commit_retries_a_failed_save() {
+        // A regular file at `storage_dir` fails every save until it goes.
+        let dir = tempfile::TempDir::new().unwrap();
+        let base = dir.path().join("not-a-directory");
+        std::fs::write(&base, b"occupied").unwrap();
+        let mut wallet = test_wallet(Some(base.clone()));
+        wallet.last_tx_id = Some(3);
+
+        let mut commit = noop_commit(&wallet);
+        commit.dust_event_id += 1;
+        assert!(matches!(
+            wallet.commit_resync(commit),
+            Err(WalletError::Storage(_))
+        ));
+
+        std::fs::remove_file(&base).unwrap();
+        wallet.commit_resync(noop_commit(&wallet)).unwrap();
+
+        let loaded = super::super::snapshot::load(&base, "undeployed", &wallet.storage_id())
+            .unwrap()
+            .expect("a no-op commit after a failed save must save");
+        assert_eq!(loaded.dust_event_id, 1);
+
+        wallet.commit_resync(noop_commit(&wallet)).unwrap();
+        assert_eq!(
+            stored_generations(&base),
+            vec![1],
+            "a successful save must stop the no-op commits from saving"
+        );
+    }
+
     #[test]
     fn commit_resync_clears_confirmed_against_commit_time_pending() {
         // The plan → run → commit split releases the wallet lock during the
@@ -2348,7 +2391,8 @@ mod tests {
         let blocker = dir.path().join("not-a-directory");
         std::fs::write(&blocker, b"occupied").unwrap();
 
-        let mut wallet = test_wallet(Some(blocker));
+        let mut wallet = test_wallet(Some(blocker.clone()));
+        wallet.last_tx_id = Some(3);
         wallet.dust_wallet.dust_local_state = None;
         wallet.reserve_pending(
             vec![dust_batch(&[7])],
@@ -2365,6 +2409,15 @@ mod tests {
             wallet.build_context_inner(),
             Err(WalletError::Transfer(_))
         ));
+
+        // Once the disk works again, a commit that moves nothing must
+        // still write the reservation.
+        std::fs::remove_file(&blocker).unwrap();
+        wallet.commit_resync(noop_commit(&wallet)).unwrap();
+        let saved = PendingReservations::load(&blocker, "undeployed", &wallet.storage_id())
+            .unwrap()
+            .expect("a no-op commit after a failed pending write must save");
+        assert_eq!(saved.unshielded_keys().count(), 1);
     }
 
     fn params_with(
