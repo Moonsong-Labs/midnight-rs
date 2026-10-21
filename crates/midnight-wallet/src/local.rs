@@ -2,6 +2,9 @@
 //! process owns. Its builds for each ledger generation are in the generation
 //! modules.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use async_trait::async_trait;
 use midnight_types::chain_pin::{ChainView, current_pin};
 use midnight_types::hd::Seed;
@@ -13,6 +16,7 @@ use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::Wallet;
+use crate::background::{self, BackgroundSync};
 use crate::sync::require_same_chain;
 
 /// A [`Wallet`] this process owns, shared behind its own lock.
@@ -21,7 +25,8 @@ use crate::sync::require_same_chain;
 /// holds a `LocalWallet` cannot block a sync by keeping a guard alive.
 ///
 /// `LocalWallet` serializes its resyncs, rescans, coin watches and forgets
-/// against each other.
+/// against each other. [`Self::sync_in_background`] resyncs it in a
+/// background task.
 pub struct LocalWallet {
     inner: RwLock<Wallet>,
     /// Held across each resync, rescan, coin watch and forget. Take it before
@@ -41,6 +46,64 @@ impl LocalWallet {
             inner: RwLock::new(wallet),
             sync: Mutex::new(()),
         }
+    }
+
+    /// Resync this wallet in a background task until the returned handle
+    /// drops.
+    ///
+    /// Each pass is one [`WalletFacade::resync`] against `chain`. It resumes
+    /// the replay of the wallet's indexer from its cursors. When the wallet
+    /// holds a chain pin, the pass checks it against `chain`. The first pass
+    /// starts `pause` after this call, because a [`Wallet`] is synced when it
+    /// is made. Each later pass starts `pause` after the one before it ends,
+    /// so passes never overlap.
+    ///
+    /// A failed pass does not stop the sync. The task logs the error, and
+    /// [`BackgroundSync::last_error`] holds it until a pass commits. The next
+    /// pass runs after `pause`.
+    ///
+    /// The wallet serializes each pass with its other sync methods. So a build
+    /// through the provider waits for a pass in flight.
+    ///
+    /// Pass the `Arc<MidnightProvider>` that the wallet is attached to as
+    /// `chain`. The task holds it until the handle drops. Start one background
+    /// sync for each wallet.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// use midnight_provider::MidnightProvider;
+    /// use midnight_wallet::{LocalWallet, Wallet};
+    ///
+    /// # async fn example(provider: MidnightProvider) -> Result<(), Box<dyn std::error::Error>> {
+    /// let wallet = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?
+    ///     .sync(&provider)
+    ///     .await?;
+    /// let wallet = Arc::new(LocalWallet::new(wallet));
+    /// let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));
+    ///
+    /// // Dropping `sync` stops the background sync.
+    /// let sync = wallet.sync_in_background(provider.clone(), Duration::from_secs(5));
+    ///
+    /// if let Some(error) = sync.last_error() {
+    ///     eprintln!("the last background resync failed: {error}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// When called outside a Tokio runtime.
+    pub fn sync_in_background(
+        self: &Arc<Self>,
+        chain: Arc<dyn ChainView>,
+        pause: Duration,
+    ) -> BackgroundSync {
+        background::spawn(Arc::clone(self), chain, pause)
     }
 
     pub(crate) fn inner(&self) -> &RwLock<Wallet> {

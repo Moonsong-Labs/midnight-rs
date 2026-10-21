@@ -51,6 +51,7 @@ midnight-core                    meta-crate; re-exports the public API
   │
   ├── midnight-wallet            the local implementation; depends on the two crates above
   │     ├── local.rs             LocalWallet: the facade over a locally-owned Wallet
+  │     ├── background.rs        BackgroundSync: LocalWallet::sync_in_background resyncs until the handle drops
   │     ├── sync.rs              Wallet::from_seed / from_mnemonic / from_mnemonic_with_passphrase or
   │     │                        WalletBuilder::new → WalletBuilder → sync(source), pinned by default
   │     ├── wallet.rs            Wallet { seed, state of the chain's generation }, crossing forks
@@ -88,6 +89,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | The synced state itself. It runs the indexer replays of a sync, a resync and a rescan. The provider reaches it through `WalletFacade`. |
 | `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
+| `BackgroundSync` | wallet | The handle of the task that `LocalWallet::sync_in_background` starts. The task resyncs the wallet after each pause. Dropping the handle stops the sync. `last_error()` names the error of the last pass. |
 | `LocalWallet` / `WalletBuilder` | wallet | The facade implemented over a locally-owned `Wallet`, and the builder (`Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase`, `WalletBuilder::new`) that syncs one from an indexer. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
@@ -102,7 +104,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 ## Provider ↔ Wallet model
 
-The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin questions to a node. A sync reads its indexer and its node from its `SyncSource`, such as the provider. The wallet keeps that indexer for later replays, and the provider answers a resync's pin questions.
+The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin questions to a node. Every build resyncs the wallet first, and when asked, `LocalWallet::sync_in_background` resyncs it in a background task. A sync reads its indexer and its node from its `SyncSource`, such as the provider. The wallet keeps that indexer for later replays, and the provider answers a resync's pin questions.
 
 Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three under a mutex of its own, which serializes its resyncs, rescans, coin watches and forgets. `Wallet::resync` and `Wallet::rescan_shielded` compose them for a wallet nobody shares.
 
@@ -140,6 +142,10 @@ provider
   .balance() / .dust_synced() / .parameters() / .unshielded_utxos() / .sync_cursors()
   .release(&spent)                 // hand back a build's reserved inputs
   .health().await                  → node reachability
+
+Arc<LocalWallet>                                    // a handle on the attached wallet
+  .sync_in_background(provider, pause) → BackgroundSync (resyncs after each pause until dropped)
+      sync.last_error()            → the error of the last pass, None after a commit
 ```
 
 `transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md).

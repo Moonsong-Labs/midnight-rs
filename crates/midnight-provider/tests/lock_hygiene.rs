@@ -8,6 +8,10 @@
 //! - `WalletBuilder::sync_with_progress` must not leak the spawned sync task:
 //!   dropping the progress receiver or the `SyncHandle` tears down the
 //!   indexer WebSocket subscriptions promptly.
+//! - `LocalWallet::sync_in_background` keeps the error of a failed pass until
+//!   a pass commits, and reports a task that a panic ended. Dropping its
+//!   handle closes the subscriptions of the pass in flight, and no later pass
+//!   starts.
 //!
 //! The mock serves both indexer protocols on one port: GraphQL-over-HTTP
 //! (`get_block`) and `graphql-transport-ws` subscriptions (via
@@ -53,6 +57,13 @@ struct MockState {
     /// events. Dust and zswap still complete, which is what an address with
     /// no new transactions looks like to a resync.
     quiet_unshielded: AtomicBool,
+    /// The number of subscriptions that completed the handshake, in every
+    /// mode. It only grows, so it shows a pass that starts after a sync
+    /// stopped.
+    opened_subs: AtomicUsize,
+    /// When set, the block query answers with a GraphQL error. The client
+    /// does not retry that error, so a resync fails at once.
+    fail_block: AtomicBool,
 }
 
 async fn spawn_mock() -> (String, Arc<MockState>) {
@@ -87,7 +98,7 @@ async fn handle_conn(stream: TcpStream, state: Arc<MockState>) {
     if &head == b"GET " {
         handle_ws(stream, state).await;
     } else {
-        handle_http(stream).await;
+        handle_http(stream, &state).await;
     }
 }
 
@@ -95,6 +106,7 @@ async fn handle_conn(stream: TcpStream, state: Arc<MockState>) {
 /// (fast mode) or hold it silent until the client disconnects (stall mode).
 async fn handle_ws(stream: TcpStream, state: Arc<MockState>) {
     let (mut ws, sub) = subscriber_handshake(stream).await;
+    state.opened_subs.fetch_add(1, Ordering::SeqCst);
     let query = sub["payload"]["query"].as_str().unwrap_or("").to_string();
     if query.contains("unshieldedTransactions") && state.quiet_unshielded.load(Ordering::SeqCst) {
         // The shape of an address with no new transactions: the stream is
@@ -128,13 +140,18 @@ async fn drain(ws: &mut ServerWs) {
 }
 
 /// Serve one GraphQL HTTP request. Every query in the exercised paths is
-/// `get_block(None)`, so the response is always the same post-genesis block
-/// carrying valid ledger parameters.
-async fn handle_http(mut stream: TcpStream) {
+/// `get_block(None)`, so the response is the same post-genesis block carrying
+/// valid ledger parameters, or a GraphQL error when `fail_block` is set.
+async fn handle_http(mut stream: TcpStream, state: &MockState) {
     if !read_http_request(&mut stream).await {
         return;
     }
-    write_json_response(&mut stream, "200 OK", &block_response()).await;
+    let body = if state.fail_block.load(Ordering::SeqCst) {
+        json!({ "errors": [{ "message": "the mock refuses the block query" }] }).to_string()
+    } else {
+        block_response()
+    };
+    write_json_response(&mut stream, "200 OK", &body).await;
 }
 
 fn block_response() -> String {
@@ -158,6 +175,9 @@ fn block_response() -> String {
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+/// The pause of every background sync in these tests.
+const PAUSE: Duration = Duration::from_millis(50);
 
 fn builder() -> WalletBuilder {
     // No sync source here reports a network, so the wallet names one.
@@ -461,4 +481,104 @@ async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
         matches!(err, WalletError::ChainMismatch { .. }),
         "expected ChainMismatch, got {err:?}"
     );
+}
+
+/// Dropping the `BackgroundSync` aborts its task. The pass in flight closes
+/// its subscriptions, and no later pass starts.
+///
+/// A handle that only detaches the task leaves the stalled pass open until
+/// the resume idle bound, around ten seconds, and the loop runs on after it.
+#[tokio::test]
+async fn dropping_the_background_sync_closes_its_subscriptions() {
+    let (url, state) = spawn_mock().await;
+    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+
+    state.stall.store(true, Ordering::SeqCst);
+    let sync = wallet.sync_in_background(Arc::new(provider(&url)), PAUSE);
+    wait_until("background resync subscriptions", || {
+        state.stalled_subs.load(Ordering::SeqCst) >= 3
+    })
+    .await;
+
+    drop(sync);
+
+    // Keep this bound under the resume idle bound. At that bound the stalled
+    // pass ends by itself and closes its subscriptions.
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_until("subscription sockets to close", || {
+            state.stalled_subs.load(Ordering::SeqCst) == 0
+        }),
+    )
+    .await
+    .expect("dropping the handle must close the subscriptions of the pass in flight");
+
+    let opened = state.opened_subs.load(Ordering::SeqCst);
+    tokio::time::sleep(PAUSE * 5).await;
+    assert_eq!(
+        state.opened_subs.load(Ordering::SeqCst),
+        opened,
+        "no pass may start after the handle drops"
+    );
+}
+
+/// A failed pass shows in `last_error`, the sync goes on, and the next pass
+/// that commits clears the error.
+///
+/// Three wrong loops fail it: one that ends at its first error, one that only
+/// logs the error, and one whose commit keeps the old error. With the second,
+/// the wallet goes stale and only a log line shows it. The first shows
+/// `SyncTaskJoin` in place of the error of the pass.
+#[tokio::test]
+async fn a_failed_pass_is_recorded_and_the_next_pass_clears_it() {
+    let (url, state) = spawn_mock().await;
+    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+
+    state.fail_block.store(true, Ordering::SeqCst);
+    let sync = wallet.sync_in_background(Arc::new(provider(&url)), PAUSE);
+    wait_until("a failed pass", || {
+        matches!(sync.last_error().as_deref(), Some(WalletError::Indexer(_)))
+    })
+    .await;
+
+    state.fail_block.store(false, Ordering::SeqCst);
+    wait_until("a pass that commits", || sync.last_error().is_none()).await;
+}
+
+/// A node view whose finalized-height query panics.
+struct PanickingChain;
+
+#[async_trait::async_trait]
+impl midnight_wallet::chain_pin::ChainView for PanickingChain {
+    async fn block_hashes_at(&self, _height: u64) -> Option<Vec<BlockHash>> {
+        None
+    }
+
+    async fn finalized_height(&self) -> Option<u64> {
+        panic!("the node view panics");
+    }
+}
+
+/// A pass that panics ends the background sync, and `last_error` says so.
+///
+/// A panicked pass sends nothing on the status channel. So a `last_error`
+/// that reads only that channel shows a healthy wallet while nothing syncs.
+#[tokio::test]
+async fn a_panicked_pass_ends_the_sync_and_last_error_names_it() {
+    let (url, _state) = spawn_mock().await;
+    // A pinned wallet: each resync asks the chain for a fresh pin first.
+    let wallet = builder()
+        .sync(&SwappableChain::new(&url))
+        .await
+        .expect("initial sync against the mock indexer");
+    let wallet = Arc::new(LocalWallet::new(wallet));
+
+    let sync = wallet.sync_in_background(Arc::new(PanickingChain), PAUSE);
+    wait_until("the background sync to stop", || {
+        matches!(
+            sync.last_error().as_deref(),
+            Some(WalletError::SyncTaskJoin(_))
+        )
+    })
+    .await;
 }
