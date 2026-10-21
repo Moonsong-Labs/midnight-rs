@@ -12,6 +12,8 @@
 //!   a pass commits, and reports a task that a panic ended. Dropping its
 //!   handle closes the subscriptions of the pass in flight, and no later pass
 //!   starts.
+//! - `BackgroundSync::wait_until` outlasts a failed pass, and ends when a
+//!   panic ends the task.
 //!
 //! The mock serves both indexer protocols on one port: GraphQL-over-HTTP
 //! (`get_block`) and `graphql-transport-ws` subscriptions (via
@@ -559,10 +561,12 @@ impl midnight_wallet::chain_pin::ChainView for PanickingChain {
     }
 }
 
-/// A pass that panics ends the background sync, and `last_error` says so.
+/// A pass that panics ends the background sync. `last_error` says so, and a
+/// wait in flight ends with the same error.
 ///
 /// A panicked pass sends nothing on the status channel. So a `last_error`
 /// that reads only that channel shows a healthy wallet while nothing syncs.
+/// A wait that does not see the task end waits for a pass that never comes.
 #[tokio::test]
 async fn a_panicked_pass_ends_the_sync_and_last_error_names_it() {
     let (url, _state) = spawn_mock().await;
@@ -574,6 +578,15 @@ async fn a_panicked_pass_ends_the_sync_and_last_error_names_it() {
     let wallet = Arc::new(LocalWallet::new(wallet));
 
     let sync = wallet.sync_in_background(Arc::new(PanickingChain), PAUSE);
+    // The first pass starts one pause from now, so this wait is in flight
+    // when the task ends.
+    let waited = tokio::time::timeout(Duration::from_secs(10), sync.wait_until(|_| false))
+        .await
+        .expect("the wait must end when the task ends");
+    assert!(
+        matches!(waited, Err(WalletError::SyncTaskJoin(_))),
+        "expected SyncTaskJoin, got {waited:?}"
+    );
     wait_until("the background sync to stop", || {
         matches!(
             sync.last_error().as_deref(),
@@ -581,4 +594,44 @@ async fn a_panicked_pass_ends_the_sync_and_last_error_names_it() {
         )
     })
     .await;
+}
+
+/// A failed pass does not end a wait, because a later pass can commit.
+///
+/// The condition of the wait holds only after a failed pass has woken the
+/// wait. So a wait that ends on a failed pass fails here.
+#[tokio::test]
+async fn a_wait_outlasts_a_failed_pass() {
+    let (url, state) = spawn_mock().await;
+    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+
+    state.fail_block.store(true, Ordering::SeqCst);
+    let sync = wallet.sync_in_background(Arc::new(provider(&url)), PAUSE);
+
+    let ready = AtomicBool::new(false);
+    let (waited, ()) = tokio::join!(
+        async {
+            let waited = tokio::time::timeout(
+                Duration::from_secs(30),
+                sync.wait_until(|_| ready.load(Ordering::SeqCst)),
+            )
+            .await;
+            // A wait that returns before the condition is true reads false here.
+            (waited, ready.load(Ordering::SeqCst))
+        },
+        async {
+            wait_until("a failed pass", || {
+                matches!(sync.last_error().as_deref(), Some(WalletError::Indexer(_)))
+            })
+            .await;
+            // That pass woke the wait. Keep the condition false for a few
+            // more pauses, so the check after that wake reads false.
+            tokio::time::sleep(PAUSE * 3).await;
+            ready.store(true, Ordering::SeqCst);
+        },
+    );
+    assert!(
+        matches!(waited, (Ok(Ok(())), true)),
+        "a failed pass must not end the wait, got {waited:?}"
+    );
 }

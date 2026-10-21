@@ -218,6 +218,33 @@ The first pass starts one pause after the call, because the wallet is synced whe
 
 A failed pass does not stop the sync. The task logs the error, and the next pass runs after the pause. `sync.last_error()` returns the error of the last pass, and `None` after a pass commits. A pass that panics ends the task, and `last_error()` then returns `WalletError::SyncTaskJoin`. Read `last_error()` to show a wallet that does not sync, such as a wallet on a replaced chain (`WalletError::ChainMismatch`).
 
+`sync.wait_until(done)` waits until `done` holds for the balance of the wallet. A finalized transaction reaches the wallet only through a resync, and one resync can end before it sees the transaction. So wait on the balance before a read or a build that needs the effect of the transaction. `done` runs at the call and after each pass, outside the lock of the wallet. This example waits until a transfer of `amount` of `token` leaves the wallet:
+
+```rust
+use std::time::Duration;
+
+// `balance()` returns the state of the last pass. Resync first, so that
+// `before` is the state that the build of the transfer starts from.
+provider.resync_wallet().await?;
+let before = provider.balance().await?.shielded_value(token);
+provider
+    .transfer_shielded(token, amount, &recipient)
+    .await?
+    .wait_finalized()
+    .await?;
+// The transfer succeeded, so `before` covered `amount`.
+let after = before - amount;
+tokio::time::timeout(
+    Duration::from_secs(60),
+    sync.wait_until(|b| b.shielded_value(token) == after),
+)
+.await??;
+```
+
+After a deploy, a contract call or another fee-paying transaction, wait until no build reserves Dust: `|b| b.dust.spendable_speck == b.dust.balance_speck`. A resync that sees the Dust spend ends the reservation of the build.
+
+The wait has no deadline, so wrap it in `tokio::time::timeout`. A failed pass does not end the wait, because a later pass can commit. After a timeout, `sync.last_error()` tells whether the passes fail. When the background task has ended, the wait fails with `WalletError::SyncTaskJoin`.
+
 Dropping the handle stops the sync at the task's next await, and closes the subscriptions of a pass in flight. The wallet then keeps its state from before that pass, or the whole commit of the pass. Bind the handle to a named variable. `let _ = wallet.sync_in_background(..)` drops it at once, and `#[must_use]` does not warn about `let _ =`. The task holds the provider and the wallet until the handle drops. Start one background sync for each wallet.
 
 ### Across a hard fork
@@ -427,6 +454,7 @@ provider.with_wallet(wallet)
   provider.parameters() / .sync_cursors() / .unshielded_utxos()
   provider.resync_wallet()               incremental refresh + re-persist
   wallet.sync_in_background(provider, pause)   resync in a task until the handle drops (an Arc<LocalWallet>)
+      sync.wait_until(done)              wait until done holds for the balance (at the call and after each pass)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded

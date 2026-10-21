@@ -89,7 +89,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | The synced state itself. It runs the indexer replays of a sync, a resync and a rescan. The provider reaches it through `WalletFacade`. |
 | `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
-| `BackgroundSync` | wallet | The handle of the task that `LocalWallet::sync_in_background` starts. The task resyncs the wallet after each pause. Dropping the handle stops the sync. `last_error()` names the error of the last pass. |
+| `BackgroundSync` | wallet | The handle of the task that `LocalWallet::sync_in_background` starts. The task resyncs the wallet after each pause. Dropping the handle stops the sync. `last_error()` names the error of the last pass. `wait_until(done)` waits until `done` holds for the balance. It checks at the call and after each pass. |
 | `LocalWallet` / `WalletBuilder` | wallet | The facade implemented over a locally-owned `Wallet`, and the builder (`Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase`, `WalletBuilder::new`) that syncs one from an indexer. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
@@ -146,6 +146,7 @@ provider
 Arc<LocalWallet>                                    // a handle on the attached wallet
   .sync_in_background(provider, pause) → BackgroundSync (resyncs after each pause until dropped)
       sync.last_error()            → the error of the last pass, None after a commit
+      sync.wait_until(done).await  // wait until done(&WalletBalance) holds: at the call and after each pass
 ```
 
 `transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md).
