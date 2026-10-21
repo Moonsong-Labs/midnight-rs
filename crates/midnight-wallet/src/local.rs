@@ -76,33 +76,46 @@ impl LocalWallet {
     /// use std::time::Duration;
     ///
     /// use midnight_provider::MidnightProvider;
-    /// use midnight_wallet::{LocalWallet, Wallet};
+    /// use midnight_wallet::{BackgroundSync, LocalWallet, Wallet};
     ///
-    /// # async fn example(provider: MidnightProvider) -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn example(provider: MidnightProvider) -> Result<BackgroundSync, Box<dyn std::error::Error>> {
     /// let wallet = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?
     ///     .sync(&provider)
     ///     .await?;
     /// let wallet = Arc::new(LocalWallet::new(wallet));
     /// let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));
     ///
-    /// // Dropping `sync` stops the background sync.
+    /// // Keep the handle for as long as the wallet must stay fresh. Dropping
+    /// // it stops the background sync.
     /// let sync = wallet.sync_in_background(provider.clone(), Duration::from_secs(5));
+    /// # Ok(sync)
+    /// # }
+    /// ```
     ///
+    /// Read [`BackgroundSync::last_error`] later, for example on each tick of
+    /// a UI:
+    ///
+    /// ```rust,no_run
+    /// # fn tick(sync: &midnight_wallet::BackgroundSync) {
     /// if let Some(error) = sync.last_error() {
     ///     eprintln!("the last background resync failed: {error}");
     /// }
-    /// # Ok(())
     /// # }
     /// ```
     ///
     /// # Panics
     ///
-    /// When called outside a Tokio runtime.
+    /// When `pause` is zero, because the loop then resyncs with no rest. Also
+    /// when called outside a Tokio runtime.
     pub fn sync_in_background(
         self: &Arc<Self>,
         chain: Arc<dyn ChainView>,
         pause: Duration,
     ) -> BackgroundSync {
+        assert!(
+            !pause.is_zero(),
+            "the pause of a background sync must be above zero"
+        );
         background::spawn(Arc::clone(self), chain, pause)
     }
 
