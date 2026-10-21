@@ -34,7 +34,9 @@ impl BackgroundSync {
     /// the first pass ends, it returns `None`. A later pass that commits
     /// clears the error.
     pub fn last_error(&self) -> Option<Arc<WalletError>> {
-        if self.task.is_finished() {
+        // The task drops its status sender before the task counts as
+        // finished, and `wait_until` ends on that drop.
+        if self.task.is_finished() || self.status.has_changed().is_err() {
             return Some(Arc::new(stopped()));
         }
         self.status.borrow().clone()
@@ -60,7 +62,7 @@ impl BackgroundSync {
     ///
     /// # async fn example(sync: &BackgroundSync) -> Result<(), Box<dyn std::error::Error>> {
     /// // After a fee-paying transaction finalizes, wait until a pass sees its
-    /// // Dust spend and no build holds Dust.
+    /// // Dust spend and no build reserves Dust.
     /// tokio::time::timeout(
     ///     Duration::from_secs(60),
     ///     sync.wait_until(|b| b.dust.spendable_speck == b.dust.balance_speck),

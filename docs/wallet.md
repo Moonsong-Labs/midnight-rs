@@ -223,20 +223,25 @@ A failed pass does not stop the sync. The task logs the error, and the next pass
 ```rust
 use std::time::Duration;
 
+// `balance()` returns the state of the last pass. Resync first, so that
+// `before` is the state that the build of the transfer starts from.
+provider.resync_wallet().await?;
 let before = provider.balance().await?.shielded_value(token);
 provider
     .transfer_shielded(token, amount, &recipient)
     .await?
     .wait_finalized()
     .await?;
+// The transfer succeeded, so `before` covered `amount`.
+let after = before - amount;
 tokio::time::timeout(
     Duration::from_secs(60),
-    sync.wait_until(|b| b.shielded_value(token) == before - amount),
+    sync.wait_until(|b| b.shielded_value(token) == after),
 )
 .await??;
 ```
 
-After a deploy, a contract call or another fee-paying transaction, wait until no build holds Dust: `|b| b.dust.spendable_speck == b.dust.balance_speck`. A resync that sees the Dust spend ends the reservation of the build.
+After a deploy, a contract call or another fee-paying transaction, wait until no build reserves Dust: `|b| b.dust.spendable_speck == b.dust.balance_speck`. A resync that sees the Dust spend ends the reservation of the build.
 
 The wait has no deadline, so wrap it in `tokio::time::timeout`. A failed pass does not end the wait, because a later pass can commit. After a timeout, `sync.last_error()` tells whether the passes fail. When the background task has ended, the wait fails with `WalletError::SyncTaskJoin`.
 
