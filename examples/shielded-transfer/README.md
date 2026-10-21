@@ -1,6 +1,6 @@
 # Shielded Transfer Example
 
-Self-transfer of 1 unit of a shielded token, end to end: sync wallet → start a background sync → build → submit → wait for finalization → wait for the outputs → print the post-balance.
+Self-transfer of 1 unit of a shielded token, end to end: sync wallet → build → submit → wait for finalization → start a background sync → wait for the outputs → print the post-balance.
 
 **Local devnet only.** The public preprod faucet only funds *unshielded* addresses (NIGHT), and the SDK has no `unshielded → shielded` conversion helper. The local dev preset of `midnightntwrk/midnight-node` mints several shielded test tokens to the hardcoded dev seed at genesis. The example spends one of them, so it needs no external funding step. For the full token model see [`docs/tokens.md`](../../docs/tokens.md).
 
@@ -83,5 +83,6 @@ balance: ... SPECK, spendable UTXOs: ...
 - `PendingTx::wait_best` + `wait_finalized`: the submission lifecycle
 - `LocalWallet::sync_in_background`: resync the attached wallet in a background task until the handle drops
 - `BackgroundSync::wait_until` with a balance check: wait until the wallet sees the outputs of the transfer
+- `BackgroundSync::last_error`: after a timeout, the error of the last pass, when that pass failed
 
 For the wallet API reference (sync, balances, transfers, Dust, persistence), see [`docs/wallet.md`](../../docs/wallet.md).

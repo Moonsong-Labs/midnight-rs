@@ -7,10 +7,8 @@
 //! None of this is part of the swap itself; it is just arranging something to
 //! trade.
 
-use anyhow::Context;
 use midnight_core::contract::parse_address;
 use midnight_core::provider::{HashOutput, ShieldedTokenType};
-use midnight_core::wallet::BackgroundSync;
 use midnight_core::{MidnightProvider, Seed};
 
 mod contract {
@@ -19,10 +17,9 @@ mod contract {
     );
 }
 
-/// Mint `amount` units of a fresh shielded token to `recipient`.
-///
-/// Wait until `recipient_sync` sees the coin. Return the type of the minted
-/// token. `minter` deploys the contract and pays the fees.
+/// Mint `amount` units of a fresh shielded token to `recipient`, and return
+/// the type of the minted token. `minter` deploys the contract and pays the
+/// fees.
 ///
 /// The mint circuit sends the new coin to the recipient's shielded key and
 /// attaches the discovery ciphertext, so the recipient finds it on resync with
@@ -30,7 +27,6 @@ mod contract {
 pub async fn mint_token_to(
     minter: &MidnightProvider,
     recipient: &Seed,
-    recipient_sync: &BackgroundSync,
     amount: u64,
 ) -> anyhow::Result<ShieldedTokenType> {
     use midnight_core::compact_bindgen::Bytes;
@@ -55,13 +51,5 @@ pub async fn mint_token_to(
         )
         .await?;
 
-    let token_type =
-        parse_address(mint.address())?.custom_shielded_token_type(HashOutput(domain_sep));
-    tokio::time::timeout(
-        crate::EFFECT_TIMEOUT,
-        recipient_sync.wait_until(|b| b.shielded_value(token_type) == u128::from(amount)),
-    )
-    .await
-    .context("the recipient did not discover the minted token")??;
-    Ok(token_type)
+    Ok(parse_address(mint.address())?.custom_shielded_token_type(HashOutput(domain_sep)))
 }

@@ -143,7 +143,8 @@ async fn main() -> anyhow::Result<()> {
         }
         None => {
             bail!(
-                "recipient did not discover the minted coin; shielded coins seen: {:?}",
+                "recipient did not discover the minted coin; last pass error: {:?}; shielded coins seen: {:?}",
+                sync.last_error().map(|e| e.to_string()),
                 balance
                     .shielded
                     .coins

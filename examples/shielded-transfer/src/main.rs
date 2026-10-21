@@ -66,16 +66,15 @@ async fn main() -> anyhow::Result<()> {
     let address = wallet.shielded_address();
     let wallet = Arc::new(LocalWallet::new(wallet));
     let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));
-    let sync = wallet.sync_in_background(provider.clone(), SYNC_PAUSE);
     println!("Sync complete.");
     println!("Shielded address:  {address}\n");
 
-    // Pick the first shielded coin in the wallet. The local dev preset funds
-    // the dev seed with several shielded test tokens; on a fresh devnet the
-    // default-id token ([0; 32]) is always there.
+    // Pick a coin worth more than 1 unit, so the transfer has a change output:
+    // the default coin selection spends the largest coin of the token. The
+    // local dev preset funds the dev seed with several shielded test tokens.
     let balance = provider.balance().await?;
-    let Some(coin) = balance.shielded.coins.first().cloned() else {
-        bail!("wallet has no shielded coins to spend. Is this a fresh local devnet?");
+    let Some(coin) = balance.shielded.coins.iter().find(|c| c.value > 1).cloned() else {
+        bail!("wallet has no shielded coin worth more than 1 unit. Is this a fresh local devnet?");
     };
     println!("--- Pre-transfer shielded balance ---");
     for c in &balance.shielded.coins {
@@ -101,11 +100,16 @@ async fn main() -> anyhow::Result<()> {
     // The self-transfer spends one coin and outputs 1 unit plus the change, so
     // the wallet holds one more coin once a pass sees it.
     println!("Waiting for the wallet to see the outputs...");
+    let sync = wallet.sync_in_background(provider.clone(), SYNC_PAUSE);
     tokio::time::timeout(
         EFFECT_TIMEOUT,
         sync.wait_until(|b| b.shielded.total_count > balance.shielded.total_count),
     )
     .await
+    .map_err(|elapsed| {
+        sync.last_error()
+            .map_or_else(|| elapsed.into(), anyhow::Error::from)
+    })
     .context("the wallet did not see the outputs")??;
     let post = provider.balance().await?;
     println!("\n--- Post-transfer shielded balance ---");

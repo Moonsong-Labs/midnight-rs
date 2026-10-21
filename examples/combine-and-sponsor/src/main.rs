@@ -81,7 +81,6 @@ async fn main() -> anyhow::Result<()> {
     let address_b = wallet.shielded_address();
     let wallet_b = Arc::new(LocalWallet::new(wallet));
     let provider_b = Arc::new(provider_b.with_wallet(Arc::clone(&wallet_b)));
-    let sync_b = wallet_b.sync_in_background(provider_b.clone(), SYNC_PAUSE);
     println!("   A and B synced.\n");
 
     // --- A deploys the counter (A is genesis-funded with Dust) ---
@@ -116,11 +115,17 @@ async fn main() -> anyhow::Result<()> {
         .await?
         .wait_finalized()
         .await?;
+    let sync_b = wallet_b.sync_in_background(provider_b.clone(), SYNC_PAUSE);
     tokio::time::timeout(
         EFFECT_TIMEOUT,
         sync_b.wait_until(|b| b.shielded_value(coin.token_type) >= b_before + SHIELDED_TO_B),
     )
     .await
+    .map_err(|elapsed| {
+        sync_b
+            .last_error()
+            .map_or_else(|| elapsed.into(), anyhow::Error::from)
+    })
     .context("B did not see the coin from A")??;
     println!("   B holds a coin (and no Dust).\n");
 
