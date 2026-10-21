@@ -610,10 +610,15 @@ async fn a_wait_outlasts_a_failed_pass() {
 
     let ready = AtomicBool::new(false);
     let (waited, ()) = tokio::join!(
-        tokio::time::timeout(
-            Duration::from_secs(30),
-            sync.wait_until(|_| ready.load(Ordering::SeqCst)),
-        ),
+        async {
+            let waited = tokio::time::timeout(
+                Duration::from_secs(30),
+                sync.wait_until(|_| ready.load(Ordering::SeqCst)),
+            )
+            .await;
+            // A wait that returns before the condition is true reads false here.
+            (waited, ready.load(Ordering::SeqCst))
+        },
         async {
             wait_until("a failed pass", || {
                 matches!(sync.last_error().as_deref(), Some(WalletError::Indexer(_)))
@@ -626,7 +631,7 @@ async fn a_wait_outlasts_a_failed_pass() {
         },
     );
     assert!(
-        matches!(waited, Ok(Ok(()))),
+        matches!(waited, (Ok(Ok(())), true)),
         "a failed pass must not end the wait, got {waited:?}"
     );
 }
