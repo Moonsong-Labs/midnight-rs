@@ -32,8 +32,12 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::{Context, bail};
 use midnight_core::provider::DustlessBuilder;
+use midnight_core::wallet::LocalWallet;
 use midnight_core::{MidnightProvider, Wallet};
 
 mod counter {
@@ -53,6 +57,13 @@ const SEED_B: &str = "0000000000000000000000000000000000000000000000000000000000
 /// Shielded units A seeds B with, so B has a coin to transfer.
 const SHIELDED_TO_B: u128 = 3;
 
+/// The pause between two passes of B's background sync. A short pause ends
+/// the wait soon after the indexer serves the transaction.
+const SYNC_PAUSE: Duration = Duration::from_secs(1);
+
+/// How long a wallet waits to see the effect of a finalized transaction.
+const EFFECT_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Combine-and-Sponsor Example (B acts, A pays) ===\n");
@@ -68,7 +79,8 @@ async fn main() -> anyhow::Result<()> {
     let provider_b = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::from_seed(SEED_B)?.sync(&provider_b).await?;
     let address_b = wallet.shielded_address();
-    let provider_b = provider_b.with_wallet(wallet);
+    let wallet_b = Arc::new(LocalWallet::new(wallet));
+    let provider_b = Arc::new(provider_b.with_wallet(Arc::clone(&wallet_b)));
     println!("   A and B synced.\n");
 
     // --- A deploys the counter (A is genesis-funded with Dust) ---
@@ -95,12 +107,26 @@ async fn main() -> anyhow::Result<()> {
         .cloned()
         .context("wallet A has no shielded coins. Is this a fresh local devnet?")?;
     println!("2. A sends B a shielded coin...");
+    // B can hold this token from an earlier run, so B waits for its total to
+    // grow, not for any coin of the token.
+    let b_before = provider_b.balance().await?.shielded_value(coin.token_type);
     provider_a
         .transfer_shielded(coin.token_type, SHIELDED_TO_B, &address_b)
         .await?
         .wait_finalized()
         .await?;
-    provider_b.resync_wallet().await?;
+    let sync_b = wallet_b.sync_in_background(provider_b.clone(), SYNC_PAUSE);
+    tokio::time::timeout(
+        EFFECT_TIMEOUT,
+        sync_b.wait_until(|b| b.shielded_value(coin.token_type) >= b_before + SHIELDED_TO_B),
+    )
+    .await
+    .map_err(|elapsed| {
+        sync_b
+            .last_error()
+            .map_or_else(|| elapsed.into(), anyhow::Error::from)
+    })
+    .context("B did not see the coin from A")??;
     println!("   B holds a coin (and no Dust).\n");
 
     // --- B builds its two Dustless transactions (it pays nothing) ---
