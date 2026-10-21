@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use subxt::OnlineClient;
+use subxt::backend::CombinedBackend;
 use subxt::config::RpcConfigFor;
+use subxt::ext::futures::StreamExt;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
 use subxt::rpcs::client::{RpcClient, RpcParams, rpc_params};
 use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
@@ -782,6 +784,9 @@ impl MidnightProvider {
     /// cache invalidation. The initial dial is bounded by [`RPC_TIMEOUT`]
     /// (the reconnecting client would otherwise retry a misconfigured URL
     /// forever instead of failing fast).
+    ///
+    /// A caller can drop the connect at any await. The connection then
+    /// closes when its pending requests end.
     async fn get_or_connect(&self) -> Result<NodeConnection, ProviderError> {
         {
             let guard = self.conn.read().await;
@@ -805,17 +810,29 @@ impl MidnightProvider {
         .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         let rpc = RpcClient::new(reconnecting);
         // The runtime-aware client shares the same auto-reconnecting
-        // transport; building it fetches metadata, so it is part of the
-        // one-time connection cost.
-        let client = OnlineClient::<subxt::SubstrateConfig>::from_rpc_client(rpc.clone())
+        // transport.
+        let (backend, mut driver) = CombinedBackend::builder()
+            .build(rpc.clone())
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("building the node backend: {e}")))?;
+        let client = OnlineClient::<subxt::SubstrateConfig>::from_backend(Arc::new(backend))
             .await
             .map_err(|e| ProviderError::Rpc(format!("building the runtime client: {e}")))?;
 
         let mut guard = self.conn.write().await;
-        if guard.is_none() {
-            *guard = Some(NodeConnection { rpc, client });
-        }
-        Ok(guard.as_ref().unwrap().clone())
+        let conn = guard.get_or_insert_with(|| {
+            // Spawn the follow driver only for the kept connection: the
+            // driver holds the client open until a hard error.
+            tokio::spawn(async move {
+                while let Some(res) = driver.next().await {
+                    if let Err(e) = res {
+                        debug!(error = %e, "chainHead follow error");
+                    }
+                }
+            });
+            NodeConnection { rpc, client }
+        });
+        Ok(conn.clone())
     }
 
     async fn call_runtime_api<R: subxt::ext::scale_decode::DecodeAsType>(
@@ -1347,31 +1364,30 @@ impl Drop for HeldInputs {
 /// [`SyncSource`](midnight_types::chain_pin::SyncSource), and the provider's
 /// own resync checks pins through the same answers.
 ///
-/// A query connects to the node first, and a failed connect gives `None`.
-/// After the connect, each answer comes within ten seconds. A query that
+/// Each answer comes within ten seconds, the connect included. A query that
 /// the node does not answer in that time gives `None`, as a failed query
-/// does. The timeout ends only the wait. While the node is down, the
-/// reconnecting client keeps the query in its queue. The client sends it
-/// after the reconnect and drops the late answer.
+/// does. A timeout during the first connect drops that connect, and the next
+/// query dials again. After the first connect, the timeout ends only the
+/// wait. While the node is down, the reconnecting client keeps the query in
+/// its queue. The client sends it after the reconnect and drops the late
+/// answer.
 #[async_trait]
 impl midnight_types::chain_pin::ChainView for MidnightProvider {
     async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>> {
-        self.get_or_connect().await.ok()?;
         query_within_timeout(self.get_block_hashes_by_height(height))
             .await
             .ok()
     }
 
     async fn finalized_height(&self) -> Option<u64> {
-        self.get_or_connect().await.ok()?;
         query_within_timeout(self.get_finalized_block_height())
             .await
             .ok()
     }
 }
 
-/// The node's network has the same connect and the same bound as the
-/// `ChainView` answers of this provider.
+/// The node's network has the same bound as the `ChainView` answers of this
+/// provider.
 #[async_trait]
 impl midnight_types::chain_pin::SyncSource for MidnightProvider {
     fn indexer_url(&self) -> &str {
@@ -1379,11 +1395,7 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
     }
 
     async fn network(&self) -> Option<Network> {
-        let answer = match self.get_or_connect().await {
-            Ok(_) => query_within_timeout(self.ledger_network_id()).await,
-            Err(e) => Err(e),
-        };
-        match answer {
+        match query_within_timeout(self.ledger_network_id()).await {
             Ok(network) => network,
             Err(e) => {
                 warn!(error = %e, "could not read the node's network");
@@ -1395,9 +1407,6 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
 
 /// The answer to a chain `query`, or an error when the node gives none
 /// within [`QUERY_TIMEOUT`].
-///
-/// Connect before the query. A timeout that drops a connect in the middle
-/// of its build can leave that connection open.
 async fn query_within_timeout<T>(
     query: impl Future<Output = Result<T, ProviderError>>,
 ) -> Result<T, ProviderError> {
@@ -1552,5 +1561,99 @@ mod tests {
         .await;
 
         assert_eq!(height, Ok(None));
+    }
+
+    /// A chain query whose first connect stalls gives no answer within the
+    /// bound. The node accepts the dial and never answers the genesis-hash
+    /// query of the client build. A bound that starts after the connect waits
+    /// for the client's 60 s request timeout. The test takes about ten
+    /// seconds: paused time does not work with real sockets.
+    #[tokio::test]
+    async fn a_chain_query_whose_connect_stalls_gives_none() {
+        use midnight_types::chain_pin::ChainView;
+
+        let (listener, node_url) = bind_node().await;
+        let (genesis_asked_tx, mut genesis_asked_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = testutil::accept_ws(stream).await;
+            let mut genesis_asked_tx = Some(genesis_asked_tx);
+            while let Some(request) = testutil::next_json(&mut ws).await {
+                match request["method"].as_str() {
+                    Some("rpc_methods") => answer(&mut ws, &request, json!({"methods": []})).await,
+                    Some("chain_getBlockHash") => {
+                        if let Some(tx) = genesis_asked_tx.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let provider = MidnightProvider::new(&node_url, "http://127.0.0.1:1");
+
+        let answer = tokio::time::timeout(
+            Duration::from_secs(30),
+            ChainView::finalized_height(&provider),
+        )
+        .await;
+
+        assert!(
+            genesis_asked_rx.try_recv().is_ok(),
+            "the client build never asked for the genesis hash, so a failed dial can explain the answer"
+        );
+        assert_eq!(answer, Ok(None));
+    }
+
+    /// A connect that its caller drops in the middle of the runtime-client
+    /// build closes its connection. The client starts its follow driver
+    /// before it queries the genesis hash. A drop between the two leaves that
+    /// driver to hold the connection open.
+    #[tokio::test]
+    async fn a_connect_dropped_during_the_build_closes_its_connection() {
+        let (listener, node_url) = bind_node().await;
+        let (genesis_asked_tx, genesis_asked_rx) = oneshot::channel();
+        let (answer_genesis_tx, answer_genesis_rx) = oneshot::channel::<()>();
+        let (closed_tx, closed_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = testutil::accept_ws(stream).await;
+            let genesis_request = loop {
+                let request = testutil::next_json(&mut ws).await.expect("a request");
+                match request["method"].as_str() {
+                    Some("rpc_methods") => {
+                        let methods = json!({"methods": ["chainHead_v1_follow"]});
+                        answer(&mut ws, &request, methods).await;
+                    }
+                    Some("chainSpec_v1_genesisHash") => break request,
+                    _ => {}
+                }
+            };
+            genesis_asked_tx.send(()).unwrap();
+            answer_genesis_rx.await.unwrap();
+            let genesis = format!("0x{}", "00".repeat(32));
+            answer(&mut ws, &genesis_request, json!(genesis)).await;
+            let closed = tokio::time::timeout(Duration::from_secs(5), async {
+                while testutil::next_json(&mut ws).await.is_some() {}
+            })
+            .await
+            .is_ok();
+            let _ = closed_tx.send(closed);
+        });
+        let provider = MidnightProvider::new(&node_url, "http://127.0.0.1:1");
+
+        tokio::select! {
+            connect = provider.get_or_connect() => {
+                panic!("the connect ended before the genesis answer: {:?}", connect.err())
+            }
+            asked = genesis_asked_rx => asked.unwrap(),
+        }
+        // The pending genesis query keeps the connection open until it ends.
+        answer_genesis_tx.send(()).unwrap();
+
+        assert!(
+            closed_rx.await.unwrap(),
+            "the connection stayed open after its connect was dropped"
+        );
     }
 }
