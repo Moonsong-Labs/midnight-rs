@@ -1003,7 +1003,7 @@ mod simulator_tests {
     }
 
     /// Each call adds one to the private state and returns the sum.
-    struct NextSecret;
+    pub(super) struct NextSecret;
 
     impl secret_counter::Witnesses for NextSecret {
         type PrivateState = u64;
@@ -1091,5 +1091,46 @@ mod simulator_tests {
 
         let key = simulator.caller_coin_public_key().unwrap();
         assert_eq!(key.bytes, Bytes([5; 32]));
+    }
+}
+
+#[cfg(test)]
+mod witness_adapter_tests {
+    use compact_bindgen::midnight_contract::runtime::{
+        WitnessContext, WitnessOutcome, WitnessProvider,
+    };
+
+    use crate::secret_counter;
+    use crate::simulator_tests::NextSecret;
+
+    /// Returns a fixed secret and leaves the private state alone.
+    struct FixedSecret;
+
+    impl secret_counter::Witnesses for FixedSecret {
+        type PrivateState = u64;
+
+        fn next_secret(&self, _ps: &mut u64) -> Result<u16, secret_counter::WitnessError> {
+            Ok(7)
+        }
+    }
+
+    /// The private-state buffer after one `next_secret` call that starts from
+    /// an empty buffer.
+    fn buffer_after_one_call<W: secret_counter::Witnesses>(witnesses: &W) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        let outcome = secret_counter::WitnessesAdapter(witnesses)
+            .call_witness(&mut WitnessContext::new(&mut buffer), "next_secret", &[])
+            .expect("next_secret runs");
+        assert!(matches!(outcome, WitnessOutcome::Value(_)), "{outcome:?}");
+        buffer
+    }
+
+    /// An empty buffer holds the `Default` state. A buffer that holds the
+    /// encoding of `Default` (`0`) after a witness that left the state alone
+    /// reads as a change, and a build-only call then refuses.
+    #[test]
+    fn the_adapter_writes_the_private_state_only_when_a_witness_changes_it() {
+        assert_eq!(buffer_after_one_call(&FixedSecret), b"");
+        assert_eq!(buffer_after_one_call(&NextSecret), b"1");
     }
 }

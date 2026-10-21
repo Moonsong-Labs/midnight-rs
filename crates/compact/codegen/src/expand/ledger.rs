@@ -1114,6 +1114,12 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// Build and prove the call transaction and return its bytes,
                 /// **without** submitting. Combine it with other transactions via
                 /// `MidnightProvider::merge_transactions`, then submit yourself.
+                ///
+                /// The build records no private-state snapshot. So it fails with
+                /// `ContractError::UnrecordedPrivateState` when the witnesses change the
+                /// private state, after the local run and before the build reserves an
+                /// input or makes a proof. Submit such a call with `.await` or `.send()`.
+                /// See `midnight_contract::Contract::build_call_with`.
                 pub async fn build(
                     self,
                 ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
@@ -1189,6 +1195,12 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 // build-and-prove future is large, and leaving it inline here
                 // makes the caller's frame big enough to overflow the stack on
                 // debug builds.
+                /// Build and prove the call with no Dust fee, for another wallet to
+                /// sponsor with `MidnightProvider::balance_transaction`.
+                ///
+                /// As with `build`, it fails with `ContractError::UnrecordedPrivateState`
+                /// when the witnesses change the private state, before the build reserves
+                /// an input or makes a proof. Submit such a call with `.await` or `.send()`.
                 fn without_dust(
                     self,
                 ) -> impl ::core::future::Future<
@@ -1237,6 +1249,12 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// Attach a typed [`Witnesses`] implementation. Each circuit call
                 /// then loads the contract's private state before execution,
                 /// threads it through the witnesses, and persists it after.
+                ///
+                /// Only a submitted call (`.await` or `.send()`) records the state.
+                /// A call builder's `build` and `without_dust` refuse a call whose
+                /// witnesses change the state, with
+                /// `ContractError::UnrecordedPrivateState`. [`Witnesses`] says when
+                /// the state counts as changed.
                 pub fn with_witnesses<W: Witnesses>(
                     self,
                     witnesses: &'a W,

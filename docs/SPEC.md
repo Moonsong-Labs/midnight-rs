@@ -149,7 +149,7 @@ Arc<LocalWallet>                                    // a handle on the attached 
       sync.wait_until(done).await  // wait until done(&WalletBalance) holds: at the call and after each pass
 ```
 
-`transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md).
+`transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md). A contract call's `.build()` and `.without_dust()` record no private state, so they fail with `ContractError::UnrecordedPrivateState` when the call's witnesses change it. The refusal comes after the local run and before the build reserves an input or makes a proof.
 
 `with_network` accepts a `Network` variant or a `&str` / `String` (via `impl Into<Network>`). See [`docs/wallet.md`](wallet.md) for the typed and string forms.
 
