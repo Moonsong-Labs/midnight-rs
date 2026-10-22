@@ -78,13 +78,19 @@ The compiler declares these natives only with `--feature-zkir-v3`. A contract co
 | Native | Symbols | Returns | Status |
 | --- | --- | --- | --- |
 | `sha512` | `sha512` | Bytes 64 | implemented (via `sha2::Sha512` over the `persistentHash` bytes, as ZKIR v3 does) |
-| `neg`, `inv` | `{secp256k1,secp256r1,curve25519}{Base,Scalar}{Neg,Inv}` | the same field | missing |
-| `secp256k1PointX`, `secp256k1PointY` | the same | Secp256k1Base | missing |
+| `neg`, `inv` | `secp256k1{Base,Scalar}{Neg,Inv}` | the same field | implemented (`try_builtin`) |
+| `neg`, `inv` | `{secp256r1,curve25519}{Base,Scalar}{Neg,Inv}` | the same field | missing |
+| `secp256k1PointX`, `secp256k1PointY` | the same | Secp256k1Base | implemented |
 | `secp256r1PointX`, `secp256r1PointY` | the same | Secp256r1Base | missing |
 | `curve25519PointX`, `curve25519PointY` | the same | Curve25519Base | missing |
-| `ecAdd`, `ecMul`, `ecMulGenerator` | `{secp256k1,secp256r1,curve25519}{Add,Mul,MulGenerator}` | the curve's point | missing |
+| `ecAdd`, `ecMul`, `ecMulGenerator` | `secp256k1{Add,Mul,MulGenerator}` | Secp256k1Point | implemented |
+| `ecAdd`, `ecMul`, `ecMulGenerator` | `{secp256r1,curve25519}{Add,Mul,MulGenerator}` | the curve's point | missing |
 
-The missing natives all need foreign field and point values, which the interpreter does not have. The analyzed-IR parser knows no secp256r1 or Curve25519 type, and the interpreter and the codegen refuse the secp256k1 types. The TypeScript runtime also exports `+`, `-` and `*` for each foreign field (`secp256k1BaseAdd` and the others). They are not in the native tables, but they need the same values. ZKIR v3 computes these values with the `k256`, `p256` and `curve25519` modules of `midnight-curves`, which this workspace already pins.
+The secp256k1 natives compute with the `k256` module of `midnight-curves`, as ZKIR v3 does. The interpreter holds a secp256k1 value as an `AlignedValue` in the encoding that the compiler gives it. `midnight_typed_state::{Secp256k1Base, Secp256k1Scalar, Secp256k1Point}` own that encoding. The `+`, `-` and `*` of a secp256k1 field are not natives: the IR types the operation with the field, and the interpreter computes it in that field. They match the `secp256k1BaseAdd` family of the TypeScript runtime.
+
+A conditional gives `inv`, `secp256k1PointX` and `secp256k1PointY` no protection at proving time. The interpreter and the TypeScript runtime compute only the branch taken, but ZKIR v3 computes both branches and then selects one. So `b ? inv(x) : y` runs off-chain with `b` false and `x` zero, and the prover then fails on the inverse of zero. The same applies to the coordinates of the identity. A guarded-off witness or ledger read of a `Secp256k1Point` is the identity in ZKIR v3. So a coordinate of it fails at the prover each time the branch is not taken. Give these natives an argument that is valid on both branches.
+
+The missing natives need secp256r1 and Curve25519 values, and the analyzed-IR parser knows neither type.
 
 ### Interpreter intrinsics outside the native table
 

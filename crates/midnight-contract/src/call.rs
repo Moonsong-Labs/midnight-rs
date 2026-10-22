@@ -51,7 +51,7 @@ pub struct UnprovenCallTx {
 /// Default transaction TTL: 1 hour.
 ///
 /// Used by the low-level [`build_unproven_call_tx`] path. The high-level path
-/// ([`crate::deploy::deploy_funded`], [`call_funded_with`], and the
+/// ([`crate::deploy::deploy_funded`], [`call_transaction`], and the
 /// [`crate::DeployBuilder`] / [`crate::Contract::call_with`] APIs that wrap
 /// them) reads `global_ttl` from chain parameters via the upstream
 /// `StandardTransactionInfo::build`, so this constant doesn't apply there.
@@ -138,52 +138,39 @@ pub(crate) fn run_call(
     )?)
 }
 
-/// Run a circuit and build its funded, proven transaction on the chain's
-/// generation. Returns the transaction bytes, the contract's state after the
-/// circuit, and the circuit's result.
+/// Build the funded, proven transaction of a circuit run on the chain's
+/// generation, and return its bytes.
 ///
-/// The circuit runs ([`run_call`]) before the wallet resync, so a failed
-/// `assert` costs no resync and no proof.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn call_funded_with(
+/// `exec_result` is the run of `circuit` on `state`. The build resyncs the
+/// wallet and reserves the inputs that the transaction spends.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the inputs of the generation's own `call_transaction`, before the dispatch"
+)]
+pub(crate) async fn call_transaction(
     circuit: &compact_codegen::ir::Circuit,
-    program: &interpreter::Program<'_>,
+    args: &[(&str, runtime::Value)],
+    exec_result: &runtime::ExecutionResult,
     state: &StateAtBlock,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     provider: &midnight_provider::MidnightProvider,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
-    args: &[(&str, runtime::Value)],
-    witnesses: &dyn runtime::WitnessProvider,
-    private_state: Option<&mut Vec<u8>>,
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     // When false, skip Dust funding: the call is built proven but fee-less, for
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
     pay_fees: bool,
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
-    let (coin_public_key, _) = provider.shielded_public_keys().await?;
-    let exec_result = run_call(
-        circuit,
-        program,
-        &state.view,
-        state.time,
-        contract_address,
-        args,
-        witnesses,
-        private_state,
-        Some(coin_public_key),
-    )?;
-
+) -> Result<Vec<u8>, ContractError> {
     // Each arm is boxed so this frame holds one generation's future, not
     // both (see the frame-size note on `MidnightProvider::resync_wallet`).
-    let tx_bytes = match provider.builds().await? {
+    match provider.builds().await? {
         Builds::Ledger8(builds) => {
             Box::pin(crate::ledger_8::call::call_transaction(
                 &builds,
                 circuit,
                 args,
-                &exec_result,
+                exec_result,
                 &state.view,
                 &state.bytes,
                 state.time,
@@ -194,14 +181,14 @@ pub(crate) async fn call_funded_with(
                 shielded,
                 pay_fees,
             ))
-            .await?
+            .await
         }
         Builds::Ledger9(builds) => {
             Box::pin(crate::ledger_9::call::call_transaction(
                 &builds,
                 circuit,
                 args,
-                &exec_result,
+                exec_result,
                 &state.view,
                 &state.bytes,
                 state.time,
@@ -212,10 +199,9 @@ pub(crate) async fn call_funded_with(
                 shielded,
                 pay_fees,
             ))
-            .await?
+            .await
         }
-    };
-    Ok((tx_bytes, exec_result.state, exec_result.result))
+    }
 }
 
 /// The circuit's public state program, as the transcript replays it: the
