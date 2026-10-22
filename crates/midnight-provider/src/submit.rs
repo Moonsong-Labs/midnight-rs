@@ -32,20 +32,6 @@ pub(crate) fn rejection_is_definitive(err: &SubmitError) -> bool {
     matches!(err, SubmitError::Invalid { .. })
 }
 
-/// Whether a failed submission proves the transaction never reached the node,
-/// so the inputs it reserved are safe to hand back immediately.
-///
-/// Only [`SubmitError::NotSubmitted`] says that: it failed before the RPC call.
-/// [`SubmitError::SubmitRpc`] does not say whether the node holds the
-/// transaction (see its docs). A wait, not the submit, reports every other
-/// variant.
-pub(crate) fn never_reached_the_node(err: &ProviderError) -> bool {
-    matches!(
-        err,
-        ProviderError::Submission(SubmitError::NotSubmitted { .. })
-    )
-}
-
 /// Why a transaction submission (or the wait for its inclusion) failed.
 ///
 /// Carried by [`ProviderError::Submission`]. The variants matter because
@@ -351,13 +337,6 @@ impl Reservation {
 }
 
 impl PendingTx {
-    /// Carry a build's reservation on this handle so a terminal rejection can
-    /// hand it back. See [`Reservation`].
-    pub(crate) fn with_reservation(mut self, reservation: Reservation) -> Self {
-        self.reservation = Some(reservation);
-        self
-    }
-
     /// The hash of the submitted extrinsic.
     pub fn extrinsic_hash(&self) -> ExtrinsicHash {
         self.progress.extrinsic_hash()
@@ -628,10 +607,6 @@ pub(crate) async fn submit_bytes(
 #[cfg(test)]
 mod tests {
 
-    fn err(e: SubmitError) -> ProviderError {
-        ProviderError::Submission(e)
-    }
-
     fn every_variant() -> [SubmitError; 7] {
         let m = || "x".to_string();
         [
@@ -657,21 +632,6 @@ mod tests {
             let expected = matches!(e, SubmitError::Invalid { .. });
             assert_eq!(rejection_is_definitive(&e), expected, "{e:?}");
         }
-    }
-
-    /// Releasing a transaction that can still land lets a later build spend
-    /// the same inputs, so the submit site frees them only when the
-    /// transaction provably never left this process. `SubmitRpc` is the
-    /// interesting one: a transport failure mid-call may still have delivered
-    /// it.
-    #[test]
-    fn only_a_failed_submission_frees_inputs_at_the_submit_site() {
-        for e in every_variant() {
-            let expected = matches!(e, SubmitError::NotSubmitted { .. });
-            assert_eq!(never_reached_the_node(&err(e.clone())), expected, "{e:?}");
-        }
-
-        assert!(!never_reached_the_node(&ProviderError::NoWallet));
     }
 
     use super::*;

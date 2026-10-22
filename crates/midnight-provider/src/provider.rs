@@ -815,31 +815,13 @@ impl MidnightProvider {
     ///
     /// Any other failure keeps the inputs reserved until their TTL passes,
     /// because the node can still hold the transaction. Use [`Self::submit`]
-    /// for bytes that this wallet did not build.
+    /// for bytes that this wallet did not build. This is
+    /// [`Self::prepare_reserved`], then [`PreparedTx::submit`](crate::PreparedTx::submit).
     pub async fn submit_reserved(
         &self,
         result: TransferResult,
     ) -> Result<PendingTx, ProviderError> {
-        match self.submit(&result.tx_bytes).await {
-            Ok(pending) => Ok(match self.facade() {
-                Some(wallet) => {
-                    pending.with_reservation(crate::submit::Reservation::new(wallet, result.spent))
-                }
-                None => pending,
-            }),
-            Err(err) => {
-                if crate::submit::never_reached_the_node(&err)
-                    && let Err(release_err) = self.release(&result.spent).await
-                {
-                    tracing::warn!(
-                        error = %release_err,
-                        "could not release the inputs of a transaction that never reached the \
-                         node; they stay reserved until their TTL elapses"
-                    );
-                }
-                Err(err)
-            }
-        }
+        self.prepare_reserved(result).await?.submit().await
     }
 
     /// The attached wallet's shielded public keys. See
