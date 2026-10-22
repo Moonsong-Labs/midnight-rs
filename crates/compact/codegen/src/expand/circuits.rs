@@ -207,6 +207,15 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
         ///
         /// Each method returns `Result<T, WitnessError>`: return `Ok` with the
         /// witness value, or `Err` (see [`WitnessError`]) to abort the call.
+        ///
+        /// A witness changes the private state when the `serde_json` encoding
+        /// of the state after it differs from the encoding before it. Only a
+        /// call that changes the state records a new snapshot. A call
+        /// builder's `build` and `without_dust` record no snapshot, so they
+        /// refuse a call that changes the state. A `PrivateState` that holds
+        /// a `HashMap` can encode in another key order with no change of
+        /// value, which reads as a change. Prefer an ordered map, such as a
+        /// `BTreeMap`.
         pub trait Witnesses: Send + Sync {
             /// The contract's off-chain private state. `Default` is used when the
             /// contract has none stored yet. Serialized with `serde_json`.
@@ -267,12 +276,24 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                         );
                     }
                 };
-                let __new = serde_json::to_vec(&__ps).map_err(|__e| {
-                    midnight_contract::runtime::InterpreterError::Witness(
-                        ::std::format!("encode private state: {__e}")
-                    )
-                })?;
-                __ctx.set_private_state(__new);
+                let __encode = |__ps: &<W as Witnesses>::PrivateState| {
+                    serde_json::to_vec(__ps).map_err(|__e| {
+                        midnight_contract::runtime::InterpreterError::Witness(
+                            ::std::format!("encode private state: {__e}")
+                        )
+                    })
+                };
+                let __new = __encode(&__ps)?;
+                // An empty buffer holds `Default`. A state that the witness
+                // left alone keeps its buffer, so the call records no snapshot.
+                let __changed = if __bytes.is_empty() {
+                    __new != __encode(&::core::default::Default::default())?
+                } else {
+                    __new.as_slice() != __bytes
+                };
+                if __changed {
+                    __ctx.set_private_state(__new);
+                }
                 ::core::result::Result::Ok(
                     midnight_contract::runtime::WitnessOutcome::Value(__ret),
                 )

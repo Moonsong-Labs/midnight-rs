@@ -67,6 +67,25 @@ pub struct Simulated<T, L> {
     pub block_hash: BlockHash,
 }
 
+/// A circuit call that ran locally, before the build of its transaction
+/// reserves an input or makes a proof.
+struct RanCall {
+    /// The contract's state and the block time that the run read.
+    state: crate::state::StateAtBlock,
+    /// The contract's address.
+    address: midnight_types::ContractAddress,
+    /// The source of the keys that the build proves with.
+    zk_config: Arc<dyn ZkConfigProvider>,
+    /// The result of the run.
+    exec_result: crate::runtime::ExecutionResult,
+    /// The private state the witnesses started from.
+    baseline: Vec<u8>,
+    /// The private state after the witnesses ran.
+    private_state: Vec<u8>,
+    /// The extrinsic that wrote `baseline`, when the journal has a head.
+    depends_on: Option<[u8; 32]>,
+}
+
 /// A circuit call built and proven, before it is submitted.
 struct BuiltCall {
     /// The tagged-serialized proven transaction.
@@ -1132,14 +1151,41 @@ impl<P: Provider> Contract<P> {
     /// via [`MidnightProvider::merge_transactions`](midnight_provider::MidnightProvider::merge_transactions),
     /// then [`submit`](midnight_provider::MidnightProvider::submit) the result.
     /// It is the build-only mirror of [`Self::call_with`], which builds and
-    /// submits in one step.
+    /// submits in one step. When `pay_fees` is false, the transaction pays no
+    /// Dust fee, for another wallet to sponsor with
+    /// [`MidnightProvider::balance_transaction`](midnight_provider::MidnightProvider::balance_transaction).
     ///
-    /// Because nothing is submitted, the post-call private state is **not**
-    /// journaled, and this method does not return it either, so use this path
-    /// for stateless calls (e.g. a burn); a private-state contract's post-call
-    /// state changes would be lost. The dust UTXOs the build selected are
-    /// reserved on the wallet (as with `call_with`), since the transaction is
-    /// expected to be submitted.
+    /// A build-only call records no private-state snapshot. So it refuses a
+    /// call whose witnesses change the private state, after the local run of
+    /// the circuit and before the build. A call that leaves the private state
+    /// as it was, or a contract with no witnesses, builds as usual. The build
+    /// reserves the wallet inputs that the transaction spends, as
+    /// [`Self::call_with`] does. They stay reserved until the chain shows the
+    /// spends or their TTL passes (see [`MidnightProvider::release`]).
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::UnrecordedPrivateState`] when the witnesses change
+    ///   the private state. The call reserves no input and makes no proof.
+    ///   Submit the call with [`Self::send_call_with`] or [`Self::call_with`].
+    /// - [`ContractError::InvalidAddress`] when the handle's address does not
+    ///   parse.
+    /// - [`ContractError::Construction`] when the contract declares witnesses
+    ///   and the provider has no private-state store, or when the handle has
+    ///   no zk config. Both checks come before any query to the node.
+    /// - [`ContractError::NotFound`] when the node has no contract at the
+    ///   address.
+    /// - [`ContractError::StateFetch`] when the node's contract state does not
+    ///   decode.
+    /// - [`ContractError::PrivateState`] when the store cannot read the
+    ///   journal head.
+    /// - [`ContractError::Interpreter`] when the circuit or a witness fails,
+    ///   or when an argument does not encode.
+    /// - [`ContractError::Serialization`] when the transaction or one of its
+    ///   ledger values does not serialize.
+    /// - [`ContractError::Provider`] when the provider has no wallet, or when
+    ///   the read of the state or the block time, the build or the proof
+    ///   fails.
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,
@@ -1150,20 +1196,60 @@ impl<P: Provider> Contract<P> {
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
-        // When false, build the call proven but Dustless (fee-less), for another
-        // wallet to sponsor via `MidnightProvider::balance_transaction`.
         pay_fees: bool,
     ) -> Result<Vec<u8>, ContractError>
     where
         P: AsMidnightProvider,
     {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        let (built, _result) = Box::pin(self.build_call(
+        Box::pin(self.build_call_with_inner(
             circuit,
             program,
             circuit_name,
             args,
             witnesses,
+            coin_encryption_keys,
+            shielded,
+            pay_fees,
+        ))
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments of `build_call_with`"
+    )]
+    async fn build_call_with_inner(
+        &self,
+        circuit: &compact_codegen::ir::Circuit,
+        program: &compact_interpreter::Program<'_>,
+        circuit_name: &str,
+        args: &[(&str, crate::runtime::Value)],
+        witnesses: &dyn crate::runtime::WitnessProvider,
+        coin_encryption_keys: &[crate::ShieldedRecipient],
+        shielded: crate::call::ShieldedInputs,
+        pay_fees: bool,
+    ) -> Result<Vec<u8>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        let store = self.provider.as_midnight_provider().private_state();
+        require_private_state_for_witnesses(self.declares_witnesses, store.is_some())?;
+
+        let ran = Box::pin(self.run_for_build(circuit, program, args, witnesses, store.as_deref()))
+            .await?;
+        if private_state_persist(&ran.baseline, &ran.private_state) == PrivateStatePersist::Persist
+        {
+            return Err(ContractError::UnrecordedPrivateState {
+                address: self.address.clone(),
+            });
+        }
+
+        let (built, _result) = Box::pin(self.build_call(
+            ran,
+            circuit,
+            circuit_name,
+            args,
             coin_encryption_keys,
             shielded,
             pay_fees,
@@ -1191,24 +1277,21 @@ impl<P: Provider> Contract<P> {
         })
     }
 
-    /// Run the circuit on the state at the handle's block and build its proven
-    /// transaction. When `pay_fees` is false the transaction is left
-    /// fee-less. Returns the built call and the circuit's raw result.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the inputs of a call, as `build_call_with` and `call_with` take them"
-    )]
-    async fn build_call(
+    /// Run the circuit on the state at the handle's block, for a call that the
+    /// provider's wallet builds next. The witnesses start from the head of
+    /// `store`'s journal.
+    ///
+    /// `ownPublicKey()` returns the coin public key of the wallet. The run
+    /// reserves no input and makes no proof, so a failed `assert` costs no
+    /// resync and no proof.
+    async fn run_for_build(
         &self,
         circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
-        circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        coin_encryption_keys: &[crate::ShieldedRecipient],
-        shielded: crate::call::ShieldedInputs,
-        pay_fees: bool,
-    ) -> Result<(BuiltCall, Option<crate::runtime::Value>), ContractError>
+        store: Option<&dyn PrivateStateProvider>,
+    ) -> Result<RanCall, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1216,22 +1299,61 @@ impl<P: Provider> Contract<P> {
         let address = crate::address::parse_address(&self.address)?;
         let zk_config = self.zk_config.clone().ok_or_else(missing_zk_config)?;
         let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
-        let (baseline, depends_on) = self
-            .witness_baseline(provider.private_state().as_deref())
-            .await?;
+        let (baseline, depends_on) = self.witness_baseline(store).await?;
+        let (coin_public_key, _) = provider.shielded_public_keys().await?;
 
         let mut private_state = baseline.clone();
-        let (tx_bytes, _new_state, value) = crate::call::call_funded_with(
+        let exec_result = crate::call::run_call(
             circuit,
             program,
-            &state,
-            circuit_name,
+            &state.view,
+            state.time,
             address,
-            provider,
-            zk_config,
             args,
             witnesses,
             Some(&mut private_state),
+            Some(coin_public_key),
+        )?;
+        Ok(RanCall {
+            state,
+            address,
+            zk_config,
+            exec_result,
+            baseline,
+            private_state,
+            depends_on,
+        })
+    }
+
+    /// Build the proven transaction of a call that ran. When `pay_fees` is
+    /// false the transaction is left fee-less. Returns the built call and the
+    /// circuit's raw result.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the inputs of a call, as `build_call_with` and `call_with` take them"
+    )]
+    async fn build_call(
+        &self,
+        ran: RanCall,
+        circuit: &compact_codegen::ir::Circuit,
+        circuit_name: &str,
+        args: &[(&str, crate::runtime::Value)],
+        coin_encryption_keys: &[crate::ShieldedRecipient],
+        shielded: crate::call::ShieldedInputs,
+        pay_fees: bool,
+    ) -> Result<(BuiltCall, Option<crate::runtime::Value>), ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        let tx_bytes = crate::call::call_transaction(
+            circuit,
+            args,
+            &ran.exec_result,
+            &ran.state,
+            circuit_name,
+            ran.address,
+            self.provider.as_midnight_provider(),
+            ran.zk_config,
             coin_encryption_keys,
             shielded,
             pay_fees,
@@ -1240,11 +1362,11 @@ impl<P: Provider> Contract<P> {
         Ok((
             BuiltCall {
                 tx_bytes,
-                baseline,
-                private_state,
-                depends_on,
+                baseline: ran.baseline,
+                private_state: ran.private_state,
+                depends_on: ran.depends_on,
             },
-            value,
+            ran.exec_result.result,
         ))
     }
 
@@ -1371,12 +1493,13 @@ impl<P: Provider> Contract<P> {
 
         // Each step is boxed; see the frame-size note on
         // `MidnightProvider::resync_wallet`.
+        let ran = Box::pin(self.run_for_build(circuit, program, args, witnesses, store.as_deref()))
+            .await?;
         let (built, result) = Box::pin(self.build_call(
+            ran,
             circuit,
-            program,
             circuit_name,
             args,
-            witnesses,
             coin_encryption_keys,
             shielded,
             // The submit path always self-funds its fees.
