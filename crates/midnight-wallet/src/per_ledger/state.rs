@@ -23,7 +23,7 @@ use crate::chain_pin::ChainPin;
 use crate::replay::{LedgerStream, replay_ledger_events, replay_unshielded_events};
 use crate::storage::wallet_storage_id;
 use crate::wallet::ChainSync;
-use crate::{Seed, SpentUtxoKey, SyncProgress, WalletError};
+use crate::{ReservedInput, Seed, SpentUtxoKey, SyncProgress, WalletError};
 
 /// A Midnight wallet: identity (seed, addresses) and synced ledger state.
 ///
@@ -755,34 +755,15 @@ impl Wallet {
 
     /// Hand back the inputs a build reserved. See [`crate::Wallet::release`].
     ///
-    /// Dust is named by nullifier rather than by batch so that a path which
-    /// never produced a [`TransferResult`](crate::TransferResult), such as
-    /// sponsoring or a deploy, can still hand its reservation back.
-    ///
     /// The updated pending set is persisted as [`Self::reserve_pending`]
     /// persists it.
-    pub fn release_pending(
-        &mut self,
-        dust_nullifiers: &[helpers::DustNullifier],
-        unshielded_spends: &[SpentUtxoKey],
-        shielded_spends: &[helpers::Nullifier],
-        reserved_at: Timestamp,
-    ) {
-        self.pending.release(
-            dust_nullifiers,
-            unshielded_spends,
-            shielded_spends,
-            reserved_at,
-        );
-        self.persist_pending();
-    }
-
-    /// [`Self::release_pending`] for what a build reported spending.
     pub fn release(&mut self, spent: &crate::SpentInputs) {
-        let dust: Vec<DustNullifier> = spent.dust.iter().map(|n| n.into_ledger()).collect();
-        let shielded: Vec<helpers::Nullifier> =
-            spent.shielded.iter().map(|n| n.into_ledger()).collect();
-        self.release_pending(&dust, &spent.unshielded, &shielded, spent.reserved_at);
+        let dust: Vec<ReservedInput<DustNullifier>> =
+            spent.dust.iter().map(into_ledger_entry).collect();
+        let shielded: Vec<ReservedInput<helpers::Nullifier>> =
+            spent.shielded.iter().map(into_ledger_entry).collect();
+        self.pending.release(&dust, &spent.unshielded, &shielded);
+        self.persist_pending();
     }
 
     /// This wallet's on-disk identity; see [`wallet_storage_id`].
@@ -1638,6 +1619,14 @@ pub(crate) mod test_support {
         let mut raw = Vec::new();
         tagged_serialize(&event, &mut raw).unwrap();
         hex::encode(raw)
+    }
+}
+
+/// `entry`, with its input in this generation's type.
+fn into_ledger_entry<T: IntoLedger + Copy>(entry: &ReservedInput<T>) -> ReservedInput<T::Ledger> {
+    ReservedInput {
+        input: entry.input.into_ledger(),
+        reserved_at: entry.reserved_at,
     }
 }
 

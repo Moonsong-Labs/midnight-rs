@@ -39,8 +39,9 @@ pub use midnight_types::{
 // separate dep on midnight-wallet-facade.
 pub use midnight_types::hd::{Seed, SeedError};
 pub use midnight_types::{
-    Network, ShieldedCoinBalance, SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors,
-    TrackedUtxo, TransferKind, TransferRequest, TransferResult, WalletBalance, WalletError,
+    Network, ReservedInput, ShieldedCoinBalance, SpendableShieldedCoin, SpentInputs, SpentUtxoKey,
+    SyncCursors, TrackedUtxo, TransferKind, TransferRequest, TransferResult, WalletBalance,
+    WalletError,
 };
 pub use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 

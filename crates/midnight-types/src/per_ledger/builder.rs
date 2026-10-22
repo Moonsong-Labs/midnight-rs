@@ -25,8 +25,8 @@ use helpers::{
 use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
 use crate::{
-    Network, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest, TransferResult, WalletError,
-    panic_message,
+    Network, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
+    TransferResult, WalletError, panic_message,
 };
 
 type UnprovenTx = helpers::UnprovenTransaction<DefaultDB>;
@@ -111,14 +111,29 @@ impl PreparedTransfer {
         &self.spent_shielded_inputs
     }
 
+    /// The chain time this build selected against. Reserve its inputs with
+    /// this stamp, which [`Self::spent_inputs`] gives each of them.
+    pub fn reserved_at(&self) -> Timestamp {
+        self.reserved_at
+    }
+
     /// Everything this build will spend, in the form a reservation takes.
     pub fn spent_inputs(&self) -> SpentInputs {
         SpentInputs {
-            dust: dust_nullifiers(&self.dust_batches),
-            unshielded: self.spent_unshielded_inputs.clone(),
-            shielded: sdk_nullifiers(&self.spent_shielded_inputs),
-            reserved_at: self.reserved_at,
+            dust: self.stamped(dust_nullifiers(&self.dust_batches)),
+            unshielded: self.stamped(self.spent_unshielded_inputs.iter().cloned()),
+            shielded: self.stamped(self.spent_shielded_inputs.iter().map(|n| n.into_sdk())),
         }
+    }
+
+    fn stamped<T>(&self, inputs: impl IntoIterator<Item = T>) -> Vec<ReservedInput<T>> {
+        inputs
+            .into_iter()
+            .map(|input| ReservedInput {
+                input,
+                reserved_at: self.reserved_at,
+            })
+            .collect()
     }
 
     /// Prove the transaction and serialize it. The slowest step in a build,
@@ -159,11 +174,10 @@ impl PreparedTransfer {
 
 /// The nullifier of every Dust spend in `batches`, which is how a release
 /// names them.
-fn dust_nullifiers(batches: &[DustSpendBatch]) -> Vec<crate::DustNullifier> {
+fn dust_nullifiers(batches: &[DustSpendBatch]) -> impl Iterator<Item = crate::DustNullifier> {
     batches
         .iter()
         .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier.into_sdk()))
-        .collect()
 }
 
 fn flat_spends(batches: &[DustSpendBatch]) -> Vec<DustSpend<ProofPreimageMarker, DefaultDB>> {
@@ -171,10 +185,6 @@ fn flat_spends(batches: &[DustSpendBatch]) -> Vec<DustSpend<ProofPreimageMarker,
         .iter()
         .flat_map(|b| b.spends.iter().cloned())
         .collect()
-}
-
-fn sdk_nullifiers(nullifiers: &[Nullifier]) -> Vec<crate::Nullifier> {
-    nullifiers.iter().map(|n| n.into_sdk()).collect()
 }
 
 /// Wrap a foreign error as [`WalletError::Transfer`], naming the failing

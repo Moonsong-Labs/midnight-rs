@@ -61,20 +61,32 @@ pub struct SpentUtxoKey {
 /// re-select them before the indexer surfaces the spend. Reserve them, and
 /// hand them back if the build will never reach the chain.
 ///
-/// `reserved_at` travels with the inputs because it is half of a
-/// reservation's identity. A release names both, so a build hands back its
-/// own entry, not one a later build made over the same input in a later
+/// Each input carries the stamp of its reservation, because the stamp is half
+/// of a reservation's identity. A release names both, so a build hands back
+/// its own entry, not one a later build made over the same input in a later
 /// block. Two reservations in one block share the stamp, which is why a
 /// reservation is released once.
+///
+/// One transaction can hold the inputs of two reservations with different
+/// stamps. A contract call or a deploy with a shielded offer reserves its
+/// pinned coins in its own build context, and the Dust for its fee in a fresh
+/// one. [`Self::merge`] joins the two, so one value hands both back.
 #[derive(Debug, Default, Clone)]
 pub struct SpentInputs {
     /// The Dust spends that fund the fee, by nullifier.
-    pub dust: Vec<DustNullifier>,
+    pub dust: Vec<ReservedInput<DustNullifier>>,
     /// The unshielded UTXOs the build spends.
-    pub unshielded: Vec<SpentUtxoKey>,
+    pub unshielded: Vec<ReservedInput<SpentUtxoKey>>,
     /// The shielded coins the build spends, by nullifier.
-    pub shielded: Vec<Nullifier>,
-    /// The chain time the build read when it selected these inputs, which is
+    pub shielded: Vec<ReservedInput<Nullifier>>,
+}
+
+/// One input that a build reserved, and the stamp of that reservation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReservedInput<T> {
+    /// The input: a nullifier, or the key of an unshielded UTXO.
+    pub input: T,
+    /// The chain time the build read when it selected the input, which is
     /// what the reservation is stamped with.
     pub reserved_at: Timestamp,
 }
@@ -83,10 +95,19 @@ impl SpentInputs {
     /// The shielded coins a build pinned, for one that spends nothing else.
     pub fn from_shielded(shielded: Vec<Nullifier>, reserved_at: Timestamp) -> Self {
         Self {
-            shielded,
-            reserved_at,
+            shielded: shielded
+                .into_iter()
+                .map(|input| ReservedInput { input, reserved_at })
+                .collect(),
             ..Self::default()
         }
+    }
+
+    /// Add the inputs of `other`. Each input keeps its own stamp.
+    pub fn merge(&mut self, other: SpentInputs) {
+        self.dust.extend(other.dust);
+        self.unshielded.extend(other.unshielded);
+        self.shielded.extend(other.shielded);
     }
 
     /// Whether this build drew nothing at all, so there is nothing to reserve

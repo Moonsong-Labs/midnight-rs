@@ -80,7 +80,7 @@ pub use midnight_types::address::parse_shielded_recipient;
 pub use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustParameters,
     EncryptionPublicKey, HashOutput, LedgerVersion, NIGHT, Network, Nonce, Nullifier,
-    ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
+    ReservedInput, ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
     SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind,
     TransferRequest, TransferResult, UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
     WalletError, chain_pin, panic_message,
