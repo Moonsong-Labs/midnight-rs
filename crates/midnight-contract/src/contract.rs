@@ -1421,7 +1421,6 @@ impl<P: Provider> Contract<P> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use midnight_provider::{StateQuery, StateQueryResult};
 
     struct MockProvider {
         inner: MidnightProvider,
@@ -1449,13 +1448,6 @@ mod tests {
             _at: Option<BlockHash>,
         ) -> Result<Option<String>, ProviderError> {
             Ok(None)
-        }
-        async fn query_contract_state(
-            &self,
-            _address: &str,
-            _queries: Vec<StateQuery>,
-        ) -> Result<Vec<StateQueryResult>, ProviderError> {
-            Ok(vec![])
         }
     }
 

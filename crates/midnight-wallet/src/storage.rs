@@ -34,14 +34,15 @@ pub(crate) fn dust_wallet_file(generation: u64) -> String {
 /// Derived from the wallet's public (unshielded) address, not its seed: the
 /// address uniquely identifies the wallet, is safe to put in a path, and can be
 /// supplied by an external signer (e.g. a hardware wallet) that never releases
-/// the seed. So the `storage` module never handles seed material, and the seed
-/// stays purely a signing concern.
+/// the seed. So the `storage` module never handles seed material.
 ///
-/// The invariant covers every file in the directory, not just its name. A
-/// persisted record that needs to name a wallet names this id; most need no
-/// wallet identity at all, because the directory already scopes them, which is
-/// why `pending.json` stores none. The pending module's
-/// `pending_json_contains_no_seed_material` test is what holds the line.
+/// No file in the directory holds the seed either. A persisted record that
+/// needs to name a wallet names this id; most need no wallet identity at all,
+/// because the directory already scopes them, which is why `pending.json`
+/// stores none. The pending module's `pending_json_contains_no_seed_material`
+/// test holds that line. `dust_wallet-N.bin` does hold the Dust secret key: the
+/// helpers' `DustWallet` serializes it, and a resumed wallet needs it to apply
+/// Dust events.
 pub(crate) fn wallet_storage_id(address: &str) -> String {
     use sha2::Digest;
     hex::encode(sha2::Sha256::digest(address.as_bytes()))
@@ -139,10 +140,10 @@ pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> Path
 
 /// [`midnight_owner_only::create_dir_all`] for the wallet's storage directory.
 ///
-/// The tree holds the wallet's UTXO set, spend history and reserved
-/// nullifiers. None of that is secret in the key sense, but it is a full
-/// picture of the wallet's activity and there is no reason for another local
-/// user to have it.
+/// The tree holds the key that spends the wallet's Dust, in
+/// `dust_wallet-N.bin`. It also holds the wallet's UTXO set, spend history and
+/// reserved nullifiers, a full picture of the wallet's activity. No other local
+/// user has a reason to read either.
 ///
 /// Only the wallet's own directory is narrowed. An ancestor an earlier version
 /// or another tool created keeps its mode, so the set of wallet ids under a
@@ -304,10 +305,9 @@ pub(crate) fn save_snapshot(
     Ok(())
 }
 
-/// On-disk representation of a wallet's pending reservations. `DustSpend` and
-/// `Sp<DustLocalState<D>, D>` are both Tagged + Serializable, so we
-/// hex-encode their `tagged_serialize` bytes to round-trip through JSON
-/// without dragging the tagged-codec into the schema.
+/// On-disk representation of a wallet's pending reservations. The hex fields
+/// hold the `tagged_serialize` bytes of the Dust spends and the shielded
+/// nullifiers, so the JSON schema stays free of the tagged codec.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredPending {
     /// The ledger generation whose types encoded the hex fields.
@@ -325,8 +325,6 @@ pub(crate) struct StoredPending {
 pub(crate) struct StoredPendingDustBatch {
     /// Tagged-serialized `Vec<DustSpend<ProofPreimageMarker, DefaultDB>>`, hex.
     pub spends_hex: String,
-    /// Tagged-serialized `Sp<DustLocalState<DefaultDB>, DefaultDB>`, hex.
-    pub updated_state_hex: String,
     /// `Timestamp::to_secs()` value.
     pub reserved_at_secs: u64,
 }
@@ -498,9 +496,10 @@ mod tests {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 
-    /// The snapshot tree records the wallet's UTXO set, spend history and
-    /// reserved nullifiers. Written at the process umask it lands world
-    /// readable, which hands every local user a full picture of the wallet.
+    /// The snapshot tree records the Dust secret key, and the wallet's UTXO
+    /// set, spend history and reserved nullifiers. Written at the process umask
+    /// it lands world readable, which hands every local user the key and a full
+    /// picture of the wallet.
     #[test]
     fn snapshot_tree_is_owner_only() {
         let base = tempfile::TempDir::new().unwrap();

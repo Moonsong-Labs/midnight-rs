@@ -2,6 +2,10 @@
 //! interpreter and diff the canonical report against the golden emitted by
 //! the canonical TS runtime (`expected/`, regenerated with
 //! `make conformance-regen`).
+//!
+//! A step with `"error": "<substring>"` must fail on both sides, and both
+//! error messages must contain the substring. The next step starts from the
+//! state before the failed one.
 
 use std::fs;
 use std::path::Path;
@@ -100,9 +104,44 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
 
     for (i, (step, expected_step)) in steps.iter().zip(expected_steps).enumerate() {
         let circuit = step["circuit"].as_str().expect("step has circuit");
+        let context = format!("{fixture_name}/{case_name} step {i} ({circuit})");
         let args_tagged: Vec<Json> = step["args"].as_array().cloned().unwrap_or_default();
         let witnesses =
             ScriptedWitnesses::from_json(step.get("witnesses")).expect("witness script parses");
+
+        if let Some(substring) = step.get("error") {
+            let substring = substring.as_str().expect("step error is a string");
+            let ts_error = expected_step["error"].as_str().unwrap_or_else(|| {
+                panic!(
+                    "{context}: the case expects an error, but the golden has none; \
+                     run `make conformance-regen`"
+                )
+            });
+            let rust_error = match run_step(
+                &fixture,
+                circuit,
+                state.clone(),
+                &args_tagged,
+                &witnesses,
+                block_time,
+                Some(coin_public_key),
+            ) {
+                Ok(_) => panic!(
+                    "{context}: the canonical TS runtime failed with \"{ts_error}\", \
+                     but the Rust interpreter ran the circuit"
+                ),
+                Err(e) => e,
+            };
+            assert!(
+                ts_error.contains(substring),
+                "{context}: the TS error \"{ts_error}\" does not contain \"{substring}\""
+            );
+            assert!(
+                rust_error.contains(substring),
+                "{context}: the Rust error \"{rust_error}\" does not contain \"{substring}\""
+            );
+            continue;
+        }
 
         let (rust_report, result) = run_step(
             &fixture,
@@ -113,16 +152,12 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
             block_time,
             Some(coin_public_key),
         )
-        .unwrap_or_else(|e| panic!("{fixture_name}/{case_name} step {i} ({circuit}): {e}"));
+        .unwrap_or_else(|e| panic!("{context}: {e}"));
         witnesses
             .assert_drained()
-            .unwrap_or_else(|e| panic!("{fixture_name}/{case_name} step {i} ({circuit}): {e}"));
+            .unwrap_or_else(|e| panic!("{context}: {e}"));
 
-        assert_json_eq(
-            &format!("{fixture_name}/{case_name} step {i} ({circuit})"),
-            &rust_report,
-            expected_step,
-        );
+        assert_json_eq(&context, &rust_report, expected_step);
 
         state = result.state;
     }

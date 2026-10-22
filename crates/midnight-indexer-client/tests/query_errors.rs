@@ -1,5 +1,4 @@
-//! Mock-HTTP-server tests of `IndexerError::is_retryable` for the failures
-//! of a one-shot indexer query.
+//! Mock-HTTP-server tests of the failures of a one-shot indexer query.
 
 use std::time::Duration;
 
@@ -52,4 +51,23 @@ async fn a_query_that_times_out_is_not_retryable() {
         .unwrap_err();
     assert!(err.is_timeout(), "{err:?}");
     assert!(!IndexerError::from(err).is_retryable());
+}
+
+#[tokio::test]
+async fn a_body_that_does_not_decode_gives_a_deserialization_error() {
+    // 513 bytes, so the logged excerpt is cut, and byte 512 is inside `é`.
+    let body = format!("{}é", "a".repeat(511));
+    let (listener, url) = bind().await;
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        if read_http_request(&mut stream).await {
+            write_json_response(&mut stream, "200 OK", &body).await;
+        }
+    });
+    let err = IndexerClient::new(&url)
+        .unwrap()
+        .get_block(None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IndexerError::Deserialization(_)), "{err}");
 }

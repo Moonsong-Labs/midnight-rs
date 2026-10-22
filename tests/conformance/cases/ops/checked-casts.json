@@ -1,0 +1,13 @@
+{
+  "fixture": "ops",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "narrow", "args": [{ "field": "255" }, { "uint": "255" }, { "bytes": "ff00" }] },
+    { "circuit": "narrow", "args": [{ "field": "256" }, { "uint": "0" }, { "bytes": "0000" }], "error": "cast from Field or Uint value to smaller Uint value failed: 256 is greater than 255" },
+    { "circuit": "narrow", "args": [{ "field": "0" }, { "uint": "256" }, { "bytes": "0000" }], "error": "cast from Field or Uint value to smaller Uint value failed: 256 is greater than 255" },
+    { "circuit": "narrow", "args": [{ "field": "0" }, { "uint": "0" }, { "bytes": "0001" }], "error": "byte vector [0,1] exceeds maximum value 255 of Uint<0..256> type" },
+    { "circuit": "tri", "args": [{ "field": "2" }, { "enum": 1 }] },
+    { "circuit": "tri", "args": [{ "field": "3" }, { "enum": 0 }], "error": "cast from Field or Uint value to enum Tri failed: 3 is greater than maximum enum value 2" },
+    { "circuit": "tri", "args": [{ "field": "0" }, { "enum": 2 }], "error": "cast from enum Tri to Uint<0..2> failed: enum value 2 is greater than 1" }
+  ]
+}

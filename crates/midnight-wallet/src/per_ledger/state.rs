@@ -70,8 +70,8 @@ pub struct Wallet {
     pending: PendingReservations,
 
     /// Where this wallet persists its state, when [`Wallet::sync_inner`] was
-    /// given a storage directory. Retained so [`Wallet::resync`] can re-save
-    /// the moved cursors and [`Wallet::reserve_pending`] can persist
+    /// given a storage directory. Retained so [`Wallet::commit_resync`] can
+    /// re-save the moved cursors and [`Wallet::reserve_pending`] can persist
     /// `pending.json` without the caller re-supplying the path.
     storage_dir: Option<PathBuf>,
 
@@ -312,7 +312,7 @@ fn validate_ledger_parameters(p: &LedgerParameters) -> Result<(), WalletError> {
     Ok(())
 }
 
-/// This generation's half of [`crate::ResyncPlan`].
+/// This generation's half of [`crate::wallet::ResyncPlan`].
 #[derive(Clone)]
 pub struct ResyncPlan {
     pub(crate) secret_keys: SecretKeys,
@@ -326,9 +326,9 @@ pub struct ResyncPlan {
 }
 
 impl ResyncPlan {
-    /// The replay phase of [`crate::ResyncPlan::run`] on this generation. It
-    /// returns [`WalletError::LedgerMismatch`] when the chain moved to a
-    /// later generation, for the caller to cross.
+    /// The replay phase of [`crate::wallet::ResyncPlan::run`] on this
+    /// generation. It returns [`WalletError::LedgerMismatch`] when the chain
+    /// moved to a later generation, for the caller to cross.
     pub async fn run(self, indexer_url: &str) -> Result<ResyncCommit, WalletError> {
         let ResyncPlan {
             secret_keys,
@@ -425,7 +425,7 @@ impl ResyncPlan {
     }
 }
 
-/// This generation's half of [`crate::ResyncCommit`].
+/// This generation's half of [`crate::wallet::ResyncCommit`].
 #[must_use = "apply with Wallet::commit_resync, or the completed replay is discarded"]
 pub struct ResyncCommit {
     dust_wallet: DustWallet<DefaultDB>,
@@ -442,7 +442,7 @@ pub struct ResyncCommit {
     parameters: LedgerParameters,
 }
 
-/// This generation's half of [`crate::ShieldedRescanPlan`].
+/// This generation's half of [`crate::wallet::ShieldedRescanPlan`].
 pub struct ShieldedRescanPlan {
     pub(crate) secret_keys: SecretKeys,
     pub(crate) initial_state: ZswapLocalState<DefaultDB>,
@@ -462,9 +462,9 @@ impl ShieldedRescanPlan {
         }
     }
 
-    /// The replay of [`crate::ShieldedRescanPlan::run`] on this generation.
-    /// It returns [`WalletError::LedgerMismatch`] when the stream holds
-    /// another generation's events.
+    /// The replay of [`crate::wallet::ShieldedRescanPlan::run`] on this
+    /// generation. It returns [`WalletError::LedgerMismatch`] when the stream
+    /// holds another generation's events.
     pub async fn run(self, indexer_url: &str) -> Result<ShieldedRescanCommit, WalletError> {
         let sub_client = SubscriptionClient::new(indexer_url);
         let replay = replay_zswap_events(
@@ -486,7 +486,7 @@ impl ShieldedRescanPlan {
     }
 }
 
-/// This generation's half of [`crate::ShieldedRescanCommit`].
+/// This generation's half of [`crate::wallet::ShieldedRescanCommit`].
 #[must_use = "apply with Wallet::commit_shielded_rescan, or the completed replay is discarded"]
 pub struct ShieldedRescanCommit {
     pub(crate) zswap_state: ZswapLocalState<DefaultDB>,
@@ -717,8 +717,8 @@ impl Wallet {
     /// don't re-select the same inputs.
     ///
     /// Dust and unshielded reservations live in `Wallet::pending` until either:
-    /// - event replay (a sync, or [`Wallet::resync`]) observes
-    ///   the corresponding confirmed spends and clears them,
+    /// - event replay (a sync or a resync) observes the corresponding
+    ///   confirmed spends and clears them,
     /// - or their TTL window elapses (evicted at [`Wallet::build_context_inner`]
     ///   time).
     ///

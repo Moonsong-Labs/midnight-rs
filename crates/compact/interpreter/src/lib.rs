@@ -30,9 +30,9 @@ use compact_runtime::{
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
 // above, generated code does not reference these by path.
 use compact_runtime::{
-    aligned_atom_to_u128, bytes_aligned_value, default_value, element_atom_range, element_count,
-    element_type_at, encode_typed, ir_length, layout_from_fields, merkle_leaf_hash, slice_atoms,
-    try_builtin_typed, value_to_fr, value_to_u128,
+    bytes_aligned_value, default_value, element_atom_range, element_count, element_type_at,
+    encode_typed, ir_length, layout_from_fields, merkle_leaf_hash, slice_atoms, try_builtin_typed,
+    value_to_fr, value_to_u128,
 };
 
 /// Everything a circuit body needs from its program.
@@ -376,10 +376,8 @@ struct ExecContext<'a> {
 /// Returns `None` when the type cannot be determined; callers must treat that
 /// as "unknown" (never fabricate a type).
 ///
-/// This is deliberately narrower than the types the artifact carries: an
-/// arithmetic node is typed as its left operand rather than as the widened
-/// result, and an integer literal as a field element, because those are the
-/// widths the encodings in flight were produced with.
+/// An integer literal is typed as a field element, because that is the width
+/// its encoding in flight has.
 fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
     use ir::Expr as E;
     match expr {
@@ -396,9 +394,7 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
         | E::Le { .. }
         | E::Gt { .. }
         | E::Ge { .. } => Some(Type::Boolean),
-        E::Add { left, .. } | E::Sub { left, .. } | E::Mul { left, .. } => {
-            infer_type_of_expr(ctx, left)
-        }
+        E::Add { ty, .. } | E::Sub { ty, .. } | E::Mul { ty, .. } => Some(ty.clone()),
         E::If { then, .. } => infer_type_of_expr(ctx, then),
         E::LetStar { body, .. } => infer_type_of_expr(ctx, body),
         E::Seq(items) => infer_type_of_expr(ctx, items.last()?),
@@ -428,8 +424,8 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
             element_type_at(&operand, usize::try_from(*index).ok()).cloned()
         }
         // The node carries the operand's declared type, which is the reliable
-        // one: inference types an arithmetic node as its left operand, a
-        // narrower width than the value in flight was encoded with.
+        // one: inference of the operand can give an element a narrower type
+        // than the vector declares.
         E::VectorRef { ty, expr, index } => {
             let i = const_index(index);
             element_type_at(ty, i).cloned().or_else(|| {
@@ -681,12 +677,12 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             }
         }
 
-        E::Add { left, right, .. } => eval_arith(ctx, left, right, ArithOp::Add),
-        E::Sub { left, right, .. } => eval_arith(ctx, left, right, ArithOp::Sub),
-        E::Mul { left, right, .. } => eval_arith(ctx, left, right, ArithOp::Mul),
+        E::Add { ty, left, right } => eval_arith(ctx, ty, left, right, ArithOp::Add),
+        E::Sub { ty, left, right } => eval_arith(ctx, ty, left, right, ArithOp::Sub),
+        E::Mul { ty, left, right } => eval_arith(ctx, ty, left, right, ArithOp::Mul),
 
-        E::Eq { left, right, .. } => Ok(Value::Bool(eval_equal(ctx, left, right)?)),
-        E::Neq { left, right, .. } => Ok(Value::Bool(!eval_equal(ctx, left, right)?)),
+        E::Eq { ty, left, right } => Ok(Value::Bool(eval_equal(ctx, ty, left, right)?)),
+        E::Neq { ty, left, right } => Ok(Value::Bool(!eval_equal(ctx, ty, left, right)?)),
 
         E::Lt { left, right, .. } => eval_compare(ctx, left, right, u128::lt),
         E::Le { left, right, .. } => eval_compare(ctx, left, right, u128::le),
@@ -1071,44 +1067,131 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
     }
 }
 
-/// The value of a cast.
+/// The value of a cast from `from` to `to`, by the target type.
 ///
-/// Only two conversions change the value; every other cast is a change of
-/// static type over the same runtime representation.
+/// - To `Field`: a Field element, whatever numeric form the value has.
+/// - To a `Uint`: a [`Value::Integer`], checked against the bound of `to`.
+/// - To an enum: the index of the variant as a [`Value::Integer`], checked
+///   against the last variant.
+///
+/// Any other cast changes only the static type, so the value stays as it is.
+/// compactc treats a narrowing cast as an assert, and its TS throws when the
+/// value is out of range. A failed check here is
+/// [`InterpreterError::AssertionFailed`] with the message of the TS, without
+/// its source location.
 fn eval_cast(val: Value, from: &Type, to: &Type) -> Result<Value, InterpreterError> {
+    match to.resolved() {
+        Type::Field(_) => cast_to_field(&val, from),
+        Type::Unsigned(maxval) => cast_to_uint(&val, from, maxval),
+        Type::Enum { name, variants } => cast_to_enum(&val, name, variants),
+        _ => Ok(val),
+    }
+}
+
+/// A cast to `Field`. The result always has the Field alignment, so a ledger
+/// key or cell made from it matches the one that the canonical runtime makes.
+fn cast_to_field(val: &Value, from: &Type) -> Result<Value, InterpreterError> {
     use midnight_transient_crypto::curve::Fr;
 
-    // Bytes<length> → Field. Byte 0 is the least significant byte and
-    // values >= the field modulus are rejected, not reduced — matching
-    // the Compact runtime's `convertBytesToField` (casts.ts). At the
-    // FAB level both Bytes and Field atoms are zero-trimmed
-    // little-endian bytes, so this is a reinterpretation plus a range
-    // check.
-    if let (Type::Bytes(length), Type::Field(_)) = (from.resolved(), to.resolved()) {
-        let bytes = value_to_byte_string(&val, ir_length(*length)?)?;
-        let fr = Fr::from_le_bytes(bytes).ok_or_else(|| {
+    // Byte 0 is the least significant byte. A byte string at or above the
+    // field modulus is refused.
+    let fr = if let Type::Bytes(length) = from.resolved() {
+        let bytes = value_to_byte_string(val, ir_length(*length)?)?;
+        Fr::from_le_bytes(bytes).ok_or_else(|| {
             InterpreterError::TypeError(format!(
                 "range error: byte string {} exceeds the maximum value of the Field type",
                 hex::encode(bytes)
             ))
-        })?;
-        return Ok(Value::AlignedValue(AlignedValue::from(fr)));
-    }
+        })?
+    } else {
+        let n = numeric_value(val)?;
+        Fr::from_le_bytes(&n.to_bytes_le()).ok_or_else(|| {
+            InterpreterError::TypeError(format!("{n} exceeds the maximum value of the Field type"))
+        })?
+    };
+    Ok(Value::AlignedValue(AlignedValue::from(fr)))
+}
 
-    // When casting an Integer to Field (e.g. `request_id as Field`
-    // before a `Map<Field, _>` insert/lookup), eagerly re-encode
-    // as a Field-aligned `AlignedValue` so every downstream
-    // consumer sees the correct alignment byte-for-byte. The consumers are
-    // a push operand, an idx path key, and a direct read of the local. Without this, the Integer
-    // value survives through the let-binding and later gets encoded as a
-    // u64-aligned cell, which never matches a Field-aligned key stored
-    // on-chain.
-    if let (Value::Integer(n), Type::Field(_)) = (&val, to) {
-        // `From<u128> for Fr` is exact (midnight-curves
-        // `Scalar::from_u128`); never narrow through u64 here.
-        return Ok(Value::AlignedValue(AlignedValue::from(Fr::from(*n))));
+/// A cast to the `Uint` whose largest value is `maxval`.
+fn cast_to_uint(val: &Value, from: &Type, maxval: &BigUint) -> Result<Value, InterpreterError> {
+    if let Type::Bytes(length) = from.resolved() {
+        let bytes = padded_bytes(val, ir_length(*length)?)?;
+        let n = BigUint::from_bytes_le(&bytes);
+        if n > *maxval {
+            let bytes: Vec<String> = bytes.iter().map(u8::to_string).collect();
+            return Err(InterpreterError::AssertionFailed(format!(
+                "range error: byte vector [{}] exceeds maximum value {maxval} of {} type",
+                bytes.join(","),
+                uint_type_name(maxval)
+            )));
+        }
+        return uint_value(n);
     }
-    Ok(val)
+    let n = numeric_value(val)?;
+    if n > *maxval {
+        return Err(InterpreterError::AssertionFailed(match from.resolved() {
+            Type::Enum { name, .. } => format!(
+                "cast from enum {name} to {} failed: enum value {n} is greater than {maxval}",
+                uint_type_name(maxval)
+            ),
+            _ => format!(
+                "cast from Field or Uint value to smaller Uint value failed: \
+                 {n} is greater than {maxval}"
+            ),
+        }));
+    }
+    uint_value(n)
+}
+
+/// A cast to the enum `name`, whose index selects one of `variants`.
+fn cast_to_enum(val: &Value, name: &str, variants: &[String]) -> Result<Value, InterpreterError> {
+    let n = numeric_value(val)?;
+    let last = variants.len().saturating_sub(1);
+    if n > BigUint::from(last) {
+        return Err(InterpreterError::AssertionFailed(format!(
+            "cast from Field or Uint value to enum {name} failed: \
+             {n} is greater than maximum enum value {last}"
+        )));
+    }
+    uint_value(n)
+}
+
+/// The number that a Field, Uint, enum or Boolean value holds.
+fn numeric_value(val: &Value) -> Result<BigUint, InterpreterError> {
+    match val {
+        Value::Integer(n) => Ok(BigUint::from(*n)),
+        Value::Bool(b) => Ok(BigUint::from(u8::from(*b))),
+        other => {
+            let av = other.try_to_aligned_value()?;
+            match av.value.0.as_slice() {
+                [atom] => Ok(BigUint::from_bytes_le(&atom.0)),
+                _ => Err(InterpreterError::TypeError(format!(
+                    "expected a number, got {other:?}"
+                ))),
+            }
+        }
+    }
+}
+
+/// `n` as a [`Value::Integer`].
+fn uint_value(n: BigUint) -> Result<Value, InterpreterError> {
+    u128::try_from(&n)
+        .map(Value::Integer)
+        .map_err(|_| uint_above_u128(&n))
+}
+
+/// The refusal of a Uint above `u128::MAX`: the interpreter holds a Uint in a
+/// `u128`, as the bindings do.
+fn uint_above_u128(n: &BigUint) -> InterpreterError {
+    InterpreterError::Unsupported(format!(
+        "the Uint value {n} is above 2^128 - 1, and the interpreter holds a Uint in a u128"
+    ))
+}
+
+/// The name of the `Uint` whose largest value is `maxval`, as compactc's TS
+/// writes it in a cast error.
+fn uint_type_name(maxval: &BigUint) -> String {
+    format!("Uint<0..{}>", maxval + 1u32)
 }
 
 /// Run a circuit body or an inline loop callee as a pure call: parameters
@@ -1542,12 +1625,13 @@ fn eval_compare(
 
 fn eval_equal(
     ctx: &mut ExecContext,
+    ty: &Type,
     left: &ir::Expr,
     right: &ir::Expr,
 ) -> Result<bool, InterpreterError> {
     let l = eval_expr(ctx, left)?;
     let r = eval_expr(ctx, right)?;
-    Ok(values_equal(&l, &r))
+    values_equal(&l, &r, ty)
 }
 
 #[derive(Clone, Copy)]
@@ -1557,82 +1641,73 @@ enum ArithOp {
     Mul,
 }
 
-/// Evaluate `left <op> right`.
+/// Evaluate `left <op> right` at `ty`, the type of the result.
 ///
-/// When both operands fit `u128` this keeps the historical wrapping integer
-/// arithmetic. When either operand is a wider `Field` element — e.g. a Poseidon
-/// hash output feeding an on-circuit mod-`r` reduction like
-/// `c = c_native - challenge_quotient * JUBJUB_ORDER` — it falls back to field
-/// arithmetic over `Fr`, matching what the compiled circuit computes. Without
-/// this, `eval_as_integer` rejects the full-width operand as "expected integer".
+/// A `Field` result computes in `Fr`, as compactc's TS does, so it wraps at
+/// the field modulus. A `Uint` result is exact. compactc gives it a bound that
+/// holds every result, and asserts before a subtraction that the result is not
+/// negative. So an exact result fails only above `u128::MAX`, the largest Uint
+/// that the interpreter holds.
 fn eval_arith(
     ctx: &mut ExecContext,
+    ty: &Type,
     left: &ir::Expr,
     right: &ir::Expr,
     op: ArithOp,
 ) -> Result<Value, InterpreterError> {
     use midnight_transient_crypto::curve::Fr;
 
+    check_type(ty)?;
     let lv = eval_expr(ctx, left)?;
     let rv = eval_expr(ctx, right)?;
-
-    if let (Some(l), Some(r)) = (value_to_u128(&lv), value_to_u128(&rv)) {
-        let n = match op {
-            ArithOp::Add => l.wrapping_add(r),
-            ArithOp::Sub => l.wrapping_sub(r),
-            ArithOp::Mul => l.wrapping_mul(r),
-        };
-        return Ok(Value::Integer(n));
+    match ty.resolved() {
+        Type::Field(_) => {
+            let to_fr = |v: &Value| {
+                value_to_fr(v).ok_or_else(|| {
+                    InterpreterError::TypeError(format!("expected a Field operand, got {v:?}"))
+                })
+            };
+            // `Fr` wraps `midnight_curves::Fq` (the field). It has no direct
+            // `std::ops`, so operate on the inner scalar.
+            let (l, r) = (to_fr(&lv)?.0, to_fr(&rv)?.0);
+            let f = match op {
+                ArithOp::Add => l + r,
+                ArithOp::Sub => l - r,
+                ArithOp::Mul => l * r,
+            };
+            Ok(Value::AlignedValue(AlignedValue::from(Fr(f))))
+        }
+        Type::Unsigned(_) => {
+            let to_u128 = |v: &Value| {
+                value_to_u128(v).ok_or_else(|| {
+                    InterpreterError::TypeError(format!("expected a Uint operand, got {v:?}"))
+                })
+            };
+            let (l, r) = (to_u128(&lv)?, to_u128(&rv)?);
+            let n = match op {
+                ArithOp::Add => l
+                    .checked_add(r)
+                    .ok_or_else(|| uint_above_u128(&(BigUint::from(l) + BigUint::from(r)))),
+                ArithOp::Mul => l
+                    .checked_mul(r)
+                    .ok_or_else(|| uint_above_u128(&(BigUint::from(l) * BigUint::from(r)))),
+                ArithOp::Sub => l.checked_sub(r).ok_or_else(|| {
+                    InterpreterError::TypeError(format!("the Uint result of {l} - {r} is negative"))
+                }),
+            }?;
+            Ok(Value::Integer(n))
+        }
+        other => Err(InterpreterError::TypeError(format!(
+            "arithmetic on a value of type {other:?}"
+        ))),
     }
-
-    let to_fr = |v: &Value| -> Result<Fr, InterpreterError> {
-        value_to_fr(v).ok_or_else(|| {
-            InterpreterError::TypeError(format!("expected a Field or integer operand, got {v:?}"))
-        })
-    };
-    // `Fr` wraps `midnight_curves::Fq` (the field). It has no direct `std::ops`,
-    // so operate on the inner scalar to reuse midnight-curves' field arithmetic.
-    let (l, r) = (to_fr(&lv)?.0, to_fr(&rv)?.0);
-    let f = match op {
-        ArithOp::Add => Fr(l + r),
-        ArithOp::Sub => Fr(l - r),
-        ArithOp::Mul => Fr(l * r),
-    };
-    Ok(Value::AlignedValue(AlignedValue::from(f)))
 }
 
-fn values_equal(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Integer(x), Value::Integer(y)) => x == y,
-        (Value::Bool(x), Value::Bool(y)) => x == y,
-        (Value::AlignedValue(x), Value::AlignedValue(y)) => x.value == y.value,
-        (Value::Void, Value::Void) => true,
-        (Value::Tuple(x), Value::Tuple(y)) => {
-            x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| values_equal(a, b))
-        }
-        (Value::Struct(x), Value::Struct(y)) => {
-            x.len() == y.len()
-                && x.iter()
-                    .all(|(k, v2)| y.get(k).is_some_and(|v3| values_equal(v2, v3)))
-        }
-        // Mixed arms: a single-atom AlignedValue (e.g. the result of
-        // slicing a struct field whose declared type is an enum or a
-        // small Uint) compares equal to a Value::Integer with the same
-        // numeric value. Without this, `request.status ==
-        // SigningRequestStatus.pending` always returns false because
-        // the LHS comes back as an `AlignedValue` from popeq and the
-        // RHS is an `Integer` produced by an enum reference.
-        (Value::AlignedValue(av), Value::Integer(n))
-        | (Value::Integer(n), Value::AlignedValue(av)) => {
-            aligned_atom_to_u128(av).is_some_and(|lhs| lhs == *n)
-        }
-        (Value::AlignedValue(av), Value::Bool(b)) | (Value::Bool(b), Value::AlignedValue(av)) => {
-            aligned_atom_to_u128(av)
-                .map(|n| (n != 0) == *b)
-                .unwrap_or(false)
-        }
-        _ => false,
-    }
+/// Whether `a` and `b`, two values of type `ty`, hold the same atoms at that
+/// type. The alignments are left out, because compactc's TS compares values
+/// that carry none.
+fn values_equal(a: &Value, b: &Value, ty: &Type) -> Result<bool, InterpreterError> {
+    Ok(encode_typed(a, ty)?.value == encode_typed(b, ty)?.value)
 }
 
 /// `Either<A, B>.field` where the compiler folded the ternary away: the field
@@ -2269,6 +2344,11 @@ mod tests {
         run(&circuit(Vec::new(), result_type, body), &[])
     }
 
+    /// Whether `a` equals `b` as values of type `ty`.
+    fn equal_at(ty: &Type, a: &Value, b: &Value) -> bool {
+        values_equal(a, b, ty).expect("both values encode at the type")
+    }
+
     /// The counter contract's `increment` body: add 1 to the round cell.
     fn increment_round() -> ir::Expr {
         ir::Expr::LetStar {
@@ -2326,114 +2406,24 @@ mod tests {
         }
     }
 
+    /// A Uint result above `u128::MAX` is refused, not wrapped. Only a bound
+    /// wider than 128 bits holds such a result.
     #[test]
-    fn values_equal_struct() {
-        let mut f1 = HashMap::new();
-        f1.insert("a".to_string(), Value::Integer(1));
-        let mut f2 = HashMap::new();
-        f2.insert("a".to_string(), Value::Integer(1));
-        assert!(values_equal(&Value::Struct(f1.clone()), &Value::Struct(f2)));
-
-        let mut f3 = HashMap::new();
-        f3.insert("a".to_string(), Value::Integer(2));
-        assert!(!values_equal(&Value::Struct(f1), &Value::Struct(f3)));
-    }
-
-    #[test]
-    fn values_equal_tuple() {
-        let t1 = Value::Tuple(vec![Value::Integer(1), Value::Bool(true)]);
-        let t2 = Value::Tuple(vec![Value::Integer(1), Value::Bool(true)]);
-        let t3 = Value::Tuple(vec![Value::Integer(1), Value::Bool(false)]);
-        assert!(values_equal(&t1, &t2));
-        assert!(!values_equal(&t1, &t3));
-    }
-
-    #[test]
-    fn values_equal_decodes_fab_atoms_little_endian() {
-        use midnight_base_crypto::fab;
-        // FAB atoms are zero-trimmed little-endian bytes (`ValueAtom`
-        // conversions in midnight-base-crypto fab/conversions.rs): the atom
-        // [0x2C, 0x01] is 300. A big-endian decode would read 0x2C01 = 11265
-        // and silently flip equality results, e.g. a `popeq` read of a
-        // Cell<Uint<16>> holding 300 compared against an integer literal.
-        let av = fab::AlignedValue::new(
-            fab::Value(vec![fab::ValueAtom(vec![0x2C, 0x01])]),
-            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 2 }),
+    fn a_uint_sum_above_u128_is_refused() {
+        let wide = (BigUint::from(u128::MAX) * 2u32).to_string();
+        let err = eval(
+            ir::Expr::Add {
+                ty: uint(&wide),
+                left: Box::new(int(u128::MAX)),
+                right: Box::new(int(1)),
+            },
+            uint(&wide),
         )
-        .unwrap();
-        // Sanity: this is exactly the FAB encoding of 300u16.
-        assert_eq!(av, AlignedValue::from(300u16));
-        assert!(values_equal(
-            &Value::AlignedValue(av.clone()),
-            &Value::Integer(300)
-        ));
-        assert!(values_equal(
-            &Value::Integer(300),
-            &Value::AlignedValue(av.clone())
-        ));
-        assert!(!values_equal(
-            &Value::AlignedValue(av),
-            &Value::Integer(11265)
-        ));
-    }
-
-    #[test]
-    fn arithmetic_falls_back_to_field_for_wide_operands() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
-
-        // A Poseidon output is a full-width field element (wider than u128) — the
-        // shape that fed the "expected integer" failure in a gateway committee
-        // signature's mod-r reduction `c_native - challenge_quotient * order`.
-        let c_native = transient_hash(&[Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)]);
-        let order = transient_hash(&[Fr::from(9u64)]);
-
-        // Subtraction with a wide operand must evaluate over Fr, not reject it.
-        let sub = run(
-            &circuit(
-                vec![argument("a", field()), argument("b", field())],
-                field(),
-                ir::Expr::Sub {
-                    ty: field(),
-                    left: Box::new(var("a")),
-                    right: Box::new(var("b")),
-                },
-            ),
-            &[
-                ("a", Value::AlignedValue(AlignedValue::from(c_native))),
-                ("b", fr_value(5)),
-            ],
-        )
-        .expect("field subtraction must not reject a wide operand");
-        assert_eq!(as_fr(sub), Fr(c_native.0 - Fr::from(5u64).0));
-
-        // The full mod-r reduction shape, all field arithmetic.
-        let c = run(
-            &circuit(
-                vec![
-                    argument("c", field()),
-                    argument("q", field()),
-                    argument("o", field()),
-                ],
-                field(),
-                ir::Expr::Sub {
-                    ty: field(),
-                    left: Box::new(var("c")),
-                    right: Box::new(ir::Expr::Mul {
-                        ty: field(),
-                        left: Box::new(var("q")),
-                        right: Box::new(var("o")),
-                    }),
-                },
-            ),
-            &[
-                ("c", Value::AlignedValue(AlignedValue::from(c_native))),
-                ("q", fr_value(3)),
-                ("o", Value::AlignedValue(AlignedValue::from(order))),
-            ],
-        )
-        .expect("field reduction must evaluate");
-        assert_eq!(as_fr(c), Fr(c_native.0 - Fr::from(3u64).0 * order.0));
+        .expect_err("the sum does not fit in a u128");
+        assert!(
+            matches!(err, InterpreterError::Unsupported(_)),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -2476,7 +2466,10 @@ mod tests {
             var("%round.7"),
         );
         let value = run(&circ, &[("round", Value::Integer(9))]).expect("the argument binds");
-        assert!(values_equal(&value, &Value::Integer(9)), "got {value:?}");
+        assert!(
+            equal_at(&uint("65535"), &value, &Value::Integer(9)),
+            "got {value:?}"
+        );
 
         // An argument the caller did not supply is undefined, not defaulted.
         let err = run(&circ, &[("other", Value::Integer(9))]).expect_err("no value for `round`");
@@ -2497,7 +2490,8 @@ mod tests {
         let program = Program::new(&[], &[], &[]);
         let result = execute(&circ, &program, state, &[], epoch()).expect("execute the sequence");
         assert_eq!(counter_cell(&result.state), 2, "both items ran");
-        assert!(values_equal(
+        assert!(equal_at(
+            &uint("255"),
             &result.result.expect("a result value"),
             &Value::Integer(3)
         ));
@@ -3090,7 +3084,7 @@ mod tests {
                 assert_eq!(els.len(), expected.len(), "{els:?}");
                 for (el, &want) in els.iter().zip(expected) {
                     assert!(
-                        values_equal(el, &Value::Integer(want)),
+                        equal_at(&uint("255"), el, &Value::Integer(want)),
                         "expected {want}, got {el:?}"
                     );
                 }
@@ -3621,7 +3615,10 @@ mod tests {
                 uint("255"),
             )
             .expect("byte within the declared width");
-            assert!(values_equal(&got, &Value::Integer(expected)), "got {got:?}");
+            assert!(
+                equal_at(&uint("255"), &got, &Value::Integer(expected)),
+                "got {got:?}"
+            );
         }
     }
 
@@ -3798,10 +3795,11 @@ mod tests {
         // where `is_some` is meant fails, and so does the reverse.
         let flat =
             AlignedValue::concat([AlignedValue::from(3u16), AlignedValue::from(9u16)].iter());
+        let result_type = Type::Tuple(vec![Type::Boolean, uint("65535")]);
         let got = run(
             &circuit(
                 vec![argument("xs", vector(2, uint("65535")))],
-                Type::Tuple(vec![Type::Boolean, uint("65535")]),
+                result_type.clone(),
                 body,
             ),
             &[("xs", Value::AlignedValue(flat))],
@@ -3809,7 +3807,7 @@ mod tests {
         .expect("field access on map elements");
         let expected = Value::Tuple(vec![Value::Bool(false), Value::Integer(9)]);
         assert!(
-            values_equal(&got, &expected),
+            equal_at(&result_type, &got, &expected),
             "expected (false, 9), got {got:?}"
         );
     }
@@ -3862,8 +3860,8 @@ mod tests {
     }
 
     /// The operand annotation the node carries wins over inference of the
-    /// operand, which types an arithmetic node as its left operand: a
-    /// narrower width than the one the value in flight was encoded at.
+    /// operand, which types an element of a vector literal as the element
+    /// itself: a narrower width than the vector declares.
     #[test]
     fn vector_ref_inference_prefers_the_node_annotation() {
         let program = Program::new(&[], &[], &[]);
@@ -3879,11 +3877,7 @@ mod tests {
         let node = ir::Expr::VectorRef {
             ty: vector(2, uint("65535")),
             expr: Box::new(ir::Expr::VectorLit(vec![
-                single(ir::Expr::Add {
-                    ty: uint("65535"),
-                    left: Box::new(var("a")),
-                    right: Box::new(var("b")),
-                }),
+                single(var("a")),
                 single(var("b")),
             ])),
             index: Box::new(int(0)),
@@ -3943,7 +3937,8 @@ mod tests {
             },
         )
         .expect("the witness runs");
-        assert!(values_equal(
+        assert!(equal_at(
+            &uint("255"),
             &result.result.expect("a result value"),
             &Value::Integer(9)
         ));

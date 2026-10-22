@@ -3,8 +3,8 @@
 //! Every other workspace crate that needs `LedgerContext`, `DustSpend`,
 //! `WalletSeed`, etc. imports them from `midnight_helpers` instead of the
 //! upstream helpers. That keeps the upstream dependency pinned in exactly one
-//! place (this crate's manifest) so the source can move without touching
-//! every consumer.
+//! place (the root manifest's `[workspace.dependencies]`, which only this crate
+//! names) so the source can move without touching every consumer.
 //!
 //! Each ledger generation is one module, [`ledger_8`] and [`ledger_9`]. A
 //! module re-exports that generation's whole upstream surface: the ledger,

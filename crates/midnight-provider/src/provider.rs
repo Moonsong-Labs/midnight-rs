@@ -885,14 +885,6 @@ impl Provider for MidnightProvider {
     ) -> Result<Option<String>, ProviderError> {
         self.get_state_from_node(address, at).await
     }
-
-    async fn query_contract_state(
-        &self,
-        address: &str,
-        queries: Vec<StateQuery>,
-    ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        self.query_contract_state_at(address, queries, None).await
-    }
 }
 
 /// The network a `MidnightRuntimeApi::get_network_id` answer names. `None`
