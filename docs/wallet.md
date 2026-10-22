@@ -421,7 +421,7 @@ To check the outcome, look for the coin in `provider.spendable_shielded_coins()`
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). The wallet serializes each step of the two provider methods against resyncs: the registration, and each replay. A resync that runs between the registration and the replay keeps the registration. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
+Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On a handle (`Arc<LocalWallet>`), `watch_for_coins` registers and `rescan_shielded` replays. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet serializes each step of the two provider methods against resyncs: the registration, and each replay. A resync that runs between the registration and the replay keeps the registration. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
 
 ## Pending reservations
 
