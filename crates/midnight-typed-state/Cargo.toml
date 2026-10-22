@@ -14,8 +14,12 @@ midnight-coin-structure-ledger-8 = { workspace = true }
 midnight-storage = { workspace = true }
 midnight-base-crypto = { workspace = true }
 midnight-transient-crypto = { workspace = true }
+midnight-curves = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 primitive-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+midnight-zkir-v3 = { workspace = true }

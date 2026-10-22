@@ -147,15 +147,6 @@ pub enum FieldType {
     Scalar(Curve),
 }
 
-impl FieldType {
-    /// Whether values of this field compute in the native scalar field. The
-    /// compiler distinguishes the Jubjub scalar field from the native one,
-    /// but they share a modulus, so both compute identically.
-    pub fn is_native(&self) -> bool {
-        matches!(self, FieldType::Native | FieldType::Scalar(Curve::Jubjub))
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Curve {
     Jubjub,
@@ -706,12 +697,5 @@ mod type_tests {
             .is_unit()
         );
         assert!(!Type::Tuple(vec![Type::Boolean]).is_unit());
-    }
-
-    #[test]
-    fn the_jubjub_scalar_field_computes_as_the_native_field() {
-        assert!(FieldType::Native.is_native());
-        assert!(FieldType::Scalar(Curve::Jubjub).is_native());
-        assert!(!FieldType::Scalar(Curve::Secp256k1).is_native());
     }
 }

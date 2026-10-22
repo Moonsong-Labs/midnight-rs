@@ -30,9 +30,9 @@ use compact_runtime::{
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
 // above, generated code does not reference these by path.
 use compact_runtime::{
-    bytes_aligned_value, default_value, element_atom_range, element_count, element_type_at,
-    encode_typed, ir_length, layout_from_fields, merkle_leaf_hash, slice_atoms, try_builtin_typed,
-    value_to_fr, value_to_u128,
+    ArithOp, ForeignField, bytes_aligned_value, default_value, element_atom_range, element_count,
+    element_type_at, encode_typed, ir_length, layout_from_fields, merkle_leaf_hash, slice_atoms,
+    try_builtin_typed, value_to_fr, value_to_u128,
 };
 
 /// Everything a circuit body needs from its program.
@@ -303,8 +303,7 @@ pub fn execute(
     })
 }
 
-/// Refuse a type the interpreter cannot execute, naming it. Refusing it by
-/// name beats reading it as if it were a native field.
+/// Refuse a type the interpreter cannot execute, naming it.
 ///
 /// [`execute`] is public and runs circuits that no artifact supplied, so this
 /// check runs again at run time (the rule is
@@ -312,6 +311,18 @@ pub fn execute(
 fn check_type(ty: &Type) -> Result<(), InterpreterError> {
     compact_codegen::artifact::unsupported_type(ty)
         .map_or(Ok(()), |what| Err(InterpreterError::Unsupported(what)))
+}
+
+/// Refuse a cast between a secp256k1 field and `Field` or a `Uint`, which the
+/// compiler never emits. The native cast would read the foreign encoding as a
+/// native field element.
+fn refuse_foreign_cast(field: &ir::FieldType) -> Result<(), InterpreterError> {
+    match ForeignField::of(field) {
+        Some(_) => Err(InterpreterError::TypeError(format!(
+            "no cast between {field:?} and Field or Uint"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// FAB-encode a circuit's argument list into the single input value the
@@ -769,8 +780,11 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             from,
             expr,
         } => {
-            check_type(&Type::Field(field_type.clone()))?;
             check_type(from)?;
+            refuse_foreign_cast(field_type)?;
+            if let Type::Field(from_field) = from.resolved() {
+                refuse_foreign_cast(from_field)?;
+            }
             let val = eval_expr(ctx, expr)?;
             eval_cast(val, from, &Type::Field(ir::FieldType::Native))
         }
@@ -780,7 +794,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             field_type,
             expr,
         } => {
-            check_type(&Type::Field(field_type.clone()))?;
+            refuse_foreign_cast(field_type)?;
             let val = eval_expr(ctx, expr)?;
             eval_cast(
                 val,
@@ -872,14 +886,22 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             field_type,
             expr,
         } => {
-            check_type(&Type::Field(field_type.clone()))?;
             let val = eval_expr(ctx, expr)?;
+            let len = ir_length(*len)?;
+            if let Some(foreign) = ForeignField::of(field_type) {
+                return bytes_aligned_value(foreign.to_le_bytes(&val)?.to_vec(), len)
+                    .map(Value::AlignedValue)
+                    .map_err(|_| {
+                        InterpreterError::TypeError(format!(
+                            "range error: {val:?} does not fit into {len} bytes"
+                        ))
+                    });
+            }
             let fr = value_to_fr(&val).ok_or_else(|| {
                 InterpreterError::TypeError(format!(
                     "field-to-bytes expects a Field value, got {val:?}"
                 ))
             })?;
-            let len = ir_length(*len)?;
             bytes_aligned_value(fr.as_le_bytes(), len)
                 .map(Value::AlignedValue)
                 .map_err(|_| {
@@ -1081,6 +1103,16 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
 /// its source location.
 fn eval_cast(val: Value, from: &Type, to: &Type) -> Result<Value, InterpreterError> {
     match to.resolved() {
+        // A secp256k1 field takes its only cast, from bytes, modulo its order,
+        // where `Field` refuses a value at or above its own.
+        Type::Field(field) if let Some(foreign) = ForeignField::of(field) => {
+            let Type::Bytes(length) = from.resolved() else {
+                return Err(InterpreterError::TypeError(format!(
+                    "no cast from {from:?} to {foreign:?}"
+                )));
+            };
+            Ok(foreign.from_le_bytes(value_to_byte_string(&val, ir_length(*length)?)?))
+        }
         Type::Field(_) => cast_to_field(&val, from),
         Type::Unsigned(maxval) => cast_to_uint(&val, from, maxval),
         Type::Enum { name, variants } => cast_to_enum(&val, name, variants),
@@ -1634,20 +1666,14 @@ fn eval_equal(
     values_equal(&l, &r, ty)
 }
 
-#[derive(Clone, Copy)]
-enum ArithOp {
-    Add,
-    Sub,
-    Mul,
-}
-
 /// Evaluate `left <op> right` at `ty`, the type of the result.
 ///
-/// A `Field` result computes in `Fr`, as compactc's TS does, so it wraps at
-/// the field modulus. A `Uint` result is exact. compactc gives it a bound that
-/// holds every result, and asserts before a subtraction that the result is not
-/// negative. So an exact result fails only above `u128::MAX`, the largest Uint
-/// that the interpreter holds.
+/// A secp256k1 field result computes in that field. A `Field` result computes
+/// in `Fr`, as compactc's TS does, so it wraps at the field modulus. A `Uint`
+/// result is exact. compactc gives it a bound that holds every result, and
+/// asserts before a subtraction that the result is not negative. So an exact
+/// result fails only above `u128::MAX`, the largest Uint that the interpreter
+/// holds.
 fn eval_arith(
     ctx: &mut ExecContext,
     ty: &Type,
@@ -1660,6 +1686,11 @@ fn eval_arith(
     check_type(ty)?;
     let lv = eval_expr(ctx, left)?;
     let rv = eval_expr(ctx, right)?;
+    if let Type::Field(field) = ty.resolved()
+        && let Some(foreign) = ForeignField::of(field)
+    {
+        return foreign.arith(op, &lv, &rv);
+    }
     match ty.resolved() {
         Type::Field(_) => {
             let to_fr = |v: &Value| {
@@ -2497,21 +2528,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn a_secp256k1_type_is_refused_by_name() {
-        let err = eval(
-            ir::Expr::Default(Type::Field(FieldType::Scalar(ir::Curve::Secp256k1))),
-            Type::unit(),
-        )
-        .expect_err("a foreign field is not executable");
-        match err {
-            InterpreterError::Unsupported(ref msg) => {
-                assert!(msg.contains("secp256k1"), "error should name it: {msg}")
-            }
-            other => panic!("expected Unsupported, got {other:?}"),
-        }
-    }
-
     // -----------------------------------------------------------------------
     // Jubjub builtins
     // -----------------------------------------------------------------------
@@ -2598,10 +2614,11 @@ mod tests {
         // The runtime symbols of the compiler's natives, which `make
         // compact-natives` writes. A call dispatches on this symbol.
         let natives = include_str!("compact-natives.txt");
-        // Natives with no implementation yet: the foreign-curve natives of the
-        // ZKIR v3 table, which need foreign field and point values. The
-        // witness natives are not here: `WitnessNative` dispatches each of
-        // them, so they count as handled. See docs/compact-natives.md.
+        // Natives with no implementation yet: the secp256r1 and Curve25519
+        // natives of the ZKIR v3 table, whose types the analyzed-IR parser
+        // does not know. The witness natives are not here: `WitnessNative`
+        // dispatches each of them, so they count as handled. See
+        // docs/compact-natives.md.
         const KNOWN_UNIMPLEMENTED: &[&str] = &[
             "curve25519Add",
             "curve25519BaseInv",
@@ -2612,15 +2629,6 @@ mod tests {
             "curve25519PointY",
             "curve25519ScalarInv",
             "curve25519ScalarNeg",
-            "secp256k1Add",
-            "secp256k1BaseInv",
-            "secp256k1BaseNeg",
-            "secp256k1Mul",
-            "secp256k1MulGenerator",
-            "secp256k1PointX",
-            "secp256k1PointY",
-            "secp256k1ScalarInv",
-            "secp256k1ScalarNeg",
             "secp256r1Add",
             "secp256r1BaseInv",
             "secp256r1BaseNeg",
@@ -3210,20 +3218,6 @@ mod tests {
         assert!(
             err.to_string().contains("fit"),
             "error should mention the value not fitting: {err}"
-        );
-    }
-
-    #[test]
-    fn field_to_bytes_on_a_foreign_field_is_unsupported() {
-        let expr = ir::Expr::FieldToBytes {
-            len: 32,
-            field_type: FieldType::Scalar(ir::Curve::Secp256k1),
-            expr: Box::new(int(1)),
-        };
-        let err = eval(expr, Type::Bytes(32)).expect_err("a foreign field is not executable");
-        assert!(
-            matches!(err, InterpreterError::Unsupported(_)),
-            "expected Unsupported, got {err:?}"
         );
     }
 
