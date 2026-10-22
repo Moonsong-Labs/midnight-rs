@@ -754,10 +754,9 @@ impl MidnightProvider {
     /// [`Self::balance_transaction`], or of a deploy. The inputs in
     /// `result.spent` then go back to the wallet in two cases:
     ///
-    /// - The submit fails with
-    ///   [`SubmitError::NotSubmitted`](crate::SubmitError::NotSubmitted), a
-    ///   failed connect included. The transaction never left this process, and
-    ///   the release completes before the error returns.
+    /// - The prepare fails: the connect, the metadata read, or the encoding of
+    ///   the extrinsic. The transaction never left this process, whatever the
+    ///   error, and the release completes before the error returns.
     /// - A wait on the [`PendingTx`] reads
     ///   [`SubmitError::Invalid`](crate::SubmitError::Invalid), the node's
     ///   definitive rejection. It arrives after this method returns, so the
@@ -770,26 +769,26 @@ impl MidnightProvider {
         &self,
         result: TransferResult,
     ) -> Result<PendingTx, ProviderError> {
-        match self.submit(&result.tx_bytes).await {
-            Ok(pending) => Ok(match self.facade() {
-                Some(wallet) => {
-                    pending.with_reservation(crate::submit::Reservation::new(wallet, result.spent))
-                }
-                None => pending,
-            }),
+        let prepared = match self.prepare(&result.tx_bytes).await {
+            Ok(prepared) => prepared,
             Err(err) => {
-                if crate::submit::never_reached_the_node(&err)
-                    && let Err(release_err) = self.release(&result.spent).await
-                {
+                if let Err(release_err) = self.release(&result.spent).await {
                     tracing::warn!(
                         error = %release_err,
                         "could not release the inputs of a transaction that never reached the \
                          node; they stay reserved until their TTL elapses"
                     );
                 }
-                Err(err)
+                return Err(err);
             }
-        }
+        };
+        let pending = prepared.submit().await?;
+        Ok(match self.facade() {
+            Some(wallet) => {
+                pending.with_reservation(crate::submit::Reservation::new(wallet, result.spent))
+            }
+            None => pending,
+        })
     }
 
     /// The attached wallet's shielded public keys. See

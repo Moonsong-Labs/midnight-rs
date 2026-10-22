@@ -18,7 +18,7 @@ mod counter {
 
 use std::sync::Arc;
 
-use midnight_contract::{ContractError, SubmitError};
+use midnight_contract::ContractError;
 use midnight_provider::{MidnightProvider, ProviderError, WalletFacade};
 use midnight_wallet::LocalWallet;
 
@@ -50,11 +50,9 @@ async fn a_deploy_the_node_never_gets_hands_its_inputs_back() {
         panic!("a deploy whose node refuses the dial must fail");
     };
     assert!(
-        matches!(
-            err,
-            ContractError::Provider(ProviderError::Submission(SubmitError::NotSubmitted { .. }))
-        ),
-        "the deploy must fail at the submit, after a build that reserved its fee: {err:?}"
+        matches!(err, ContractError::Provider(ProviderError::Rpc(_))),
+        "the deploy must fail at the connect of its submit, after a build that reserved its fee: \
+         {err:?}"
     );
 
     let dust = wallet.balance().await.dust;

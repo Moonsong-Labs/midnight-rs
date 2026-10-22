@@ -434,7 +434,7 @@ The wallet also drops a reservation of another ledger generation when it loads `
 
 A release also drops a reservation, for a transaction that can never land. It matches each entry by its input and by the stamp of its reservation, so a late release cannot drop an entry that a later build made over the same input. These paths release:
 
-- `MidnightProvider::submit_reserved`, when the submit fails with `NotSubmitted` (a failed connect included), and its `PendingTx` when a wait reads `Invalid`. The transfers, `register_dust`, a deploy and a maintenance update submit this way. Submit the result of a `.build()` or of `balance_transaction` with it too.
+- `MidnightProvider::submit_reserved`, when its prepare fails (the connect included), and its `PendingTx` when a wait reads `Invalid`. The transfers, `register_dust`, a deploy and a maintenance update submit this way. Submit the result of a `.build()` or of `balance_transaction` with it too.
 - A build whose proof fails, and a deploy whose shielded offer fails before its fee is paid.
 - `MidnightProvider::release(&spent)`, for a `TransferResult` that you build and never submit.
 
