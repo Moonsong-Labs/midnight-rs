@@ -136,6 +136,7 @@ provider
       b.add_funding(&ctx) / b.build_funded(tx_info) / b.prepare_shielded_inputs(..)
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
+  .prepare_reserved(result).await  → PreparedTx that holds the reservation of the build
   .submit(tx_bytes).await          → PendingTx
   .submit_reserved(result).await   → PendingTx that carries the reservation of the build
   .merge_transactions(&[..])       → one transaction from several proven ones
@@ -376,6 +377,8 @@ One auto-reconnecting websocket carries everything the node serves: raw Substrat
 Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures with no verdict surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection; `NotSubmitted`: never left the process) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a wait/decode issue that leaves the tx in flight (`WatchStream`: transport-only; `VerdictFetch`: landed but events undecodable; re-query the chain rather than resubmit). `SubmitRpc` does not say whether the node holds the tx, so a resubmit after it also risks a double spend.
 
 `MidnightProvider::prepare` stops one step earlier: it builds the unsigned `send_mn_transaction` extrinsic locally from the node's metadata and returns a `PreparedTx` whose extrinsic hash is already known, so a caller can durably record state keyed by that hash before the transaction reaches the mempool. The metadata checks only the call's shape, so the node validates the transaction only at submit. `PreparedTx::submit` then hands back the same `PendingTx`.
+
+`MidnightProvider::prepare_reserved` prepares a `TransferResult`, and the `PreparedTx` holds the reservation of its build. A failed prepare hands the inputs back before it returns. A `PreparedTx` that drops before its submit hands them back too, and `PreparedTx::release` does the same and waits for it. `PreparedTx::submit` moves the reservation to the `PendingTx`, so a wait that reads `Invalid` hands the inputs back. A failed submit keeps them reserved.
 
 `MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A submit that fails with `NotSubmitted` hands the inputs back before it returns. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call submits with no reservation, so its inputs stay reserved until their TTL after a rejection.
 
