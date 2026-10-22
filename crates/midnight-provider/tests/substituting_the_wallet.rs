@@ -79,7 +79,7 @@ impl WalletFacade for StubWallet {
 
     async fn release(&self, spent: &SpentInputs) {
         let mut released = self.released.lock().unwrap();
-        released.extend(spent.shielded.iter().map(|reserved| reserved.input.clone()));
+        released.extend(spent.shielded.iter().map(|reserved| reserved.input));
     }
 
     async fn resync(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
@@ -238,7 +238,7 @@ async fn a_reserved_build_whose_connect_fails_gets_its_inputs_back() {
     let result = TransferResult {
         tx_bytes: vec![0; 8],
         ledger_version: LedgerVersion::V9,
-        spent: SpentInputs::from_shielded(vec![nullifier.clone()], Timestamp::from_secs(100)),
+        spent: SpentInputs::from_shielded(vec![nullifier], Timestamp::from_secs(100)),
         fee_speck: 0,
     };
 
