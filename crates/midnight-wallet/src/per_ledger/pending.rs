@@ -30,10 +30,7 @@
 use std::path::Path;
 
 use super::helpers;
-use helpers::{
-    DefaultDB, DustLocalState, DustNullifier, DustSpend, Nullifier, ProofPreimageMarker, Sp,
-    Timestamp,
-};
+use helpers::{DefaultDB, DustNullifier, DustSpend, Nullifier, ProofPreimageMarker, Timestamp};
 use tracing::warn;
 
 use super::types::DustSpendBatch;
@@ -47,14 +44,11 @@ use crate::{SpentUtxoKey, WalletError};
 ///
 /// A later build applies the `spends` of each batch to a `DustWallet` clone
 /// with the clone's current state, so its coin selection skips the reserved
-/// nullifiers. That replay does not apply `updated_state`.
+/// nullifiers.
 #[derive(Clone)]
 pub(crate) struct PendingDustBatch {
     /// The spends as built. Tagged-serializable so they can be persisted.
     pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
-    /// The `DustLocalState` that `speculative_spend` returned with `spends`.
-    /// `pending.json` stores it with the batch.
-    pub updated_state: Sp<DustLocalState<DefaultDB>, DefaultDB>,
     /// `chain_tblock` at reservation time, for TTL eviction.
     pub reserved_at: Timestamp,
 }
@@ -107,7 +101,6 @@ impl PendingReservations {
         self.dust
             .extend(dust_batches.into_iter().map(|b| PendingDustBatch {
                 spends: b.spends,
-                updated_state: b.updated_state,
                 reserved_at,
             }));
         self.unshielded.extend(
@@ -254,7 +247,6 @@ impl PendingReservations {
         for p in &self.dust {
             dust.push(StoredPendingDustBatch {
                 spends_hex: tagged_to_hex(&p.spends, "pending dust spends")?,
-                updated_state_hex: tagged_to_hex(&p.updated_state, "pending dust state")?,
                 reserved_at_secs: p.reserved_at.to_secs(),
             });
         }
@@ -321,7 +313,6 @@ impl PendingReservations {
         for s in stored.dust {
             dust.push(PendingDustBatch {
                 spends: tagged_from_hex(&s.spends_hex, "pending dust spends")?,
-                updated_state: tagged_from_hex(&s.updated_state_hex, "pending dust state")?,
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
             });
         }
@@ -359,7 +350,7 @@ pub(super) mod test_support {
     use super::*;
     use crate::Seed;
     use helpers::mn_ledger::dust::DustCommitment;
-    use helpers::{Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
+    use helpers::{DustLocalState, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage, Sp};
 
     pub(crate) fn ukey(intent_hash: &str, output_index: u32) -> SpentUtxoKey {
         SpentUtxoKey {
@@ -408,7 +399,7 @@ mod tests {
     use super::test_support::{dust_batch, dust_spend, nullifier, ukey};
     use super::*;
     use crate::Seed;
-    use helpers::{Duration, INITIAL_PARAMETERS};
+    use helpers::{DustLocalState, Duration, INITIAL_PARAMETERS, Sp};
 
     /// A transaction built for one generation cannot land on a chain that
     /// runs another, so its reservations are dead. Loading them would hide
@@ -437,6 +428,27 @@ mod tests {
                 super::super::LEDGER
             );
         }
+    }
+
+    /// An earlier build wrote each Dust batch with an `updated_state_hex`. A
+    /// `deny_unknown_fields` on the stored structs refuses that file, and the
+    /// resume of each upgraded wallet with a Dust reservation in flight fails.
+    #[test]
+    fn a_pending_file_that_an_earlier_build_wrote_still_loads() {
+        let batch = dust_batch(&[1]);
+        let body = serde_json::json!({
+            "ledger_version": super::super::LEDGER,
+            "dust": [{
+                "spends_hex": tagged_to_hex(&batch.spends, "spends").unwrap(),
+                "updated_state_hex": tagged_to_hex(&batch.updated_state, "state").unwrap(),
+                "reserved_at_secs": 100,
+            }],
+        });
+        let stored = serde_json::from_value(body).expect("the file parses");
+        let loaded = PendingReservations::from_stored(stored).unwrap();
+        let batches: Vec<_> = loaded.dust_batches().collect();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].spends[0].old_nullifier, nullifier(1));
     }
 
     #[test]
