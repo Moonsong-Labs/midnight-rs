@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     }
     println!();
 
-    println!("Syncing wallet state from indexer (zswap + unshielded + dust in parallel)...");
+    println!("Syncing wallet state from indexer (zswap and unshielded, then dust)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
     let provider = MidnightProvider::new(&node_url, &indexer_url);
     let mut builder = WalletBuilder::new(&seed).with_network(&network);

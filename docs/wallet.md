@@ -145,7 +145,7 @@ let wallet = Wallet::from_mnemonic(phrase)?
 let provider = provider.with_wallet(wallet);
 ```
 
-A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider)` runs three concurrent indexer subscriptions in the current task, and returns the `Wallet` once all three have caught up:
+A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider)` replays three indexer subscriptions in the current task: the zswap and unshielded streams at the same time, then the Dust stream. It returns the `Wallet` once all three have caught up:
 
 | Subscription | What it fills |
 |---|---|
@@ -272,11 +272,13 @@ With `.with_storage(dir)`, the sync writes to:
   ├── metadata.json     event cursors, last block, last tx id, generation pointers,
   │                     and the ledger generation that wrote the state files
   ├── zswap-N.bin       tagged-serialized ZswapLocalState
-  ├── dust_wallet-N.bin tagged-serialized DustWallet
+  ├── dust_wallet-N.bin tagged-serialized DustWallet, which holds the Dust secret key
   └── pending.json      in-flight spend reservations (see below)
 ```
 
 `{network}` is the network that `.with_network(..)` names or, without `.with_network(..)`, the node's network.
+
+The directory holds the Dust secret key, so protect it as key material. On Unix, the SDK creates the wallet's directory with mode 0700 and its files with mode 0600.
 
 Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the old generation is cleaned up. A crash mid-write leaves the previous generation intact.
 

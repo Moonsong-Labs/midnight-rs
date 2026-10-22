@@ -96,3 +96,30 @@ export circuit casts(n: Uint<32>, f: Field): Bytes<32> {
   tag_cell = disclose(b);
   return b;
 }
+
+export enum Tri { low, mid, high }
+
+// The checked narrowing casts to a Uint: from a Field, from a wider Uint and
+// from Bytes. Each one fails above 255. The write keeps the circuit impure,
+// because the driver reads the proof data of a step.
+export circuit narrow(f: Field, n: Uint<16>, b: Bytes<2>): Uint<16> {
+  const r = (f as Uint<8>) + (n as Uint<8>) + (b as Uint<8>);
+  scratch = disclose(r as Field);
+  return r;
+}
+
+// The checked enum casts: a Field to an enum, and an enum to a Uint narrower
+// than the enum.
+export circuit tri(f: Field, t: Tri): Uint<8> {
+  const r = ((f as Tri) as Uint<0..3>) + (t as Uint<0..2>);
+  scratch = disclose(r as Field);
+  return r;
+}
+
+// A Counter read cast to a Field. The ledger write and the result take the
+// Field alignment, not the 8 bytes of the Counter.
+export circuit counter_as_field(): Field {
+  const f = hits as Field;
+  scratch = f;
+  return f;
+}
