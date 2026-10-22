@@ -1,0 +1,7 @@
+error: the Compact struct `Pair` has two instantiations with different fields, and the bindings give one Rust struct per name
+ --> tests/ui/fail/struct-instantiations.rs:5:1
+  |
+5 | compact_bindgen::contract!("../../../../tests/fixtures/compiled/pairs/compiler/analyzed-ir.sexp");
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `compact_bindgen::contract` (in Nightly builds, run with -Z macro-backtrace for more info)

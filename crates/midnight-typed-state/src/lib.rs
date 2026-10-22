@@ -15,6 +15,7 @@ mod nav;
 mod reexports;
 
 mod conversions;
+mod standard_library;
 
 pub use accessors::{ListAccessor, MapAccessor, MerkleTreeAccessor, SetAccessor};
 pub use contract_state::decode_contract_state;
@@ -22,6 +23,7 @@ pub use conversions::{Bytes, Uint, UintOutOfRange, Vector};
 pub use error::StateError;
 pub use nav::{cell_as, cell_value, get_field, get_field_path, variant_name};
 pub use reexports::*;
+pub use standard_library::{Either, Maybe};
 
 pub mod lazy;
 

@@ -73,7 +73,7 @@ TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 # Codegen test fixtures: tests/fixtures/sources/<name>.compact compiles to
 # tests/fixtures/compiled/<name>/compiler/analyzed-ir.sexp.
-CODEGEN_FIXTURES := gateway many-fields mint-probe zerocash
+CODEGEN_FIXTURES := gateway many-fields mint-probe pairs struct-shapes zerocash
 
 # Conformance corpus (tests/conformance/fixtures/<name>/). Each fixture
 # carries its source `.compact` plus the two compiler outputs both executors

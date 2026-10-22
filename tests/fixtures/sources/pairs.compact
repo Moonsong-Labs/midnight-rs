@@ -1,0 +1,10 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// A generic struct at two types. The bindings give one Rust struct per Compact
+// struct name, so they refuse this contract.
+
+export struct Pair<T> { first: T, second: T }
+
+export ledger fields: Pair<Field>;
+export ledger tags: Pair<Bytes<32>>;
