@@ -1,7 +1,7 @@
 use proc_macro2::{Literal, TokenStream};
 use quote::quote;
 
-use crate::ir::{Curve, Type, uint_byte_width};
+use crate::ir::{Curve, FieldType, Type, uint_byte_width};
 
 use super::helpers::Lit;
 
@@ -10,6 +10,8 @@ use super::helpers::Lit;
 pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
     match ty {
         Type::Boolean => quote! { bool },
+        Type::Field(FieldType::Base(Curve::Secp256k1)) => quote! { Secp256k1Base },
+        Type::Field(FieldType::Scalar(Curve::Secp256k1)) => quote! { Secp256k1Scalar },
         Type::Field(_) => quote! { TransientFr },
         Type::Unsigned(maxval) => uint_tokens(maxval),
         Type::Bytes(length) => {
@@ -36,7 +38,17 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
             let inner: Vec<_> = types.iter().map(type_to_tokens).collect();
             quote! { (#(#inner),*) }
         }
-        Type::Struct { name, .. } | Type::Enum { name, .. } => {
+        Type::Struct { name, fields } => match library_struct(name, fields) {
+            Some((library, args)) => {
+                let args = args.into_iter().map(type_to_tokens);
+                quote! { #library<#(#args),*> }
+            }
+            None => {
+                let ident = super::helpers::make_ident(name);
+                quote! { #ident }
+            }
+        },
+        Type::Enum { name, .. } => {
             let ident = super::helpers::make_ident(name);
             quote! { #ident }
         }
@@ -44,10 +56,11 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
         // The runtime's EC values carry the wire spelling the generated
         // bindings already used for a Jubjub point.
         Type::Point(Curve::Jubjub) => opaque_tokens("JubjubPoint"),
+        Type::Point(Curve::Secp256k1) => quote! { Secp256k1Point },
         Type::Opaque(name) => opaque_tokens(name),
         Type::Contract { .. } => type_to_tokens(&Type::contract_address()),
         // Rejected at load by `artifact::check_type`; unreachable here.
-        Type::Point(_) | Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
             quote! { Vec<u8> }
         }
     }
@@ -80,6 +93,30 @@ pub(crate) fn uint_tokens(maxval: &num_bigint::BigUint) -> TokenStream {
     }
 }
 
+/// The generic `compact_runtime` type that a standard-library struct binds to,
+/// with the types of its parameters, or `None` for any other struct.
+///
+/// The shape decides, because the analyzed IR names a struct but gives no
+/// type arguments for it.
+pub(crate) fn library_struct<'a>(
+    name: &str,
+    fields: &'a [(String, Type)],
+) -> Option<(TokenStream, Vec<&'a Type>)> {
+    match (name, fields) {
+        ("Maybe", [(is_some, Type::Boolean), (value, t)])
+            if is_some == "is_some" && value == "value" =>
+        {
+            Some((quote! { midnight_contract::runtime::Maybe }, vec![t]))
+        }
+        ("Either", [(is_left, Type::Boolean), (left, a), (right, b)])
+            if is_left == "is_left" && left == "left" && right == "right" =>
+        {
+            Some((quote! { midnight_contract::runtime::Either }, vec![a, b]))
+        }
+        _ => None,
+    }
+}
+
 // --- Opaque type mapping ---
 
 pub(crate) fn opaque_tokens(ts_type: &str) -> TokenStream {
@@ -103,6 +140,21 @@ pub(crate) fn opaque_tokens(ts_type: &str) -> TokenStream {
 /// declared alignment for the prover to accept it.
 pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &Type) -> TokenStream {
     match ty {
+        // Field by field, as a generated struct encodes. The library type's
+        // own conversion needs `AlignedValue: From` for each field, which a
+        // vector or a tuple of generated types lacks.
+        Type::Struct { name, fields } if library_struct(name, fields).is_some() => {
+            let parts = fields.iter().map(|(field, field_ty)| {
+                let field = super::helpers::make_ident(field);
+                encode_to_aligned_value(&quote! { __lib.#field }, field_ty)
+            });
+            quote! {
+                {
+                    let __lib = #expr;
+                    AlignedValue::concat([#(&#parts),*])
+                }
+            }
+        }
         Type::Boolean
         | Type::Unsigned(_)
         | Type::Field(_)
@@ -169,9 +221,9 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &Type) -> TokenStr
 /// Used by `Aligned` impls for structs.
 pub(crate) fn alignment_expr(ty: &Type) -> TokenStream {
     match ty {
-        Type::Struct { name, .. } | Type::Enum { name, .. } => {
-            let ident = super::helpers::make_ident(name);
-            quote! { <#ident as Aligned>::alignment() }
+        Type::Struct { .. } | Type::Enum { .. } => {
+            let rust_type = type_to_tokens(ty);
+            quote! { <#rust_type as Aligned>::alignment() }
         }
         Type::Alias { ty: inner, .. } => alignment_expr(inner),
         Type::Contract { .. } => alignment_expr(&Type::contract_address()),

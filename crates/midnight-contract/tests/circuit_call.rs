@@ -266,6 +266,51 @@ fn witness_context_threads_private_state() {
 }
 
 // ---------------------------------------------------------------------------
+// Build-only calls
+// ---------------------------------------------------------------------------
+
+/// A build-only call of a contract with witnesses needs a private-state store,
+/// as a submitted call does, and it checks for one before it queries the node.
+/// The provider's node URL is a closed port, so a check after the state read
+/// fails with a node error instead.
+#[tokio::test]
+async fn a_build_only_call_with_witnesses_needs_a_store_before_any_node_query() {
+    use midnight_base_crypto::hash::HashOutput;
+    use midnight_contract::runtime::NoWitnesses;
+    use midnight_contract::{Contract, ContractError, ShieldedInputs};
+    use midnight_provider::MidnightProvider;
+
+    let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1");
+    let contract = Contract::at(
+        &provider,
+        midnight_contract::ContractAddress(HashOutput([7; 32])),
+    )
+    .with_declared_witnesses(true)
+    .with_zk_config("compiled")
+    .build();
+    let witnesses = vec![persistent_hash_witness()];
+    let program = interpreter::Program::new(&[], &witnesses, &[]);
+
+    let err = contract
+        .build_call_with(
+            &persistent_hash_witness_ir(),
+            &program,
+            "test",
+            &[],
+            &NoWitnesses,
+            &[],
+            ShieldedInputs::default(),
+            true,
+        )
+        .await
+        .expect_err("a contract with witnesses and no store must not build");
+    assert!(
+        matches!(&err, ContractError::Construction(message) if message.contains("with_private_state")),
+        "expected the store error, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Shielded mint: createZswapOutput capture
 // ---------------------------------------------------------------------------
 

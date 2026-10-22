@@ -1,0 +1,6 @@
+{
+  "steps": [
+    { "circuit": "flat_points", "args": [{ "field": "2" }, { "field": "3" }] },
+    { "circuit": "flat_points", "args": [{ "field": "2" }, { "field": "3" }] }
+  ]
+}

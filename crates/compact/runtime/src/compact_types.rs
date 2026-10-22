@@ -5,13 +5,14 @@
 
 use std::ops::Range;
 
-use midnight_typed_state::AlignedValue;
+use midnight_typed_state::{Aligned, AlignedValue, Secp256k1Base, Secp256k1Point, Secp256k1Scalar};
 
-use compact_codegen::ir::{Type, uint_byte_width};
+use compact_codegen::ir::{Curve, Type, uint_byte_width};
 use num_bigint::BigUint;
 
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
 use crate::error::InterpreterError;
+use crate::secp256k1::{ForeignField, encode_point};
 use crate::value::Value;
 
 /// Precomputed layout of a struct: field name → (atom offset, atom count).
@@ -38,9 +39,15 @@ impl StructLayout {
 /// fit a `usize`.
 pub fn atom_count_for_type(ty: &Type) -> Option<usize> {
     match ty {
-        Type::Boolean | Type::Unsigned(_) | Type::Field(_) | Type::Bytes(_) => Some(1),
-        // A curve point is two atoms (x and y).
-        Type::Point(_) => Some(2),
+        Type::Field(field) => Some(match ForeignField::of(field) {
+            Some(ForeignField::Base) => Secp256k1Base::alignment().0.len(),
+            Some(ForeignField::Scalar) => Secp256k1Scalar::alignment().0.len(),
+            None => 1,
+        }),
+        Type::Boolean | Type::Unsigned(_) | Type::Bytes(_) => Some(1),
+        // A Jubjub point is two atoms (x and y).
+        Type::Point(Curve::Jubjub) => Some(2),
+        Type::Point(Curve::Secp256k1) => Some(Secp256k1Point::alignment().0.len()),
         Type::Opaque(name) => match name.as_str() {
             "JubjubPoint" => Some(2),
             "Scalar<BLS12-381>" => Some(1),
@@ -255,14 +262,15 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
             check_uint_range(n, maxval)?;
             bytes_aligned_value(n.to_le_bytes().to_vec(), uint_byte_width(maxval))
         }
-        Type::Field(_) => match val {
-            Value::AlignedValue(av) => Ok(av.clone()),
-            Value::Integer(n) => {
+        Type::Field(field) => match (ForeignField::of(field), val) {
+            (Some(foreign), _) => foreign.encode(val),
+            (None, Value::AlignedValue(av)) => Ok(av.clone()),
+            (None, Value::Integer(n)) => {
                 use midnight_transient_crypto::curve::Fr;
                 // Exact u128 → Fr conversion — see `value_to_fr`.
                 Ok(AlignedValue::from(Fr::from(*n)))
             }
-            _ => Err(unsupported()),
+            (None, _) => Err(unsupported()),
         },
         Type::Bytes(length) => match val {
             Value::AlignedValue(av) => {
@@ -280,7 +288,8 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
         },
         Type::Alias { ty: inner, .. } => encode_typed(val, inner),
         Type::Contract { .. } => encode_typed(val, &Type::contract_address()),
-        Type::Opaque(_) | Type::Point(_) => match val {
+        Type::Point(Curve::Secp256k1) => encode_point(val),
+        Type::Opaque(_) | Type::Point(Curve::Jubjub) => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
             // evaluates to Void.
@@ -440,9 +449,11 @@ pub fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
     match ty {
         Type::Boolean => Ok(Value::Bool(false)),
         Type::Unsigned(_) | Type::Enum { .. } => Ok(Value::Integer(0)),
-        Type::Field(_) => Ok(Value::AlignedValue(AlignedValue::from(
-            midnight_transient_crypto::curve::Fr::from(0u64),
-        ))),
+        Type::Field(field) => Ok(Value::AlignedValue(match ForeignField::of(field) {
+            Some(ForeignField::Base) => AlignedValue::from(Secp256k1Base::default()),
+            Some(ForeignField::Scalar) => AlignedValue::from(Secp256k1Scalar::default()),
+            None => AlignedValue::from(midnight_transient_crypto::curve::Fr::from(0u64)),
+        })),
         Type::Bytes(length) => Ok(Value::AlignedValue(bytes_aligned_value(
             Vec::new(),
             ir_length(*length)?,
@@ -453,8 +464,11 @@ pub fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
         // wherever the type's own alignment is what is wanted: `max-sizeof`
         // sizes a `List` read's `concat` from it, and `(null <type>)` builds
         // that read's empty answer.
-        Type::Point(_) => Ok(Value::AlignedValue(AlignedValue::from(
+        Type::Point(Curve::Jubjub) => Ok(Value::AlignedValue(AlignedValue::from(
             midnight_transient_crypto::curve::EmbeddedGroupAffine::identity(),
+        ))),
+        Type::Point(Curve::Secp256k1) => Ok(Value::AlignedValue(AlignedValue::from(
+            Secp256k1Point::default(),
         ))),
         Type::Opaque(_) => Ok(Value::AlignedValue(empty_opaque())),
         Type::Struct { fields, .. } => {

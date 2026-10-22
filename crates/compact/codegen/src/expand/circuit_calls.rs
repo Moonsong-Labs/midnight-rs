@@ -118,24 +118,35 @@ pub(crate) fn value_to_type_conversion(ty: &Type, context: &str) -> TokenStream 
             }
         }
         Type::Alias { ty: inner, .. } => value_to_type_conversion(inner, context),
+        // The interpreter holds a vector or a tuple as `Value::Tuple` and a
+        // small `Field` as `Value::Integer`, so the value is encoded at its
+        // type before it is decoded.
         _ => {
             let rust_ty = type_to_tokens(ty);
+            let ir_ty = super::emit_ir::type_ref(ty);
+            let encode_msg = format!("{context}: {{}}");
             let convert_msg = format!("{context}: failed to convert value to {{}}: {{}}");
-            let mismatch = mismatch_arm(context, "an AlignedValue");
             quote! {
-                match __val {
-                    midnight_contract::runtime::Value::AlignedValue(__av) => {
-                        <#rust_ty>::try_from(&*__av.value).map_err(|__e| {
+                {
+                    #[allow(unused_imports)]
+                    use midnight_contract::compact_codegen::ir as __ir;
+                    midnight_contract::runtime::encode_typed(&__val, &#ir_ty)
+                        .map_err(|__e| {
                             midnight_contract::runtime::InterpreterError::TypeError(
-                                ::std::format!(
-                                    #convert_msg,
-                                    ::core::stringify!(#rust_ty),
-                                    __e
-                                )
+                                ::std::format!(#encode_msg, __e)
                             )
                         })
-                    }
-                    #mismatch
+                        .and_then(|__av| {
+                            <#rust_ty>::try_from(&*__av.value).map_err(|__e| {
+                                midnight_contract::runtime::InterpreterError::TypeError(
+                                    ::std::format!(
+                                        #convert_msg,
+                                        ::core::stringify!(#rust_ty),
+                                        __e
+                                    )
+                                )
+                            })
+                        })
                 }
             }
         }

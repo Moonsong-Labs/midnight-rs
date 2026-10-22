@@ -73,7 +73,7 @@ TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 # Codegen test fixtures: tests/fixtures/sources/<name>.compact compiles to
 # tests/fixtures/compiled/<name>/compiler/analyzed-ir.sexp.
-CODEGEN_FIXTURES := gateway many-fields mint-probe zerocash
+CODEGEN_FIXTURES := gateway many-fields mint-probe pairs results struct-shapes zerocash
 
 # Conformance corpus (tests/conformance/fixtures/<name>/). Each fixture
 # carries its source `.compact` plus the two compiler outputs both executors
@@ -81,11 +81,11 @@ CODEGEN_FIXTURES := gateway many-fields mint-probe zerocash
 # `contract/index.js` (TS codegen run by the ts-driver against the canonical
 # @midnight-ntwrk/compact-runtime).
 CONFORMANCE_FIXTURES := bboard containers counter defaults events indexing keccak kernel loops ops \
-                        peers scopes sha512 shadowing slices structs tiny trees vectors
-# The fixtures that compile for ZKIR v3. Without the flag the compiler declares
-# no sha512, and its ZKIR v2 backend rejects keccak256 in a circuit that needs a
-# proof, which is every circuit the driver runs.
-CONFORMANCE_ZKIR_V3_FIXTURES := keccak sha512
+                        peers scopes secp256k1 sha512 shadowing slices structs tiny trees vectors
+# The fixtures that compile for ZKIR v3. Without the flag, the compiler declares
+# no sha512 and no secp256k1 types. Its ZKIR v2 backend also rejects keccak256
+# in a circuit that needs a proof, and the driver runs only such circuits.
+CONFORMANCE_ZKIR_V3_FIXTURES := keccak secp256k1 sha512
 CONFORMANCE_DIR := tests/conformance
 # The runtime tarball the driver installs. Generated, not committed: only the
 # driver reads it, and `vendor-compact-runtime` builds it from COMPACT_REV.
@@ -303,6 +303,7 @@ test-e2e: contracts
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test unshielded_payout_to_user -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test call_context -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test simulate_call -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test build_only_private_state -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test emit_event -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output

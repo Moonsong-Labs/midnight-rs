@@ -1,0 +1,930 @@
+{
+  "fixture": "vectors",
+  "case": "flat-points",
+  "constructor": {
+    "state": {
+      "data": {
+        "tag": "array",
+        "content": [
+          {
+            "tag": "cell",
+            "content": {
+              "value": [
+                ""
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "tag": "cell",
+            "content": {
+              "value": [
+                "",
+                "01",
+                "",
+                "01"
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "serializedUntagged": "34000c4020010400040100288440014001c44141414104080401040c080104041014030401041008041408040804180403041c0004200801040424d4030462c401040304010804080801040104010c40200100011403040104100401080104040104010401288440014001c4414141410000040014182c282c2c1003000400"
+    }
+  },
+  "steps": [
+    {
+      "circuit": "flat_points",
+      "input": {
+        "value": [
+          "02",
+          "03"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "",
+          "01",
+          "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+          "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+          "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+          "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47",
+          "7f384d6b3130c69d1a83d4f068e399e66445c55424196d07c8a99888d458c865",
+          "76291dc83cbd77fc4e28e612d0dd26d6b0fa040a4d651ad8c1c6e25419b1e639"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 1
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 1
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "dup": {
+            "n": 0
+          }
+        },
+        {
+          "idx": {
+            "cached": false,
+            "pushPath": false,
+            "path": [
+              {
+                "tag": "value",
+                "value": {
+                  "value": [
+                    "01"
+                  ],
+                  "alignment": [
+                    {
+                      "tag": "atom",
+                      "value": {
+                        "tag": "bytes",
+                        "length": 1
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "popeq": {
+            "cached": false,
+            "result": {
+              "value": [
+                "",
+                "01",
+                "",
+                "01"
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "01"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+                  "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+                  "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+                  "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        },
+        {
+          "dup": {
+            "n": 0
+          }
+        },
+        {
+          "idx": {
+            "cached": false,
+            "pushPath": false,
+            "path": [
+              {
+                "tag": "value",
+                "value": {
+                  "value": [
+                    "01"
+                  ],
+                  "alignment": [
+                    {
+                      "tag": "atom",
+                      "value": {
+                        "tag": "bytes",
+                        "length": 1
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "popeq": {
+            "cached": false,
+            "result": {
+              "value": [
+                "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+                "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+                "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+                "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47"
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "dup": {
+            "n": 0
+          }
+        },
+        {
+          "idx": {
+            "cached": false,
+            "pushPath": false,
+            "path": [
+              {
+                "tag": "value",
+                "value": {
+                  "value": [
+                    "01"
+                  ],
+                  "alignment": [
+                    {
+                      "tag": "atom",
+                      "value": {
+                        "tag": "bytes",
+                        "length": 1
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "popeq": {
+            "cached": false,
+            "result": {
+              "value": [
+                "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+                "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+                "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+                "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47"
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+                  "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+                  "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+                  "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serializedUntagged": "38000c40200104000401003902846001dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e6001719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a316001cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d8136001c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47c44141414104080401040c080104041014030401041008041408040804180403041c0004200801040424ec03046ddc5cbd519a069c82c269176c6c3d8136001c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47c441414141000042815020304ff010201040304010804080801040104010c402001000114030401041004010801040401040104013902846001dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e6001719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a316001cdbb89b6fc75eebe5569c5469e875722b2e00004001418302c30301003000400"
+      },
+      "zswapOutputs": []
+    },
+    {
+      "circuit": "flat_points",
+      "input": {
+        "value": [
+          "02",
+          "03"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "01",
+          "01",
+          "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+          "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+          "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+          "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47",
+          "7f384d6b3130c69d1a83d4f068e399e66445c55424196d07c8a99888d458c865",
+          "76291dc83cbd77fc4e28e612d0dd26d6b0fa040a4d651ad8c1c6e25419b1e639"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 1
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 1
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "dup": {
+            "n": 0
+          }
+        },
+        {
+          "idx": {
+            "cached": false,
+            "pushPath": false,
+            "path": [
+              {
+                "tag": "value",
+                "value": {
+                  "value": [
+                    "01"
+                  ],
+                  "alignment": [
+                    {
+                      "tag": "atom",
+                      "value": {
+                        "tag": "bytes",
+                        "length": 1
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "popeq": {
+            "cached": false,
+            "result": {
+              "value": [
+                "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+                "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+                "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+                "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47"
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "01"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+                  "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+                  "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+                  "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        },
+        {
+          "dup": {
+            "n": 0
+          }
+        },
+        {
+          "idx": {
+            "cached": false,
+            "pushPath": false,
+            "path": [
+              {
+                "tag": "value",
+                "value": {
+                  "value": [
+                    "01"
+                  ],
+                  "alignment": [
+                    {
+                      "tag": "atom",
+                      "value": {
+                        "tag": "bytes",
+                        "length": 1
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "popeq": {
+            "cached": false,
+            "result": {
+              "value": [
+                "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+                "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+                "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+                "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47"
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "dup": {
+            "n": 0
+          }
+        },
+        {
+          "idx": {
+            "cached": false,
+            "pushPath": false,
+            "path": [
+              {
+                "tag": "value",
+                "value": {
+                  "value": [
+                    "01"
+                  ],
+                  "alignment": [
+                    {
+                      "tag": "atom",
+                      "value": {
+                        "tag": "bytes",
+                        "length": 1
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "popeq": {
+            "cached": false,
+            "result": {
+              "value": [
+                "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+                "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+                "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+                "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47"
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                },
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e",
+                  "719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a31",
+                  "cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d813",
+                  "c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  },
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serializedUntagged": "38000c40200104000401003902846001dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e6001719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a316001cdbb89b6fc75eebe5569c5469e875722b2e5cbd519a069c82c269176c6c3d8136001c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47c44141414104080401040c080104041014030401041008041408040804180403041c0004200801040424ec03046ddc5cbd519a069c82c269176c6c3d8136001c5295dd1cb37a4ae58005ac7019c958df01d0e5256e17e81ba9d94a2db339c47c441414141000042815020304ff010201040304010804080801040104010c402001000114030401041004010801040401040104013902846001dd1c0d6935aecc606473e78a773750b2c4adfdcab649fbc3042cee7d61dbf13e6001719af0e6e0c6d0aa680f3b7e97dee9c3cbc3a7815979f08e33a640fab8ca9a316001cdbb89b6fc75eebe5569c5469e875722b2e00004001418302c30301003000400"
+      },
+      "zswapOutputs": []
+    }
+  ]
+}
