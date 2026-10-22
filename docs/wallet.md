@@ -8,7 +8,7 @@ The SDK's wallet covers Midnight's three asset legs:
 
 `Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` or `Wallet::from_mnemonic` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts. The wallet can also resync itself in a background task (see [Background sync](#background-sync)).
 
-The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`). Such an implementation must serialize its own `resync`, `rescan_shielded`, `watch_for_coins` and `forget_coins` against each other, because the provider holds no lock across them.
+The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`). Such an implementation must serialize its own `resync`, `rescan_shielded`, `watch_for_coins` and `forget_coins` against each other, because the provider holds no lock across them. Its `rescan_shielded` and `watch_for_coins` take the chain view, as `resync` does. When its state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync. `watch_for_coins` registers the coins and then rescans.
 
 ```rust
 use std::sync::Arc;
@@ -20,7 +20,7 @@ let provider = provider.with_wallet(Arc::clone(&wallet));
 let balance = wallet.balance().await;
 ```
 
-The wallet serializes its own resyncs, rescans, coin watches and forgets. So the handle can run them too, from any number of tasks or providers.
+The wallet serializes its own resyncs, rescans, coin watches and forgets. So the handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.rescan_shielded(&provider)`.
 
 ## Seeds
 
@@ -423,13 +423,13 @@ Registration records the coin's commitment; a replay that meets the matching out
 
 Every coin the wallet already holds is re-registered before that replay, so a rescan never costs you a coin. This matters because the ledger consumes a registration the moment a replay claims it: a coin recovered by an earlier `watch_for_coin` has no ciphertext to be found by, and a replay that started without it would collapse its leaf again.
 
-That full replay costs more than a resync, so register every coin you know about in one `watch_for_coins([...])` call, and treat this as a recovery step rather than a routine one. Registrations are persisted with the rest of the wallet state, so one made for a coin that has not landed yet survives a restart, and a resync that lands in the middle of one carries it rather than dropping it.
+That full replay costs more than a resync, so register every coin you know about in one `watch_for_coins([...])` call, and treat this as a recovery step rather than a routine one. Registrations are persisted with the rest of the wallet state, so one made for a coin that has not landed yet survives a restart, and every later resync carries it rather than dropping it.
 
 To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. If the coin does not appear there, it is not on chain yet, or its rebuilt `CoinInfo` is wrong. A wrong registration never matches an output, and every later replay carries it. Drop it with `provider.forget_coin(coin)`. Forgetting drops the registration only, and a coin that the wallet already claimed stays spendable.
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On a handle (`Arc<LocalWallet>`), `watch_for_coins` registers and `rescan_shielded` replays. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet serializes each step of the two provider methods against resyncs: the registration, and each replay. A resync that runs between the registration and the replay keeps the registration. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
+`provider.rescan_shielded()` runs the replay alone. A handle (`Arc<LocalWallet>`) has the same two methods: `watch_for_coins(coins, &provider)` and `rescan_shielded(&provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them. When the wallet's state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
 
 ## Pending reservations
 
@@ -470,7 +470,8 @@ provider.with_wallet(wallet)
   provider.resync_wallet()               incremental refresh + re-persist
   wallet.sync_in_background(provider, pause)   resync in a task until the handle drops (an Arc<LocalWallet>)
       sync.wait_until(done)              wait until done holds for the balance (at the call and after each pass)
-  provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
+  provider.watch_for_coin(coin)          claim a coin with no usable ciphertext: register, then replay
+  provider.rescan_shielded()             replay the shielded stream (a resync first, to cross a fork)
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
   provider.transfer_unshielded(...).await    builds + submits → PendingTx

@@ -7,14 +7,16 @@
 
 use midnight_curves::k256::{Fp, Fq, K256, K256Affine};
 use midnight_curves::pairing::group::ff::{Field, PrimeField};
-use midnight_typed_state::{
-    AlignedValue, InvalidBuiltinDecode, Secp256k1Base, Secp256k1Point, Secp256k1Scalar, ValueSlice,
-};
+use midnight_typed_state::{AlignedValue, InvalidBuiltinDecode, ValueSlice};
 
 use compact_codegen::ir::{Curve, FieldType};
 
 use crate::error::InterpreterError;
 use crate::value::Value;
+
+mod values;
+
+pub use values::{Secp256k1Base, Secp256k1Point, Secp256k1Scalar};
 
 /// A binary operator of field arithmetic.
 #[derive(Clone, Copy, Debug)]

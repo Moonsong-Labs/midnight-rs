@@ -1,7 +1,9 @@
 //! A contract with secp256k1 ledger fields, circuit arguments, a struct of
 //! secp256k1 fields and a secp256k1 witness binds each type to its
-//! `midnight_typed_state` value, and a ledger built from those values reads
+//! `compact_runtime` value, and a ledger built from those values reads
 //! them back through its typed accessors.
+
+use compact_bindgen::midnight_contract::runtime::{Secp256k1Base, Secp256k1Point, Secp256k1Scalar};
 
 compact_bindgen::contract!(
     "../../../../tests/conformance/fixtures/secp256k1/compiler/analyzed-ir.sexp"
@@ -10,9 +12,9 @@ compact_bindgen::contract!(
 fn main() {
     let mut two = [0u8; 32];
     two[31] = 2;
-    let base = compact_bindgen::Secp256k1Base::from_be_bytes(two).unwrap();
-    let scalar = compact_bindgen::Secp256k1Scalar::from_be_bytes(two).unwrap();
-    let point = compact_bindgen::Secp256k1Point::default();
+    let base = Secp256k1Base::from_be_bytes(two).unwrap();
+    let scalar = Secp256k1Scalar::from_be_bytes(two).unwrap();
+    let point = Secp256k1Point::default();
 
     let ledger = LedgerInitialState {
         base_cell: base.into(),

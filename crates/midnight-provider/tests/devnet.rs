@@ -32,7 +32,7 @@ async fn the_devnet_runs_the_ledger_its_leg_names() {
 #[tokio::test]
 async fn health_check() {
     let Some(p) = provider() else { return };
-    let health = p.health().await.unwrap();
+    let health = p.health().await;
     assert!(health.node_connected);
     assert!(health.block_height.unwrap() > 0);
     eprintln!("health: {health:?}");

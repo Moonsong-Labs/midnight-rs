@@ -15,6 +15,7 @@ use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
 use subxt::tx::{TransactionInBlock, TransactionStatus};
 
+use crate::provider::QUERY_TIMEOUT;
 use crate::{HeldInputs, ProviderError};
 
 type AtBlock = subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>;
@@ -571,9 +572,14 @@ pub(crate) async fn prepare_bytes(
         vec![subxt::dynamic::Value::from_bytes(tx_bytes)],
     );
 
-    let tx_client = client.tx().await.map_err(|e| SubmitError::NotSubmitted {
-        message: format!("tx client: {e}"),
-    })?;
+    let tx_client = tokio::time::timeout(QUERY_TIMEOUT, client.tx())
+        .await
+        .map_err(|_| SubmitError::NotSubmitted {
+            message: format!("tx client: the node gave no answer within {QUERY_TIMEOUT:?}"),
+        })?
+        .map_err(|e| SubmitError::NotSubmitted {
+            message: format!("tx client: {e}"),
+        })?;
     let tx = tx_client
         .create_unsigned(&call)
         .map_err(|e| SubmitError::NotSubmitted {

@@ -25,13 +25,26 @@ use midnight_types::{
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
-/// Connection timeout for the node WebSocket RPC.
-const RPC_TIMEOUT: Duration = Duration::from_secs(10);
+/// The bound of a node query, its connect included.
+///
+/// The subxt reconnecting client retries a refused dial forever. While the
+/// node is down, it also keeps each new call in its queue with no deadline,
+/// and its own request timeout covers only a request on a live socket. So a
+/// query with no bound waits for the whole outage.
+///
+/// A timeout during the first connect drops that connect, and the next query
+/// dials again. After the first connect, the timeout ends only the wait: the
+/// client sends the queued call after the reconnect and drops the late
+/// answer.
+pub(crate) const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Bound each chain query. While the node is down, the reconnecting
-/// client holds a call with no deadline. A query that takes longer than
-/// this bound gives no answer.
-const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+/// The bound of a contract state query, its connect included. See
+/// [`QUERY_TIMEOUT`] for why a query needs a bound.
+///
+/// A full contract state grows with the contract, so a state query gets the
+/// client's own request timeout and not the shorter bound of the other
+/// queries.
+const STATE_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Cached node connection over a single auto-reconnecting websocket: the
 /// subxt `RpcClient` carries every raw RPC (standard Substrate and custom
@@ -53,6 +66,15 @@ struct NodeConnection {
 /// through the subxt `RpcClient`, and the calls that need runtime metadata,
 /// such as transaction submission, through the `OnlineClient` built on the
 /// same transport.
+///
+/// Each node read ends within a bound that includes its connect: 60 s for a
+/// contract state read, and 10 s for every other read. A read that the node
+/// does not answer in that time returns [`ProviderError::Rpc`].
+/// [`Self::health`] bounds its connect and each of its two queries to 10 s,
+/// and reports a missing answer in its fields. [`Self::prepare`] and
+/// [`Self::submit`] bound their connect and their metadata read to 10 s. The
+/// SDK sets no deadline on the submit call or on the wait for a submitted
+/// transaction (see [`PendingTx`]).
 pub struct MidnightProvider {
     indexer_url: String,
     node_url: String,
@@ -407,9 +429,8 @@ impl MidnightProvider {
     /// the rebuilt coin was wrong, drop the registration with
     /// [`Self::forget_coin`].
     ///
-    /// The registration is recorded (and persisted) before the replay starts,
-    /// so a replay that fails leaves it in place: retry with
-    /// [`Self::rescan_shielded`] rather than registering again.
+    /// If the replay fails, retry with [`Self::rescan_shielded`]: the wallet
+    /// keeps the registration (see [`WalletFacade::watch_for_coins`]).
     ///
     /// Locking matches [`Self::resync_wallet`]: the replay runs without the
     /// wallet lock, and the wallet serializes the registration and the replay
@@ -427,15 +448,11 @@ impl MidnightProvider {
         &self,
         coins: impl IntoIterator<Item = CoinInfo> + Send,
     ) -> Result<(), ProviderError> {
-        let coins: Vec<CoinInfo> = coins.into_iter().collect();
         let wallet = &self.attached()?.facade;
-        if coins.is_empty() {
-            return Ok(());
-        }
-        wallet.watch_for_coins(coins).await?;
-        // A resync between the two calls keeps the registration: its commit
-        // carries the registrations over.
-        self.rescan_shielded().await
+        wallet
+            .watch_for_coins(coins.into_iter().collect(), self)
+            .await?;
+        Ok(())
     }
 
     /// Drop a registration [`Self::watch_for_coin`] made, for a coin that
@@ -465,19 +482,12 @@ impl MidnightProvider {
     /// Call this directly to rebuild shielded state that a resync cannot
     /// repair because its cursor has moved past the events in question.
     /// Dust state, unshielded state, and their cursors are left alone.
+    ///
+    /// A wallet whose state is in an earlier ledger generation than the chain
+    /// crosses the fork first, with a resync against this provider.
     pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
         let wallet = &self.attached()?.facade;
-        match wallet.rescan_shielded().await {
-            // The chain crossed a fork the wallet has not. A resync crosses
-            // it, and the rescan then replays across the fork.
-            Err(midnight_types::WalletError::LedgerMismatch { expected, found })
-                if found > expected =>
-            {
-                wallet.resync(self).await?;
-                wallet.rescan_shielded().await?;
-            }
-            result => result?,
-        }
+        wallet.rescan_shielded(self).await?;
         Ok(())
     }
 
@@ -609,7 +619,7 @@ impl MidnightProvider {
     /// [`TransferResult`] that this wallet built, use
     /// [`Self::submit_reserved`].
     pub async fn submit(&self, tx_bytes: &[u8]) -> Result<PendingTx, ProviderError> {
-        let conn = self.get_or_connect().await?;
+        let conn = query_within(QUERY_TIMEOUT, self.get_or_connect()).await?;
         submit::submit_bytes(&conn.client, tx_bytes).await
     }
 
@@ -628,7 +638,7 @@ impl MidnightProvider {
     /// carries no reservation. For a [`TransferResult`] that this wallet
     /// built, use [`Self::prepare_reserved`].
     pub async fn prepare(&self, tx_bytes: &[u8]) -> Result<submit::PreparedTx, ProviderError> {
-        let conn = self.get_or_connect().await?;
+        let conn = query_within(QUERY_TIMEOUT, self.get_or_connect()).await?;
         submit::prepare_bytes(&conn.client, tx_bytes).await
     }
 
@@ -824,10 +834,10 @@ impl MidnightProvider {
     ///
     /// Built once and cached for the provider's lifetime: the underlying
     /// websocket auto-reconnects with backoff, so a network drop needs no
-    /// cache invalidation. The initial dial is bounded by [`RPC_TIMEOUT`]
-    /// (the reconnecting client would otherwise retry a misconfigured URL
-    /// forever instead of failing fast).
+    /// cache invalidation.
     ///
+    /// The caller runs the connect inside the bound of its query (see
+    /// [`QUERY_TIMEOUT`]), because the client retries a refused dial forever.
     /// A caller can drop the connect at any await. The connection then
     /// closes when its pending requests end.
     async fn get_or_connect(&self) -> Result<NodeConnection, ProviderError> {
@@ -839,18 +849,10 @@ impl MidnightProvider {
         }
 
         info!(url = %self.node_url, "Connecting to Midnight node");
-        let reconnecting = tokio::time::timeout(
-            RPC_TIMEOUT,
-            ReconnectingRpcClient::builder().build(&self.node_url),
-        )
-        .await
-        .map_err(|_| {
-            ProviderError::Rpc(format!(
-                "connecting to the node at {} timed out after {RPC_TIMEOUT:?}",
-                self.node_url
-            ))
-        })?
-        .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        let reconnecting = ReconnectingRpcClient::builder()
+            .build(&self.node_url)
+            .await
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         let rpc = RpcClient::new(reconnecting);
         // The runtime-aware client shares the same auto-reconnecting
         // transport.
@@ -882,16 +884,20 @@ impl MidnightProvider {
         &self,
         method: &str,
     ) -> Result<R, ProviderError> {
-        let conn = self.get_or_connect().await?;
-        let payload = subxt::dynamic::runtime_api_call::<(), R>("MidnightRuntimeApi", method, ());
-        conn.client
-            .at_current_block()
-            .await
-            .map_err(|e| ProviderError::Rpc(format!("reading the finalized block: {e}")))?
-            .runtime_apis()
-            .call(payload)
-            .await
-            .map_err(|e| ProviderError::Rpc(format!("calling {method}: {e}")))
+        query_within(QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
+            let payload =
+                subxt::dynamic::runtime_api_call::<(), R>("MidnightRuntimeApi", method, ());
+            conn.client
+                .at_current_block()
+                .await
+                .map_err(|e| ProviderError::Rpc(format!("reading the finalized block: {e}")))?
+                .runtime_apis()
+                .call(payload)
+                .await
+                .map_err(|e| ProviderError::Rpc(format!("calling {method}: {e}")))
+        })
+        .await
     }
 }
 
@@ -960,18 +966,21 @@ pub type NodeHeader = <subxt::SubstrateConfig as subxt::Config>::Header;
 impl MidnightProvider {
     /// Get the current block number from the node (`chain_getHeader.number`).
     pub async fn get_block_number(&self) -> Result<u64, ProviderError> {
-        let conn = self.get_or_connect().await?;
+        query_within(QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
 
-        let header = legacy_rpc(&conn)
-            .chain_get_header(None)
-            .await
-            .map_err(rpc_error("chain_getHeader"))?;
+            let header = legacy_rpc(&conn)
+                .chain_get_header(None)
+                .await
+                .map_err(rpc_error("chain_getHeader"))?;
 
-        debug!(header = ?header, "chain_getHeader response");
+            debug!(header = ?header, "chain_getHeader response");
 
-        header
-            .map(|header| header.number)
-            .ok_or_else(|| ProviderError::Rpc("chain_getHeader returned no header".to_string()))
+            header
+                .map(|header| header.number)
+                .ok_or_else(|| ProviderError::Rpc("chain_getHeader returned no header".to_string()))
+        })
+        .await
     }
 
     /// Get the hash of the node's best block (`chain_getBlockHash` with no
@@ -982,15 +991,18 @@ impl MidnightProvider {
     /// at the best block at the moment of that read. Pass this hash to such
     /// reads to keep two of them at one block.
     pub async fn best_block_hash(&self) -> Result<BlockHash, ProviderError> {
-        let conn = self.get_or_connect().await?;
+        query_within(QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
 
-        legacy_rpc(&conn)
-            .chain_get_block_hash(None)
-            .await
-            .map_err(rpc_error("chain_getBlockHash"))?
-            .ok_or_else(|| {
-                ProviderError::Rpc("chain_getBlockHash returned no best block".to_string())
-            })
+            legacy_rpc(&conn)
+                .chain_get_block_hash(None)
+                .await
+                .map_err(rpc_error("chain_getBlockHash"))?
+                .ok_or_else(|| {
+                    ProviderError::Rpc("chain_getBlockHash returned no best block".to_string())
+                })
+        })
+        .await
     }
 
     /// Get the latest finalized block height (`archive_v1_finalizedHeight`).
@@ -999,13 +1011,16 @@ impl MidnightProvider {
     /// are safe for observers that must never see a block twice. Part of the
     /// `archive_v1` spec, the replacement for the legacy `chain_*` RPCs.
     pub async fn get_finalized_block_height(&self) -> Result<u64, ProviderError> {
-        let conn = self.get_or_connect().await?;
+        query_within(QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
 
-        archive_rpc(&conn)
-            .archive_v1_finalized_height()
-            .await
-            .map(|height| height as u64)
-            .map_err(rpc_error("archive_v1_finalizedHeight"))
+            archive_rpc(&conn)
+                .archive_v1_finalized_height()
+                .await
+                .map(|height| height as u64)
+                .map_err(rpc_error("archive_v1_finalizedHeight"))
+        })
+        .await
     }
 
     /// Get the hashes of the blocks at `height` (`archive_v1_hashByHeight`):
@@ -1019,14 +1034,18 @@ impl MidnightProvider {
         &self,
         height: u64,
     ) -> Result<Vec<BlockHash>, ProviderError> {
-        let conn = self.get_or_connect().await?;
+        query_within(QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
 
-        let height = usize::try_from(height)
-            .map_err(|_| ProviderError::Rpc(format!("block height {height} overflows usize")))?;
-        archive_rpc(&conn)
-            .archive_v1_hash_by_height(height)
-            .await
-            .map_err(rpc_error("archive_v1_hashByHeight"))
+            let height = usize::try_from(height).map_err(|_| {
+                ProviderError::Rpc(format!("block height {height} overflows usize"))
+            })?;
+            archive_rpc(&conn)
+                .archive_v1_hash_by_height(height)
+                .await
+                .map_err(rpc_error("archive_v1_hashByHeight"))
+        })
+        .await
     }
 
     /// Get the header of the block with `hash` (`archive_v1_header`), or
@@ -1036,12 +1055,15 @@ impl MidnightProvider {
         &self,
         hash: BlockHash,
     ) -> Result<Option<NodeHeader>, ProviderError> {
-        let conn = self.get_or_connect().await?;
+        query_within(QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
 
-        archive_rpc(&conn)
-            .archive_v1_header(hash)
-            .await
-            .map_err(rpc_error("archive_v1_header"))
+            archive_rpc(&conn)
+                .archive_v1_header(hash)
+                .await
+                .map_err(rpc_error("archive_v1_header"))
+        })
+        .await
     }
 
     /// Get the timestamp of the block with `hash`, as time since the Unix
@@ -1051,22 +1073,27 @@ impl MidnightProvider {
     /// timestamp, so it reads as zero. Errors when the node does not know
     /// `hash`, or no longer holds the state at it.
     pub async fn get_block_timestamp(&self, hash: BlockHash) -> Result<Duration, ProviderError> {
-        let conn = self.get_or_connect().await?;
+        query_within(QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
 
-        let millis = conn
-            .client
-            .at_block(hash)
-            .await
-            .map_err(|e| ProviderError::Rpc(format!("reading block {hash:#x}: {e}")))?
-            .storage()
-            .fetch(subxt::dynamic::storage::<(), u64>("Timestamp", "Now"), ())
-            .await
-            .map_err(|e| ProviderError::Rpc(format!("reading Timestamp::Now at {hash:#x}: {e}")))?
-            .decode()
-            .map_err(|e| {
-                ProviderError::Rpc(format!("decoding Timestamp::Now at {hash:#x}: {e}"))
-            })?;
-        Ok(Duration::from_millis(millis))
+            let millis = conn
+                .client
+                .at_block(hash)
+                .await
+                .map_err(|e| ProviderError::Rpc(format!("reading block {hash:#x}: {e}")))?
+                .storage()
+                .fetch(subxt::dynamic::storage::<(), u64>("Timestamp", "Now"), ())
+                .await
+                .map_err(|e| {
+                    ProviderError::Rpc(format!("reading Timestamp::Now at {hash:#x}: {e}"))
+                })?
+                .decode()
+                .map_err(|e| {
+                    ProviderError::Rpc(format!("decoding Timestamp::Now at {hash:#x}: {e}"))
+                })?;
+            Ok(Duration::from_millis(millis))
+        })
+        .await
     }
 
     /// The node's chain-spec display name (substrate `system_chain`), e.g.
@@ -1078,17 +1105,20 @@ impl MidnightProvider {
     /// [`MidnightProvider::network`]. The network the node runs comes from
     /// [`MidnightProvider::ledger_network_id`].
     pub async fn system_chain(&self) -> Result<String, ProviderError> {
-        let conn = self.get_or_connect().await?;
+        query_within(QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
 
-        let chain: String = conn
-            .rpc
-            .request("system_chain", RpcParams::new())
-            .await
-            .map_err(rpc_error("system_chain"))?;
+            let chain: String = conn
+                .rpc
+                .request("system_chain", RpcParams::new())
+                .await
+                .map_err(rpc_error("system_chain"))?;
 
-        debug!(chain = %chain, "system_chain response");
+            debug!(chain = %chain, "system_chain response");
 
-        Ok(chain)
+            Ok(chain)
+        })
+        .await
     }
 
     /// The network that the node's runtime reports, at the current finalized
@@ -1127,60 +1157,67 @@ impl MidnightProvider {
 
     /// Best-effort health status of the node.
     ///
-    /// Never returns `Err`; failures surface in the returned [`Health`] fields.
-    pub async fn health(&self) -> Result<Health, ProviderError> {
-        let (node_connected, block_height, peers, is_syncing) = match self.get_or_connect().await {
+    /// After the connect, it queries `system_health` and `chain_getHeader` at
+    /// the same time. Failures surface in the returned [`Health`] fields: a
+    /// field is `None` when its query fails or gets no answer within 10 s,
+    /// and `node_connected` is `false` when neither query answers.
+    pub async fn health(&self) -> Health {
+        let conn = match query_within(QUERY_TIMEOUT, self.get_or_connect()).await {
+            Ok(conn) => conn,
             Err(err) => {
                 warn!(url = %self.node_url, error = %err, "Failed to connect to Midnight node");
-                (false, None, None, None)
-            }
-            Ok(conn) => {
-                let sys_health: Option<serde_json::Value> =
-                    match conn.rpc.request("system_health", RpcParams::new()).await {
-                        Ok(v) => Some(v),
-                        Err(e) => {
-                            warn!(error = %e, "system_health RPC call failed");
-                            None
-                        }
-                    };
-
-                let peers = sys_health
-                    .as_ref()
-                    .and_then(|v| v.get("peers"))
-                    .and_then(|v| v.as_u64());
-                let is_syncing = sys_health
-                    .as_ref()
-                    .and_then(|v| v.get("isSyncing"))
-                    .and_then(|v| v.as_bool());
-
-                debug!(health = ?sys_health, "system_health response");
-
-                let header = match legacy_rpc(&conn).chain_get_header(None).await {
-                    Ok(header) => Some(header),
-                    Err(e) => {
-                        warn!(error = %e, "chain_getHeader RPC call failed");
-                        None
-                    }
+                return Health {
+                    node_connected: false,
+                    block_height: None,
+                    peers: None,
+                    is_syncing: None,
                 };
-
-                debug!(header = ?header, "chain_getHeader response");
-
-                let block_height = header
-                    .as_ref()
-                    .and_then(Option::as_ref)
-                    .map(|header| header.number);
-
-                let node_connected = sys_health.is_some() || header.is_some();
-                (node_connected, block_height, peers, is_syncing)
             }
         };
 
-        Ok(Health {
-            node_connected,
+        let (sys_health, header) = tokio::join!(
+            query_within(QUERY_TIMEOUT, async {
+                conn.rpc
+                    .request::<serde_json::Value>("system_health", RpcParams::new())
+                    .await
+                    .map_err(|e| ProviderError::Rpc(e.to_string()))
+            }),
+            query_within(QUERY_TIMEOUT, async {
+                legacy_rpc(&conn)
+                    .chain_get_header(None)
+                    .await
+                    .map_err(|e| ProviderError::Rpc(e.to_string()))
+            }),
+        );
+        let sys_health = sys_health
+            .inspect_err(|e| warn!(error = %e, "system_health RPC call failed"))
+            .ok();
+        let header = header
+            .inspect_err(|e| warn!(error = %e, "chain_getHeader RPC call failed"))
+            .ok();
+
+        debug!(health = ?sys_health, "system_health response");
+        debug!(header = ?header, "chain_getHeader response");
+
+        let peers = sys_health
+            .as_ref()
+            .and_then(|v| v.get("peers"))
+            .and_then(|v| v.as_u64());
+        let is_syncing = sys_health
+            .as_ref()
+            .and_then(|v| v.get("isSyncing"))
+            .and_then(|v| v.as_bool());
+        let block_height = header
+            .as_ref()
+            .and_then(Option::as_ref)
+            .map(|header| header.number);
+
+        Health {
+            node_connected: sys_health.is_some() || header.is_some(),
             block_height,
             peers,
             is_syncing,
-        })
+        }
     }
 
     /// Fetch full contract state via the node RPC (`midnight_contractState`),
@@ -1200,19 +1237,22 @@ impl MidnightProvider {
         address: &str,
         at_block_hash: Option<BlockHash>,
     ) -> Result<Option<String>, ProviderError> {
-        let conn = self.get_or_connect().await?;
-        match conn
-            .rpc
-            .request::<String>(
-                "midnight_contractState",
-                rpc_params![address, at_block_hash],
-            )
-            .await
-        {
-            Ok(hex_state) => Ok((!hex_state.is_empty()).then_some(hex_state)),
-            Err(e) if names_no_contract(&e) => Ok(None),
-            Err(e) => Err(ProviderError::Rpc(e.to_string())),
-        }
+        query_within(STATE_QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
+            match conn
+                .rpc
+                .request::<String>(
+                    "midnight_contractState",
+                    rpc_params![address, at_block_hash],
+                )
+                .await
+            {
+                Ok(hex_state) => Ok((!hex_state.is_empty()).then_some(hex_state)),
+                Err(e) if names_no_contract(&e) => Ok(None),
+                Err(e) => Err(ProviderError::Rpc(e.to_string())),
+            }
+        })
+        .await
     }
 
     /// Query contract state with an optional block hash pin.
@@ -1225,14 +1265,17 @@ impl MidnightProvider {
         queries: Vec<StateQuery>,
         at_block_hash: Option<BlockHash>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        let conn = self.get_or_connect().await?;
-        conn.rpc
-            .request(
-                "midnight_queryContractState",
-                rpc_params![address, queries, at_block_hash],
-            )
-            .await
-            .map_err(|e| ProviderError::Rpc(e.to_string()))
+        query_within(STATE_QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
+            conn.rpc
+                .request(
+                    "midnight_queryContractState",
+                    rpc_params![address, queries, at_block_hash],
+                )
+                .await
+                .map_err(|e| ProviderError::Rpc(e.to_string()))
+        })
+        .await
     }
 }
 
@@ -1414,25 +1457,16 @@ impl Drop for HeldInputs {
 /// [`SyncSource`](midnight_types::chain_pin::SyncSource), and the provider's
 /// own resync checks pins through the same answers.
 ///
-/// Each answer comes within ten seconds, the connect included. A query that
-/// the node does not answer in that time gives `None`, as a failed query
-/// does. A timeout during the first connect drops that connect, and the next
-/// query dials again. After the first connect, the timeout ends only the
-/// wait. While the node is down, the reconnecting client keeps the query in
-/// its queue. The client sends it after the reconnect and drops the late
-/// answer.
+/// A query that fails, or that gets no answer within its bound, gives
+/// `None`.
 #[async_trait]
 impl midnight_types::chain_pin::ChainView for MidnightProvider {
     async fn block_hashes_at(&self, height: u64) -> Option<Vec<BlockHash>> {
-        query_within_timeout(self.get_block_hashes_by_height(height))
-            .await
-            .ok()
+        self.get_block_hashes_by_height(height).await.ok()
     }
 
     async fn finalized_height(&self) -> Option<u64> {
-        query_within_timeout(self.get_finalized_block_height())
-            .await
-            .ok()
+        self.get_finalized_block_height().await.ok()
     }
 }
 
@@ -1445,7 +1479,7 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
     }
 
     async fn network(&self) -> Option<Network> {
-        match query_within_timeout(self.ledger_network_id()).await {
+        match self.ledger_network_id().await {
             Ok(network) => Some(network),
             Err(e) => {
                 warn!(error = %e, "could not read the node's network");
@@ -1455,16 +1489,17 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
     }
 }
 
-/// The answer to a chain `query`, or an error when the node gives none
-/// within [`QUERY_TIMEOUT`].
-async fn query_within_timeout<T>(
+/// The answer to a node `query`, or [`ProviderError::Rpc`] when the node
+/// gives none within `bound`.
+async fn query_within<T>(
+    bound: Duration,
     query: impl Future<Output = Result<T, ProviderError>>,
 ) -> Result<T, ProviderError> {
-    tokio::time::timeout(QUERY_TIMEOUT, query)
+    tokio::time::timeout(bound, query)
         .await
         .unwrap_or_else(|_| {
             Err(ProviderError::Rpc(format!(
-                "the node gave no answer within {QUERY_TIMEOUT:?}"
+                "the node gave no answer within {bound:?}"
             )))
         })
 }
@@ -1541,7 +1576,7 @@ mod tests {
     #[tokio::test]
     async fn health_returns_disconnected_on_bad_urls() {
         let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1");
-        let health = provider.health().await.unwrap();
+        let health = provider.health().await;
         assert!(!health.node_connected);
     }
 
@@ -1557,17 +1592,9 @@ mod tests {
         testutil::send_json(ws, &response).await;
     }
 
-    /// A chain query during a node outage gives no answer within the
-    /// bound. After the first connect, the reconnecting client keeps the
-    /// query in its queue until a reconnect succeeds, and the reconnect
-    /// never stops. With no bound, the query waits for the whole outage.
-    /// The client's request timeout covers only a request on a live socket,
-    /// so it does not end the wait. The test takes about ten seconds: paused
-    /// time does not work with real sockets.
-    #[tokio::test]
-    async fn a_chain_query_during_a_node_outage_gives_none() {
-        use midnight_types::chain_pin::ChainView;
-
+    /// A provider whose node went down after the first connect. The client
+    /// sees the close and dials again, and no dial succeeds after that.
+    async fn provider_during_a_node_outage() -> MidnightProvider {
         let (listener, node_url) = bind_node().await;
         let (outage_tx, outage_rx) = oneshot::channel::<()>();
         let node = tokio::spawn(async move {
@@ -1603,14 +1630,135 @@ mod tests {
             .await
             .expect("the client dials again after the close")
             .unwrap();
+        provider
+    }
 
-        let height = tokio::time::timeout(
-            Duration::from_secs(30),
-            ChainView::finalized_height(&provider),
-        )
+    /// The `name` of a read and its outcome, checked by `expected`. The
+    /// outcome is `None` when the read does not end within 30 s.
+    async fn ended<T>(
+        name: &'static str,
+        read: impl Future<Output = T>,
+        expected: impl FnOnce(T) -> Result<(), String>,
+    ) -> (&'static str, Option<Result<(), String>>) {
+        let outcome = tokio::time::timeout(Duration::from_secs(30), read).await;
+        (name, outcome.ok().map(expected))
+    }
+
+    /// Whether a read failed as a read that gets no answer does.
+    fn gave_no_answer<T>(read: Result<T, ProviderError>) -> Result<(), String> {
+        match read {
+            Err(ProviderError::Rpc(_)) => Ok(()),
+            Err(other) => Err(format!("{other:?}")),
+            Ok(_) => Err("Ok".to_owned()),
+        }
+    }
+
+    /// Every node read ends during a node outage (see `QUERY_TIMEOUT`). It
+    /// catches a read left outside its bound, a `health` that bounds only its
+    /// connect, and a `prepare` whose metadata read times out as `Rpc`. The
+    /// two contract state reads have a 60 s bound, so the test leaves them
+    /// out. It takes about ten seconds: paused time does not work with real
+    /// sockets.
+    #[tokio::test]
+    async fn every_node_read_ends_during_a_node_outage() {
+        use midnight_types::chain_pin::ChainView;
+        use subxt::ext::futures::{FutureExt, future::join_all};
+
+        let provider = provider_during_a_node_outage().await;
+        let hash = BlockHash::repeat_byte(1);
+        let disconnected = Health {
+            node_connected: false,
+            block_height: None,
+            peers: None,
+            is_syncing: None,
+        };
+
+        let outcomes = join_all([
+            ended("ledger_version", provider.ledger_version(), gave_no_answer).boxed_local(),
+            ended(
+                "get_block_number",
+                provider.get_block_number(),
+                gave_no_answer,
+            )
+            .boxed_local(),
+            ended(
+                "best_block_hash",
+                provider.best_block_hash(),
+                gave_no_answer,
+            )
+            .boxed_local(),
+            ended(
+                "get_finalized_block_height",
+                provider.get_finalized_block_height(),
+                gave_no_answer,
+            )
+            .boxed_local(),
+            ended(
+                "get_block_hashes_by_height",
+                provider.get_block_hashes_by_height(1),
+                gave_no_answer,
+            )
+            .boxed_local(),
+            ended(
+                "get_block_header",
+                provider.get_block_header(hash),
+                gave_no_answer,
+            )
+            .boxed_local(),
+            ended(
+                "get_block_timestamp",
+                provider.get_block_timestamp(hash),
+                gave_no_answer,
+            )
+            .boxed_local(),
+            ended("system_chain", provider.system_chain(), gave_no_answer).boxed_local(),
+            ended(
+                "ledger_network_id",
+                provider.ledger_network_id(),
+                gave_no_answer,
+            )
+            .boxed_local(),
+            ended("health", provider.health(), |health| {
+                (health == disconnected)
+                    .then_some(())
+                    .ok_or_else(|| format!("{health:?}"))
+            })
+            .boxed_local(),
+            ended("prepare", provider.prepare(&[0; 8]), |read| match read {
+                Err(ProviderError::Submission(crate::SubmitError::NotSubmitted { .. })) => Ok(()),
+                Err(other) => Err(format!("{other:?}")),
+                Ok(_) => Err("Ok".to_owned()),
+            })
+            .boxed_local(),
+            ended(
+                "ChainView::finalized_height",
+                ChainView::finalized_height(&provider),
+                |height| height.map_or(Ok(()), |height| Err(format!("Some({height})"))),
+            )
+            .boxed_local(),
+        ])
         .await;
 
-        assert_eq!(height, Ok(None));
+        let unbounded: Vec<_> = outcomes
+            .iter()
+            .filter(|(_, outcome)| outcome.is_none())
+            .map(|(name, _)| *name)
+            .collect();
+        assert!(
+            unbounded.is_empty(),
+            "these reads did not end within 30 s: {unbounded:?}"
+        );
+        let wrong: Vec<_> = outcomes
+            .iter()
+            .filter_map(|(name, outcome)| match outcome {
+                Some(Err(got)) => Some((*name, got)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "these reads ended with the wrong outcome: {wrong:#?}"
+        );
     }
 
     /// A chain query whose first connect stalls gives no answer within the
