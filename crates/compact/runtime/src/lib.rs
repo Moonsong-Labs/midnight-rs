@@ -13,6 +13,7 @@ mod compact_types;
 mod conversions;
 mod error;
 mod result;
+mod secp256k1;
 mod standard_library;
 mod value;
 mod witness;
@@ -29,6 +30,7 @@ pub use conversions::{
 };
 pub use error::InterpreterError;
 pub use result::ExecutionResult;
+pub use secp256k1::{ArithOp, ForeignField};
 pub use standard_library::{Either, Maybe};
 pub use value::{Value, integer_fallback_aligned};
 pub use witness::{NoWitnesses, WitnessContext, WitnessOutcome, WitnessProvider};
