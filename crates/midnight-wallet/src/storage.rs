@@ -304,10 +304,9 @@ pub(crate) fn save_snapshot(
     Ok(())
 }
 
-/// On-disk representation of a wallet's pending reservations. `DustSpend` and
-/// `Sp<DustLocalState<D>, D>` are both Tagged + Serializable, so we
-/// hex-encode their `tagged_serialize` bytes to round-trip through JSON
-/// without dragging the tagged-codec into the schema.
+/// On-disk representation of a wallet's pending reservations. The hex fields
+/// hold the `tagged_serialize` bytes of the Dust spends and the shielded
+/// nullifiers, so the JSON schema stays free of the tagged codec.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredPending {
     /// The ledger generation whose types encoded the hex fields.
@@ -325,8 +324,6 @@ pub(crate) struct StoredPending {
 pub(crate) struct StoredPendingDustBatch {
     /// Tagged-serialized `Vec<DustSpend<ProofPreimageMarker, DefaultDB>>`, hex.
     pub spends_hex: String,
-    /// Tagged-serialized `Sp<DustLocalState<DefaultDB>, DefaultDB>`, hex.
-    pub updated_state_hex: String,
     /// `Timestamp::to_secs()` value.
     pub reserved_at_secs: u64,
 }
