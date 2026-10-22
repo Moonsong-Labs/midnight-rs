@@ -9,7 +9,6 @@ description = "Implementation-free vocabulary and toolkit for the Midnight SDK: 
 [dependencies]
 async-trait = { workspace = true }
 midnight-helpers = { workspace = true }
-midnight-indexer-client = { workspace = true }
 bip32 = { workspace = true }
 bip39 = { workspace = true }
 futures-util = { workspace = true }

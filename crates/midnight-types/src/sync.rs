@@ -25,10 +25,14 @@ pub struct SyncCursors {
 #[derive(Debug, Clone)]
 pub struct TrackedUtxo {
     pub owner: String,
-    pub token_type: String,
+    /// The token this UTXO holds.
+    pub token_type: UnshieldedTokenType,
     pub value: u128,
-    pub intent_hash: Option<String>,
-    pub output_index: Option<i64>,
+    /// The intent hash of the transaction that created this UTXO.
+    pub intent_hash: HashOutput,
+    /// The number of this UTXO among its transaction's outputs, as the ledger
+    /// counts it.
+    pub output_index: u32,
     /// Creation time in seconds since the epoch. Dust generation accrues from
     /// this instant, so a dust registration needs it to declare the fee
     /// allowance the ledger will accept.
@@ -39,20 +43,10 @@ pub struct TrackedUtxo {
     pub registered_for_dust_generation: Option<bool>,
 }
 
-/// The NIGHT token id in the 64-char hex form the indexer reports.
-pub(crate) static NIGHT_TOKEN_HEX: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| NIGHT.to_string());
-
 impl TrackedUtxo {
     /// Whether this UTXO holds the native NIGHT token.
     pub fn is_night(&self) -> bool {
-        self.token_type == *NIGHT_TOKEN_HEX
-    }
-
-    /// The token this UTXO holds, parsed from its `token_type` hex. `None` on
-    /// a decode error or wrong length.
-    pub fn unshielded_token_type(&self) -> Option<UnshieldedTokenType> {
-        hash_from_hex(&self.token_type).map(UnshieldedTokenType)
+        self.token_type == NIGHT
     }
 
     /// Whether this UTXO already generates dust.
@@ -67,64 +61,10 @@ impl TrackedUtxo {
 
     /// The key that a reservation of this UTXO and a confirmed spend of it
     /// share, so that the confirmation clears the reservation.
-    ///
-    /// `None` when the intent hash or the output index is missing, or when
-    /// the index is outside `u32`. Such a UTXO cannot match a reservation.
-    pub fn spent_key(&self) -> Option<SpentUtxoKey> {
-        Some(SpentUtxoKey {
-            intent_hash: self.intent_hash.clone()?,
-            output_index: self.output_number()?,
-        })
-    }
-
-    /// The intent hash of the transaction that created this UTXO, parsed
-    /// from its 64-char `intent_hash` hex. `None` when the hash is missing,
-    /// or on a decode error or wrong length.
-    pub fn parsed_intent_hash(&self) -> Option<HashOutput> {
-        hash_from_hex(self.intent_hash.as_deref()?)
-    }
-
-    /// The number of this UTXO among its transaction's outputs, as the ledger
-    /// counts it. `None` when the index is missing or outside `u32`, because
-    /// a truncated index names another output.
-    pub fn output_number(&self) -> Option<u32> {
-        u32::try_from(self.output_index?).ok()
-    }
-}
-
-fn hash_from_hex(hex: &str) -> Option<HashOutput> {
-    Some(HashOutput(hex::decode(hex).ok()?.try_into().ok()?))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn utxo(intent_hash: Option<&str>, output_index: Option<i64>) -> TrackedUtxo {
-        TrackedUtxo {
-            owner: "owner".into(),
-            token_type: "00".repeat(32),
-            value: 1,
-            intent_hash: intent_hash.map(str::to_string),
-            output_index,
-            ctime: None,
-            registered_for_dust_generation: None,
+    pub fn spent_key(&self) -> SpentUtxoKey {
+        SpentUtxoKey {
+            intent_hash: self.intent_hash,
+            output_index: self.output_index,
         }
-    }
-
-    /// Only a UTXO that carries both identity fields, with an index inside
-    /// `u32`, has a key. A truncated index would name another output.
-    #[test]
-    fn spent_key_needs_both_identity_fields_in_range() {
-        assert_eq!(
-            utxo(Some("abcd"), Some(2)).spent_key(),
-            Some(SpentUtxoKey {
-                intent_hash: "abcd".into(),
-                output_index: 2,
-            })
-        );
-        assert_eq!(utxo(None, Some(1)).spent_key(), None);
-        assert_eq!(utxo(Some("ffff"), None).spent_key(), None);
-        assert_eq!(utxo(Some("eeee"), Some(-1)).spent_key(), None);
     }
 }

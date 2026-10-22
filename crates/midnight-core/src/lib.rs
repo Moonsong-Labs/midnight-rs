@@ -76,7 +76,10 @@ pub use midnight_provider::{
 // Re-export the wallet types a caller names to sync one and attach it, so
 // the common path needs no `midnight_core::wallet::` prefix.
 #[cfg(feature = "wallet")]
-pub use midnight_wallet::{Network, Seed, SyncProgress, Wallet, WalletBuilder, WalletFacade};
+pub use midnight_wallet::{
+    InvalidNetworkName, Network, NetworkName, Seed, SyncProgress, Wallet, WalletBuilder,
+    WalletFacade,
+};
 
 // Re-export contract types (gated behind "contract" feature).
 #[cfg(feature = "contract")]

@@ -75,11 +75,9 @@ pub trait SyncSource: ChainView {
     /// The indexer the wallet replays from, and the one its later resyncs use.
     fn indexer_url(&self) -> &str;
 
-    /// The network the node's runtime reports; `None` when it cannot answer
-    /// or reports none.
-    ///
-    /// Return the name as the node reports it. A sync with no network of its
-    /// own refuses a name that fails [`Network::is_valid_name`].
+    /// The network the node's runtime reports; `None` when it cannot answer,
+    /// reports none, or reports an id that is not a valid name for a
+    /// [`Network`].
     async fn network(&self) -> Option<Network>;
 }
 

@@ -46,23 +46,6 @@ impl LedgerVersion {
         of_tagged::<ledger_8::LedgerParameters, ledger_9::LedgerParameters>(bytes)
     }
 
-    /// The generation a block ran, from the ledger parameters the indexer
-    /// serves on it.
-    ///
-    /// # Errors
-    ///
-    /// When the block carries no ledger parameters, or parameters of no
-    /// linked generation.
-    pub fn of_block(block: &midnight_indexer_client::Block) -> Result<Self, UnknownLedger> {
-        let hex = block
-            .ledger_parameters
-            .as_deref()
-            .ok_or_else(|| UnknownLedger("a block without ledger parameters".into()))?;
-        let bytes = hex::decode(hex)
-            .map_err(|e| UnknownLedger(format!("ledger parameters that are not hex ({e})")))?;
-        Self::of_ledger_parameters(&bytes)
-    }
-
     /// The generation of an encoded transaction.
     ///
     /// # Errors

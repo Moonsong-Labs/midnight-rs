@@ -234,7 +234,7 @@ impl Seed {
     /// The unshielded receiving address of this seed on `network`, e.g.
     /// `mn_addr_undeployed1...`.
     ///
-    /// `network` accepts both [`Network`] and `&str` / `String` (via `Into`).
+    /// `network` is a [`Network`] or a `&Network`.
     pub fn unshielded_address(&self, network: impl Into<Network>) -> String {
         UnshieldedWallet::default(self.into_ledger())
             .address(network.into().as_str())
@@ -244,7 +244,7 @@ impl Seed {
     /// The shielded receiving address of this seed on `network`, e.g.
     /// `mn_shield-addr_undeployed1...`.
     ///
-    /// `network` accepts both [`Network`] and `&str` / `String` (via `Into`).
+    /// `network` is a [`Network`] or a `&Network`.
     pub fn shielded_address(&self, network: impl Into<Network>) -> String {
         ShieldedWallet::<DefaultDB>::default(self.into_ledger())
             .address(network.into().as_str())
@@ -627,13 +627,13 @@ mod tests {
 
     #[test]
     fn unshielded_address_uses_network_suffix() {
-        let addr = seed().unshielded_address("undeployed");
+        let addr = seed().unshielded_address(Network::Undeployed);
         assert!(addr.starts_with("mn_addr_undeployed"), "address was {addr}");
     }
 
     #[test]
     fn shielded_address_uses_network_suffix() {
-        let addr = seed().shielded_address("undeployed");
+        let addr = seed().shielded_address(Network::Undeployed);
         assert!(
             addr.starts_with("mn_shield-addr_undeployed"),
             "address was {addr}"
@@ -642,8 +642,8 @@ mod tests {
 
     #[test]
     fn unshielded_address_differs_per_network() {
-        let a = seed().unshielded_address("undeployed");
-        let b = seed().unshielded_address("testnet");
+        let a = seed().unshielded_address(Network::Undeployed);
+        let b = seed().unshielded_address(Network::Testnet);
         assert_ne!(a, b);
     }
 

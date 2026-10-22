@@ -22,7 +22,7 @@ pub fn parse_shielded_recipient(
     s: &str,
     network: impl Into<Network>,
 ) -> Result<ShieldedRecipient, WalletError> {
-    let wallet = crate::ledger_9::shielded_destination(s, network)?;
+    let wallet = crate::ledger_9::shielded_destination(s, &network.into())?;
     Ok(shielded_recipient(&wallet))
 }
 
