@@ -11,6 +11,9 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 const GRAPHQL_PATH: &str = "/api/v3/graphql";
 
+/// The most bytes of an undecodable response body that the warning logs.
+const LOGGED_BODY_BYTES: usize = 512;
+
 /// Returns the GraphQL endpoint for an indexer URL.
 ///
 /// Keeps a URL whose path ends in `/graphql`, and drops a `/ws` that follows
@@ -79,12 +82,8 @@ impl IndexerClient {
         let text = resp.text().await?;
 
         let gql_resp: GraphQLResponse<R> = serde_json::from_str(&text).map_err(|e| {
-            let truncated = if text.len() > 512 {
-                format!("{}... ({} bytes)", &text[..512], text.len())
-            } else {
-                text.clone()
-            };
-            warn!(error = %e, body = %truncated, "failed to deserialize indexer response");
+            let logged = &text[..text.floor_char_boundary(LOGGED_BODY_BYTES)];
+            warn!(error = %e, body = logged, bytes = text.len(), "failed to deserialize indexer response");
             IndexerError::Deserialization(e.to_string())
         })?;
 
