@@ -3,8 +3,8 @@
 //! [`Wallet`] owns the seed, the secret keys, the synced ledger state
 //! (shielded coins, dust UTXOs, unshielded UTXOs), the ledger parameters,
 //! and the latest block context, in the ledger generation the chain runs. It
-//! exposes accessors for balances, addresses and cursors, and the resync and
-//! rescan steps.
+//! exposes accessors for balances, addresses and cursors. Its resyncs and
+//! rescans run through [`LocalWallet`].
 //!
 //! The API a consumer programs against is the `WalletFacade` trait in
 //! `midnight-wallet-facade`, which this crate depends on and implements:
@@ -95,4 +95,4 @@ pub use background::BackgroundSync;
 pub use local::LocalWallet;
 pub use midnight_types::hd::{self, AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use sync::{SyncHandle, SyncProgress, WalletBuilder};
-pub use wallet::{ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, Wallet};
+pub use wallet::Wallet;
