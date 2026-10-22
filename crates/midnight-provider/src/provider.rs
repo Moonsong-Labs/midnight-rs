@@ -407,9 +407,8 @@ impl MidnightProvider {
     /// the rebuilt coin was wrong, drop the registration with
     /// [`Self::forget_coin`].
     ///
-    /// The registration is recorded (and persisted) before the replay starts,
-    /// so a replay that fails leaves it in place: retry with
-    /// [`Self::rescan_shielded`] rather than registering again.
+    /// If the replay fails, retry with [`Self::rescan_shielded`]: the wallet
+    /// keeps the registration (see [`WalletFacade::watch_for_coins`]).
     ///
     /// Locking matches [`Self::resync_wallet`]: the replay runs without the
     /// wallet lock, and the wallet serializes the registration and the replay
@@ -427,15 +426,11 @@ impl MidnightProvider {
         &self,
         coins: impl IntoIterator<Item = CoinInfo> + Send,
     ) -> Result<(), ProviderError> {
-        let coins: Vec<CoinInfo> = coins.into_iter().collect();
         let wallet = &self.attached()?.facade;
-        if coins.is_empty() {
-            return Ok(());
-        }
-        wallet.watch_for_coins(coins).await?;
-        // A resync between the two calls keeps the registration: its commit
-        // carries the registrations over.
-        self.rescan_shielded().await
+        wallet
+            .watch_for_coins(coins.into_iter().collect(), self)
+            .await?;
+        Ok(())
     }
 
     /// Drop a registration [`Self::watch_for_coin`] made, for a coin that
@@ -465,19 +460,12 @@ impl MidnightProvider {
     /// Call this directly to rebuild shielded state that a resync cannot
     /// repair because its cursor has moved past the events in question.
     /// Dust state, unshielded state, and their cursors are left alone.
+    ///
+    /// A wallet whose state is in an earlier ledger generation than the chain
+    /// crosses the fork first, with a resync against this provider.
     pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
         let wallet = &self.attached()?.facade;
-        match wallet.rescan_shielded().await {
-            // The chain crossed a fork the wallet has not. A resync crosses
-            // it, and the rescan then replays across the fork.
-            Err(midnight_types::WalletError::LedgerMismatch { expected, found })
-                if found > expected =>
-            {
-                wallet.resync(self).await?;
-                wallet.rescan_shielded().await?;
-            }
-            result => result?,
-        }
+        wallet.rescan_shielded(self).await?;
         Ok(())
     }
 

@@ -106,7 +106,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every build resyncs the wallet first, and when asked, `LocalWallet::sync_in_background` resyncs it in a background task. A sync reads its indexer and its node from its `SyncSource`, such as the provider. The wallet keeps that indexer for later replays, and the provider answers a resync's pin queries.
 
-Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three under a mutex of its own, which serializes its resyncs, rescans, coin watches and forgets. A `Wallet` has no resync of its own: to resync or rescan one outside a provider, wrap it in `LocalWallet`.
+Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three under a mutex of its own, which serializes its resyncs, rescans, coin watches and forgets. Under one hold of that mutex, a rescan of a state in an earlier generation than the chain resyncs first, and a coin watch registers and then rescans. A `Wallet` has no resync of its own: to resync or rescan one outside a provider, wrap it in `LocalWallet`.
 
 `MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and never names an implementation. The local one is built on its own and attached:
 
@@ -127,9 +127,10 @@ provider
   .with_proof_provider(provers)                     // optional, ProofProviders::local() by default
   .ledger_version().await          → the chain's generation, from the node's finalized block
   .resync_wallet().await                            // incremental refresh
-  .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext
+  .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext: register, then rescan
   .forget_coin(coin).await                          // drop a registration that matched nothing
   .rescan_shielded().await                          // replay the shielded stream from event zero
+                                                    // (a resync first, to cross a fork)
   .builds().await                  → Builds::Ledger8(b) | Builds::Ledger9(b) (resyncs first)
       b.build_context().await      → Arc<BuildContext> (evicts expired pending)
       b.execution_context().await  → the half a circuit runs against, with no funding view
@@ -147,6 +148,8 @@ Arc<LocalWallet>                                    // a handle on the attached 
   .sync_in_background(provider, pause) → BackgroundSync (resyncs after each pause until dropped)
       sync.last_error()            → the error of the last pass, None after a commit
       sync.wait_until(done).await  // wait until done(&WalletBalance) holds: at the call and after each pass
+  .watch_for_coins(coins, &provider).await          // the provider's coin watch, on the handle
+  .rescan_shielded(&provider).await                 // the provider's rescan, on the handle
 ```
 
 `transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md).
@@ -161,7 +164,7 @@ A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy wi
 
 Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm.
 
-`watch_for_coin` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. A resync carries registrations across for the same reason. `forget_coin` drops a registration whose rebuilt `CoinInfo` matched no output, which would otherwise ride along on every replay. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
+`watch_for_coin` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The wallet records and replays under one hold of its sync lock. A state in an earlier generation than the chain first crosses the fork with a resync, because it cannot apply the later generation's events. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. A resync carries registrations across for the same reason. `forget_coin` drops a registration whose rebuilt `CoinInfo` matched no output, which would otherwise ride along on every replay. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
 
 ## Ledger generations
 
@@ -420,4 +423,4 @@ Ledger 9 ships only as git tags, and upstream's ledger crates and helpers name e
 | State change subscriptions | WebSocket subscription support for contract state updates |
 | Lazy query batching | `query_contract_state` already takes a batch, but each generated `ledger_query()` accessor sends one query of its own |
 | Production proving | `ProofProvider::prove` returns `Transaction`, not `Result`, so a backend signals failure by panicking. The SDK catches that unwind and reports `WalletError::Proving` rather than losing the task, but the trait has no error channel and this is not mainnet-ready |
-| A remote signer | The facade lets a different local wallet stand in, but a build still needs `seed`. A browser extension or an HSM needs `prepare_transfer` to return something unsigned plus a separate signing step |
+| A remote signer | The facade lets a different local wallet stand in, and it asks for no seed. But a build signs inside `prepare_transfer`, so a browser extension or an HSM needs it to return something unsigned plus a separate signing step |

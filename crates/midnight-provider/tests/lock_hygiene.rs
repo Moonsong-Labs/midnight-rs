@@ -14,28 +14,32 @@
 //!   starts.
 //! - `BackgroundSync::wait_until` outlasts a failed pass, and ends when a
 //!   panic ends the task.
+//! - A rescan on a `LocalWallet` crosses a fork that the wallet has not
+//!   crossed yet.
 //!
 //! The mock serves both indexer protocols on one port: GraphQL-over-HTTP
 //! (`get_block`) and `graphql-transport-ws` subscriptions (via
 //! `midnight_indexer_client::testutil`). In *fast* mode every subscription
 //! completes immediately (empty chain), so a full wallet sync takes
 //! milliseconds; in *stall* mode subscriptions are accepted and then held
-//! silent, pinning the replay phase mid-flight.
+//! silent, pinning the replay phase mid-flight. In *forked* mode the chain
+//! runs ledger 9: the block carries ledger 9 parameters, and the zswap stream
+//! holds one ledger 9 event.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use midnight_helpers::ledger_8::INITIAL_PARAMETERS;
 use midnight_helpers::midnight_serialize::tagged_serialize;
+use midnight_helpers::{ledger_8, ledger_9};
 use midnight_indexer_client::testutil::{
     ServerWs, bind, ledger_event, next_json, read_http_request, send_next, subscriber_handshake,
-    unshielded_progress, write_json_response,
+    subscription_variable, unshielded_progress, write_json_response,
 };
 use midnight_provider::{BlockHash, MidnightProvider};
 use midnight_wallet::{
-    CoinInfo, HashOutput, LocalWallet, Network, Nonce, ShieldedTokenType, SyncHandle, SyncProgress,
-    Wallet, WalletBuilder, WalletError, WalletFacade,
+    CoinInfo, HashOutput, LedgerVersion, LocalWallet, Network, Nonce, ShieldedTokenType,
+    SyncHandle, SyncProgress, Wallet, WalletBuilder, WalletError, WalletFacade,
 };
 use serde_json::json;
 use tokio::net::TcpStream;
@@ -66,7 +70,15 @@ struct MockState {
     /// When set, the block query answers with a GraphQL error. The client
     /// does not retry that error, so a resync fails at once.
     fail_block: AtomicBool,
+    /// When set, the chain has crossed the fork to ledger 9: the block
+    /// carries ledger 9 parameters, and the zswap stream holds one ledger 9
+    /// event.
+    forked: AtomicBool,
 }
+
+/// The id of the one zswap event of a forked chain. The empty chain of fast
+/// mode leaves a wallet's zswap cursor at zero, so a resync wants this one.
+const FORK_EVENT_ID: i64 = 1;
 
 async fn spawn_mock() -> (String, Arc<MockState>) {
     let (listener, url) = bind().await;
@@ -122,6 +134,13 @@ async fn handle_ws(stream: TcpStream, state: Arc<MockState>) {
         // frames (keepalive pings), until the client closes the connection.
         drain(&mut ws).await;
         state.stalled_subs.fetch_sub(1, Ordering::SeqCst);
+    } else if query.contains("zswapLedgerEvents") && state.forked.load(Ordering::SeqCst) {
+        if subscription_variable(&sub, "id") <= FORK_EVENT_ID {
+            let raw = ledger_9_zswap_output();
+            let data = ledger_event("zswapLedgerEvents", FORK_EVENT_ID, &raw, FORK_EVENT_ID);
+            send_next(&mut ws, &sub, data).await;
+        }
+        drain(&mut ws).await;
     } else {
         // "Empty chain" replies: each replay loop completes immediately.
         let data = if query.contains("zswapLedgerEvents") {
@@ -151,14 +170,19 @@ async fn handle_http(mut stream: TcpStream, state: &MockState) {
     let body = if state.fail_block.load(Ordering::SeqCst) {
         json!({ "errors": [{ "message": "the mock refuses the block query" }] }).to_string()
     } else {
-        block_response()
+        block_response(state.forked.load(Ordering::SeqCst))
     };
     write_json_response(&mut stream, "200 OK", &body).await;
 }
 
-fn block_response() -> String {
+/// The block, with the parameters of ledger 9 when `forked`, else of ledger 8.
+fn block_response(forked: bool) -> String {
     let mut params = Vec::new();
-    tagged_serialize(&INITIAL_PARAMETERS, &mut params).unwrap();
+    if forked {
+        tagged_serialize(&ledger_9::INITIAL_PARAMETERS, &mut params).unwrap();
+    } else {
+        tagged_serialize(&ledger_8::INITIAL_PARAMETERS, &mut params).unwrap();
+    }
     json!({
         "data": {
             "block": {
@@ -172,6 +196,31 @@ fn block_response() -> String {
         }
     })
     .to_string()
+}
+
+/// The hex of a ledger 9 zswap event: an output to no one this wallet knows,
+/// at the first leaf of the Merkle tree.
+fn ledger_9_zswap_output() -> String {
+    use ledger_9::coin_structure::coin::Commitment;
+    use ledger_9::mn_ledger::events::{EventDetails, EventSource, ZswapPreimageEvidence};
+    use ledger_9::{DefaultDB, Event, TransactionHash};
+
+    let event: Event<DefaultDB> = Event {
+        source: EventSource {
+            transaction_hash: TransactionHash(ledger_9::HashOutput([0; 32])),
+            logical_segment: 0,
+            physical_segment: 0,
+        },
+        content: EventDetails::ZswapOutput {
+            commitment: Commitment(ledger_9::HashOutput([1; 32])),
+            preimage_evidence: ZswapPreimageEvidence::None,
+            contract: None,
+            mt_index: 0,
+        },
+    };
+    let mut raw = Vec::new();
+    tagged_serialize(&event, &mut raw).unwrap();
+    hex::encode(raw)
 }
 
 // ---------------------------------------------------------------------------
@@ -634,4 +683,28 @@ async fn a_wait_outlasts_a_failed_pass() {
         matches!(waited, (Ok(Ok(())), true)),
         "a failed pass must not end the wait, got {waited:?}"
     );
+}
+
+/// A rescan on the handle crosses a fork that the wallet has not crossed yet.
+///
+/// A ledger 8 state cannot apply the ledger 9 event, so the rescan has to
+/// cross with a resync first, and then replay. Three wrong rescans fail here.
+/// One with no fork arm, and one that resyncs only when the chain is behind
+/// the wallet, return `LedgerMismatch`. One that crosses through the public
+/// `resync` waits for the sync lock that it holds, until the timeout.
+#[tokio::test]
+async fn a_rescan_crosses_a_fork_that_the_wallet_has_not() {
+    let (url, state) = spawn_mock().await;
+    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+    assert_eq!(wallet.ledger_version().await, LedgerVersion::V8);
+
+    state.forked.store(true, Ordering::SeqCst);
+    let rescan = tokio::time::timeout(
+        Duration::from_secs(30),
+        wallet.rescan_shielded(&provider(&url)),
+    )
+    .await
+    .expect("the rescan must not wait for the sync lock that it holds");
+    assert!(matches!(rescan, Ok(())), "got {rescan:?}");
+    assert_eq!(wallet.ledger_version().await, LedgerVersion::V9);
 }

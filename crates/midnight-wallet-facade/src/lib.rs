@@ -19,13 +19,14 @@
 //! releases the wallet between what it reads and what it commits. A sync
 //! method that runs in that window can lose its work, or the work of the
 //! other one. No caller holds a lock across them: `MidnightProvider` and every
-//! handle on a shared wallet call them directly.
+//! handle on a shared wallet call them directly. So when a rescan needs a
+//! resync first, or a coin watch needs a rescan, the implementation runs both
+//! steps under one hold.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_types::chain_pin::ChainView;
-use midnight_types::hd::Seed;
 use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
@@ -55,13 +56,6 @@ pub trait WalletFacade: Send + Sync {
     /// A build dispatches on it to this wallet's `WalletBuilds` of that
     /// generation.
     async fn ledger_version(&self) -> LedgerVersion;
-
-    /// The seed this wallet signs and derives with.
-    ///
-    /// A build needs it, which is why it is here. It is also the one thing an
-    /// external signer will not hand over, so a facade over one cannot serve
-    /// this.
-    async fn seed(&self) -> Seed;
 
     /// The public keys a coin addressed to this wallet commits to.
     async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey);
@@ -124,11 +118,29 @@ pub trait WalletFacade: Send + Sync {
     /// Replay the shielded event stream from its first event and rebuild the
     /// shielded state from it. Dust state, unshielded state, and their cursors
     /// are left alone.
-    async fn rescan_shielded(&self) -> Result<(), WalletError>;
+    ///
+    /// `chain` answers the queries of a chain pin, as in [`Self::resync`]. An
+    /// implementation that pins its snapshot checks the pin before the replay.
+    /// When the state is in an earlier ledger generation than the chain, the
+    /// implementation first crosses the fork with a resync against `chain`.
+    /// A replay in the earlier generation cannot apply the events of the
+    /// later one.
+    async fn rescan_shielded(&self, chain: &dyn ChainView) -> Result<(), WalletError>;
 
-    /// Register coins this wallet owns but cannot discover, so the next replay
-    /// claims them. See `Wallet::watch_for_coin` on the implementing wallet.
-    async fn watch_for_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError>;
+    /// Register coins this wallet owns but cannot discover, persist the
+    /// registrations, and then rescan as [`Self::rescan_shielded`] does, so
+    /// the replay claims them. See `Wallet::watch_for_coin` on the
+    /// implementing wallet.
+    ///
+    /// An empty list does nothing: no write and no replay.
+    ///
+    /// A replay that fails keeps the registration. Retry with
+    /// [`Self::rescan_shielded`] rather than registering again.
+    async fn watch_for_coins(
+        &self,
+        coins: Vec<CoinInfo>,
+        chain: &dyn ChainView,
+    ) -> Result<(), WalletError>;
 
     /// Drop registrations that matched no on-chain output.
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError>;
@@ -174,10 +186,6 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).ledger_version().await
     }
 
-    async fn seed(&self) -> Seed {
-        (**self).seed().await
-    }
-
     async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
         (**self).shielded_public_keys().await
     }
@@ -214,12 +222,16 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).resync(chain).await
     }
 
-    async fn rescan_shielded(&self) -> Result<(), WalletError> {
-        (**self).rescan_shielded().await
+    async fn rescan_shielded(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
+        (**self).rescan_shielded(chain).await
     }
 
-    async fn watch_for_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {
-        (**self).watch_for_coins(coins).await
+    async fn watch_for_coins(
+        &self,
+        coins: Vec<CoinInfo>,
+        chain: &dyn ChainView,
+    ) -> Result<(), WalletError> {
+        (**self).watch_for_coins(coins, chain).await
     }
 
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {

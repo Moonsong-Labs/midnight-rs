@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use midnight_types::chain_pin::{ChainView, current_pin};
-use midnight_types::hd::Seed;
 use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
@@ -122,6 +121,69 @@ impl LocalWallet {
     pub(crate) fn inner(&self) -> &RwLock<Wallet> {
         &self.inner
     }
+
+    /// [`WalletFacade::resync`], for a caller that holds `self.sync`.
+    async fn resync_held(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
+        let (pin, snapshot) = {
+            let wallet = self.inner.read().await;
+            (wallet.chain_pin().cloned(), wallet.snapshot_dir())
+        };
+
+        // Take the replacement pin before the check; see
+        // `require_same_chain`.
+        let replacement = if pin.is_some() {
+            current_pin(chain).await
+        } else {
+            None
+        };
+
+        if let Some(pin) = &pin {
+            require_same_chain(chain, pin, snapshot.as_deref()).await?;
+        }
+
+        // The plan is snapshotted under a read lock and the commit applied
+        // under a write one, so the replay in between runs with the wallet
+        // free.
+        let plan = self.inner.read().await.resync_plan();
+        let commit = plan.run().await?;
+        self.inner.write().await.commit_resync(commit)?;
+
+        // Move the pin forward with the commit, so a wallet that runs for a
+        // long time keeps a recent mark rather than one an archive has since
+        // pruned, which would leave every later check inconclusive.
+        if let Some(fresh) = replacement {
+            self.inner.write().await.set_chain_pin(fresh);
+        }
+        Ok(())
+    }
+
+    /// [`WalletFacade::rescan_shielded`], for a caller that holds
+    /// `self.sync`.
+    async fn rescan_held(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
+        let (pin, snapshot) = {
+            let wallet = self.inner.read().await;
+            (wallet.chain_pin().cloned(), wallet.snapshot_dir())
+        };
+        if let Some(pin) = &pin {
+            require_same_chain(chain, pin, snapshot.as_deref()).await?;
+        }
+
+        match self.rescan_once().await {
+            // A fork the state has not crossed. `resync` would wait for the
+            // `self.sync` that the caller holds, so cross with `resync_held`.
+            Err(WalletError::LedgerMismatch { expected, found }) if found > expected => {
+                self.resync_held(chain).await?;
+                self.rescan_once().await
+            }
+            result => result,
+        }
+    }
+
+    async fn rescan_once(&self) -> Result<(), WalletError> {
+        let plan = self.inner.read().await.shielded_rescan_plan();
+        let commit = plan.run().await?;
+        self.inner.write().await.commit_shielded_rescan(commit)
+    }
 }
 
 impl std::fmt::Debug for LocalWallet {
@@ -147,10 +209,6 @@ impl WalletFacade for LocalWallet {
 
     async fn ledger_version(&self) -> LedgerVersion {
         self.inner.read().await.ledger_version()
-    }
-
-    async fn seed(&self) -> Seed {
-        self.inner.read().await.seed().clone()
     }
 
     async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
@@ -187,49 +245,25 @@ impl WalletFacade for LocalWallet {
 
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
         let _sync = self.sync.lock().await;
-        let (pin, snapshot) = {
-            let wallet = self.inner.read().await;
-            (wallet.chain_pin().cloned(), wallet.snapshot_dir())
-        };
-
-        // Take the replacement pin before the check; see
-        // `require_same_chain`.
-        let replacement = if pin.is_some() {
-            current_pin(chain).await
-        } else {
-            None
-        };
-
-        if let Some(pin) = &pin {
-            require_same_chain(chain, pin, snapshot.as_deref()).await?;
-        }
-
-        // The plan is snapshotted under a read lock and the commit applied
-        // under a write one, so the replay in between runs with the wallet
-        // free.
-        let plan = self.inner.read().await.resync_plan();
-        let commit = plan.run().await?;
-        self.inner.write().await.commit_resync(commit)?;
-
-        // Move the pin forward with the commit, so a wallet that runs for a
-        // long time keeps a recent mark rather than one an archive has since
-        // pruned, which would leave every later check inconclusive.
-        if let Some(fresh) = replacement {
-            self.inner.write().await.set_chain_pin(fresh);
-        }
-        Ok(())
+        self.resync_held(chain).await
     }
 
-    async fn rescan_shielded(&self) -> Result<(), WalletError> {
+    async fn rescan_shielded(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
         let _sync = self.sync.lock().await;
-        let plan = self.inner.read().await.shielded_rescan_plan();
-        let commit = plan.run().await?;
-        self.inner.write().await.commit_shielded_rescan(commit)
+        self.rescan_held(chain).await
     }
 
-    async fn watch_for_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {
+    async fn watch_for_coins(
+        &self,
+        coins: Vec<CoinInfo>,
+        chain: &dyn ChainView,
+    ) -> Result<(), WalletError> {
+        if coins.is_empty() {
+            return Ok(());
+        }
         let _sync = self.sync.lock().await;
-        self.inner.write().await.watch_for_coins(coins)
+        self.inner.write().await.watch_for_coins(coins)?;
+        self.rescan_held(chain).await
     }
 
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {
