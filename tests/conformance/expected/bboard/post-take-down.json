@@ -466,6 +466,10 @@
     },
     {
       "circuit": "take_down",
+      "error": "failed assert: Attempted to take down post, but not the current poster"
+    },
+    {
+      "circuit": "take_down",
       "input": {
         "value": [],
         "alignment": []

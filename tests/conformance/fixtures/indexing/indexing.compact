@@ -69,3 +69,13 @@ export circuit store_slice(xs: Vector<6, Field>): [] {
   rows.insert(0, mid);
 }
 
+// A Uint<16> element read written to a Uint<32> cell, which takes 4 bytes.
+export circuit widen_first_id(): [] {
+  byte_sum = members[0].id;
+}
+
+// A vector argument compared with the vector that the ledger holds.
+export circuit members_are(ms: Vector<3, Member>): Boolean {
+  return members == ms;
+}
+
