@@ -51,7 +51,7 @@ let coin = provider
 let offer = ShieldedOffer {
     coins: vec![coin],
     outputs: vec![ShieldedPayment {
-        recipient: parse_shielded_recipient(address, "undeployed")?,
+        recipient: parse_shielded_recipient(address, provider.network().await?)?,
         token_type,
         value: 10,
     }],
@@ -63,7 +63,7 @@ let contract = Contract::deploy(&provider)
     .await?;
 ```
 
-`DeployBuilder::with_shielded_offer` says how the deploy spends the coins, returns the change and pays the fee.
+`DeployBuilder::with_shielded_offer` says how the deploy spends the coins, returns the change and pays the fee. The deploy builder of a `contract!` binding has the same method.
 
 ## What is per generation
 

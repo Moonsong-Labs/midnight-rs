@@ -539,7 +539,10 @@ async fn a_failed_pass_is_recorded_and_the_next_pass_clears_it() {
     state.fail_block.store(true, Ordering::SeqCst);
     let sync = wallet.sync_in_background(Arc::new(provider(&url)), PAUSE);
     wait_until("a failed pass", || {
-        matches!(sync.last_error().as_deref(), Some(WalletError::Indexer(_)))
+        matches!(
+            sync.last_error().as_deref(),
+            Some(WalletError::Indexer { .. })
+        )
     })
     .await;
 
@@ -621,7 +624,10 @@ async fn a_wait_outlasts_a_failed_pass() {
         },
         async {
             wait_until("a failed pass", || {
-                matches!(sync.last_error().as_deref(), Some(WalletError::Indexer(_)))
+                matches!(
+                    sync.last_error().as_deref(),
+                    Some(WalletError::Indexer { .. })
+                )
             })
             .await;
             // That pass woke the wait. Keep the condition false for a few

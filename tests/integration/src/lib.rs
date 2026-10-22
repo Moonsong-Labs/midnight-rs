@@ -983,12 +983,12 @@ mod lazy_tests {
 mod simulator_tests {
     use std::time::{Duration, UNIX_EPOCH};
 
-    use compact_bindgen::Bytes;
     use compact_bindgen::midnight_contract::runtime::InterpreterError;
     use compact_bindgen::midnight_contract::{CoinPublicKey, ContractAddress, ContractError};
+    use compact_bindgen::{Bytes, TransientFr};
     use midnight_base_crypto::hash::HashOutput;
 
-    use crate::{bboard, call_context, kernel, secret_counter};
+    use crate::{bboard, call_context, kernel, ops, secret_counter};
 
     fn expect_failed_assert<T: std::fmt::Debug>(result: Result<T, ContractError>, message: &str) {
         let err = result.unwrap_err();
@@ -1082,6 +1082,19 @@ mod simulator_tests {
         let color = simulator.mint(Bytes([7; 32]), 1).unwrap();
         let expected = address.custom_unshielded_token_type(HashOutput([7; 32]));
         assert_eq!(color.0, expected.0.0);
+    }
+
+    /// A Field result reaches the binding as a Field element, the only form
+    /// that the binding decodes as a Field.
+    #[test]
+    fn a_field_result_decodes_as_a_field() {
+        let mut simulator = ops::Simulator::new(ops::OpsInitialState::default(), UNIX_EPOCH);
+
+        // (3 * 5 + 3) - 5
+        let result = simulator
+            .field_arith(TransientFr::from(3u64), TransientFr::from(5u64))
+            .unwrap();
+        assert_eq!(result, TransientFr::from(13u64));
     }
 
     #[test]

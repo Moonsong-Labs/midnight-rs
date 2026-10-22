@@ -16,7 +16,8 @@ use tracing::info;
 
 use crate::WalletError;
 use crate::chain_pin::ChainPin;
-use midnight_types::TrackedUtxo;
+use hex::FromHex;
+use midnight_types::{HashOutput, TrackedUtxo, UnshieldedTokenType};
 
 const METADATA_FILE: &str = "metadata.json";
 const PENDING_FILE: &str = "pending.json";
@@ -34,14 +35,15 @@ pub(crate) fn dust_wallet_file(generation: u64) -> String {
 /// Derived from the wallet's public (unshielded) address, not its seed: the
 /// address uniquely identifies the wallet, is safe to put in a path, and can be
 /// supplied by an external signer (e.g. a hardware wallet) that never releases
-/// the seed. So the `storage` module never handles seed material, and the seed
-/// stays purely a signing concern.
+/// the seed. So the `storage` module never handles seed material.
 ///
-/// The invariant covers every file in the directory, not just its name. A
-/// persisted record that needs to name a wallet names this id; most need no
-/// wallet identity at all, because the directory already scopes them, which is
-/// why `pending.json` stores none. The pending module's
-/// `pending_json_contains_no_seed_material` test is what holds the line.
+/// No file in the directory holds the seed either. A persisted record that
+/// needs to name a wallet names this id; most need no wallet identity at all,
+/// because the directory already scopes them, which is why `pending.json`
+/// stores none. The pending module's `pending_json_contains_no_seed_material`
+/// test holds that line. `dust_wallet-N.bin` does hold the Dust secret key: the
+/// helpers' `DustWallet` serializes it, and a resumed wallet needs it to apply
+/// Dust events.
 pub(crate) fn wallet_storage_id(address: &str) -> String {
     use sha2::Digest;
     hex::encode(sha2::Sha256::digest(address.as_bytes()))
@@ -78,13 +80,15 @@ pub(crate) struct StoredMetadata {
     pub unshielded_utxos: Vec<StoredUtxo>,
 }
 
+/// A [`TrackedUtxo`] as `metadata.json` holds it. The hashes stay hex
+/// strings, because the serde form of `HashOutput` is a list of 32 numbers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoredUtxo {
     owner: String,
     token_type: String,
     value: String,
-    intent_hash: Option<String>,
-    output_index: Option<i64>,
+    intent_hash: String,
+    output_index: u32,
     // A snapshot written before these fields existed carries neither, and the
     // next sync refills them from the indexer.
     #[serde(default)]
@@ -97,9 +101,9 @@ impl From<&TrackedUtxo> for StoredUtxo {
     fn from(u: &TrackedUtxo) -> Self {
         Self {
             owner: u.owner.clone(),
-            token_type: u.token_type.clone(),
+            token_type: hex::encode(u.token_type.0.0),
             value: u.value.to_string(),
-            intent_hash: u.intent_hash.clone(),
+            intent_hash: hex::encode(u.intent_hash.0),
             output_index: u.output_index,
             ctime: u.ctime,
             registered_for_dust_generation: u.registered_for_dust_generation,
@@ -111,17 +115,24 @@ impl TryFrom<StoredUtxo> for TrackedUtxo {
     type Error = WalletError;
 
     fn try_from(u: StoredUtxo) -> Result<Self, Self::Error> {
-        let value: u128 = u.value.parse().map_err(|e| {
+        let malformed = |field, value: &str, reason: &dyn std::fmt::Display| {
             WalletError::Storage(format!(
-                "failed to parse stored UTXO value '{}': {e}",
-                u.value
+                "{METADATA_FILE}: stored UTXO {field} {value:?}: {reason}"
             ))
-        })?;
+        };
+        let token_type = <[u8; 32]>::from_hex(&u.token_type)
+            .map_err(|e| malformed("token_type", &u.token_type, &e))?;
+        let value = u
+            .value
+            .parse::<u128>()
+            .map_err(|e| malformed("value", &u.value, &e))?;
+        let intent_hash = <[u8; 32]>::from_hex(&u.intent_hash)
+            .map_err(|e| malformed("intent_hash", &u.intent_hash, &e))?;
         Ok(Self {
             owner: u.owner,
-            token_type: u.token_type,
+            token_type: UnshieldedTokenType(HashOutput(token_type)),
             value,
-            intent_hash: u.intent_hash,
+            intent_hash: HashOutput(intent_hash),
             output_index: u.output_index,
             ctime: u.ctime,
             registered_for_dust_generation: u.registered_for_dust_generation,
@@ -139,10 +150,10 @@ pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> Path
 
 /// [`midnight_owner_only::create_dir_all`] for the wallet's storage directory.
 ///
-/// The tree holds the wallet's UTXO set, spend history and reserved
-/// nullifiers. None of that is secret in the key sense, but it is a full
-/// picture of the wallet's activity and there is no reason for another local
-/// user to have it.
+/// The tree holds the key that spends the wallet's Dust, in
+/// `dust_wallet-N.bin`. It also holds the wallet's UTXO set, spend history and
+/// reserved nullifiers, a full picture of the wallet's activity. No other local
+/// user has a reason to read either.
 ///
 /// Only the wallet's own directory is narrowed. An ancestor an earlier version
 /// or another tool created keeps its mode, so the set of wallet ids under a
@@ -304,10 +315,9 @@ pub(crate) fn save_snapshot(
     Ok(())
 }
 
-/// On-disk representation of a wallet's pending reservations. `DustSpend` and
-/// `Sp<DustLocalState<D>, D>` are both Tagged + Serializable, so we
-/// hex-encode their `tagged_serialize` bytes to round-trip through JSON
-/// without dragging the tagged-codec into the schema.
+/// On-disk representation of a wallet's pending reservations. The hex fields
+/// hold the `tagged_serialize` bytes of the Dust spends and the shielded
+/// nullifiers, so the JSON schema stays free of the tagged codec.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredPending {
     /// The ledger generation whose types encoded the hex fields.
@@ -325,8 +335,6 @@ pub(crate) struct StoredPending {
 pub(crate) struct StoredPendingDustBatch {
     /// Tagged-serialized `Vec<DustSpend<ProofPreimageMarker, DefaultDB>>`, hex.
     pub spends_hex: String,
-    /// Tagged-serialized `Sp<DustLocalState<DefaultDB>, DefaultDB>`, hex.
-    pub updated_state_hex: String,
     /// `Timestamp::to_secs()` value.
     pub reserved_at_secs: u64,
 }
@@ -448,6 +456,32 @@ mod tests {
         assert_eq!(metadata.zswap_event_id, 178, "the rest still parses");
     }
 
+    /// A stored UTXO keeps its hashes as hex and its value as a decimal
+    /// string, and the load parses that form. A write in another form, such
+    /// as the ten characters of the `Display` of `HashOutput`, refuses the
+    /// next resume.
+    #[test]
+    fn a_stored_utxo_keeps_its_form_on_disk() {
+        let stored = serde_json::json!({
+            "owner": "mn_addr_undeployed1owner",
+            "token_type": "02".repeat(32),
+            "value": u128::MAX.to_string(),
+            "intent_hash": "ab".repeat(32),
+            "output_index": 3,
+            "ctime": 1_700_000_000,
+            "registered_for_dust_generation": true,
+        });
+        let parsed: StoredUtxo = serde_json::from_value(stored.clone()).expect("parse");
+        let utxo = TrackedUtxo::try_from(parsed).expect("a stored UTXO in this form loads");
+        assert_eq!(utxo.token_type, UnshieldedTokenType(HashOutput([0x02; 32])));
+        assert_eq!(utxo.value, u128::MAX);
+        assert_eq!(utxo.intent_hash, HashOutput([0xab; 32]));
+        assert_eq!(utxo.output_index, 3);
+
+        let written = serde_json::to_value(StoredUtxo::from(&utxo)).expect("serialize");
+        assert_eq!(written, stored, "a save writes the form a load reads");
+    }
+
     /// The pin's field names are the on-disk contract. A rename would not
     /// fail to compile: `#[serde(default)]` turns an unrecognised field into
     /// `None`, so every stored pin would quietly stop guarding anything.
@@ -498,9 +532,10 @@ mod tests {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 
-    /// The snapshot tree records the wallet's UTXO set, spend history and
-    /// reserved nullifiers. Written at the process umask it lands world
-    /// readable, which hands every local user a full picture of the wallet.
+    /// The snapshot tree records the Dust secret key, and the wallet's UTXO
+    /// set, spend history and reserved nullifiers. Written at the process umask
+    /// it lands world readable, which hands every local user the key and a full
+    /// picture of the wallet.
     #[test]
     fn snapshot_tree_is_owner_only() {
         let base = tempfile::TempDir::new().unwrap();

@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
     let network: Network = env::var("MIDNIGHT_NETWORK")
         .unwrap_or_else(|_| "undeployed".into())
-        .into();
+        .parse()?;
 
     println!("=== Midnight Shielded Transfer ===\n");
     println!("Network:           {network}");
@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Indexer:           {indexer_url}");
     println!();
 
-    println!("Syncing wallet from indexer (zswap + dust + unshielded in parallel)...");
+    println!("Syncing wallet from indexer (zswap and unshielded, then dust)...");
     let provider = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::from_seed(DEV_SEED)?
         .with_network(&network)

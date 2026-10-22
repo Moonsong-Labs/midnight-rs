@@ -3,8 +3,8 @@
 //! [`Wallet`] owns the seed, the secret keys, the synced ledger state
 //! (shielded coins, dust UTXOs, unshielded UTXOs), the ledger parameters,
 //! and the latest block context, in the ledger generation the chain runs. It
-//! exposes accessors for balances, addresses and cursors, and the resync and
-//! rescan steps.
+//! exposes accessors for balances, addresses and cursors. Its resyncs and
+//! rescans run through [`LocalWallet`].
 //!
 //! The API a consumer programs against is the `WalletFacade` trait in
 //! `midnight-wallet-facade`, which this crate depends on and implements:
@@ -39,8 +39,10 @@
 //! the whole event before any part of it is applied
 //! ([`WalletError::MalformedUtxo`], decode errors), and decoded ledger
 //! parameters are sanity-checked before fee math consumes them
-//! ([`WalletError::CorruptParameters`]). These checks catch corruption and
-//! protocol violations, not dishonesty. Actively cross-checking indexer
+//! ([`WalletError::CorruptParameters`]). Sync keeps the owner address of a
+//! UTXO as it comes, because the subscription asks for the UTXOs of one
+//! address. These checks catch corruption and protocol violations, not
+//! dishonesty. Actively cross-checking indexer
 //! answers against the node (e.g. `midnight_queryUnshielded`) is
 //! explicitly out of scope; revisit if a threat model requires operating
 //! against an untrusted indexer.
@@ -79,11 +81,11 @@ mod wallet;
 pub use midnight_types::address::parse_shielded_recipient;
 pub use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustParameters,
-    EncryptionPublicKey, HashOutput, LedgerVersion, NIGHT, Network, Nonce, Nullifier,
-    ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
-    SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind,
-    TransferRequest, TransferResult, UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
-    WalletError, chain_pin, panic_message,
+    EncryptionPublicKey, HashOutput, InvalidNetworkName, LedgerVersion, NIGHT, Network,
+    NetworkName, Nonce, Nullifier, ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient,
+    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo,
+    TransferKind, TransferRequest, TransferResult, UnshieldedTokenType, UnshieldedUtxoInfo,
+    WalletBalance, WalletError, chain_pin, panic_message,
 };
 // The API this crate implements, so attaching a wallet needs no dependency on
 // midnight-wallet-facade either.
@@ -93,4 +95,4 @@ pub use background::BackgroundSync;
 pub use local::LocalWallet;
 pub use midnight_types::hd::{self, AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use sync::{SyncHandle, SyncProgress, WalletBuilder};
-pub use wallet::{ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, Wallet};
+pub use wallet::Wallet;

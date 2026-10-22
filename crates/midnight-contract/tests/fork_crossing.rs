@@ -15,8 +15,10 @@ mod counter {
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use midnight_provider::{Builds, LedgerVersion, MidnightProvider, NIGHT, Network, Nullifier};
-use midnight_wallet::Wallet;
+use midnight_provider::{
+    Builds, HashOutput, LedgerVersion, MidnightProvider, NIGHT, Network, Nullifier,
+};
+use midnight_wallet::{LocalWallet, Wallet, WalletFacade};
 
 #[tokio::test]
 async fn a_wallet_crosses_the_fork_to_ledger_9() {
@@ -233,11 +235,11 @@ async fn wait_for_dust(provider: &MidnightProvider) {
 }
 
 /// The UTXOs that generate Dust, as `(intent hash, output index)`.
-fn generating(utxos: &[midnight_provider::TrackedUtxo]) -> Vec<(Option<String>, Option<i64>)> {
+fn generating(utxos: &[midnight_provider::TrackedUtxo]) -> Vec<(HashOutput, u32)> {
     let mut generating: Vec<_> = utxos
         .iter()
         .filter(|u| u.is_registered_for_dust())
-        .map(|u| (u.intent_hash.clone(), u.output_index))
+        .map(|u| (u.intent_hash, u.output_index))
         .collect();
     generating.sort();
     generating
@@ -254,23 +256,22 @@ async fn wait_for_ledger_9(provider: &MidnightProvider, network: &Network, snaps
         assert!(Instant::now() < deadline, "the node did not run ledger 9");
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
-    let mut probe = Wallet::from_seed(common::DEV_WALLET_SEED)
-        .unwrap()
-        .with_network(network.clone())
-        .with_storage(snapshot)
-        .sync(provider)
-        .await
-        .expect("resume the probe snapshot");
-    while probe.ledger_version() != LedgerVersion::V9 {
+    let probe = LocalWallet::new(
+        Wallet::from_seed(common::DEV_WALLET_SEED)
+            .unwrap()
+            .with_network(network.clone())
+            .with_storage(snapshot)
+            .sync(provider)
+            .await
+            .expect("resume the probe snapshot"),
+    );
+    while probe.ledger_version().await != LedgerVersion::V9 {
         assert!(
             Instant::now() < deadline,
             "the indexer did not serve a ledger 9 block"
         );
         tokio::time::sleep(Duration::from_secs(2)).await;
-        probe
-            .resync(provider.indexer_url())
-            .await
-            .expect("resync the probe");
+        probe.resync(provider).await.expect("resync the probe");
     }
 }
 

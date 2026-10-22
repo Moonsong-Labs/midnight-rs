@@ -120,7 +120,13 @@ let shielded   = seed.shielded_address(Network::Preprod);
 // mn_shield-addr_preprod1...
 ```
 
-Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `Seed` address methods take the network as `impl Into<Network>`. They accept a `Network` variant (`Network::Preprod`, `Network::Mainnet` and the others) or a name, such as `"preprod"` or the `String` from `env::var("MIDNIGHT_NETWORK")?`. Unknown names round-trip through `Network::Other(String)`, for example for a custom devnet.
+Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `Seed` address methods take the network as `impl Into<Network>`, so a `Network` or a `&Network`. For a name, such as the value of an environment variable, parse it first:
+
+```rust
+let network: Network = env::var("MIDNIGHT_NETWORK")?.parse()?;
+```
+
+The parse gives the variant of a known name (`Network::Preprod`, `Network::Mainnet` and the others), and `Network::Other` for any other valid name, for example the name of a custom devnet. A valid name has 1 to 68 characters, each a lowercase ASCII letter, a digit, `-` or `_`. Such a name is safe in an address prefix and in the storage path. The parse refuses any other name with `InvalidNetworkName`.
 
 `Network::Mainnet` produces bech32 HRPs without a `_<name>` suffix (`mn_addr1...`, `mn_shield-addr1...`), matching the upstream convention; all other variants get the suffix.
 
@@ -145,7 +151,7 @@ let wallet = Wallet::from_mnemonic(phrase)?
 let provider = provider.with_wallet(wallet);
 ```
 
-A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider)` runs three concurrent indexer subscriptions in the current task, and returns the `Wallet` once all three have caught up:
+A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider)` replays three indexer subscriptions in the current task: the zswap and unshielded streams at the same time, then the Dust stream. It returns the `Wallet` once all three have caught up:
 
 | Subscription | What it fills |
 |---|---|
@@ -157,9 +163,9 @@ Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress
 
 The provider is the sync's source: the sync replays the provider's indexer, and the provider's node reports its network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the indexer URL and the node's network to the two-query `ChainView`.
 
-Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. The sync then fails with `WalletError::NetworkUnknown` when the node cannot answer, reports no network, or reports a name that fails `Network::is_valid_name`. A valid name has 1 to 68 characters, each a lowercase ASCII letter, a digit, `-` or `_`. Such a name is safe in an address prefix and in the storage path.
+Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. The sync then fails with `WalletError::NetworkUnknown` when the node cannot answer, reports no network, or reports an id that the parse of a `Network` refuses (see [Address derivation](#address-derivation)).
 
-`.with_network(..)` names the network, as a `Network` or as a name such as `"preprod"`. A node that runs another network then fails the sync with `WalletError::NetworkMismatch`, before the sync reads the indexer. A node that cannot answer, or that reports no network, does not fail a sync with a named network. Name the network when your program reads it from its configuration. The sync then refuses a node URL of another network.
+`.with_network(..)` names the network, as a `Network`. A node that runs another network then fails the sync with `WalletError::NetworkMismatch`, before the sync reads the indexer. A node that cannot answer, reports no network, or reports an id that the parse refuses does not fail a sync with a named network. Name the network when your program reads it from its configuration, with `.with_network(env::var("MIDNIGHT_NETWORK")?.parse::<Network>()?)`. The sync then refuses a node URL of another network.
 
 The pin is the chain-reset guard, and every sync takes one by default. A snapshot's cursors are counts, so a snapshot from a replaced chain resumes cleanly and reports the dead chain's balance. To catch this, the sync checks a stored snapshot's pin against the chain before it replays. A replaced chain fails the sync with `WalletError::ChainMismatch`. The sync also gives the wallet a fresh pin, which every later resync checks again.
 
@@ -167,7 +173,7 @@ A node that cannot answer for the pin does not fail the sync. The sync continues
 
 `.unpinned()` is the opt-out: it skips the network check and the pin. With a named network, the sync then asks the node nothing. With no network named, the sync still asks the node for its network, and nothing else. The sync still keeps a stored snapshot's pin, and every later resync checks that pin.
 
-Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. A non-retryable error fails the sync at once, and a retryable one fails it after the last retry (`IndexerError::is_retryable` decides which errors are retryable). An indexer that keeps the socket alive but sends no event in time also fails the sync, unless a resync reads the silence as the tip. When the sync gives up on the indexer, it returns `WalletError::Indexer`.
+Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. A non-retryable error fails the sync at once, and a retryable one fails it after the last retry. An indexer that keeps the socket alive but sends no event in time also fails the sync, unless a resync reads the silence as the tip. When the sync gives up on the indexer, it returns `WalletError::Indexer`, whose `retryable` field tells whether a later sync can succeed.
 
 For a long sync with UI updates, end the builder with `.sync_with_progress(&provider)` in place of `.sync(&provider)`:
 
@@ -261,7 +267,7 @@ The shielded coins carry across. The Dust state starts empty, because the fork e
 
 The indexer is the wallet's sole data source: shielded state, dust state, the unshielded UTXO set, and the ledger parameters used for fee and TTL math are all rebuilt from indexer subscriptions and blocks. Nothing is cross-checked against a node. A hostile or compromised indexer can therefore fabricate UTXOs that do not exist on chain (the node rejects transactions built from them) or withhold real ones (funds look missing until you sync against an honest indexer). Point the provider at an indexer you trust as much as your node.
 
-What sync does enforce is the shape of the data: event ids must not go backwards within a subscription connection (`WalletError::EventOrder`), an event with a malformed field rejects the whole event before any part of it is applied (`WalletError::MalformedUtxo`, decode errors), and decoded ledger parameters are sanity-checked before any fee math consumes them (`WalletError::CorruptParameters`). These checks catch corruption and protocol violations, not dishonesty. Actively cross-checking indexer answers against the node (for example `midnight_queryUnshielded`) is explicitly out of scope today; revisit if a threat model requires operating against an untrusted indexer.
+What sync does enforce is the shape of the data: event ids must not go backwards within a subscription connection (`WalletError::EventOrder`), an event with a malformed field rejects the whole event before any part of it is applied (`WalletError::MalformedUtxo`, decode errors), and decoded ledger parameters are sanity-checked before any fee math consumes them (`WalletError::CorruptParameters`). Sync keeps the owner address of a UTXO as it comes, because the subscription asks for the UTXOs of one address. These checks catch corruption and protocol violations, not dishonesty. Actively cross-checking indexer answers against the node (for example `midnight_queryUnshielded`) is explicitly out of scope today; revisit if a threat model requires operating against an untrusted indexer.
 
 ### Persistence
 
@@ -272,11 +278,13 @@ With `.with_storage(dir)`, the sync writes to:
   ├── metadata.json     event cursors, last block, last tx id, generation pointers,
   │                     and the ledger generation that wrote the state files
   ├── zswap-N.bin       tagged-serialized ZswapLocalState
-  ├── dust_wallet-N.bin tagged-serialized DustWallet
+  ├── dust_wallet-N.bin tagged-serialized DustWallet, which holds the Dust secret key
   └── pending.json      in-flight spend reservations (see below)
 ```
 
 `{network}` is the network that `.with_network(..)` names or, without `.with_network(..)`, the node's network.
+
+The directory holds the Dust secret key, so protect it as key material. On Unix, the SDK creates the wallet's directory with mode 0700 and its files with mode 0600.
 
 Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the old generation is cleaned up. A crash mid-write leaves the previous generation intact.
 
@@ -421,7 +429,7 @@ To check the outcome, look for the coin in `provider.spendable_shielded_coins()`
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). The wallet serializes each step of the two provider methods against resyncs: the registration, and each replay. A resync that runs between the registration and the replay keeps the registration. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
+Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On a handle (`Arc<LocalWallet>`), `watch_for_coins` registers and `rescan_shielded` replays. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet serializes each step of the two provider methods against resyncs: the registration, and each replay. A resync that runs between the registration and the replay keeps the registration. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
 
 ## Pending reservations
 

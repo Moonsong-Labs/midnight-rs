@@ -39,8 +39,9 @@ pub use midnight_types::{
 // separate dep on midnight-wallet-facade.
 pub use midnight_types::hd::{Seed, SeedError};
 pub use midnight_types::{
-    Network, ShieldedCoinBalance, SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors,
-    TrackedUtxo, TransferKind, TransferRequest, TransferResult, WalletBalance, WalletError,
+    InvalidNetworkName, Network, NetworkName, ShieldedCoinBalance, SpendableShieldedCoin,
+    SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind, TransferRequest,
+    TransferResult, WalletBalance, WalletError,
 };
 pub use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
@@ -66,7 +67,8 @@ use std::sync::Arc;
 /// well-defined surface to implement. Reachability checks
 /// (`MidnightProvider::health`, block / network metadata, etc.) are
 /// inherent methods on [`MidnightProvider`] — they aren't part of the
-/// generic abstraction.
+/// generic abstraction. The generated lazy reads go through
+/// [`StateQueryProvider`] instead.
 ///
 /// Automatically implemented for `&T`, `Arc<T>`, and `Box<T>` where `T: Provider`.
 #[async_trait::async_trait]
@@ -84,14 +86,6 @@ pub trait Provider: Send + Sync {
         address: &str,
         at: Option<BlockHash>,
     ) -> Result<Option<String>, ProviderError>;
-
-    /// Query specific fields/keys in a contract's state tree without
-    /// downloading the entire state blob.
-    async fn query_contract_state(
-        &self,
-        address: &str,
-        queries: Vec<StateQuery>,
-    ) -> Result<Vec<StateQueryResult>, ProviderError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,13 +121,6 @@ macro_rules! delegate_provider {
             ) -> Result<Option<String>, ProviderError> {
                 (**self).get_contract_state(address, at).await
             }
-            async fn query_contract_state(
-                &self,
-                address: &str,
-                queries: Vec<StateQuery>,
-            ) -> Result<Vec<StateQueryResult>, ProviderError> {
-                (**self).query_contract_state(address, queries).await
-            }
         }
     )+ };
 }
@@ -159,13 +146,6 @@ mod tests {
             at: Option<BlockHash>,
         ) -> Result<Option<String>, ProviderError> {
             Ok(Some(format!("{address}@{at:?}")))
-        }
-        async fn query_contract_state(
-            &self,
-            _address: &str,
-            _queries: Vec<StateQuery>,
-        ) -> Result<Vec<StateQueryResult>, ProviderError> {
-            Ok(vec![])
         }
     }
 

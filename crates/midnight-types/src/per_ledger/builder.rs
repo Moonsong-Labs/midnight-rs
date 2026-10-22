@@ -273,8 +273,8 @@ pub trait BuildInputs: Send + Sync {
     /// The seed the build signs and derives with.
     fn seed(&self) -> &Seed;
 
-    /// The network identifier a recipient address must match.
-    fn network(&self) -> &str;
+    /// The network a recipient address must belong to.
+    fn network(&self) -> &Network;
 
     /// The ledger parameters a dust registration computes its fee allowance
     /// from.
@@ -576,7 +576,7 @@ impl<'a> TransferBuilder<'a> {
                 let intent_hash = s.intent_hash.as_ref()?;
                 let output_index = s.output_number?;
                 Some(SpentUtxoKey {
-                    intent_hash: hex::encode(intent_hash.0.0),
+                    intent_hash: intent_hash.0,
                     output_index,
                 })
             })
@@ -723,8 +723,8 @@ impl<'a> TransferBuilder<'a> {
                     value: utxo.value,
                     owner: seed.clone(),
                     token_type: NIGHT,
-                    intent_hash: utxo.parsed_intent_hash().map(helpers::IntentHash),
-                    output_number: utxo.output_number(),
+                    intent_hash: Some(helpers::IntentHash(utxo.intent_hash)),
+                    output_number: Some(utxo.output_index),
                 };
                 Box::new(info) as Box<dyn BuildUtxoSpend<DefaultDB, BuildContext>>
             })
@@ -772,7 +772,7 @@ impl<'a> TransferBuilder<'a> {
         tx_info.use_mock_proofs_for_fees(true);
 
         let spent_unshielded_inputs: Vec<SpentUtxoKey> =
-            night_utxos.iter().filter_map(|u| u.spent_key()).collect();
+            night_utxos.iter().map(|u| u.spent_key()).collect();
 
         let mut prepared = prepare_no_validate(tx_info).await?;
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
@@ -1376,18 +1376,15 @@ fn check_address_network(addr: &WalletAddress, expected: &Network) -> Result<(),
     };
     if actual != want {
         return Err(WalletError::AddressNetworkMismatch {
-            expected: expected.to_string(),
+            expected: expected.as_str().to_string(),
             actual: actual.unwrap_or(Network::Mainnet.as_str()).to_string(),
         });
     }
     Ok(())
 }
 
-fn parse_unshielded_recipient(
-    s: &str,
-    network: impl Into<Network>,
-) -> Result<UnshieldedWallet, WalletError> {
-    let addr = parse_wallet_address(s, &network.into())?;
+fn parse_unshielded_recipient(s: &str, network: &Network) -> Result<UnshieldedWallet, WalletError> {
+    let addr = parse_wallet_address(s, network)?;
     UnshieldedWallet::try_from(&addr)
         .map_err(|e| WalletError::InvalidAddress(format!("not an unshielded address: {e:?}")))
 }
@@ -1402,9 +1399,9 @@ fn parse_unshielded_recipient(
 /// shielded address.
 pub(crate) fn shielded_destination(
     s: &str,
-    network: impl Into<Network>,
+    network: &Network,
 ) -> Result<ShieldedWallet<DefaultDB>, WalletError> {
-    let addr = parse_wallet_address(s, &network.into())?;
+    let addr = parse_wallet_address(s, network)?;
     // Upstream asserts this length rather than returning its `InvalidCoinKeyLen`
     // variant, so a truncated address would abort the process.
     let len = addr.data().len();
@@ -1448,10 +1445,10 @@ mod tests {
     fn night_utxo(value: u128, ctime: Option<i64>, registered: bool) -> TrackedUtxo {
         TrackedUtxo {
             owner: "owner".into(),
-            token_type: crate::sync::NIGHT_TOKEN_HEX.clone(),
+            token_type: crate::NIGHT,
             value,
-            intent_hash: None,
-            output_index: None,
+            intent_hash: crate::HashOutput([0; 32]),
+            output_index: 0,
             ctime,
             registered_for_dust_generation: Some(registered),
         }

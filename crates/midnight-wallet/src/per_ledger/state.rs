@@ -23,7 +23,7 @@ use crate::chain_pin::ChainPin;
 use crate::replay::{LedgerStream, replay_ledger_events, replay_unshielded_events};
 use crate::storage::wallet_storage_id;
 use crate::wallet::ChainSync;
-use crate::{Seed, SpentUtxoKey, SyncProgress, WalletError};
+use crate::{Network, Seed, SpentUtxoKey, SyncProgress, WalletError};
 
 /// A Midnight wallet: identity (seed, addresses) and synced ledger state.
 ///
@@ -37,7 +37,7 @@ use crate::{Seed, SpentUtxoKey, SyncProgress, WalletError};
 pub struct Wallet {
     seed: Seed,
     secret_keys: SecretKeys,
-    network_id: String,
+    network: Network,
     unshielded_address: String,
 
     // Shielded state (from zswapLedgerEvents)
@@ -70,8 +70,8 @@ pub struct Wallet {
     pending: PendingReservations,
 
     /// Where this wallet persists its state, when [`Wallet::sync_inner`] was
-    /// given a storage directory. Retained so [`Wallet::resync`] can re-save
-    /// the moved cursors and [`Wallet::reserve_pending`] can persist
+    /// given a storage directory. Retained so [`Wallet::commit_resync`] can
+    /// re-save the moved cursors and [`Wallet::reserve_pending`] can persist
     /// `pending.json` without the caller re-supplying the path.
     storage_dir: Option<PathBuf>,
 
@@ -246,12 +246,7 @@ fn decode_event(raw: &[u8], kind: &str) -> Result<Event<DefaultDB>, WalletError>
 fn decode_ledger_parameters(
     block: &midnight_indexer_client::Block,
 ) -> Result<LedgerParameters, WalletError> {
-    let params_hex = block
-        .ledger_parameters
-        .as_deref()
-        .ok_or_else(|| WalletError::Sync("latest block has no ledger_parameters".into()))?;
-    let params_bytes = hex::decode(params_hex)
-        .map_err(|e| WalletError::Sync(format!("decode ledger params hex: {e}")))?;
+    let params_bytes = crate::replay::encoded_ledger_parameters(block)?;
     let parameters: LedgerParameters = tagged_deserialize(&params_bytes[..])
         .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))?;
     validate_ledger_parameters(&parameters)?;
@@ -312,7 +307,7 @@ fn validate_ledger_parameters(p: &LedgerParameters) -> Result<(), WalletError> {
     Ok(())
 }
 
-/// This generation's half of [`crate::ResyncPlan`].
+/// This generation's half of [`crate::wallet::ResyncPlan`].
 #[derive(Clone)]
 pub struct ResyncPlan {
     pub(crate) secret_keys: SecretKeys,
@@ -326,9 +321,9 @@ pub struct ResyncPlan {
 }
 
 impl ResyncPlan {
-    /// The replay phase of [`crate::ResyncPlan::run`] on this generation. It
-    /// returns [`WalletError::LedgerMismatch`] when the chain moved to a
-    /// later generation, for the caller to cross.
+    /// The replay phase of [`crate::wallet::ResyncPlan::run`] on this
+    /// generation. It returns [`WalletError::LedgerMismatch`] when the chain
+    /// moved to a later generation, for the caller to cross.
     pub async fn run(self, indexer_url: &str) -> Result<ResyncCommit, WalletError> {
         let ResyncPlan {
             secret_keys,
@@ -386,7 +381,7 @@ impl ResyncPlan {
         let block = block_res?;
         // A chain that moved to a later generation since the plan was taken
         // needs the wallet to cross, which is not this generation's to do.
-        expect_ledger(crate::LedgerVersion::of_block(&block)?)?;
+        expect_ledger(crate::replay::ledger_of(&block)?)?;
         if let Some((_, found)) = zswap.later_ledger {
             expect_ledger(found)?;
         }
@@ -425,7 +420,7 @@ impl ResyncPlan {
     }
 }
 
-/// This generation's half of [`crate::ResyncCommit`].
+/// This generation's half of [`crate::wallet::ResyncCommit`].
 #[must_use = "apply with Wallet::commit_resync, or the completed replay is discarded"]
 pub struct ResyncCommit {
     dust_wallet: DustWallet<DefaultDB>,
@@ -442,7 +437,7 @@ pub struct ResyncCommit {
     parameters: LedgerParameters,
 }
 
-/// This generation's half of [`crate::ShieldedRescanPlan`].
+/// This generation's half of [`crate::wallet::ShieldedRescanPlan`].
 pub struct ShieldedRescanPlan {
     pub(crate) secret_keys: SecretKeys,
     pub(crate) initial_state: ZswapLocalState<DefaultDB>,
@@ -462,9 +457,9 @@ impl ShieldedRescanPlan {
         }
     }
 
-    /// The replay of [`crate::ShieldedRescanPlan::run`] on this generation.
-    /// It returns [`WalletError::LedgerMismatch`] when the stream holds
-    /// another generation's events.
+    /// The replay of [`crate::wallet::ShieldedRescanPlan::run`] on this
+    /// generation. It returns [`WalletError::LedgerMismatch`] when the stream
+    /// holds another generation's events.
     pub async fn run(self, indexer_url: &str) -> Result<ShieldedRescanCommit, WalletError> {
         let sub_client = SubscriptionClient::new(indexer_url);
         let replay = replay_zswap_events(
@@ -486,7 +481,7 @@ impl ShieldedRescanPlan {
     }
 }
 
-/// This generation's half of [`crate::ShieldedRescanCommit`].
+/// This generation's half of [`crate::wallet::ShieldedRescanCommit`].
 #[must_use = "apply with Wallet::commit_shielded_rescan, or the completed replay is discarded"]
 pub struct ShieldedRescanCommit {
     pub(crate) zswap_state: ZswapLocalState<DefaultDB>,
@@ -535,7 +530,7 @@ impl Wallet {
         let dir = self.storage_dir.as_deref()?;
         Some(crate::storage::snapshot_path(
             dir,
-            &self.network_id,
+            self.network.as_str(),
             &wallet_storage_id(&self.unshielded_address),
         ))
     }
@@ -573,7 +568,7 @@ impl Wallet {
             indexer_url,
             seed,
             address,
-            network_id,
+            network,
             storage_dir,
             save,
             chain_pin,
@@ -605,7 +600,7 @@ impl Wallet {
         let sub_client = SubscriptionClient::new(indexer_url);
         let dust_checkpoint = make_dust_checkpoint(
             save_dir,
-            network_id,
+            network.as_str(),
             CheckpointState {
                 wallet_id: wallet_id.clone(),
                 zswap_state: zswap_state.clone(),
@@ -658,7 +653,7 @@ impl Wallet {
         // pending entries; this is a separate file.
         let pending = match save_dir {
             Some(dir) => {
-                PendingReservations::load(dir, network_id, &wallet_id)?.unwrap_or_default()
+                PendingReservations::load(dir, network.as_str(), &wallet_id)?.unwrap_or_default()
             }
             None => PendingReservations::default(),
         };
@@ -666,7 +661,7 @@ impl Wallet {
         let mut state = Self {
             seed: seed.clone(),
             secret_keys,
-            network_id: network_id.to_string(),
+            network: network.clone(),
             unshielded_address: address.to_string(),
             zswap_state,
             zswap_event_id,
@@ -717,8 +712,8 @@ impl Wallet {
     /// don't re-select the same inputs.
     ///
     /// Dust and unshielded reservations live in `Wallet::pending` until either:
-    /// - event replay (a sync, or [`Wallet::resync`]) observes
-    ///   the corresponding confirmed spends and clears them,
+    /// - event replay (a sync or a resync) observes the corresponding
+    ///   confirmed spends and clears them,
     /// - or their TTL window elapses (evicted at [`Wallet::build_context_inner`]
     ///   time).
     ///
@@ -802,7 +797,9 @@ impl Wallet {
     /// Crash-safety is degraded until then, hence the error-level log.
     fn persist_pending(&mut self) {
         if let Some(dir) = self.storage_dir.as_deref()
-            && let Err(err) = self.pending.save(dir, &self.network_id, &self.storage_id())
+            && let Err(err) = self
+                .pending
+                .save(dir, self.network.as_str(), &self.storage_id())
         {
             error!(error = %err, "failed to persist pending reservations; in-memory set is ahead of pending.json");
             self.save_failed = true;
@@ -837,7 +834,7 @@ impl Wallet {
         let wallet_id = self.storage_id();
         super::snapshot::save(
             base,
-            &self.network_id,
+            self.network.as_str(),
             &wallet_id,
             super::snapshot::Snapshot {
                 zswap_state: &self.zswap_state,
@@ -850,7 +847,7 @@ impl Wallet {
                 unshielded_utxos: &self.unshielded_utxos,
             },
         )?;
-        self.pending.save(base, &self.network_id, &wallet_id)
+        self.pending.save(base, self.network.as_str(), &wallet_id)
     }
 
     /// Save to the storage directory when `changed` is true or the last save
@@ -883,7 +880,7 @@ impl Wallet {
     pub fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
         // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
         let ledger_state = LedgerState::with_genesis_settings(
-            &self.network_id,
+            self.network.as_str(),
             self.parameters.clone(),
             0,
             MAX_SUPPLY,
@@ -974,18 +971,12 @@ impl Wallet {
                 .map_err(|_| WalletError::Sync("ledger state lock poisoned".into()))?;
             let mut ledger_state = (**guard).clone();
 
-            // intent_hash + output_no are part of a UTXO's identity; falling back
-            // to default values silently creates collisions between distinct UTXOs
-            // and synthesizes inputs the chain will reject.
             let mut utxo_state = (*ledger_state.utxo).clone();
             for tracked in &self.unshielded_utxos {
-                if tracked
-                    .spent_key()
-                    .is_some_and(|key| pending_unshielded.contains(&&key))
-                {
+                if pending_unshielded.contains(&&tracked.spent_key()) {
                     continue;
                 }
-                let utxo = tracked_to_ledger_utxo(tracked, owner)?;
+                let utxo = tracked_to_ledger_utxo(tracked, owner);
                 utxo_state = utxo_state.insert(utxo, UtxoMeta { ctime: utxo_ctime });
             }
             ledger_state.utxo = Sp::new(utxo_state);
@@ -1118,8 +1109,8 @@ impl Wallet {
     }
 
     /// See [`crate::Wallet::network`].
-    pub fn network(&self) -> &str {
-        &self.network_id
+    pub fn network(&self) -> &Network {
+        &self.network
     }
 
     /// See [`crate::Wallet::unshielded_address`].
@@ -1560,41 +1551,14 @@ fn event_spend_nullifier(event: &Event<DefaultDB>) -> Option<DustNullifier> {
     }
 }
 
-fn tracked_to_ledger_utxo(
-    tracked: &TrackedUtxo,
-    owner: helpers::UserAddress,
-) -> Result<LedgerUtxo, WalletError> {
-    let type_ = tracked
-        .unshielded_token_type()
-        .map(IntoLedger::into_ledger)
-        .ok_or_else(|| {
-            WalletError::Sync(format!(
-                "tracked UTXO has malformed token_type {}",
-                tracked.token_type
-            ))
-        })?;
-    let intent_hash = tracked
-        .parsed_intent_hash()
-        .map(helpers::IntentHash)
-        .ok_or_else(|| {
-            WalletError::Sync(match &tracked.intent_hash {
-                None => "tracked UTXO has no intent_hash".into(),
-                Some(hex) => format!("tracked UTXO has malformed intent_hash {hex}"),
-            })
-        })?;
-    let output_no = tracked.output_number().ok_or_else(|| {
-        WalletError::Sync(match tracked.output_index {
-            None => "tracked UTXO has no output_index".into(),
-            Some(idx) => format!("tracked UTXO output_index {idx} out of range"),
-        })
-    })?;
-    Ok(LedgerUtxo {
+fn tracked_to_ledger_utxo(tracked: &TrackedUtxo, owner: helpers::UserAddress) -> LedgerUtxo {
+    LedgerUtxo {
         value: tracked.value,
         owner,
-        type_,
-        intent_hash,
-        output_no,
-    })
+        type_: tracked.token_type.into_ledger(),
+        intent_hash: helpers::IntentHash(tracked.intent_hash),
+        output_no: tracked.output_index,
+    }
 }
 
 #[cfg(test)]
@@ -1733,7 +1697,7 @@ mod tests {
         Wallet {
             seed: seed.clone(),
             secret_keys,
-            network_id: "undeployed".into(),
+            network: Network::Undeployed,
             unshielded_address: "mn_addr_undeployed1test".into(),
             zswap_state: shielded.state.clone(),
             zswap_event_id: 0,
@@ -1891,15 +1855,14 @@ mod tests {
         );
     }
 
-    /// A NIGHT UTXO with both identity fields, so `tracked_to_ledger_utxo`
-    /// accepts it.
+    /// A NIGHT UTXO that `ukey(0xab, 0)` names.
     fn tracked_night_utxo() -> TrackedUtxo {
         TrackedUtxo {
             owner: "mn_addr_undeployed1test".into(),
-            token_type: "00".repeat(32),
+            token_type: midnight_types::NIGHT,
             value: 42,
-            intent_hash: Some("ab".repeat(32)),
-            output_index: Some(0),
+            intent_hash: midnight_types::HashOutput([0xab; 32]),
+            output_index: 0,
             ctime: Some(0),
             registered_for_dust_generation: Some(false),
         }
@@ -1951,7 +1914,7 @@ mod tests {
         wallet.unshielded_utxos = vec![tracked_night_utxo()];
         wallet.reserve_pending(
             Vec::new(),
-            vec![ukey(&"ab".repeat(32), 0)],
+            vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
         );
@@ -2009,7 +1972,7 @@ mod tests {
         let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
         wallet.reserve_pending(
             Vec::new(),
-            vec![ukey("abcd", 0)],
+            vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
         );
@@ -2288,7 +2251,7 @@ mod tests {
     #[test]
     fn resync_commit_persists_when_reservation_cleared() {
         let (dir, mut wallet) = saved_wallet();
-        let key = ukey("abcd", 0);
+        let key = ukey(0xab, 0);
         wallet.reserve_pending(
             Vec::new(),
             vec![key.clone()],
@@ -2352,7 +2315,7 @@ mod tests {
         // confirmed, preserve reservations made after the snapshot.
         let mut wallet = test_wallet(None);
         wallet.last_tx_id = Some(3);
-        let confirmed = ukey("aaaa", 0);
+        let confirmed = ukey(0xaa, 0);
         wallet.reserve_pending(
             Vec::new(),
             vec![confirmed.clone()],
@@ -2364,7 +2327,7 @@ mod tests {
         let _plan = wallet.resync_plan();
 
         // A transfer build interleaves while the (conceptual) replay runs.
-        let late = ukey("bbbb", 1);
+        let late = ukey(0xbb, 1);
         wallet.reserve_pending(
             Vec::new(),
             vec![late.clone()],
@@ -2396,7 +2359,7 @@ mod tests {
         wallet.dust_wallet.dust_local_state = None;
         wallet.reserve_pending(
             vec![dust_batch(&[7])],
-            vec![ukey("abcd", 0)],
+            vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
         );

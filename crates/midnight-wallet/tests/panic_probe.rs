@@ -68,7 +68,7 @@ fn mainnet_has_no_hrp_network_suffix() {
 /// more than three underscore-separated pieces.
 #[test]
 fn custom_network_names_may_contain_underscores() {
-    let network = Network::Other("custom_devnet".into());
+    let network: Network = "custom_devnet".parse().unwrap();
     let addr = seed().shielded_address(network.clone());
     assert!(
         parse_shielded_recipient(&addr, network).is_ok(),

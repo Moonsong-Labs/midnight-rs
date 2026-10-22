@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
     let network: Network = env::var("MIDNIGHT_NETWORK")
         .unwrap_or_else(|_| "preprod".into())
-        .into();
+        .parse()?;
 
     let seed_input = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
     let seed: Seed = seed_input.parse()?;
@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     }
     println!();
 
-    println!("Syncing wallet state from indexer (zswap + unshielded + dust in parallel)...");
+    println!("Syncing wallet state from indexer (zswap and unshielded, then dust)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
     let provider = MidnightProvider::new(&node_url, &indexer_url);
     let mut builder = WalletBuilder::new(&seed).with_network(&network);

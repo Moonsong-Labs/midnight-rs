@@ -10,6 +10,12 @@
     {
       "circuit": "take_down",
       "args": [],
+      "witnesses": { "local_secret_key": [{ "bytes": "0808080808080808080808080808080808080808080808080808080808080808" }] },
+      "error": "not the current poster"
+    },
+    {
+      "circuit": "take_down",
+      "args": [],
       "witnesses": { "local_secret_key": [{ "bytes": "0707070707070707070707070707070707070707070707070707070707070707" }] }
     }
   ]
