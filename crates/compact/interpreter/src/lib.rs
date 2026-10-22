@@ -634,8 +634,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                     // disagreement, not a user error.
                     ir::TupleArg::Spread { len, expr } => {
                         let expected = ir_length(*len)?;
+                        let ty = infer_type_of_expr(ctx, expr);
                         let inner = eval_expr(ctx, expr)?;
-                        splice_spread(inner, expected, &mut vals)?;
+                        splice_spread(inner, ty.as_ref(), expected, &mut vals)?;
                     }
                 }
             }
@@ -1361,15 +1362,25 @@ fn byte_type() -> Type {
 /// Splice the elements of a spread's inner value into a tuple constructor's
 /// element list. The inner value is a Compact vector/tuple, which at runtime
 /// arrives either as a structured `Value::Tuple` or flattened into an
-/// `AlignedValue` (one atom per leaf element — circuit arguments and popeq
-/// reads). `expected` is the element count the compiler attached to the
-/// spread; a mismatch means the value's shape disagrees with its static type.
+/// `AlignedValue` (popeq reads, struct fields). `ty`, the inner value's type
+/// when inference knows it, lays out a flattened value; without it each atom
+/// is one element. `expected` is the element count the compiler attached to
+/// the spread; a mismatch means the value's shape disagrees with its static
+/// type.
 fn splice_spread(
     inner: Value,
+    ty: Option<&Type>,
     expected: usize,
     out: &mut Vec<Value>,
 ) -> Result<(), InterpreterError> {
     match inner {
+        // An element can take more than one atom, so the type lays them out.
+        Value::AlignedValue(_) if ty.and_then(element_count) == Some(expected) => {
+            for i in 0..expected {
+                out.push(indexed_element(&inner, ty, i, "spread")?);
+            }
+            Ok(())
+        }
         Value::Tuple(els) => {
             if els.len() != expected {
                 return Err(InterpreterError::TypeError(format!(

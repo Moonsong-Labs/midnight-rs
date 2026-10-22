@@ -1,0 +1,21 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// Circuit results in the shapes that the interpreter holds apart from their
+// encoding. A vector or a tuple is a tuple of values, and an enum member is an
+// integer.
+
+export enum Phase { open, closed }
+
+export ledger total: Field;
+export ledger phase_cell: Phase;
+
+export circuit pair(a: Field, b: Field): [Field, Vector<2, Field>] {
+  total = disclose(a);
+  return disclose([a + b, [a, b]]);
+}
+
+export circuit close(): Phase {
+  phase_cell = Phase.closed;
+  return Phase.closed;
+}
