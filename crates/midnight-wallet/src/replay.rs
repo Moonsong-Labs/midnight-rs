@@ -976,7 +976,8 @@ mod tests {
     /// applies a UTXO that the balance and the builds then read wrong.
     #[test]
     fn apply_unshielded_tx_is_all_or_nothing_on_malformed_field() {
-        let rows: [(&str, &str, fn(&mut SubscriptionUtxo)); 4] = [
+        type Corrupt = fn(&mut SubscriptionUtxo);
+        let rows: [(&str, &str, Corrupt); 4] = [
             ("value", "not-a-number", |u| u.value = "not-a-number".into()),
             ("token_type", "zz", |u| u.token_type = "zz".into()),
             ("intent_hash", "abcd", |u| u.intent_hash = "abcd".into()),
