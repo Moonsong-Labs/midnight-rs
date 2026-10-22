@@ -303,6 +303,7 @@ test-e2e: contracts
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test unshielded_payout_to_user -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test call_context -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test simulate_call -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test build_only_private_state -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test emit_event -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output

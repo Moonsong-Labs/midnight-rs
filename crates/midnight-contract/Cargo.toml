@@ -47,5 +47,6 @@ midnight-wallet = { workspace = true }
 # fine here because dev-deps are only added to the dep graph when building this
 # crate's tests, not when downstream code uses midnight-contract as a lib.
 compact-bindgen = { workspace = true }
-# The fork crossing test stores wallet snapshots in temporary directories.
+# The devnet tests keep wallet snapshots and private state in temporary
+# directories.
 tempfile = { workspace = true }

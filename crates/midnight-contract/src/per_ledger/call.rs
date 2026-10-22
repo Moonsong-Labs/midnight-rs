@@ -936,7 +936,7 @@ mod tests {
     }
 
     /// The commitment `build_shielded_offer_outputs` returns is the routing key
-    /// `call_funded_with` matches against the transcript's claimed effects to
+    /// `call_transaction` matches against the transcript's claimed effects to
     /// pick a coin's offer segment. It must equal the coin's real
     /// `Info::commitment` for the decoded coin + recipient — the same function
     /// the on-chain runtime uses to record the effect — or the coin would be
