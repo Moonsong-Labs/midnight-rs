@@ -12,7 +12,7 @@ pub(crate) mod helpers;
 mod ledger;
 pub(crate) mod types;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -25,8 +25,8 @@ pub(crate) struct EmitCtxt<'a> {
     pub info: &'a ContractInfo,
     pub contract_name: &'a str,
     pub crate_path: &'a TokenStream,
-    /// Tracks which struct/enum names have already been emitted (deduplication).
-    pub emitted_types: HashSet<String>,
+    /// The struct and enum types emitted so far, by name (deduplication).
+    pub emitted_types: HashMap<String, crate::ir::Type>,
 }
 
 impl<'a> EmitCtxt<'a> {
@@ -39,7 +39,7 @@ impl<'a> EmitCtxt<'a> {
             info,
             contract_name,
             crate_path,
-            emitted_types: HashSet::new(),
+            emitted_types: HashMap::new(),
         }
     }
 
@@ -382,12 +382,8 @@ mod tests {
         assert!(generated.contains("Withdraw"));
 
         // Struct types referenced only in circuits (not in ledger)
-        assert!(generated.contains("pub struct Maybe"));
         assert!(generated.contains("pub struct ValidatorSignature"));
         assert!(generated.contains("pub struct ShieldedCoinInfo"));
-
-        // Maybe gets into_option()
-        assert!(generated.contains("into_option"));
 
         // cell_as used in accessor bodies
         assert!(generated.contains("cell_as::<"));
@@ -493,9 +489,10 @@ mod tests {
         assert!(generated.contains("pub enum PermissibleVotes"));
         assert!(generated.contains("pub enum PrivateState"));
 
-        // Maybe struct with into_option
-        assert!(generated.contains("pub struct Maybe"));
-        assert!(generated.contains("into_option"));
+        // Each instantiation of `Maybe` keeps its own value type.
+        assert!(generated.contains("Maybe<Vec<u8>>"));
+        assert!(generated.contains("Maybe<MerkleTreePath>"));
+        assert!(!generated.contains("pub struct Maybe"));
 
         // Ledger wrapper with fields
         assert!(generated.contains("pub struct Election"));

@@ -1,0 +1,25 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// Struct instantiations that the bindings accept. Two instantiations that give
+// the same Rust struct share it, and a tree's element type is never named. A
+// Maybe holds a vector of enum members.
+
+export enum Color { red, green }
+export struct Pair<T> { first: T, second: T }
+export type Amount = Uint<64>;
+
+export ledger amounts: Pair<Amount>;
+export ledger counts: Pair<Uint<64>>;
+export ledger colors: Maybe<Vector<2, Color>>;
+export ledger pairs: MerkleTree<4, Pair<Field>>;
+
+export circuit second_color(c: Maybe<Vector<2, Color>>): Color {
+  assert(c.is_some, "no colors");
+  colors = disclose(c);
+  return disclose(c.value[1]);
+}
+
+export circuit paint(): [] {
+  colors = some<Vector<2, Color>>([Color.green, Color.red]);
+}

@@ -1,74 +1,120 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
 use crate::ir::{Type, Witness};
-use crate::types::{Circuit, LedgerField};
+use crate::types::{Circuit, LedgerField, StorageKind};
 
 use super::helpers::{make_ident, to_pascal_case};
-use super::types::{alignment_expr, encode_to_aligned_value, type_to_tokens};
+use super::types::{alignment_expr, encode_to_aligned_value, library_struct, type_to_tokens};
 
 pub(crate) fn emit_data_types(
     fields: &[LedgerField],
     circuits: &[Circuit],
     witnesses: &[Witness],
-    emitted: &mut HashSet<String>,
+    emitted: &mut HashMap<String, Type>,
 ) -> TokenStream {
     let mut tokens = Vec::new();
+    let mut tree_elements = Vec::new();
 
     // Collect from ledger fields.
     for field in fields {
+        if matches!(
+            field.storage,
+            StorageKind::MerkleTree | StorageKind::HistoricMerkleTree
+        ) {
+            tree_elements.extend(field.element_type.iter());
+            continue;
+        }
         for type_node in [&field.element_type, &field.key, &field.value]
             .into_iter()
             .flatten()
         {
-            collect_types(type_node, emitted, &mut tokens);
+            collect_types(type_node, emitted, &mut tokens, true);
         }
     }
 
     // Collect from circuit arguments and results.
     for circuit in circuits {
         for arg in circuit.arguments() {
-            collect_types(&arg.ty, emitted, &mut tokens);
+            collect_types(&arg.ty, emitted, &mut tokens, true);
         }
-        collect_types(circuit.result_type(), emitted, &mut tokens);
+        collect_types(circuit.result_type(), emitted, &mut tokens, true);
     }
 
     // Collect from witness arguments and results.
     for witness in witnesses {
         for arg in &witness.arguments {
-            collect_types(&arg.ty, emitted, &mut tokens);
+            collect_types(&arg.ty, emitted, &mut tokens, true);
         }
-        collect_types(&witness.result_type, emitted, &mut tokens);
+        collect_types(&witness.result_type, emitted, &mut tokens, true);
+    }
+
+    // Generated code never names a tree's element type, so it comes last and
+    // only adds a struct that no other position declared.
+    for type_node in tree_elements {
+        collect_types(type_node, emitted, &mut tokens, false);
     }
 
     quote! { #(#tokens)* }
 }
 
-fn collect_types(node: &Type, emitted: &mut HashSet<String>, tokens: &mut Vec<TokenStream>) {
+/// Collect the struct and enum definitions that `node` needs.
+///
+/// A struct name serves one Rust struct. With `refuse_collisions`, a second
+/// instantiation that renders other Rust fields is a compile error.
+fn collect_types(
+    node: &Type,
+    emitted: &mut HashMap<String, Type>,
+    tokens: &mut Vec<TokenStream>,
+    refuse_collisions: bool,
+) {
     match node {
         Type::Struct { name, fields } => {
-            if emitted.insert(name.clone()) {
-                for (_, field_ty) in fields {
-                    collect_types(field_ty, emitted, tokens);
+            if let Some((_, args)) = library_struct(name, fields) {
+                for arg in args {
+                    collect_types(arg, emitted, tokens, refuse_collisions);
                 }
-                let ident = make_ident(name);
-                tokens.push(emit_struct(&ident, fields));
-                tokens.push(emit_struct_aligned(&ident, fields));
-                tokens.push(emit_struct_try_from_value_slice(&ident, fields));
-                tokens.push(emit_struct_into_aligned_value(&ident, fields));
-                // Maybe<T> structs get an into_option() method.
-                if is_maybe_struct(name, fields) {
-                    tokens.push(emit_maybe_into_option(&ident, fields));
+                return;
+            }
+            match emitted.get(name) {
+                Some(Type::Struct {
+                    fields: first_fields,
+                    ..
+                }) => {
+                    if rust_fields(first_fields) == rust_fields(fields) {
+                        // The same Rust fields can still hold structs that differ.
+                        for (_, field_ty) in fields {
+                            collect_types(field_ty, emitted, tokens, refuse_collisions);
+                        }
+                    } else if refuse_collisions {
+                        let msg = format!(
+                            "the Compact struct `{name}` has two instantiations with different \
+                             fields, and the bindings give one Rust struct per name"
+                        );
+                        tokens.push(quote! { compile_error!(#msg); });
+                    }
                 }
-                if is_zswap_coin_public_key(name, fields) {
-                    tokens.push(emit_coin_public_key_from(&ident));
+                Some(_) => {}
+                None => {
+                    emitted.insert(name.clone(), node.clone());
+                    for (_, field_ty) in fields {
+                        collect_types(field_ty, emitted, tokens, refuse_collisions);
+                    }
+                    let ident = make_ident(name);
+                    tokens.push(emit_struct(&ident, fields));
+                    tokens.push(emit_struct_aligned(&ident, fields));
+                    tokens.push(emit_struct_try_from_value_slice(&ident, fields));
+                    tokens.push(emit_struct_into_aligned_value(&ident, fields));
+                    if is_zswap_coin_public_key(name, fields) {
+                        tokens.push(emit_coin_public_key_from(&ident));
+                    }
                 }
             }
         }
         Type::Enum { name, variants } => {
-            if emitted.insert(name.clone()) {
+            if emitted.insert(name.clone(), node.clone()).is_none() {
                 let ident = make_ident(name);
                 tokens.push(emit_enum(&ident, variants));
                 tokens.push(emit_enum_aligned(&ident));
@@ -77,14 +123,19 @@ fn collect_types(node: &Type, emitted: &mut HashSet<String>, tokens: &mut Vec<To
             }
         }
         Type::Alias { ty: inner, .. } | Type::Vector { ty: inner, .. } => {
-            collect_types(inner, emitted, tokens);
+            collect_types(inner, emitted, tokens, refuse_collisions);
         }
         Type::Tuple(types) => {
             for t in types {
-                collect_types(t, emitted, tokens);
+                collect_types(t, emitted, tokens, refuse_collisions);
             }
         }
-        Type::Contract { .. } => collect_types(&Type::contract_address(), emitted, tokens),
+        Type::Contract { .. } => collect_types(
+            &Type::contract_address(),
+            emitted,
+            tokens,
+            refuse_collisions,
+        ),
         // Leaf types that map directly to built-in or runtime Rust types --
         // no user-defined type definitions need to be emitted for these.
         Type::Boolean
@@ -98,14 +149,13 @@ fn collect_types(node: &Type, emitted: &mut HashSet<String>, tokens: &mut Vec<To
     }
 }
 
-/// Returns true if this struct matches the `Maybe<T>` pattern:
-/// fields `[is_some: Boolean, value: T]`.
-fn is_maybe_struct(name: &str, fields: &[(String, Type)]) -> bool {
-    name == "Maybe"
-        && fields.len() == 2
-        && fields[0].0 == "is_some"
-        && matches!(fields[0].1, Type::Boolean)
-        && fields[1].0 == "value"
+/// The fields of the Rust struct that a struct type generates: each name with
+/// its Rust type.
+fn rust_fields(fields: &[(String, Type)]) -> Vec<(&str, String)> {
+    fields
+        .iter()
+        .map(|(name, ty)| (name.as_str(), type_to_tokens(ty).to_string()))
+        .collect()
 }
 
 /// Returns true if this struct is the standard library's `ZswapCoinPublicKey`:
@@ -171,23 +221,6 @@ fn emit_struct_try_from_value_slice(ident: &Ident, elements: &[(String, Type)]) 
             fn try_from(vs: &'a ValueSlice) -> Result<Self, Self::Error> {
                 let (#(#field_names),*): (#(#field_types),*) = vs.try_into()?;
                 Ok(Self { #(#field_names),* })
-            }
-        }
-    }
-}
-
-fn emit_maybe_into_option(ident: &Ident, elements: &[(String, Type)]) -> TokenStream {
-    let value_type = type_to_tokens(&elements[1].1);
-    quote! {
-        impl #ident {
-            /// Converts this `Maybe` into an `Option`, returning `Some(value)` when
-            /// `is_some` is `true` and `None` otherwise.
-            pub fn into_option(self) -> Option<#value_type> {
-                if self.is_some {
-                    Some(self.value)
-                } else {
-                    None
-                }
             }
         }
     }
