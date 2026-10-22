@@ -19,9 +19,9 @@ use crate::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
-    BlockHash, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, InvalidNetworkName,
-    LedgerVersion, Network, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors,
-    TrackedUtxo, TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
+    BlockHash, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion,
+    Network, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
+    TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
@@ -863,36 +863,6 @@ impl Provider for MidnightProvider {
     }
 }
 
-/// The network a `MidnightRuntimeApi::get_network_id` answer names. `None`
-/// for the empty id that a node with no network id set returns, and an error
-/// for an id that is not a valid name for a [`Network`].
-fn network_from_runtime_id(id: &str) -> Result<Option<Network>, InvalidNetworkName> {
-    if id.is_empty() {
-        return Ok(None);
-    }
-    id.parse().map(Some)
-}
-
-#[cfg(test)]
-mod network_from_runtime_id_tests {
-    use super::*;
-
-    /// No devnet leaves the id unset, so only this test reaches the empty
-    /// answer. A node with no id set names no network, and it is not a node
-    /// that reports an invalid id.
-    #[test]
-    fn an_empty_runtime_id_names_no_network() {
-        assert_eq!(network_from_runtime_id("").unwrap(), None);
-    }
-
-    /// The id goes into the HRP of the wallet's addresses, where an uppercase
-    /// letter panics upstream derivation.
-    #[test]
-    fn an_invalid_runtime_id_names_no_network() {
-        assert!(network_from_runtime_id("Preprod").is_err());
-    }
-}
-
 /// The JSON-RPC error code of every `midnight_contractState` refusal (the
 /// node's `INVALID_PARAMS_CODE`).
 const CONTRACT_STATE_ERROR_CODE: i32 = -32602;
@@ -1089,17 +1059,18 @@ impl MidnightProvider {
     /// with
     /// [`WalletError::NetworkMismatch`](midnight_types::WalletError::NetworkMismatch)
     /// when they differ. A sync with no network takes this one, and fails
-    /// when there is none. An error or an `Ok(None)` here does not fail a
-    /// sync that names its network.
+    /// when there is none. An error here does not fail a sync that names its
+    /// network.
     ///
-    /// It needs no wallet and runs no resync. Returns `Ok(None)` when the
-    /// runtime reports an empty id, which a node with no network id set does.
-    /// Any other id goes through the parse of a [`Network`]. Errors when the
-    /// node cannot be reached, when its metadata describes no such API or
-    /// another return type, or when the parse refuses the id.
-    pub async fn ledger_network_id(&self) -> Result<Option<Network>, ProviderError> {
+    /// It needs no wallet and runs no resync. The id goes through the parse
+    /// of a [`Network`]. Errors when the node cannot be reached, when its
+    /// metadata describes no such API or another return type, or when the
+    /// parse refuses the id, as it does the empty id of a node with no
+    /// network id set.
+    pub async fn ledger_network_id(&self) -> Result<Network, ProviderError> {
         let id = self.call_runtime_api::<String>("get_network_id").await?;
-        network_from_runtime_id(&id).map_err(|e| ProviderError::Rpc(format!("get_network_id: {e}")))
+        id.parse()
+            .map_err(|e| ProviderError::Rpc(format!("get_network_id: {e}")))
     }
 
     /// The [`Network`] this provider's wallet derives addresses for.
@@ -1396,7 +1367,7 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
 
     async fn network(&self) -> Option<Network> {
         match query_within_timeout(self.ledger_network_id()).await {
-            Ok(network) => network,
+            Ok(network) => Some(network),
             Err(e) => {
                 warn!(error = %e, "could not read the node's network");
                 None
