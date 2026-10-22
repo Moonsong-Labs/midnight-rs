@@ -399,7 +399,7 @@ mod tests {
     use super::test_support::{dust_batch, dust_spend, nullifier, ukey};
     use super::*;
     use crate::Seed;
-    use helpers::{DustLocalState, Duration, INITIAL_PARAMETERS, Sp};
+    use helpers::{Duration, DustLocalState, INITIAL_PARAMETERS, Sp};
 
     /// A transaction built for one generation cannot land on a chain that
     /// runs another, so its reservations are dead. Loading them would hide
