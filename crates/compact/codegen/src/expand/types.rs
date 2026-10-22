@@ -90,8 +90,8 @@ pub(crate) fn uint_tokens(maxval: &num_bigint::BigUint) -> TokenStream {
     }
 }
 
-/// The generic `midnight_typed_state` type that a standard-library struct
-/// binds to, with the types of its parameters, or `None` for any other struct.
+/// The generic `compact_runtime` type that a standard-library struct binds to,
+/// with the types of its parameters, or `None` for any other struct.
 ///
 /// The shape decides, because the analyzed IR names a struct but gives no
 /// type arguments for it.
@@ -103,12 +103,12 @@ pub(crate) fn library_struct<'a>(
         ("Maybe", [(is_some, Type::Boolean), (value, t)])
             if is_some == "is_some" && value == "value" =>
         {
-            Some((quote! { Maybe }, vec![t]))
+            Some((quote! { midnight_contract::runtime::Maybe }, vec![t]))
         }
         ("Either", [(is_left, Type::Boolean), (left, a), (right, b)])
             if is_left == "is_left" && left == "left" && right == "right" =>
         {
-            Some((quote! { Either }, vec![a, b]))
+            Some((quote! { midnight_contract::runtime::Either }, vec![a, b]))
         }
         _ => None,
     }

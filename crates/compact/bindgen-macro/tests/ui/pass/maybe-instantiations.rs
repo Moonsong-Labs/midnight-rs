@@ -7,7 +7,8 @@ compact_bindgen::contract!(
     "../../../../crates/midnight-contract/tests/fixtures/election/compiler/analyzed-ir.sexp"
 );
 
-use compact_bindgen::{Bytes, Maybe, TransientFr, Vector};
+use compact_bindgen::midnight_contract::runtime::Maybe;
+use compact_bindgen::{Bytes, TransientFr, Vector};
 
 struct Voter {
     listed: bool,

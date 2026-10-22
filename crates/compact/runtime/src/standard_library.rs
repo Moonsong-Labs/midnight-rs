@@ -4,9 +4,7 @@
 //! Generated bindings use these types for every instantiation. One generated
 //! struct per Compact struct name cannot hold two instantiations of it.
 
-use midnight_base_crypto::fab::{
-    Aligned, AlignedValue, Alignment, InvalidBuiltinDecode, ValueSlice,
-};
+use midnight_typed_state::{Aligned, AlignedValue, Alignment, InvalidBuiltinDecode, ValueSlice};
 
 /// Compact's `Maybe<T>`: a `value` that is present when `is_some` is true.
 ///
@@ -16,7 +14,7 @@ use midnight_base_crypto::fab::{
 /// # Examples
 ///
 /// ```
-/// use midnight_typed_state::Maybe;
+/// use compact_runtime::Maybe;
 ///
 /// let some = Maybe { is_some: true, value: 7u8 };
 /// assert_eq!(some.into_option(), Some(7));

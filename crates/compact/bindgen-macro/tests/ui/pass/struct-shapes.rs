@@ -6,7 +6,8 @@
 
 compact_bindgen::contract!("../../../../tests/fixtures/compiled/struct-shapes/compiler/analyzed-ir.sexp");
 
-use compact_bindgen::{Maybe, Vector};
+use compact_bindgen::Vector;
+use compact_bindgen::midnight_contract::runtime::Maybe;
 
 fn main() {
     let mut simulator = Simulator::new(LedgerInitialState::default(), std::time::UNIX_EPOCH);

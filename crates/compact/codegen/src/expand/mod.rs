@@ -91,8 +91,8 @@ impl<'a> EmitCtxt<'a> {
             #[allow(unused_imports)]
             use #crate_path::{
                 Aligned, AlignedValue, Alignment, Bytes, ContractMaintenanceAuthority,
-                ContractState, Either, EmbeddedGroupAffine, InMemoryDB, InvalidBuiltinDecode,
-                ListAccessor, MapAccessor, Maybe, MerkleTree, MerkleTreeAccessor, SetAccessor,
+                ContractState, EmbeddedGroupAffine, InMemoryDB, InvalidBuiltinDecode,
+                ListAccessor, MapAccessor, MerkleTree, MerkleTreeAccessor, SetAccessor,
                 StateError, StateValue, StorageArray, StorageHashMap, TransientFr, Uint,
                 ValueSlice, Vector,
                 cell_as, decode_contract_state, get_field_path, hex, lazy, serde, serde_json,
