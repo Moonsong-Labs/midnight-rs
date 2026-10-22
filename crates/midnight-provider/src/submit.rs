@@ -46,8 +46,8 @@ pub(crate) fn rejection_is_definitive(err: &SubmitError) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SubmitError {
     /// The submission pipeline failed before the transaction was handed to
-    /// the node: connecting, fetching metadata, or encoding the unsigned
-    /// extrinsic. The transaction never left this process, so resubmitting
+    /// the node: fetching metadata, or encoding the unsigned extrinsic. A
+    /// failed connect is [`ProviderError::Rpc`]. The transaction never left this process, so resubmitting
     /// the same bytes is always safe.
     #[error("not submitted: {message}")]
     NotSubmitted { message: String },

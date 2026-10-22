@@ -175,6 +175,14 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_initial_state(state))
             }
 
+            /// Attach a shielded offer that the deploy transaction carries: the
+            /// deploy spends the offer's coins from the attached wallet and pays
+            /// each of its outputs. See
+            /// [`midnight_contract::DeployBuilder::with_shielded_offer`].
+            pub fn with_shielded_offer(self, offer: midnight_contract::ShieldedOffer) -> Self {
+                Self(self.0.with_shielded_offer(offer))
+            }
+
             /// Make the deployed contract governable by setting its maintenance
             /// authority committee (verifying keys) and threshold. See
             /// [`midnight_contract::DeployBuilder::with_maintenance_authority`].

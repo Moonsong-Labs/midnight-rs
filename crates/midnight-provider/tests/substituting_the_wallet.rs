@@ -16,14 +16,19 @@ use std::sync::Arc;
 use midnight_provider::{
     Builds, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, HashOutput,
     LedgerVersion, MidnightProvider, Network, Nullifier, ProviderError, Seed, ShieldedTokenType,
-    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest, WalletBalance,
-    WalletError, WalletFacade,
+    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest, TransferResult,
+    WalletBalance, WalletError, WalletFacade,
 };
+use midnight_types::Timestamp;
 use midnight_wallet::chain_pin::ChainView;
 
 /// A wallet that answers the three readings this test makes and refuses the
-/// rest. Everything it refuses would need chain state to answer honestly.
-struct StubWallet;
+/// rest. Everything it refuses would need chain state to answer honestly. It
+/// records the shielded inputs that the provider hands back.
+#[derive(Default)]
+struct StubWallet {
+    released: std::sync::Mutex<Vec<Nullifier>>,
+}
 
 #[async_trait::async_trait]
 impl WalletFacade for StubWallet {
@@ -72,7 +77,10 @@ impl WalletFacade for StubWallet {
         unimplemented!("this wallet has synced no parameters")
     }
 
-    async fn release(&self, _spent: &SpentInputs) {}
+    async fn release(&self, spent: &SpentInputs) {
+        let mut released = self.released.lock().unwrap();
+        released.extend(spent.shielded.iter().map(|reserved| reserved.input));
+    }
 
     async fn resync(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
         Ok(())
@@ -160,7 +168,8 @@ stub_builds!(ledger_9);
 
 #[tokio::test]
 async fn the_provider_reads_whatever_wallet_it_was_given() {
-    let provider = MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet);
+    let provider =
+        MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet::default());
 
     assert_eq!(
         provider.network().await.expect("attached"),
@@ -185,7 +194,8 @@ async fn the_provider_reads_whatever_wallet_it_was_given() {
 async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
     use midnight_helpers::ledger_9::{BuildContext, SeedableRng};
 
-    let provider = MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet);
+    let provider =
+        MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet::default());
     let Builds::Ledger9(builds) = provider.builds().await.expect("the stub resyncs") else {
         panic!("the stub's state is on ledger 9");
     };
@@ -212,4 +222,30 @@ async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
         "got {:?}",
         result.err()
     );
+}
+
+/// A prepare sends nothing to the node, so a reserved build whose prepare
+/// fails gets its inputs back, whatever the error. A failed connect is
+/// `ProviderError::Rpc`, so a release that follows the error variant keeps
+/// the inputs reserved until their TTL.
+#[tokio::test]
+async fn a_reserved_build_whose_connect_fails_gets_its_inputs_back() {
+    let wallet = Arc::new(StubWallet::default());
+    // A URL that does not parse fails the connect at once, with no retry.
+    let provider =
+        MidnightProvider::new("not a node url", "http://test").with_wallet(wallet.clone());
+    let nullifier = Nullifier(HashOutput([7; 32]));
+    let result = TransferResult {
+        tx_bytes: vec![0; 8],
+        ledger_version: LedgerVersion::V9,
+        spent: SpentInputs::from_shielded(vec![nullifier], Timestamp::from_secs(100)),
+        fee_speck: 0,
+    };
+
+    let Err(err) = provider.submit_reserved(result).await else {
+        panic!("a submit whose connect fails must fail");
+    };
+
+    assert!(matches!(err, ProviderError::Rpc(_)), "{err:?}");
+    assert_eq!(*wallet.released.lock().unwrap(), vec![nullifier]);
 }

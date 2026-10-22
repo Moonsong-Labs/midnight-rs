@@ -187,13 +187,9 @@ impl WalletFacade for LocalWallet {
 
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
         let _sync = self.sync.lock().await;
-        let (pin, snapshot, indexer_url) = {
+        let (pin, snapshot) = {
             let wallet = self.inner.read().await;
-            (
-                wallet.chain_pin().cloned(),
-                wallet.snapshot_dir(),
-                wallet.indexer_url().to_string(),
-            )
+            (wallet.chain_pin().cloned(), wallet.snapshot_dir())
         };
 
         // Take the replacement pin before the check; see
@@ -212,7 +208,7 @@ impl WalletFacade for LocalWallet {
         // under a write one, so the replay in between runs with the wallet
         // free.
         let plan = self.inner.read().await.resync_plan();
-        let commit = plan.run(&indexer_url).await?;
+        let commit = plan.run().await?;
         self.inner.write().await.commit_resync(commit)?;
 
         // Move the pin forward with the commit, so a wallet that runs for a
@@ -226,14 +222,8 @@ impl WalletFacade for LocalWallet {
 
     async fn rescan_shielded(&self) -> Result<(), WalletError> {
         let _sync = self.sync.lock().await;
-        let (plan, indexer_url) = {
-            let wallet = self.inner.read().await;
-            (
-                wallet.shielded_rescan_plan(),
-                wallet.indexer_url().to_string(),
-            )
-        };
-        let commit = plan.run(&indexer_url).await?;
+        let plan = self.inner.read().await.shielded_rescan_plan();
+        let commit = plan.run().await?;
         self.inner.write().await.commit_shielded_rescan(commit)
     }
 

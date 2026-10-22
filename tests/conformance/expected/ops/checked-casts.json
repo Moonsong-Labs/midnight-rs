@@ -1,0 +1,416 @@
+{
+  "fixture": "ops",
+  "case": "checked-casts",
+  "constructor": {
+    "state": {
+      "data": {
+        "tag": "array",
+        "content": [
+          {
+            "tag": "cell",
+            "content": {
+              "value": [
+                ""
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "tag": "cell",
+            "content": {
+              "value": [
+                ""
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "tag": "map",
+            "content": []
+          },
+          {
+            "tag": "map",
+            "content": []
+          },
+          {
+            "tag": "cell",
+            "content": {
+              "value": [
+                ""
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "bytes",
+                    "length": 8
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "serializedUntagged": "480008404104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c0d020304fcf901010403040108041408010401040108404100010802104001040000010801040401040104010c402001000108010404010402040104000001080104040104020401040000010801040401040104010840080001040000010400000104000001040000010400000104000001040000010400000104000001040000010400001430144014141003000400"
+    }
+  },
+  "steps": [
+    {
+      "circuit": "narrow",
+      "input": {
+        "value": [
+          "ff",
+          "ff",
+          "ff"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 2
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 2
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "fd02"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 2
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "fd02"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "fd02"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 8
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serializedUntagged": "4c001042fd024104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c140304010400044015020304ff010201040304010804140801040104011042fd024100010802104001040000010801040401040104010c402001000108010404010402040104000001080104040104020401040000010801040401040104010840080001040000010400000104000001040000010400000104000001040000010400000104000001040000010400001430144414141003000400"
+      },
+      "zswapOutputs": []
+    },
+    {
+      "circuit": "narrow",
+      "error": "<src>: cast from Field or Uint value to smaller Uint value failed: 256 is greater than 255"
+    },
+    {
+      "circuit": "narrow",
+      "error": "<src>: cast from Field or Uint value to smaller Uint value failed: 256 is greater than 255"
+    },
+    {
+      "circuit": "narrow",
+      "error": "range error at <src>: byte vector [0,1] exceeds maximum value 255 of Uint<0..256> type"
+    },
+    {
+      "circuit": "tri",
+      "input": {
+        "value": [
+          "02",
+          "01"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 1
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "03"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 1
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "03"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "03"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 8
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serializedUntagged": "480008034104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c0d020304fcf901010403040108041408010401040108034100010802104001040000010801040401040104010c402001000108010404010402040104000001080104040104020401040000010801040401040104010840080001040000010400000104000001040000010400000104000001040000010400000104000001040000010400001430144014141003000400"
+      },
+      "zswapOutputs": []
+    },
+    {
+      "circuit": "tri",
+      "error": "<src>: cast from Field or Uint value to enum Tri failed: 3 is greater than maximum enum value 2n"
+    },
+    {
+      "circuit": "tri",
+      "error": "<src>: cast from enum Tri to Uint<0..2> failed: enum value 2 is greater than 1"
+    }
+  ]
+}

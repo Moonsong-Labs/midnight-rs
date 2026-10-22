@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use midnight_contract::{ContractError, SubmitError};
+use midnight_contract::ContractError;
 use midnight_provider::{
     EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions, ImportResult,
     MidnightProvider, PrivateStateError, PrivateStateProvider, ProviderError, Snapshot,
@@ -198,11 +198,9 @@ async fn a_deploy_or_a_call_that_the_node_never_gets_hands_its_inputs_back() {
         panic!("a deploy whose node refuses the dial must fail");
     };
     assert!(
-        matches!(
-            err,
-            ContractError::Provider(ProviderError::Submission(SubmitError::NotSubmitted { .. }))
-        ),
-        "the deploy must fail at the submit, after a build that reserved its fee: {err:?}"
+        matches!(err, ContractError::Provider(ProviderError::Rpc(_))),
+        "the deploy must fail at the connect of its submit, after a build that reserved its fee: \
+         {err:?}"
     );
     assert_no_dust_reserved(
         &wallet,
