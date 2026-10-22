@@ -11,7 +11,7 @@ impl BuildInputs for Wallet {
     }
 
     fn network(&self) -> &str {
-        Wallet::network(self)
+        Wallet::network(self).as_str()
     }
 
     fn parameters(&self) -> &LedgerParameters {

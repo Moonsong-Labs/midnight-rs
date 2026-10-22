@@ -49,7 +49,7 @@ pub use error::{WalletError, refuse_repeated_nullifiers};
 pub use hash::{BlockHash, ExtrinsicHash};
 pub use ledger_version::{LedgerVersion, UnknownLedger};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
-pub use network::Network;
+pub use network::{InvalidNetworkName, Network, NetworkName};
 pub use parameters::{ChainParameters, DustParameters};
 /// The chain's 32-byte hash, under the names [`BlockHash`] and [`ExtrinsicHash`].
 ///

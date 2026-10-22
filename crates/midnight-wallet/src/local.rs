@@ -142,7 +142,7 @@ impl IntoWalletFacade for Wallet {
 #[async_trait]
 impl WalletFacade for LocalWallet {
     async fn network(&self) -> Network {
-        Network::from(self.inner.read().await.network())
+        self.inner.read().await.network().clone()
     }
 
     async fn ledger_version(&self) -> LedgerVersion {

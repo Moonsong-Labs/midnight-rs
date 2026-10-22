@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
     let network: Network = env::var("MIDNIGHT_NETWORK")
         .unwrap_or_else(|_| "preprod".into())
-        .into();
+        .parse()?;
 
     let seed_input = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
     let seed: Seed = seed_input.parse()?;
