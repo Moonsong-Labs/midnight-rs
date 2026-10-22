@@ -15,7 +15,7 @@ use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
 use subxt::tx::{TransactionInBlock, TransactionStatus};
 
-use crate::ProviderError;
+use crate::{HeldInputs, ProviderError};
 
 type AtBlock = subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>;
 type Status = TransactionStatus<subxt::SubstrateConfig, AtBlock>;
@@ -337,13 +337,6 @@ impl Reservation {
 }
 
 impl PendingTx {
-    /// Carry a build's reservation on this handle so a terminal rejection can
-    /// hand it back. See [`Reservation`].
-    pub(crate) fn with_reservation(mut self, reservation: Reservation) -> Self {
-        self.reservation = Some(reservation);
-        self
-    }
-
     /// The hash of the submitted extrinsic.
     pub fn extrinsic_hash(&self) -> ExtrinsicHash {
         self.progress.extrinsic_hash()
@@ -478,12 +471,32 @@ async fn tx_in_block_with_verdict(
 /// mempool, then [`submit`](Self::submit) it. This closes the window where
 /// a crash between submit and record would leave a transaction on the wire
 /// with no local handle to reconcile it.
+///
+/// A `PreparedTx` from [`MidnightProvider::prepare_reserved`] holds the
+/// reservation of its build:
+///
+/// - A drop before [`submit`](Self::submit) hands the inputs back to the
+///   wallet, under a Tokio runtime. [`release`](Self::release) does the same
+///   and waits for it.
+/// - A submit that succeeds moves the reservation to the [`PendingTx`], which
+///   hands the inputs back when a wait reads [`SubmitError::Invalid`].
+/// - A submit that fails, or a drop of the submit future, keeps the inputs
+///   reserved, because the node can hold the transaction.
+///
+/// [`MidnightProvider::prepare_reserved`]: crate::MidnightProvider::prepare_reserved
 pub struct PreparedTx {
     tx: subxt::tx::SubmittableTransaction<subxt::SubstrateConfig, AtBlock>,
     transaction_hash: TransactionHash,
+    held: Option<HeldInputs>,
 }
 
 impl PreparedTx {
+    /// Hold the reservation of the build of this transaction until the submit.
+    pub(crate) fn holding(mut self, held: HeldInputs) -> Self {
+        self.held = Some(held);
+        self
+    }
+
     /// The hash subxt will report for this extrinsic once submitted,
     /// computed here from the encoded transaction without contacting the
     /// node. Identical to the eventual [`PendingTx::extrinsic_hash`].
@@ -500,13 +513,24 @@ impl PreparedTx {
     /// Submit the prepared transaction and return a [`PendingTx`] that waits for
     /// inclusion and finalization.
     ///
+    /// The returned [`PendingTx`] carries the reservation that this value
+    /// holds. See the [type-level docs](PreparedTx).
+    ///
     /// # Errors
     ///
     /// [`ProviderError::Submission`] with [`SubmitError::SubmitRpc`] when the
-    /// submit call fails. The node can still hold the transaction.
+    /// submit call fails. The node can still hold the transaction, so the
+    /// inputs stay reserved.
     pub async fn submit(self) -> Result<PendingTx, ProviderError> {
-        let progress = self
-            .tx
+        let Self {
+            tx,
+            transaction_hash,
+            held,
+        } = self;
+        // Disarm before the call: once it starts, the node can hold the
+        // transaction, so a drop of this future must keep the inputs.
+        let reservation = held.and_then(HeldInputs::into_reservation);
+        let progress = tx
             .submit_and_watch()
             .await
             .map_err(|e| SubmitError::SubmitRpc {
@@ -514,9 +538,22 @@ impl PreparedTx {
             })?;
         Ok(PendingTx {
             progress,
-            reservation: None,
-            transaction_hash: self.transaction_hash,
+            reservation,
+            transaction_hash,
         })
+    }
+
+    /// Drop the transaction without a submit, and hand back the inputs that
+    /// its build reserved. The inputs are back when this returns.
+    ///
+    /// Under a Tokio runtime the release runs as a task of its own, so a drop
+    /// of this future does not stop it. A `PreparedTx` from
+    /// [`MidnightProvider::prepare`](crate::MidnightProvider::prepare) holds no
+    /// reservation, and this only drops it.
+    pub async fn release(self) {
+        if let Some(held) = self.held {
+            held.release().await;
+        }
     }
 }
 
@@ -545,6 +582,7 @@ pub(crate) async fn prepare_bytes(
     Ok(PreparedTx {
         tx,
         transaction_hash: midnight_transaction_hash(tx_bytes),
+        held: None,
     })
 }
 

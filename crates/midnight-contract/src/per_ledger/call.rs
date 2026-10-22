@@ -23,6 +23,7 @@ use midnight_base_crypto::fab::{InvalidBuiltinDecode, ValueSlice};
 use midnight_base_crypto::time::Timestamp;
 use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::{SpentInputs, TransferResult};
 
 use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
@@ -115,7 +116,11 @@ pub(crate) fn partition(
 
 /// Build this generation's transaction for a circuit call the interpreter
 /// already ran against `state`, and prove it. When `pay_fees` is false the
-/// transaction is left fee-less, for another wallet to sponsor.
+/// transaction is left fee-less, for another wallet to sponsor, and the result
+/// prices the fee-less transaction.
+///
+/// The result names the inputs that the build reserved: the pinned coins of
+/// `shielded`, and the Dust of the fee.
 ///
 /// `state` is the contract's state as the Compact side reads it, and
 /// `state_bytes` the encoding the chain served it in. `block_time` is the
@@ -138,7 +143,7 @@ pub(crate) async fn call_transaction(
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     pay_fees: bool,
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<TransferResult, ContractError> {
     let helper_addr: ContractAddress = contract_address.into_ledger();
     let state_db = super::state::native_state(state, state_bytes)?;
 
@@ -410,7 +415,7 @@ pub(crate) async fn call_transaction(
     // coin's own token and value, which route the input and size the change.
     // Runs after the funding view is in the context: reserving before it
     // would hide these coins from it.
-    let (prepared, pinned) = builds
+    let (prepared, held) = builds
         .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
         .await?;
     let circuit_offers = CircuitOffers {
@@ -419,7 +424,8 @@ pub(crate) async fn call_transaction(
         circuit_output_value,
         minted_value,
     };
-    pinned
+    let pinned = held.spent().clone();
+    let mut transaction = held
         .keep_on_ok(attach_and_prove(
             builds,
             tx_info,
@@ -428,7 +434,9 @@ pub(crate) async fn call_transaction(
             (change_cpk, change_epk),
             pay_fees,
         ))
-        .await
+        .await?;
+    transaction.spent.merge(pinned);
+    Ok(transaction)
 }
 
 /// The circuit's side of a call's Zswap offers, before the caller's coins join
@@ -484,7 +492,7 @@ async fn attach_and_prove(
     prepared: Vec<PreparedInput>,
     (change_cpk, change_epk): (helpers::CoinPublicKey, helpers::EncryptionPublicKey),
     pay_fees: bool,
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<TransferResult, ContractError> {
     let CircuitOffers {
         mut offers,
         output_segments,
@@ -538,31 +546,38 @@ async fn attach_and_prove(
     // after proving, in its own intent segment, which leaves the circuit proof
     // untouched. A transaction with no user circuit can take
     // `super::deploy::build_with_mock_fee_proofs` instead.
-    let mut bytes = prove_without_fee(tx_info).await?;
+    let unpaid = prove_without_fee(tx_info).await?;
+    if !pay_fees {
+        return Ok(unpaid);
+    }
 
     // Fund the already-proven transaction the same way a sponsor funds someone
     // else's: the fee intent rides its own segment, so nothing here re-proves
     // the circuit.
-    if pay_fees {
-        bytes = builds.balance_transaction(&bytes).await?.tx_bytes;
-    }
-    Ok(bytes)
+    Ok(builds.balance_transaction(&unpaid.tx_bytes).await?)
 }
 
-/// Build and prove `tx_info` with no fee, and serialize the result.
+/// Build and prove `tx_info` with no fee, and serialize and price the result.
 ///
 /// `tx_info` must carry no funding seed. The build then draws no Dust, so it
-/// leaves nothing to reserve. `Builds::balance_transaction` reserves the Dust
-/// that it draws for the fee. The
-/// built transaction is large, and it lives only after this function's last
-/// await, so it never sits in a caller's future.
+/// leaves nothing to reserve, and the result names no input.
+/// `Builds::balance_transaction` reserves the Dust that it draws for the fee.
+/// The built transaction is large, and it lives only after this function's
+/// last await, so it never sits in a caller's future.
 pub(super) async fn prove_without_fee(
     tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<TransferResult, ContractError> {
+    let context = tx_info.context.clone();
     let built = super::types::build_no_validate(tx_info)
         .await
         .map_err(ProviderError::Wallet)?;
-    crate::call::tagged_bytes(&built.finalized, "transaction")
+    Ok(TransferResult {
+        tx_bytes: crate::call::tagged_bytes(&built.finalized, "transaction")?,
+        ledger_version: super::LEDGER,
+        spent: SpentInputs::default(),
+        fee_speck: super::types::fee_speck(&context, &built.finalized)
+            .map_err(ProviderError::Wallet)?,
+    })
 }
 
 /// Pick the segment a caller-provided shielded input should ride in: the same
