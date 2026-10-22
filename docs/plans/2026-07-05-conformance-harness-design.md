@@ -32,6 +32,7 @@ The TS `CircuitResults`/`ProofData` and the Rust `ExecutionResult` expose the sa
 - `state` after each step: the serialized `ContractState` as hex, normalized to a state carrying only `data`, plus the `StateValue` as canonical JSON for readable diffs. The serialization drops the ledger version tag (`midnight:contract-state[vN]:`) because the two executors link different ledger releases; everything after the tag is compared byte for byte.
 - `initialState`: the TS `Contract.initialState` output, both as canonical JSON (the Rust side decodes it to seed circuit runs) and as serialized bytes the Rust decoder must reproduce exactly, which pins the serialization and the maintenance-authority defaults across the two stacks.
 - Zswap outputs (`createZswapOutput` coins) when a circuit mints (corpus support pending; the driver rejects cases that produce them).
+- `error`, for a step that must fail. The step in the case carries `"error": "<substring>"`, and its golden is only `{ circuit, error }`, with the error message of the TS runtime. The driver replaces each source location (`<file>.compact line N char M`) in the message with `<src>`. Both executors must fail, and both messages must contain the substring, so a step that fails for another reason diverges. The next step starts from the state before the failed one, on both sides.
 
 Determinism: fixed contract address, scripted witness values shared by both sides, no communication commitment randomness (we compare its inputs instead). Each case carries its block time, the contract balance and the caller's coin public key, and both executors read them from the case. `blockTime` is in seconds. `balance` is a list of `[tokenType, "<decimal>"]` pairs, with each token type in the runtime's `{tag, raw}` form. `coinPublicKey` is the key's 32 bytes as hex. A case that omits them runs at time 0, with an empty balance and the zero key, on both sides.
 
@@ -43,7 +44,7 @@ tests/conformance/
   package.json             npm root (node_modules must sit above fixtures/ for codegen imports)
   src/                     report model + normalizers (Value/AlignedValue/Op/StateValue -> canonical JSON)
   tests/harness.rs         runs interpreter per case, diffs against expected/
-  cases/<fixture>/<case>.json     block time, balance, coin public key, circuit, args, witness script
+  cases/<fixture>/<case>.json     block time, balance, coin public key, circuit, args, witness script, expected error
   fixtures/<name>/         <name>.compact + compiler/analyzed-ir.sexp (committed); contract/ (generated, ignored)
   expected/<fixture>/<case>.json  golden reports emitted by the TS driver
   ts-driver/               driver.mjs; vendor/ holds the runtime tarball (generated, ignored)
@@ -90,7 +91,7 @@ The runtime brings its own `@midnightntwrk/onchain-runtime-v4` and re-exports th
 - `make regen-conformance-fixtures`: recompile corpus contracts with the compactc at `COMPACT_REV` (local, needs Docker).
 - `make vendor-compact-runtime`: rebuild the driver's runtime from the fork at `COMPACT_REV` (local, needs Nix and Node).
 
-Adding coverage for a new op is: extend a fixture's `.compact` (or add a case JSON), recompile fixtures, regen goldens, commit all three. Adding a whole fixture also means listing it in the Makefile's `CONFORMANCE_FIXTURES`. A fixture that needs ZKIR v3 also goes in `CONFORMANCE_ZKIR_V3_FIXTURES`.
+Adding coverage for a new op is: extend a fixture's `.compact` (or add a case JSON), recompile fixtures, regen goldens, commit all three. Adding a whole fixture also means listing it in the Makefile's `CONFORMANCE_FIXTURES`. A fixture that needs ZKIR v3 also goes in `CONFORMANCE_ZKIR_V3_FIXTURES`. To cover a check that must make a circuit fail, add a step with `"error"` set to a part of the message that names the check.
 
 ## Findings from the first corpus run (2026-07-05)
 
