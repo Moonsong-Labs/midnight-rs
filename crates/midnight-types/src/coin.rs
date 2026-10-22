@@ -135,8 +135,9 @@ mod tests {
     use crate::ledger_8::convert::IntoSdk as _;
     use crate::ledger_9::convert::IntoLedger as _;
 
-    /// `TrackedUtxo::is_night` compares the indexer's token string with
-    /// `NIGHT`'s `Display`, so a prefix, an upper case or a cut breaks it.
+    /// The `Display` docs promise the form the indexer reports, and
+    /// `UnshieldedUtxoInfo::token_type_hex` gives it to callers. The inner
+    /// `HashOutput`'s own `Display` cuts the id to ten characters.
     #[test]
     fn a_token_type_displays_as_the_indexer_hex() {
         let token = super::UnshieldedTokenType(super::HashOutput([0xab; 32]));

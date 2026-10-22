@@ -4,8 +4,9 @@
 //! generation to apply, and the unshielded replay, whose events are JSON in
 //! every ledger generation.
 
+use hex::FromHex;
 use midnight_indexer_client::{IndexerError, SubscriptionClient};
-use midnight_types::TrackedUtxo;
+use midnight_types::{HashOutput, TrackedUtxo, UnshieldedTokenType};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -82,10 +83,8 @@ pub(crate) struct SubscriptionUtxo {
     pub owner: String,
     pub token_type: String,
     pub value: String,
-    #[serde(default)]
-    pub intent_hash: Option<String>,
-    #[serde(default)]
-    pub output_index: Option<i64>,
+    pub intent_hash: String,
+    pub output_index: i64,
     #[serde(default)]
     pub ctime: Option<i64>,
     #[serde(default)]
@@ -695,36 +694,41 @@ pub(crate) async fn replay_unshielded_events(
 }
 
 /// Composite key for matching unshielded UTXOs during spend removal.
-type UtxoKey = (String, String, u128, Option<String>, Option<i64>);
+type UtxoKey = (String, UnshieldedTokenType, u128, HashOutput, u32);
 
 fn utxo_key(u: &TrackedUtxo) -> UtxoKey {
     (
         u.owner.clone(),
-        u.token_type.clone(),
+        u.token_type,
         u.value,
-        u.intent_hash.clone(),
+        u.intent_hash,
         u.output_index,
     )
 }
 
 fn parse_utxo(u: &SubscriptionUtxo) -> Result<TrackedUtxo, WalletError> {
-    // The closure's parameter type can't be inferred through the `?`
-    // conversion, so it stays annotated.
-    let value: u128 =
-        u.value
-            .parse()
-            .map_err(|e: std::num::ParseIntError| WalletError::MalformedUtxo {
-                field: "value",
-                value: u.value.clone(),
-                reason: e.to_string(),
-                tx_id: None,
-            })?;
+    let malformed = |field, value, reason: &dyn std::fmt::Display| WalletError::MalformedUtxo {
+        field,
+        value,
+        reason: reason.to_string(),
+        tx_id: None,
+    };
+    let token_type = <[u8; 32]>::from_hex(&u.token_type)
+        .map_err(|e| malformed("token_type", u.token_type.clone(), &e))?;
+    let value = u
+        .value
+        .parse::<u128>()
+        .map_err(|e| malformed("value", u.value.clone(), &e))?;
+    let intent_hash = <[u8; 32]>::from_hex(&u.intent_hash)
+        .map_err(|e| malformed("intent_hash", u.intent_hash.clone(), &e))?;
+    let output_index = u32::try_from(u.output_index)
+        .map_err(|e| malformed("output_index", u.output_index.to_string(), &e))?;
     Ok(TrackedUtxo {
         owner: u.owner.clone(),
-        token_type: u.token_type.clone(),
+        token_type: UnshieldedTokenType(HashOutput(token_type)),
         value,
-        intent_hash: u.intent_hash.clone(),
-        output_index: u.output_index,
+        intent_hash: HashOutput(intent_hash),
+        output_index,
         ctime: u.ctime,
         registered_for_dust_generation: u.registered_for_dust_generation,
     })
@@ -739,8 +743,8 @@ fn parse_utxo(u: &SubscriptionUtxo) -> Result<TrackedUtxo, WalletError> {
 /// wallet at the end; `ResyncPlan::run` only then yields a `ResyncCommit`),
 /// a malformed event never leaves partial state behind.
 ///
-/// Returns the [`TrackedUtxo::spent_key`] of each spent UTXO that has one,
-/// so the caller can clear the reservations the event confirms.
+/// Returns the [`TrackedUtxo::spent_key`] of each spent UTXO, so the caller
+/// can clear the reservations the event confirms.
 fn apply_unshielded_tx(
     utxos: &mut Vec<TrackedUtxo>,
     tx_data: &UnshieldedTxData,
@@ -773,7 +777,7 @@ fn apply_unshielded_tx(
     }
     utxos.extend(created);
 
-    Ok(spent.iter().filter_map(TrackedUtxo::spent_key).collect())
+    Ok(spent.iter().map(TrackedUtxo::spent_key).collect())
 }
 
 /// Forward a progress event to the optional progress channel.
@@ -871,12 +875,14 @@ mod tests {
         }
     }
 
-    fn sub_utxo(intent_hash: Option<&str>, output_index: Option<i64>) -> SubscriptionUtxo {
+    /// A NIGHT UTXO of value 1 from a transaction whose intent hash repeats
+    /// the byte `intent_hash`.
+    fn sub_utxo(intent_hash: u8, output_index: i64) -> SubscriptionUtxo {
         SubscriptionUtxo {
             owner: "owner".into(),
             token_type: "00".repeat(32),
             value: "1".into(),
-            intent_hash: intent_hash.map(str::to_string),
+            intent_hash: hex::encode([intent_hash; 32]),
             output_index,
             ctime: None,
             registered_for_dust_generation: None,
@@ -889,14 +895,14 @@ mod tests {
     fn apply_unshielded_tx_reports_the_spent_keys_only() {
         let tx_data = UnshieldedTxData {
             transaction: None,
-            created_utxos: vec![sub_utxo(Some("created"), Some(0))],
-            spent_utxos: vec![sub_utxo(Some("abcd"), Some(2))],
+            created_utxos: vec![sub_utxo(0xcc, 0)],
+            spent_utxos: vec![sub_utxo(0xab, 2)],
         };
 
         assert_eq!(
             apply_unshielded_tx(&mut Vec::new(), &tx_data).unwrap(),
             vec![SpentUtxoKey {
-                intent_hash: "abcd".into(),
+                intent_hash: HashOutput([0xab; 32]),
                 output_index: 2,
             }]
         );
@@ -965,43 +971,58 @@ mod tests {
         assert_eq!(order_regression(3, Some(8)), Some(8));
     }
 
+    /// Every UTXO field is parsed before the event touches the tracked set.
+    /// A field that falls back to a default, or an index cast with `as`,
+    /// applies a UTXO that the balance and the builds then read wrong.
     #[test]
     fn apply_unshielded_tx_is_all_or_nothing_on_malformed_field() {
-        let tracked = TrackedUtxo {
-            owner: "owner".into(),
-            token_type: "00".repeat(32),
-            value: 1,
-            intent_hash: Some("aaaa".into()),
-            output_index: Some(0),
-            ctime: None,
-            registered_for_dust_generation: None,
-        };
-        let mut utxos = vec![tracked];
+        type Corrupt = fn(&mut SubscriptionUtxo);
+        let rows: [(&str, &str, Corrupt); 4] = [
+            ("value", "not-a-number", |u| u.value = "not-a-number".into()),
+            ("token_type", "zz", |u| u.token_type = "zz".into()),
+            ("intent_hash", "abcd", |u| u.intent_hash = "abcd".into()),
+            ("output_index", "-1", |u| u.output_index = -1),
+        ];
+        for (field, raw, corrupt) in rows {
+            let mut utxos = vec![TrackedUtxo {
+                owner: "owner".into(),
+                token_type: midnight_types::NIGHT,
+                value: 1,
+                intent_hash: HashOutput([0xaa; 32]),
+                output_index: 0,
+                ctime: None,
+                registered_for_dust_generation: None,
+            }];
 
-        // One parseable created UTXO, then a malformed one, and a spent
-        // entry matching the tracked UTXO. The malformed field must reject
-        // the whole event: no removal, no insertion.
-        let mut malformed = sub_utxo(Some("cccc"), Some(0));
-        malformed.value = "not-a-number".into();
-        let tx_data = UnshieldedTxData {
-            transaction: None,
-            created_utxos: vec![sub_utxo(Some("bbbb"), Some(0)), malformed],
-            spent_utxos: vec![sub_utxo(Some("aaaa"), Some(0))],
-        };
+            // One parseable created UTXO, then a malformed one, and a spent
+            // entry matching the tracked UTXO. The malformed field must
+            // reject the whole event: no removal, no insertion.
+            let mut malformed = sub_utxo(0xcc, 0);
+            corrupt(&mut malformed);
+            let tx_data = UnshieldedTxData {
+                transaction: None,
+                created_utxos: vec![sub_utxo(0xbb, 0), malformed],
+                spent_utxos: vec![sub_utxo(0xaa, 0)],
+            };
 
-        let err = apply_unshielded_tx(&mut utxos, &tx_data)
-            .expect_err("malformed value must reject the event");
-        assert!(
-            matches!(
-                &err,
-                WalletError::MalformedUtxo { field: "value", value, .. }
-                    if value == "not-a-number"
-            ),
-            "got: {err:?}"
-        );
-        assert_eq!(utxos.len(), 1, "event must not be partially applied");
-        assert_eq!(utxos[0].intent_hash.as_deref(), Some("aaaa"));
-        assert_eq!(utxos[0].value, 1);
+            let Err(err) = apply_unshielded_tx(&mut utxos, &tx_data) else {
+                panic!("{field}: a malformed field must reject the event");
+            };
+            assert!(
+                matches!(
+                    &err,
+                    WalletError::MalformedUtxo { field: f, value, .. }
+                        if *f == field && value == raw
+                ),
+                "{field}: got {err:?}"
+            );
+            assert_eq!(
+                utxos.len(),
+                1,
+                "{field}: event must not be partially applied"
+            );
+            assert_eq!(utxos[0].intent_hash, HashOutput([0xaa; 32]), "{field}");
+        }
     }
 
     #[test]
@@ -1045,9 +1066,9 @@ mod tests {
                     "transaction": {"id": id, "block": {"height": id * 10}},
                     "createdUtxos": [{
                         "owner": "addr",
-                        "tokenType": "00",
+                        "tokenType": "00".repeat(32),
                         "value": value.to_string(),
-                        "intentHash": format!("{id:02x}"),
+                        "intentHash": format!("{id:064x}"),
                         "outputIndex": 0,
                     }],
                     "spentUtxos": [],

@@ -39,8 +39,10 @@
 //! the whole event before any part of it is applied
 //! ([`WalletError::MalformedUtxo`], decode errors), and decoded ledger
 //! parameters are sanity-checked before fee math consumes them
-//! ([`WalletError::CorruptParameters`]). These checks catch corruption and
-//! protocol violations, not dishonesty. Actively cross-checking indexer
+//! ([`WalletError::CorruptParameters`]). Sync keeps the owner address of a
+//! UTXO as it comes, because the subscription asks for the UTXOs of one
+//! address. These checks catch corruption and protocol violations, not
+//! dishonesty. Actively cross-checking indexer
 //! answers against the node (e.g. `midnight_queryUnshielded`) is
 //! explicitly out of scope; revisit if a threat model requires operating
 //! against an untrusted indexer.

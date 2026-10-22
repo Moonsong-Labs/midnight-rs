@@ -16,7 +16,8 @@ use tracing::info;
 
 use crate::WalletError;
 use crate::chain_pin::ChainPin;
-use midnight_types::TrackedUtxo;
+use hex::FromHex;
+use midnight_types::{HashOutput, TrackedUtxo, UnshieldedTokenType};
 
 const METADATA_FILE: &str = "metadata.json";
 const PENDING_FILE: &str = "pending.json";
@@ -79,13 +80,15 @@ pub(crate) struct StoredMetadata {
     pub unshielded_utxos: Vec<StoredUtxo>,
 }
 
+/// A [`TrackedUtxo`] as `metadata.json` holds it. The hashes stay hex
+/// strings, because the serde form of `HashOutput` is a list of 32 numbers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoredUtxo {
     owner: String,
     token_type: String,
     value: String,
-    intent_hash: Option<String>,
-    output_index: Option<i64>,
+    intent_hash: String,
+    output_index: u32,
     // A snapshot written before these fields existed carries neither, and the
     // next sync refills them from the indexer.
     #[serde(default)]
@@ -98,9 +101,9 @@ impl From<&TrackedUtxo> for StoredUtxo {
     fn from(u: &TrackedUtxo) -> Self {
         Self {
             owner: u.owner.clone(),
-            token_type: u.token_type.clone(),
+            token_type: hex::encode(u.token_type.0.0),
             value: u.value.to_string(),
-            intent_hash: u.intent_hash.clone(),
+            intent_hash: hex::encode(u.intent_hash.0),
             output_index: u.output_index,
             ctime: u.ctime,
             registered_for_dust_generation: u.registered_for_dust_generation,
@@ -112,17 +115,24 @@ impl TryFrom<StoredUtxo> for TrackedUtxo {
     type Error = WalletError;
 
     fn try_from(u: StoredUtxo) -> Result<Self, Self::Error> {
-        let value: u128 = u.value.parse().map_err(|e| {
+        let malformed = |field, value: &str, reason: &dyn std::fmt::Display| {
             WalletError::Storage(format!(
-                "failed to parse stored UTXO value '{}': {e}",
-                u.value
+                "{METADATA_FILE}: stored UTXO {field} {value:?}: {reason}"
             ))
-        })?;
+        };
+        let token_type = <[u8; 32]>::from_hex(&u.token_type)
+            .map_err(|e| malformed("token_type", &u.token_type, &e))?;
+        let value = u
+            .value
+            .parse::<u128>()
+            .map_err(|e| malformed("value", &u.value, &e))?;
+        let intent_hash = <[u8; 32]>::from_hex(&u.intent_hash)
+            .map_err(|e| malformed("intent_hash", &u.intent_hash, &e))?;
         Ok(Self {
             owner: u.owner,
-            token_type: u.token_type,
+            token_type: UnshieldedTokenType(HashOutput(token_type)),
             value,
-            intent_hash: u.intent_hash,
+            intent_hash: HashOutput(intent_hash),
             output_index: u.output_index,
             ctime: u.ctime,
             registered_for_dust_generation: u.registered_for_dust_generation,
@@ -444,6 +454,32 @@ mod tests {
         let metadata: StoredMetadata = serde_json::from_str(json).expect("parse");
         assert_eq!(metadata.chain_pin, None, "an absent pin skips the check");
         assert_eq!(metadata.zswap_event_id, 178, "the rest still parses");
+    }
+
+    /// A stored UTXO keeps its hashes as hex and its value as a decimal
+    /// string, and the load parses that form. A write in another form, such
+    /// as the ten characters of the `Display` of `HashOutput`, refuses the
+    /// next resume.
+    #[test]
+    fn a_stored_utxo_keeps_its_form_on_disk() {
+        let stored = serde_json::json!({
+            "owner": "mn_addr_undeployed1owner",
+            "token_type": "02".repeat(32),
+            "value": u128::MAX.to_string(),
+            "intent_hash": "ab".repeat(32),
+            "output_index": 3,
+            "ctime": 1_700_000_000,
+            "registered_for_dust_generation": true,
+        });
+        let parsed: StoredUtxo = serde_json::from_value(stored.clone()).expect("parse");
+        let utxo = TrackedUtxo::try_from(parsed).expect("a stored UTXO in this form loads");
+        assert_eq!(utxo.token_type, UnshieldedTokenType(HashOutput([0x02; 32])));
+        assert_eq!(utxo.value, u128::MAX);
+        assert_eq!(utxo.intent_hash, HashOutput([0xab; 32]));
+        assert_eq!(utxo.output_index, 3);
+
+        let written = serde_json::to_value(StoredUtxo::from(&utxo)).expect("serialize");
+        assert_eq!(written, stored, "a save writes the form a load reads");
     }
 
     /// The pin's field names are the on-disk contract. A rename would not
