@@ -51,7 +51,7 @@ let coin = provider
 let offer = ShieldedOffer {
     coins: vec![coin],
     outputs: vec![ShieldedPayment {
-        recipient: parse_shielded_recipient(address, "undeployed")?,
+        recipient: parse_shielded_recipient(address, provider.network().await?)?,
         token_type,
         value: 10,
     }],

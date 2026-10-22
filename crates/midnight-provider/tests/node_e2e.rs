@@ -37,5 +37,5 @@ async fn the_node_runs_the_network_the_tests_sync_as() {
         return;
     };
     let network = p.ledger_network_id().await.unwrap();
-    assert_eq!(network, Some(Network::Undeployed));
+    assert_eq!(network, Network::Undeployed);
 }

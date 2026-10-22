@@ -259,10 +259,10 @@ pub enum WalletError {
 
     /// The sync names no network, and the node reported no valid one.
     ///
-    /// The node could not answer, it has no network id set, or its id fails
-    /// [`Network::is_valid_name`]. A wallet with no network takes the network
-    /// that the node runs. To recover, check the node URL and that the node is
-    /// up, or name the network with `WalletBuilder::with_network` in
+    /// The node could not answer, it has no network id set, or its id is not
+    /// a valid name for a [`Network`]. A wallet with no network takes the
+    /// network that the node runs. To recover, check the node URL and that the
+    /// node is up, or name the network with `WalletBuilder::with_network` in
     /// `midnight-wallet`.
     #[error(
         "the node did not report a valid network: check the node URL and that the node is up, \

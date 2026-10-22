@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
     let network: Network = env::var("MIDNIGHT_NETWORK")
         .unwrap_or_else(|_| "undeployed".into())
-        .into();
+        .parse()?;
 
     println!("=== Midnight Shielded Transfer ===\n");
     println!("Network:           {network}");

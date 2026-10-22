@@ -863,25 +863,6 @@ impl Provider for MidnightProvider {
     }
 }
 
-/// The network a `MidnightRuntimeApi::get_network_id` answer names. `None`
-/// for the empty id that a node with no network id set returns.
-fn network_from_runtime_id(id: String) -> Option<Network> {
-    (!id.is_empty()).then(|| Network::from(id))
-}
-
-#[cfg(test)]
-mod network_from_runtime_id_tests {
-    use super::*;
-
-    /// No devnet leaves the id unset, so only this test reaches the empty
-    /// answer. As `Network::Other("")`, it would refuse every sync against
-    /// such a node.
-    #[test]
-    fn an_empty_runtime_id_names_no_network() {
-        assert_eq!(network_from_runtime_id(String::new()), None);
-    }
-}
-
 /// The JSON-RPC error code of every `midnight_contractState` refusal (the
 /// node's `INVALID_PARAMS_CODE`).
 const CONTRACT_STATE_ERROR_CODE: i32 = -32602;
@@ -1049,11 +1030,10 @@ impl MidnightProvider {
     /// `"Midnight Devnet"`.
     ///
     /// This is a human-readable label, **not** the ledger network id. It is not
-    /// interchangeable with [`Network`]: feeding it to
-    /// a wallet sync would yield `Network::Other(<label>)`
-    /// and therefore wrong bech32 address prefixes. The address prefixes come
-    /// from [`MidnightProvider::network`]. The network the node runs comes
-    /// from [`MidnightProvider::ledger_network_id`].
+    /// interchangeable with [`Network`], and a label such as the one above is
+    /// not even a valid network name. The address prefixes come from
+    /// [`MidnightProvider::network`]. The network the node runs comes from
+    /// [`MidnightProvider::ledger_network_id`].
     pub async fn system_chain(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;
 
@@ -1078,20 +1058,19 @@ impl MidnightProvider {
     /// default) compares this network with the one it syncs as, and fails
     /// with
     /// [`WalletError::NetworkMismatch`](midnight_types::WalletError::NetworkMismatch)
-    /// when they differ. A sync with no network takes this one. It fails when
-    /// there is none, or when the name fails [`Network::is_valid_name`]. An
-    /// error or an `Ok(None)` here does not fail a sync that names its
+    /// when they differ. A sync with no network takes this one, and fails
+    /// when there is none. An error here does not fail a sync that names its
     /// network.
     ///
-    /// It needs no wallet and runs no resync. Returns `Ok(None)` when the
-    /// runtime reports an empty id, which a node with no network id set does.
-    /// Any other id comes back as the node reports it. Errors when the node
-    /// cannot be reached, or when its metadata describes no such API or
-    /// another return type.
-    pub async fn ledger_network_id(&self) -> Result<Option<Network>, ProviderError> {
-        self.call_runtime_api::<String>("get_network_id")
-            .await
-            .map(network_from_runtime_id)
+    /// It needs no wallet and runs no resync. The id goes through the parse
+    /// of a [`Network`]. Errors when the node cannot be reached, when its
+    /// metadata describes no such API or another return type, or when the
+    /// parse refuses the id, as it does the empty id of a node with no
+    /// network id set.
+    pub async fn ledger_network_id(&self) -> Result<Network, ProviderError> {
+        let id = self.call_runtime_api::<String>("get_network_id").await?;
+        id.parse()
+            .map_err(|e| ProviderError::Rpc(format!("get_network_id: {e}")))
     }
 
     /// The [`Network`] this provider's wallet derives addresses for.
@@ -1388,7 +1367,7 @@ impl midnight_types::chain_pin::SyncSource for MidnightProvider {
 
     async fn network(&self) -> Option<Network> {
         match query_within_timeout(self.ledger_network_id()).await {
-            Ok(network) => network,
+            Ok(network) => Some(network),
             Err(e) => {
                 warn!(error = %e, "could not read the node's network");
                 None

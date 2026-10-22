@@ -120,7 +120,13 @@ let shielded   = seed.shielded_address(Network::Preprod);
 // mn_shield-addr_preprod1...
 ```
 
-Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `Seed` address methods take the network as `impl Into<Network>`. They accept a `Network` variant (`Network::Preprod`, `Network::Mainnet` and the others) or a name, such as `"preprod"` or the `String` from `env::var("MIDNIGHT_NETWORK")?`. Unknown names round-trip through `Network::Other(String)`, for example for a custom devnet.
+Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `Seed` address methods take the network as `impl Into<Network>`, so a `Network` or a `&Network`. For a name, such as the value of an environment variable, parse it first:
+
+```rust
+let network: Network = env::var("MIDNIGHT_NETWORK")?.parse()?;
+```
+
+The parse gives the variant of a known name (`Network::Preprod`, `Network::Mainnet` and the others), and `Network::Other` for any other valid name, for example the name of a custom devnet. A valid name has 1 to 68 characters, each a lowercase ASCII letter, a digit, `-` or `_`. Such a name is safe in an address prefix and in the storage path. The parse refuses any other name with `InvalidNetworkName`.
 
 `Network::Mainnet` produces bech32 HRPs without a `_<name>` suffix (`mn_addr1...`, `mn_shield-addr1...`), matching the upstream convention; all other variants get the suffix.
 
@@ -157,9 +163,9 @@ Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress
 
 The provider is the sync's source: the sync replays the provider's indexer, and the provider's node reports its network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the indexer URL and the node's network to the two-query `ChainView`.
 
-Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. The sync then fails with `WalletError::NetworkUnknown` when the node cannot answer, reports no network, or reports a name that fails `Network::is_valid_name`. A valid name has 1 to 68 characters, each a lowercase ASCII letter, a digit, `-` or `_`. Such a name is safe in an address prefix and in the storage path.
+Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. The sync then fails with `WalletError::NetworkUnknown` when the node cannot answer, reports no network, or reports an id that the parse of a `Network` refuses (see [Address derivation](#address-derivation)).
 
-`.with_network(..)` names the network, as a `Network` or as a name such as `"preprod"`. A node that runs another network then fails the sync with `WalletError::NetworkMismatch`, before the sync reads the indexer. A node that cannot answer, or that reports no network, does not fail a sync with a named network. Name the network when your program reads it from its configuration. The sync then refuses a node URL of another network.
+`.with_network(..)` names the network, as a `Network`. A node that runs another network then fails the sync with `WalletError::NetworkMismatch`, before the sync reads the indexer. A node that cannot answer, reports no network, or reports an id that the parse refuses does not fail a sync with a named network. Name the network when your program reads it from its configuration, with `.with_network(env::var("MIDNIGHT_NETWORK")?.parse::<Network>()?)`. The sync then refuses a node URL of another network.
 
 The pin is the chain-reset guard, and every sync takes one by default. A snapshot's cursors are counts, so a snapshot from a replaced chain resumes cleanly and reports the dead chain's balance. To catch this, the sync checks a stored snapshot's pin against the chain before it replays. A replaced chain fails the sync with `WalletError::ChainMismatch`. The sync also gives the wallet a fresh pin, which every later resync checks again.
 

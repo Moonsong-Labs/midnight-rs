@@ -23,7 +23,7 @@ use crate::chain_pin::ChainPin;
 use crate::replay::{LedgerStream, replay_ledger_events, replay_unshielded_events};
 use crate::storage::wallet_storage_id;
 use crate::wallet::ChainSync;
-use crate::{Seed, SpentUtxoKey, SyncProgress, WalletError};
+use crate::{Network, Seed, SpentUtxoKey, SyncProgress, WalletError};
 
 /// A Midnight wallet: identity (seed, addresses) and synced ledger state.
 ///
@@ -37,7 +37,7 @@ use crate::{Seed, SpentUtxoKey, SyncProgress, WalletError};
 pub struct Wallet {
     seed: Seed,
     secret_keys: SecretKeys,
-    network_id: String,
+    network: Network,
     unshielded_address: String,
 
     // Shielded state (from zswapLedgerEvents)
@@ -535,7 +535,7 @@ impl Wallet {
         let dir = self.storage_dir.as_deref()?;
         Some(crate::storage::snapshot_path(
             dir,
-            &self.network_id,
+            self.network.as_str(),
             &wallet_storage_id(&self.unshielded_address),
         ))
     }
@@ -573,7 +573,7 @@ impl Wallet {
             indexer_url,
             seed,
             address,
-            network_id,
+            network,
             storage_dir,
             save,
             chain_pin,
@@ -605,7 +605,7 @@ impl Wallet {
         let sub_client = SubscriptionClient::new(indexer_url);
         let dust_checkpoint = make_dust_checkpoint(
             save_dir,
-            network_id,
+            network.as_str(),
             CheckpointState {
                 wallet_id: wallet_id.clone(),
                 zswap_state: zswap_state.clone(),
@@ -658,7 +658,7 @@ impl Wallet {
         // pending entries; this is a separate file.
         let pending = match save_dir {
             Some(dir) => {
-                PendingReservations::load(dir, network_id, &wallet_id)?.unwrap_or_default()
+                PendingReservations::load(dir, network.as_str(), &wallet_id)?.unwrap_or_default()
             }
             None => PendingReservations::default(),
         };
@@ -666,7 +666,7 @@ impl Wallet {
         let mut state = Self {
             seed: seed.clone(),
             secret_keys,
-            network_id: network_id.to_string(),
+            network: network.clone(),
             unshielded_address: address.to_string(),
             zswap_state,
             zswap_event_id,
@@ -802,7 +802,9 @@ impl Wallet {
     /// Crash-safety is degraded until then, hence the error-level log.
     fn persist_pending(&mut self) {
         if let Some(dir) = self.storage_dir.as_deref()
-            && let Err(err) = self.pending.save(dir, &self.network_id, &self.storage_id())
+            && let Err(err) = self
+                .pending
+                .save(dir, self.network.as_str(), &self.storage_id())
         {
             error!(error = %err, "failed to persist pending reservations; in-memory set is ahead of pending.json");
             self.save_failed = true;
@@ -837,7 +839,7 @@ impl Wallet {
         let wallet_id = self.storage_id();
         super::snapshot::save(
             base,
-            &self.network_id,
+            self.network.as_str(),
             &wallet_id,
             super::snapshot::Snapshot {
                 zswap_state: &self.zswap_state,
@@ -850,7 +852,7 @@ impl Wallet {
                 unshielded_utxos: &self.unshielded_utxos,
             },
         )?;
-        self.pending.save(base, &self.network_id, &wallet_id)
+        self.pending.save(base, self.network.as_str(), &wallet_id)
     }
 
     /// Save to the storage directory when `changed` is true or the last save
@@ -883,7 +885,7 @@ impl Wallet {
     pub fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
         // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
         let ledger_state = LedgerState::with_genesis_settings(
-            &self.network_id,
+            self.network.as_str(),
             self.parameters.clone(),
             0,
             MAX_SUPPLY,
@@ -1118,8 +1120,8 @@ impl Wallet {
     }
 
     /// See [`crate::Wallet::network`].
-    pub fn network(&self) -> &str {
-        &self.network_id
+    pub fn network(&self) -> &Network {
+        &self.network
     }
 
     /// See [`crate::Wallet::unshielded_address`].
@@ -1733,7 +1735,7 @@ mod tests {
         Wallet {
             seed: seed.clone(),
             secret_keys,
-            network_id: "undeployed".into(),
+            network: Network::Undeployed,
             unshielded_address: "mn_addr_undeployed1test".into(),
             zswap_state: shielded.state.clone(),
             zswap_event_id: 0,
