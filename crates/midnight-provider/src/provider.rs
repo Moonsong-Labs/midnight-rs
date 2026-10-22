@@ -604,6 +604,11 @@ impl MidnightProvider {
     /// (`wait_best`) and finalization (`wait_finalized`). The provider's
     /// `node_url` is used as the connection target — callers don't repeat it.
     /// A failed connect gives [`SubmitError::NotSubmitted`](crate::SubmitError::NotSubmitted).
+    ///
+    /// This is for bytes that this wallet did not build. It carries no
+    /// reservation, so a rejection hands no inputs back. For a
+    /// [`TransferResult`] that this wallet built, use
+    /// [`Self::submit_reserved`].
     pub async fn submit(&self, tx_bytes: &[u8]) -> Result<PendingTx, ProviderError> {
         let conn = self.connect_to_submit().await?;
         submit::submit_bytes(&conn.client, tx_bytes).await
