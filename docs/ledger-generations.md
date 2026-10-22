@@ -121,7 +121,7 @@ When the chain moves from ledger 8 to ledger 9, a wallet crosses with it:
 
 - A sync from genesis replays the ledger 8 history, then continues on ledger 9.
 - A wallet stored before the fork resumes from its snapshot and crosses on the way.
-- An attached wallet crosses at its next resync. Every build resyncs first, and the provider's `rescan_shielded` and `watch_for_coin` resync first when they must.
+- An attached wallet crosses at its next resync. Every build resyncs first. A rescan or a coin watch, through the provider or through a handle on the wallet, resyncs first when the wallet's state is in the earlier generation.
 
 What the crossing keeps and what it drops:
 

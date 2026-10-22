@@ -322,10 +322,11 @@ impl Wallet {
     /// **Registration alone does not recover a coin whose output the wallet
     /// already replayed past.** A replay that meets an output it cannot claim
     /// collapses that Merkle leaf, and a resync resumes from the cursor
-    /// instead of revisiting it. Follow the registration with a rescan,
-    /// [`WalletFacade::rescan_shielded`](crate::WalletFacade::rescan_shielded)
-    /// on a [`LocalWallet`](crate::LocalWallet), which replays the stream from
-    /// its first event. `MidnightProvider::watch_for_coin` does both.
+    /// instead of revisiting it. Register through the handle instead:
+    /// [`WalletFacade::watch_for_coins`](crate::WalletFacade::watch_for_coins)
+    /// on a [`LocalWallet`](crate::LocalWallet) registers, then replays the
+    /// stream from its first event. `MidnightProvider::watch_for_coin` calls
+    /// it.
     ///
     /// A registration is part of the wallet state, so it is persisted with it
     /// when a storage directory is configured, and a coin registered before

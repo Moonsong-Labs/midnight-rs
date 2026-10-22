@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use midnight_provider::{
     Builds, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, HashOutput,
-    LedgerVersion, MidnightProvider, Network, Nullifier, ProviderError, Seed, ShieldedTokenType,
+    LedgerVersion, MidnightProvider, Network, Nullifier, ProviderError, ShieldedTokenType,
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest, WalletBalance,
     WalletError, WalletFacade,
 };
@@ -48,10 +48,6 @@ impl WalletFacade for StubWallet {
         true
     }
 
-    async fn seed(&self) -> Seed {
-        unimplemented!("this wallet holds no seed")
-    }
-
     async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
         unimplemented!("this wallet holds no keys")
     }
@@ -78,11 +74,15 @@ impl WalletFacade for StubWallet {
         Ok(())
     }
 
-    async fn rescan_shielded(&self) -> Result<(), WalletError> {
+    async fn rescan_shielded(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
         Ok(())
     }
 
-    async fn watch_for_coins(&self, _coins: Vec<CoinInfo>) -> Result<(), WalletError> {
+    async fn watch_for_coins(
+        &self,
+        _coins: Vec<CoinInfo>,
+        _chain: &dyn ChainView,
+    ) -> Result<(), WalletError> {
         Ok(())
     }
 
