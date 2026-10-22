@@ -9,9 +9,13 @@
 //!   chooses how to wait (`wait_best` / `wait_finalized`).
 //! - `.build().await?` — the escape hatch. Returns the [`TransferResult`]
 //!   without submitting. Useful when the caller wants to inspect `tx_bytes`,
-//!   sign it elsewhere, route submission through something other than
-//!   `provider.submit(...)`, or read [`TransferResult::fee_speck`] to show
-//!   the user the deterministic Dust fee before they confirm.
+//!   or read [`TransferResult::fee_speck`] to show the user the
+//!   deterministic Dust fee before they confirm. The inputs stay reserved.
+//!   Submit the result with
+//!   [`MidnightProvider::submit_reserved`], which hands them back when the
+//!   node never gets the transaction or rejects it. Bytes that never reach
+//!   the chain keep them until [`MidnightProvider::release`] gets
+//!   `result.spent`, or until their TTL passes.
 //!
 //! Constructors are sync methods on [`MidnightProvider`]: `transfer_unshielded`,
 //! `transfer_shielded`, `register_dust`. They borrow the provider and capture
@@ -30,8 +34,10 @@
 //! let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
 //! pending.wait_finalized().await?;
 //!
-//! // Build only — keep tx_bytes around for custom routing:
+//! // Build only: read the fee, then submit with the reservation.
 //! let result = provider.transfer_shielded(token, 1, &recipient).build().await?;
+//! println!("fee: {} SPECK", result.fee_speck);
+//! provider.submit_reserved(result).await?.wait_finalized().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -362,5 +368,5 @@ async fn build_and_submit(
     request: TransferRequest,
 ) -> Result<PendingTx, ProviderError> {
     let result = provider.build_then_prove(request).await?;
-    provider.submit_reserved(&result).await
+    provider.submit_reserved(result).await
 }

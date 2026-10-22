@@ -89,10 +89,10 @@ let a_half = alice.shielded_swap(token_x, dx, token_y, dy).await?;
 let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
 let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
 let funded = sponsor.balance_transaction(&merged).await?;
-sponsor.submit(&funded).await?;
+sponsor.submit_reserved(funded).await?;
 ```
 
-A party with no Dust builds a transfer or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A sponsor pays its Dust fee with `balance_transaction` and submits it, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
+A party with no Dust builds a transfer or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A sponsor pays its Dust fee with `balance_transaction` and submits it with `submit_reserved`, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
 
 ## Compile a contract
 

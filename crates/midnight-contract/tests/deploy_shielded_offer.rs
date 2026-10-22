@@ -17,7 +17,8 @@ use midnight_provider::MidnightProvider;
 /// The offer's coin and payment must reach the guaranteed Zswap offer of the
 /// proven transaction, with a change output when the coin holds more than the
 /// payment. A successful build keeps the coin reserved, so no later build of
-/// the wallet selects it. The chain must then apply the deploy.
+/// the wallet selects it, and its result names the coin and the fee Dust for
+/// the submit to hand back. The chain must then apply the deploy.
 ///
 /// The offer pays 1 unit of shielded token id `[0; 32]` from one of the dev
 /// wallet's coins back to the wallet's own keys. It is unrelated to the
@@ -73,8 +74,10 @@ async fn deploy_funded_with_shielded_offer() {
         ($ledger:ident) => {{
             use midnight_helpers::$ledger as l;
             let tx: l::FinalizedTransaction<midnight_helpers::DefaultDB> =
-                midnight_helpers::midnight_serialize::tagged_deserialize(&mut &result.tx_bytes[..])
-                    .expect("deserialize the proven deploy");
+                midnight_helpers::midnight_serialize::tagged_deserialize(
+                    &mut &result.transaction.tx_bytes[..],
+                )
+                .expect("deserialize the proven deploy");
             let l::Transaction::Standard(stx) = &tx else {
                 panic!("a deploy must be a standard transaction");
             };
@@ -85,11 +88,14 @@ async fn deploy_funded_with_shielded_offer() {
             (guaranteed.inputs.len(), guaranteed.outputs.len())
         }};
     }
-    let (inputs, outputs) =
-        match midnight_types::LedgerVersion::of_transaction(&result.tx_bytes).unwrap() {
-            midnight_types::LedgerVersion::V8 => guaranteed_counts!(ledger_8),
-            midnight_types::LedgerVersion::V9 => guaranteed_counts!(ledger_9),
-        };
+    let (inputs, outputs) = match midnight_types::LedgerVersion::of_transaction(
+        &result.transaction.tx_bytes,
+    )
+    .unwrap()
+    {
+        midnight_types::LedgerVersion::V8 => guaranteed_counts!(ledger_8),
+        midnight_types::LedgerVersion::V9 => guaranteed_counts!(ledger_9),
+    };
     assert_eq!(
         inputs, 1,
         "the guaranteed offer must carry the attached coin"
@@ -105,17 +111,29 @@ async fn deploy_funded_with_shielded_offer() {
         "a successful deploy keeps its offer's coins reserved"
     );
 
+    // The submit hands back only what the result names, so it must name the
+    // offer's coin and the fee Dust, which two build contexts reserved.
+    let spent = &result.transaction.spent;
+    assert!(
+        spent.shielded.iter().any(|coin| coin.input == nullifier),
+        "the deploy result must name the offer's coin: {spent:?}"
+    );
+    assert!(
+        !spent.dust.is_empty(),
+        "the deploy result must name the fee Dust: {spent:?}"
+    );
+
+    let address = result.address_hex();
+    let bytes = result.transaction.tx_bytes.len();
     let (in_block, _) = provider
-        .submit(&result.tx_bytes)
+        .submit_reserved(result.transaction)
         .await
         .expect("submit the deploy")
         .wait_finalized()
         .await
         .expect("the chain must apply a deploy that carries a shielded offer");
     eprintln!(
-        "deploy_funded with shielded offer: addr={} bytes={} block={}",
-        result.address_hex(),
-        result.tx_bytes.len(),
+        "deploy_funded with shielded offer: addr={address} bytes={bytes} block={}",
         hex::encode(in_block.block_hash),
     );
 }

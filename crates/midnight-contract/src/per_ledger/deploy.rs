@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::{CoinPublicKey, EncryptionPublicKey};
+use midnight_types::{CoinPublicKey, EncryptionPublicKey, TransferResult};
 
 use super::call::{INTENT_SEGMENT, prove_without_fee};
 use super::helpers;
@@ -53,12 +53,15 @@ pub(crate) async fn deploy_funded(
     }
 
     let tx_info = single_action_tx_info(builds, context.clone(), DeployAction { deploy });
-    let tx_bytes = match shielded_offer {
+    let transaction = match shielded_offer {
         None => build_with_mock_fee_proofs(builds, tx_info).await?,
         Some(offer) => Box::pin(offer_transaction(builds, &context, tx_info, offer)).await?,
     };
 
-    Ok(DeployResult { address, tx_bytes })
+    Ok(DeployResult {
+        address,
+        transaction,
+    })
 }
 
 /// The transaction info for one intent, at [`INTENT_SEGMENT`], that holds
@@ -81,22 +84,22 @@ pub(super) fn single_action_tx_info(
     tx_info
 }
 
-/// Build `tx_info` with an empty guaranteed offer, pay its fee, and serialize
-/// the result. The wallet balances the fee against mock proofs.
+/// Build `tx_info` with an empty guaranteed offer, pay its fee, and prove the
+/// result. The wallet balances the fee against mock proofs.
 ///
 /// Only a transaction with no user circuit can take this path: upstream
 /// `MockProver::check` rejects a circuit that is not built in.
 pub(super) async fn build_with_mock_fee_proofs(
     builds: &Builds<'_>,
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<TransferResult, ContractError> {
     tx_info.set_guaranteed_offer(OfferInfo {
         inputs: vec![],
         outputs: vec![],
         transients: vec![],
     });
     tx_info.use_mock_proofs_for_fees(true);
-    Ok(builds.build_funded(tx_info).await?.tx_bytes)
+    Ok(builds.build_funded(tx_info).await?)
 }
 
 /// Add `offer` to the deploy in `tx_info`, prove it, and pay its fee.
@@ -107,14 +110,15 @@ pub(super) async fn build_with_mock_fee_proofs(
 /// pay it: it funds `context` again, and the wallet refuses a second funding
 /// of one context.
 ///
-/// The coins stay reserved once the fee is paid, and go back to the wallet
-/// when a step fails.
+/// The coins go back to the wallet when a step fails. Once the fee is paid,
+/// they stay reserved, and the result names them beside the fee Dust, so its
+/// submit can hand both back.
 async fn offer_transaction(
     builds: &Builds<'_>,
     context: &Arc<BuildContext>,
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     offer: &ShieldedOffer,
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<TransferResult, ContractError> {
     let (change_cpk, change_epk) = builds.provider().shielded_public_keys().await?;
 
     // The spends need the funding view in the context. Reserving before it
@@ -123,14 +127,18 @@ async fn offer_transaction(
     let (prepared, held) = builds
         .prepare_shielded_inputs(context, &offer.coins, &mut tx_info.rng.split())
         .await?;
-    held.keep_on_ok(pay_offer(
-        builds,
-        tx_info,
-        offer,
-        prepared,
-        (change_cpk, change_epk),
-    ))
-    .await
+    let pinned = held.spent().clone();
+    let mut transaction = held
+        .keep_on_ok(pay_offer(
+            builds,
+            tx_info,
+            offer,
+            prepared,
+            (change_cpk, change_epk),
+        ))
+        .await?;
+    transaction.spent.merge(pinned);
+    Ok(transaction)
 }
 
 /// Pay `offer` from the reserved `prepared` coins, then prove the deploy and
@@ -143,7 +151,7 @@ async fn pay_offer(
     offer: &ShieldedOffer,
     prepared: Vec<PreparedInput>,
     (change_cpk, change_epk): (CoinPublicKey, EncryptionPublicKey),
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<TransferResult, ContractError> {
     let held_value = total_by_key(
         prepared
             .iter()

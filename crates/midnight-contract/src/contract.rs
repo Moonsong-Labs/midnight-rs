@@ -519,8 +519,9 @@ impl<P> DeployBuilder<'_, P> {
     /// transaction.
     ///
     /// Get the coins from [`MidnightProvider::spendable_shielded_coins`]. The
-    /// deploy reserves them, so no other build of this wallet spends them,
-    /// and the wallet gets them back when the build fails. Each output pays
+    /// deploy reserves them, so no other build of this wallet spends them.
+    /// The wallet gets them back when the build fails, and in the cases after
+    /// the build that [`Self::send`] names. Each output pays
     /// the keys of a user, so the offer cannot fund a contract's shielded
     /// balance.
     ///
@@ -573,6 +574,12 @@ where
     ///
     /// For the common case where you don't need to observe both states, just
     /// `.await?` the builder directly.
+    ///
+    /// The deploy submits with
+    /// [`MidnightProvider::submit_reserved`]. So the inputs that its build
+    /// reserved, the fee Dust and the coins of a shielded offer, go back to
+    /// the wallet when the node never gets the deploy, or when a wait reads
+    /// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid).
     pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
         Box::pin(self.send_inner()).await
@@ -601,7 +608,7 @@ where
 
         let result = deploy_funded(&state, provider, self.shielded_offer).await?;
         let address = result.address_hex();
-        let pending = provider.submit(&result.tx_bytes).await?;
+        let pending = provider.submit_reserved(result.transaction).await?;
 
         Ok(PendingDeploy {
             pending,
@@ -1346,7 +1353,8 @@ impl<P: Provider> Contract<P> {
     ///   transaction. The variant says how to reconcile it.
     ///
     /// An error after the build keeps the wallet inputs that the build
-    /// reserved until their TTL passes (see [`MidnightProvider::release`]).
+    /// reserved until their TTL passes. The error does not name those
+    /// inputs, so [`MidnightProvider::release`] cannot hand them back.
     #[expect(
         clippy::too_many_arguments,
         reason = "the arguments of `call_with`, plus the decoder"

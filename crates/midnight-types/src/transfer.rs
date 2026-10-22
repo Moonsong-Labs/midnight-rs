@@ -17,9 +17,11 @@ pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
     /// The generation the transaction is built for.
     pub ledger_version: LedgerVersion,
-    /// What this transaction spends, which its build reserved.
-    /// `WalletFacade::release` takes it back if the transaction never reaches
-    /// the chain.
+    /// The inputs of this transaction that the builds of this wallet
+    /// reserved. `WalletFacade::release` takes them back if the transaction
+    /// never reaches the chain. A transaction that pays the fee of another
+    /// party's transaction also spends that party's inputs, and this names
+    /// only the Dust of the fee.
     pub spent: SpentInputs,
     /// Deterministic Dust fee the chain will charge for this transaction, in
     /// SPECK (`1 DUST = 10^15 SPECK`). Computed via

@@ -83,7 +83,10 @@ pub enum ContractError {
     ///
     /// - `Invalid`: the node rejected the transaction, and the rejection is
     ///   final. Mark any pending private-state snapshot failed, then build
-    ///   again.
+    ///   again. The inputs that the call reserved stay reserved until their
+    ///   TTL passes, and the error does not name them. So the next build
+    ///   draws on other inputs, and fails with `InsufficientDust` when the
+    ///   wallet has no other spendable Dust.
     /// - `SubmitRpc`, `Dropped`, `NodeError` or `WatchStream`: the fate of the
     ///   transaction is unknown, and it can still land until its TTL passes. A
     ///   `SubmitRpc` comes from the submit call, before any wait. It does not

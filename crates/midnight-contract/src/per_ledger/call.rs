@@ -544,7 +544,7 @@ async fn attach_and_prove(
     // else's: the fee intent rides its own segment, so nothing here re-proves
     // the circuit.
     if pay_fees {
-        bytes = builds.balance_transaction(&bytes).await?;
+        bytes = builds.balance_transaction(&bytes).await?.tx_bytes;
     }
     Ok(bytes)
 }

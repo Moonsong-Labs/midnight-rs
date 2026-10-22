@@ -12,7 +12,9 @@
 //!   fee-less half as a `DustlessTransaction`.
 //! - `merge_transactions(&[..])`: fold the two mirrored halves into one balanced
 //!   transaction (the mirror deltas cancel, so no token deficit remains).
-//! - `balance_transaction(bytes)`: a sponsor pays the merged swap's Dust fees.
+//! - `balance_transaction(bytes)`: a sponsor pays the merged swap's Dust fees,
+//!   and `submit_reserved` submits the result with the reservation of that
+//!   Dust.
 //!
 //! Everything before that is setup: giving B a second token to trade (see
 //! `mint`), so it does not clutter the flow.
@@ -140,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 3. A sponsors the merged swap's Dust fees and submits.
     let sponsored = provider_a.balance_transaction(&merged).await?;
-    let pending = provider_a.submit(&sponsored).await?;
+    let pending = provider_a.submit_reserved(sponsored).await?;
     let (_best, pending) = pending.wait_best().await?;
     let (finalized, _) = pending.wait_finalized().await?;
     println!(

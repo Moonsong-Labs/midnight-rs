@@ -529,7 +529,7 @@ impl MidnightProvider {
     /// let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
     /// let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
     /// let funded = sponsor.balance_transaction(&merged).await?;
-    /// sponsor.submit(&funded).await?;
+    /// sponsor.submit_reserved(funded).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -700,14 +700,27 @@ impl MidnightProvider {
     /// covering it from the funding wallet is a planned follow-up.
     ///
     /// The wallet draws the Dust and reserves it as one transition, so two
-    /// calls on one provider cannot draw the same Dust. Proving runs
-    /// afterwards, with the wallet free, and hands the Dust back if it fails.
-    pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+    /// calls on one provider cannot draw the same Dust. Proving, the merge
+    /// and the price run afterwards, with the wallet free, and a failure in
+    /// any of them hands the Dust back.
+    ///
+    /// The result holds the merged transaction, the Dust it reserved in
+    /// `spent`, and the fee of the merged transaction in `fee_speck`. Submit
+    /// it with [`Self::submit_reserved`], which hands the Dust back when the
+    /// node never gets the transaction or rejects it. A transaction that
+    /// already pays its own fee comes back unchanged, with nothing reserved.
+    pub async fn balance_transaction(
+        &self,
+        tx_bytes: &[u8],
+    ) -> Result<TransferResult, ProviderError> {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
         Box::pin(self.balance_transaction_inner(tx_bytes)).await
     }
 
-    async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+    async fn balance_transaction_inner(
+        &self,
+        tx_bytes: &[u8],
+    ) -> Result<TransferResult, ProviderError> {
         let ledger = transaction_ledger_version(tx_bytes)?;
         match self.builds().await? {
             Builds::Ledger8(builds) if ledger == LedgerVersion::V8 => {
@@ -742,27 +755,34 @@ impl MidnightProvider {
         Ok(())
     }
 
-    /// Submit a built transaction and keep its reservation alive on the
-    /// returned handle.
+    /// Submit a transaction that this provider's wallet built, and carry the
+    /// reservation of its build on the returned handle.
     ///
-    /// A node's definitive rejection arrives as a terminal status while
-    /// awaiting inclusion, after this has already returned, so the inputs a
-    /// build reserved have to travel with the handle for anything to hand them
-    /// back.
+    /// Use it for the [`TransferResult`] of a `.build()` on a transfer, of
+    /// [`Self::balance_transaction`], or of a deploy. The inputs in
+    /// `result.spent` then go back to the wallet in two cases:
     ///
-    /// Failing here frees them only when the transaction provably never left
-    /// this process. A failed RPC call may still have delivered it, so those
-    /// inputs stay reserved and wait out their TTL.
-    pub(crate) async fn submit_reserved(
+    /// - The submit fails with
+    ///   [`SubmitError::NotSubmitted`](crate::SubmitError::NotSubmitted), a
+    ///   failed connect included. The transaction never left this process, and
+    ///   the release completes before the error returns.
+    /// - A wait on the [`PendingTx`] reads
+    ///   [`SubmitError::Invalid`](crate::SubmitError::Invalid), the node's
+    ///   definitive rejection. It arrives after this method returns, so the
+    ///   reservation travels with the handle.
+    ///
+    /// Any other failure keeps the inputs reserved until their TTL passes,
+    /// because the node can still hold the transaction. Use [`Self::submit`]
+    /// for bytes that this wallet did not build.
+    pub async fn submit_reserved(
         &self,
-        result: &TransferResult,
+        result: TransferResult,
     ) -> Result<PendingTx, ProviderError> {
         match self.submit(&result.tx_bytes).await {
             Ok(pending) => Ok(match self.facade() {
-                Some(wallet) => pending.with_reservation(crate::submit::Reservation::new(
-                    wallet,
-                    result.spent.clone(),
-                )),
+                Some(wallet) => {
+                    pending.with_reservation(crate::submit::Reservation::new(wallet, result.spent))
+                }
                 None => pending,
             }),
             Err(err) => {
@@ -1291,6 +1311,14 @@ pub struct HeldInputs {
 impl HeldInputs {
     pub(crate) fn of(spent: SpentInputs, wallet: Option<Arc<dyn WalletFacade>>) -> Self {
         Self { wallet, spent }
+    }
+
+    /// The inputs this guard holds. A build reads them before
+    /// [`Self::keep_on_ok`] when its result has to name them beside the
+    /// inputs of a later reservation (see
+    /// [`SpentInputs::merge`](midnight_types::SpentInputs::merge)).
+    pub fn spent(&self) -> &SpentInputs {
+        &self.spent
     }
 
     /// Run `work` and keep the inputs reserved only if it succeeds.
