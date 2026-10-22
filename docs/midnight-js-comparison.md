@@ -25,7 +25,7 @@ ContractProviders = {
 | midnight-js abstraction       | midnight-rs equivalent                                                                              |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
 | `MidnightProvider.submitTx`   | `MidnightProvider::submit`                                                                          |
-| `PublicDataProvider`          | The `Provider` trait (`get_contract_state`, `query_contract_state`) + `MidnightProvider`'s `get_*` reads |
+| `PublicDataProvider`          | The `Provider` trait (`get_contract_state`), `StateQueryProvider` for the lazy reads, and `MidnightProvider`'s `get_*` reads |
 | `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers), plus `merge_transactions` / `balance_transaction` (see "Combining and balancing transactions") |
 | `ProofProvider`               | `ProofProviders` (one prover per ledger generation), set with `with_proof_provider`: local by default, or a `RemoteProofServer` |
 | `ZkConfigProvider`            | The `ZkConfigProvider` trait, set with `with_zk_config`, where a path gives the default `FsZkConfigProvider` |
