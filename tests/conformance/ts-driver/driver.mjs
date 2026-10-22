@@ -7,6 +7,10 @@
 // Canonical JSON forms mirror tests/conformance/src/{state_json,report}.rs:
 // hex strings for byte content, `{tag, ...}` objects rebuilt key-order-stable,
 // map entries sorted by the JSON text of the key.
+//
+// A step with `"error": "<substring>"` must fail. Its golden is
+// `{ circuit, error }`, with the error message of the runtime, and the next
+// step starts from the state before the failed one.
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -206,6 +210,28 @@ const makeWitnessHarness = (witnessNames) => {
 
 // --- case execution ---------------------------------------------------------
 
+// A source location in a runtime error message. The golden masks it, so an
+// edit that moves a line of the fixture source leaves the golden as it is.
+const SOURCE_LOCATION = /\S+\.compact line \d+ char \d+/g;
+
+// The masked error message of a step that must fail. Throws when the circuit
+// runs, or when its message does not contain `substring`.
+const expectedFailure = async (run, substring, where) => {
+  let message;
+  try {
+    await run();
+  } catch (e) {
+    message = String(e?.message ?? e).replace(SOURCE_LOCATION, '<src>');
+  }
+  if (message === undefined) {
+    throw new Error(`${where}: the circuit ran, but the case expects the error "${substring}"`);
+  }
+  if (!message.includes(substring)) {
+    throw new Error(`${where}: the error "${message}" does not contain "${substring}"`);
+  }
+  return message;
+};
+
 const runCase = async (fixture, caseName, caseJson) => {
   const moduleUrl = pathToFileURL(join(fixturesDir, fixture, 'contract', 'index.js'));
   const mod = await import(moduleUrl);
@@ -262,8 +288,15 @@ const runCase = async (fixture, caseName, caseJson) => {
     const circuit = contract.circuits[step.circuit];
     if (!circuit) throw new Error(`${fixture} has no circuit ${step.circuit}`);
     const args = (step.args ?? []).map(taggedToJs);
+    const where = `${fixture}/${caseName} step ${step.circuit}`;
+    // A failed circuit can stop before it reads all of its witness script.
+    if (step.error !== undefined) {
+      const error = await expectedFailure(() => circuit(context, ...args), step.error, where);
+      report.steps.push({ circuit: step.circuit, error });
+      continue;
+    }
     const result = await circuit(context, ...args);
-    harness.assertDrained(`${fixture}/${caseName} step ${step.circuit}`);
+    harness.assertDrained(where);
 
     const zswapOutputs = result.context.callContext.currentZswapLocalState.outputs;
     if (zswapOutputs.length > 0) {
