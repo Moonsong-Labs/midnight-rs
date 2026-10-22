@@ -2,6 +2,7 @@ pragma language_version >= 0.16.0;
 import CompactStandardLibrary;
 
 export ledger tag_cell: Bytes<32>;
+export ledger points: Vector<2, JubjubPoint>;
 
 export struct Entry {
   a: Uint<32>,
@@ -15,4 +16,14 @@ export circuit hash_entries(entries: Vector<3, Entry>): Bytes<32> {
   const h = persistentHash<Vector<3, Entry>>(entries);
   tag_cell = disclose(h);
   return h;
+}
+
+// A ledger read arrives flat and a literal arrives as a tuple. A point takes
+// two atoms. So the comparison and the spread lay out the read by its type.
+export circuit flat_points(a: Field, b: Field): [Boolean, Boolean, Vector<3, JubjubPoint>] {
+  const p = ecMulGenerator(a as JubjubScalar);
+  const q = ecMulGenerator(b as JubjubScalar);
+  const before = points == [p, q];
+  points = disclose([p, q]);
+  return disclose([before, points == [p, q], [...points, ecAdd(p, q)]]);
 }

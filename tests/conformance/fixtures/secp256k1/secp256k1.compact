@@ -1,0 +1,52 @@
+// Conformance corpus contract: the secp256k1 field arithmetic, the casts
+// between its fields and bytes, its curve natives, and the standard library
+// circuits built on them. A ledger cell of each type pins the encoding in the
+// state, and every circuit writes one, because the driver runs only circuits
+// that need a proof. The Makefile compiles this fixture for ZKIR v3
+// (CONFORMANCE_ZKIR_V3_FIXTURES).
+
+import CompactStandardLibrary;
+
+export ledger base_cell: Secp256k1Base;
+export ledger scalar_cell: Secp256k1Scalar;
+export ledger point_cell: Secp256k1Point;
+export ledger verified: Boolean;
+export ledger address: Bytes<20>;
+
+witness secret_scalar(): Secp256k1Scalar;
+
+export circuit base_ops(a: Secp256k1Base, b: Secp256k1Base): Vector<5, Secp256k1Base> {
+  const sum = a + b;
+  base_cell = disclose(sum);
+  return disclose([sum, a - b, a * b, neg(a), inv(b)]);
+}
+
+export circuit scalar_ops(a: Secp256k1Scalar, b: Secp256k1Scalar): Vector<5, Secp256k1Scalar> {
+  const k = secret_scalar();
+  scalar_cell = disclose(a * k);
+  return disclose([a + b, a - b, a * b, neg(a), inv(b)]);
+}
+
+export circuit curve_ops(p: Secp256k1Point, k: Secp256k1Scalar): [Secp256k1Base, Secp256k1Base, Boolean, Boolean] {
+  const q = ecAdd(ecMulGenerator(k), ecMul(p, k));
+  point_cell = disclose(q);
+  return disclose([secp256k1PointX(q), secp256k1PointY(q), q == p, ecMulGenerator(default<Secp256k1Scalar>) == default<Secp256k1Point>]);
+}
+
+export circuit casts(b: Bytes<32>, x: Secp256k1Base): [Secp256k1Scalar, Secp256k1Base, Bytes<32>] {
+  const s = b as Secp256k1Scalar;
+  scalar_cell = disclose(s);
+  return disclose([s, b as Secp256k1Base, x as Bytes<32>]);
+}
+
+export circuit verify(msg_hash: Bytes<32>, sig: Secp256k1EcdsaSignature, pk: Secp256k1Point): Boolean {
+  const valid = disclose(secp256k1EcdsaVerify(msg_hash, sig, pk));
+  verified = valid;
+  return valid;
+}
+
+export circuit eth_address(pk: Secp256k1Point): Bytes<20> {
+  const a = disclose(secp256k1EthereumAddress(pk));
+  address = a;
+  return a;
+}

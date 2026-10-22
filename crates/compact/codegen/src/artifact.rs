@@ -17,8 +17,8 @@ use std::path::Path;
 use crate::types::{Circuit, ContractInfo, FieldIndex, LedgerField, StorageKind};
 use compact_analyzed_ir as ir;
 
-/// A conversion failure: a construct the internal IR cannot represent yet
-/// (foreign fields, curve points) or a malformed artifact.
+/// A conversion failure: a construct the internal IR cannot represent or a
+/// malformed artifact.
 #[derive(Debug)]
 pub struct ArtifactError(String);
 
@@ -237,17 +237,13 @@ fn check_type(t: &ir::Type) -> Result<(), ArtifactError> {
 /// The construct in `t` that the interpreter cannot execute, or `None` when
 /// it can execute every part of `t`.
 ///
-/// The compiler's language is wider than what runs off-chain: a foreign-curve
-/// field or point has no value representation in the interpreter, and an ADT
-/// or a type variable is not a value type at all. The search goes through
-/// vectors, aliases, tuples and struct fields, and the description names the
-/// first such construct that it finds.
+/// An ADT or a type variable is not a value type at all. The search goes
+/// through vectors, aliases, tuples and struct fields, and the description
+/// names the first such construct that it finds.
 ///
 /// [`load`] refuses an artifact that holds such a type.
 pub fn unsupported_type(t: &ir::Type) -> Option<String> {
     match t {
-        ir::Type::Field(ft) if !ft.is_native() => Some("a secp256k1 field type".to_string()),
-        ir::Type::Point(ir::Curve::Secp256k1) => Some("a secp256k1 point type".to_string()),
         ir::Type::Adt { name, .. } => Some(format!("ADT type {name} in a value position")),
         ir::Type::TypeVar(v) => Some(format!("type variable {v}")),
         ir::Type::Vector { ty, .. } | ir::Type::Alias { ty, .. } => unsupported_type(ty),
@@ -423,24 +419,11 @@ fn check_expr(e: &ir::Expr) -> Result<(), ArtifactError> {
             check_type(from)?;
             check_expr(expr)
         }
-        CastToField {
-            field_type,
-            from,
-            expr,
-        } => {
-            check_type(&ir::Type::Field(field_type.clone()))?;
+        CastToField { from, expr, .. } => {
             check_type(from)?;
             check_expr(expr)
         }
-        CastFromField {
-            field_type, expr, ..
-        }
-        | FieldToBytes {
-            field_type, expr, ..
-        } => {
-            check_type(&ir::Type::Field(field_type.clone()))?;
-            check_expr(expr)
-        }
+        CastFromField { expr, .. } | FieldToBytes { expr, .. } => check_expr(expr),
         DowncastUnsigned { expr, .. } => check_expr(expr),
         ContractCall {
             receiver,

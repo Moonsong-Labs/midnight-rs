@@ -255,7 +255,10 @@ fn builtin(
             // Return as-is for now
             return Ok(Some(args.get(1).cloned().unwrap_or(Value::Void)));
         }
-        _ => return Ok(None), // Not a builtin
+        _ => match crate::secp256k1::native(name, args) {
+            Some(result) => result?,
+            None => return Ok(None), // Not a builtin
+        },
     };
     Ok(Some(Value::AlignedValue(av)))
 }
