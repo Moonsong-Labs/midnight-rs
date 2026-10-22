@@ -7,7 +7,7 @@ use std::time::Duration;
 use midnight_base_crypto::signatures::VerifyingKey;
 use midnight_provider::{MidnightProvider, Provider};
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::{BlockHash, ExtrinsicHash};
+use midnight_types::{BlockHash, ExtrinsicHash, TransferResult};
 
 use crate::address::IntoAddress;
 use crate::deploy::{deploy_funded, deployed_state};
@@ -78,22 +78,24 @@ struct RanCall {
     zk_config: Arc<dyn ZkConfigProvider>,
     /// The result of the run.
     exec_result: crate::runtime::ExecutionResult,
-    /// The private state the witnesses started from.
-    baseline: Vec<u8>,
-    /// The private state after the witnesses ran.
-    private_state: Vec<u8>,
-    /// The extrinsic that wrote `baseline`, when the journal has a head.
-    depends_on: Option<[u8; 32]>,
+    /// The private state of the run.
+    private_state: PrivateStateChange,
 }
 
 /// A circuit call built and proven, before it is submitted.
 struct BuiltCall {
-    /// The tagged-serialized proven transaction.
-    tx_bytes: Vec<u8>,
+    /// The proven transaction, and the wallet inputs that its build reserved.
+    transaction: TransferResult,
+    /// The private state of the call.
+    private_state: PrivateStateChange,
+}
+
+/// The private state of a call, before and after its witnesses ran.
+struct PrivateStateChange {
     /// The private state the witnesses started from.
     baseline: Vec<u8>,
     /// The private state after the witnesses ran.
-    private_state: Vec<u8>,
+    after: Vec<u8>,
     /// The extrinsic that wrote `baseline`, when the journal has a head.
     depends_on: Option<[u8; 32]>,
 }
@@ -202,15 +204,16 @@ async fn settle_call(
 /// state, then submit the call.
 ///
 /// Returns the submitted transaction, and `store` when it holds the snapshot.
+/// A failed record hands the inputs of `prepared` back before it returns.
 async fn record_and_submit(
     address: &str,
     prepared: PreparedTx,
-    built: BuiltCall,
+    private_state: PrivateStateChange,
     store: Option<Arc<dyn PrivateStateProvider>>,
 ) -> Result<(PendingTx, Option<Arc<dyn PrivateStateProvider>>), ContractError> {
     let extrinsic_hash = prepared.extrinsic_hash();
     let transaction_hash = prepared.transaction_hash();
-    let persist = private_state_persist(&built.baseline, &built.private_state);
+    let persist = private_state_persist(&private_state.baseline, &private_state.after);
     // Without a snapshot (no store, or the witnesses left the state
     // unchanged), the call has nothing to settle, and no error tells the
     // caller to reconcile one.
@@ -225,20 +228,23 @@ async fn record_and_submit(
                 // If `append_pending` fails (e.g. SnapshotAlreadyExists
                 // from a retry, a JournalConflict from a concurrent
                 // call, or an InvalidFormat journal) the tx has NOT been
-                // submitted yet, so we surface the error and stop before
-                // anything hits the wire.
-                store
+                // submitted yet, so we hand its inputs back, surface the
+                // error and stop before anything hits the wire.
+                let appended = store
                     .append_pending(
                         address,
                         extrinsic_hash.0,
-                        built.depends_on,
-                        &built.private_state,
+                        private_state.depends_on,
+                        &private_state.after,
                     )
-                    .await
-                    .map_err(|e| ContractError::PendingSnapshotFailed {
+                    .await;
+                if let Err(source) = appended {
+                    prepared.release().await;
+                    return Err(ContractError::PendingSnapshotFailed {
                         extrinsic_hash,
-                        source: e,
-                    })?;
+                        source,
+                    });
+                }
                 pending_snapshot_written = true;
             }
         }
@@ -1167,8 +1173,9 @@ impl<P: Provider> Contract<P> {
     /// the circuit and before the build. A call that leaves the private state
     /// as it was, or a contract with no witnesses, builds as usual. The build
     /// reserves the wallet inputs that the transaction spends, as
-    /// [`Self::call_with`] does. They stay reserved until the chain shows the
-    /// spends or their TTL passes (see [`MidnightProvider::release`]).
+    /// [`Self::call_with`] does. The bytes do not name those inputs, so
+    /// nothing can hand them back. They stay reserved until a sync sees the
+    /// chain spend them, or until their TTL passes.
     ///
     /// # Errors
     ///
@@ -1245,7 +1252,8 @@ impl<P: Provider> Contract<P> {
 
         let ran = Box::pin(self.run_for_build(circuit, program, args, witnesses, store.as_deref()))
             .await?;
-        if private_state_persist(&ran.baseline, &ran.private_state) == PrivateStatePersist::Persist
+        if private_state_persist(&ran.private_state.baseline, &ran.private_state.after)
+            == PrivateStatePersist::Persist
         {
             return Err(ContractError::UnrecordedPrivateState {
                 address: self.address.clone(),
@@ -1262,7 +1270,7 @@ impl<P: Provider> Contract<P> {
             pay_fees,
         ))
         .await?;
-        Ok(built.tx_bytes)
+        Ok(built.transaction.tx_bytes)
     }
 
     /// The head of the contract's private-state journal, which the witnesses
@@ -1326,15 +1334,17 @@ impl<P: Provider> Contract<P> {
             address,
             zk_config,
             exec_result,
-            baseline,
-            private_state,
-            depends_on,
+            private_state: PrivateStateChange {
+                baseline,
+                after: private_state,
+                depends_on,
+            },
         })
     }
 
     /// Build the proven transaction of a call that ran. When `pay_fees` is
-    /// false the transaction is left fee-less. Returns the built call and the
-    /// circuit's raw result.
+    /// false the transaction is left fee-less. Returns the built call, with the
+    /// wallet inputs that its build reserved, and the circuit's raw result.
     #[expect(
         clippy::too_many_arguments,
         reason = "the inputs of a call, as `build_call_with` and `call_with` take them"
@@ -1352,7 +1362,7 @@ impl<P: Provider> Contract<P> {
     where
         P: AsMidnightProvider,
     {
-        let tx_bytes = crate::call::call_transaction(
+        let transaction = crate::call::call_transaction(
             circuit,
             args,
             &ran.exec_result,
@@ -1368,10 +1378,8 @@ impl<P: Provider> Contract<P> {
         .await?;
         Ok((
             BuiltCall {
-                tx_bytes,
-                baseline: ran.baseline,
+                transaction,
                 private_state: ran.private_state,
-                depends_on: ran.depends_on,
             },
             ran.exec_result.result,
         ))
@@ -1474,9 +1482,12 @@ impl<P: Provider> Contract<P> {
     ///   The `Pending` snapshot stays, because the node can still hold the
     ///   transaction. The variant says how to reconcile it.
     ///
-    /// An error after the build keeps the wallet inputs that the build
-    /// reserved until their TTL passes. The error does not name those
-    /// inputs, so [`MidnightProvider::release`] cannot hand them back.
+    /// The build reserves the wallet inputs that the transaction spends: the
+    /// fee Dust, and the coins of `shielded`. An error before the submit hands
+    /// them back before it returns. A wait on the [`PendingCall`] that reads
+    /// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid) also
+    /// hands them back. Any other error from the submit on keeps them reserved
+    /// until a sync sees the chain spend them, or until their TTL passes.
     #[expect(
         clippy::too_many_arguments,
         reason = "the arguments of `call_with`, plus the decoder"
@@ -1514,6 +1525,10 @@ impl<P: Provider> Contract<P> {
             true,
         ))
         .await?;
+        let BuiltCall {
+            transaction,
+            private_state,
+        } = built;
 
         // Prepare the tx so its extrinsic_hash is known, then record the
         // pending snapshot keyed by that hash *before* submitting. Recording
@@ -1523,14 +1538,25 @@ impl<P: Provider> Contract<P> {
         // process dies after the append but before submit, the tx never
         // reached the mempool, leaving a provisional pending entry that
         // reconciliation resolves.
-        let prepared = Box::pin(provider.prepare(&built.tx_bytes)).await?;
+        let prepared = Box::pin(provider.prepare_reserved(transaction)).await?;
 
         // Decode before the append and the submit: an error after the submit
         // would leave the call in flight with no `PendingCall` to settle it.
-        let value = decode(result)?;
+        let value = match decode(result) {
+            Ok(value) => value,
+            Err(err) => {
+                prepared.release().await;
+                return Err(err);
+            }
+        };
 
-        let (pending, snapshot_store) =
-            Box::pin(record_and_submit(&self.address, prepared, built, store)).await?;
+        let (pending, snapshot_store) = Box::pin(record_and_submit(
+            &self.address,
+            prepared,
+            private_state,
+            store,
+        ))
+        .await?;
         Ok(PendingCall {
             pending,
             value,

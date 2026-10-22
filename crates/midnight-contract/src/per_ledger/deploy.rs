@@ -191,6 +191,6 @@ async fn pay_offer(
         transients: vec![],
     });
 
-    let bytes = prove_without_fee(tx_info).await?;
-    Ok(builds.balance_transaction(&bytes).await?)
+    let unpaid = prove_without_fee(tx_info).await?;
+    Ok(builds.balance_transaction(&unpaid.tx_bytes).await?)
 }

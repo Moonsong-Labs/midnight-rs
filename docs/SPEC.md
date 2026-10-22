@@ -305,16 +305,20 @@ builds.prepare_shielded_inputs(..)                             // only if the ca
 if pay_fees: builds.balance_transaction(bytes)
   └─ the wallet draws the Dust and reserves it as one transition (prepare_fees),
      then the fee is proved on its own and merged in at its own intent segment,
-     so the circuit proof is not redone. The call keeps only the merged bytes.
+     so the circuit proof is not redone.
   ↓
-provider.prepare(tx_bytes) → PreparedTx                   // the extrinsic hash, before the submit
+TransferResult: the merged bytes, and the pinned coins and the fee Dust in spent
+  ↓
+provider.prepare_reserved(result) → PreparedTx            // the extrinsic hash, before the submit
   ↓
 .send() only: decode the typed return value from ExecutionResult.result
+  └─ an error: PreparedTx::release hands the inputs back
   ↓
 append the Pending private-state snapshot, if the witnesses changed the state
+  └─ an error: PreparedTx::release, then PendingSnapshotFailed
   ↓
 prepared.submit().await → PendingTx → PendingCall<T>      // .send() returns here
-  └─ SubmitRpc: SubmissionWait, and the snapshot stays Pending
+  └─ SubmitRpc: SubmissionWait, the snapshot stays Pending, and the inputs stay reserved
   ↓
 PendingCall::wait_finalized → PendingTx::wait_finalized   // .await bounds it by DEFAULT_TX_FINALIZE_TIMEOUT
   ↓
@@ -380,7 +384,7 @@ Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancel
 
 `MidnightProvider::prepare_reserved` prepares a `TransferResult`, and the `PreparedTx` holds the reservation of its build. A failed prepare hands the inputs back before it returns. A `PreparedTx` that drops before its submit hands them back too, and `PreparedTx::release` does the same and waits for it. `PreparedTx::submit` moves the reservation to the `PendingTx`, so a wait that reads `Invalid` hands the inputs back. A failed submit keeps them reserved.
 
-`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A submit that fails with `NotSubmitted` hands the inputs back before it returns. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call submits with no reservation, so its inputs stay reserved until their TTL after a rejection.
+`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A submit that fails with `NotSubmitted` hands the inputs back before it returns. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call prepares with `prepare_reserved`, because it records its private-state snapshot between the prepare and the submit. So an error before its submit, or an `Invalid` at its wait, hands its inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
 
 ## Block pinning
 

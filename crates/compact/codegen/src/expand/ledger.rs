@@ -1119,6 +1119,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// `ContractError::UnrecordedPrivateState` when the witnesses change the
                 /// private state, after the local run and before the build reserves an
                 /// input or makes a proof. Submit such a call with `.await` or `.send()`.
+                ///
+                /// The build reserves the wallet inputs that the transaction spends. The
+                /// bytes do not name them, so they stay reserved until a sync sees the chain
+                /// spend them, or until their TTL passes.
                 /// See `midnight_contract::Contract::build_call_with`.
                 pub async fn build(
                     self,
@@ -1201,6 +1205,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// As with `build`, it fails with `ContractError::UnrecordedPrivateState`
                 /// when the witnesses change the private state, before the build reserves
                 /// an input or makes a proof. Submit such a call with `.await` or `.send()`.
+                /// As with `build`, the inputs that the build reserves stay reserved until
+                /// a sync sees the chain spend them, or until their TTL passes.
                 fn without_dust(
                     self,
                 ) -> impl ::core::future::Future<
