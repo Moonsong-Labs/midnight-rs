@@ -10,8 +10,12 @@ use super::helpers::Lit;
 pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
     match ty {
         Type::Boolean => quote! { bool },
-        Type::Field(FieldType::Base(Curve::Secp256k1)) => quote! { Secp256k1Base },
-        Type::Field(FieldType::Scalar(Curve::Secp256k1)) => quote! { Secp256k1Scalar },
+        Type::Field(FieldType::Base(Curve::Secp256k1)) => {
+            quote! { midnight_contract::runtime::Secp256k1Base }
+        }
+        Type::Field(FieldType::Scalar(Curve::Secp256k1)) => {
+            quote! { midnight_contract::runtime::Secp256k1Scalar }
+        }
         Type::Field(_) => quote! { TransientFr },
         Type::Unsigned(maxval) => uint_tokens(maxval),
         Type::Bytes(length) => {
@@ -56,7 +60,7 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
         // The runtime's EC values carry the wire spelling the generated
         // bindings already used for a Jubjub point.
         Type::Point(Curve::Jubjub) => opaque_tokens("JubjubPoint"),
-        Type::Point(Curve::Secp256k1) => quote! { Secp256k1Point },
+        Type::Point(Curve::Secp256k1) => quote! { midnight_contract::runtime::Secp256k1Point },
         Type::Opaque(name) => opaque_tokens(name),
         Type::Contract { .. } => type_to_tokens(&Type::contract_address()),
         // Rejected at load by `artifact::check_type`; unreachable here.

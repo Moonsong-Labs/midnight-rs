@@ -92,9 +92,9 @@ impl<'a> EmitCtxt<'a> {
             use #crate_path::{
                 Aligned, AlignedValue, Alignment, Bytes, ContractMaintenanceAuthority,
                 ContractState, EmbeddedGroupAffine, InMemoryDB, InvalidBuiltinDecode,
-                ListAccessor, MapAccessor, MerkleTree, MerkleTreeAccessor, Secp256k1Base,
-                Secp256k1Point, Secp256k1Scalar, SetAccessor, StateError, StateValue,
-                StorageArray, StorageHashMap, TransientFr, Uint, ValueSlice, Vector,
+                ListAccessor, MapAccessor, MerkleTree, MerkleTreeAccessor, SetAccessor,
+                StateError, StateValue, StorageArray, StorageHashMap, TransientFr, Uint,
+                ValueSlice, Vector,
                 cell_as, decode_contract_state, get_field_path, hex, lazy, serde, serde_json,
             };
         };

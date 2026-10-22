@@ -5,14 +5,16 @@
 
 use std::ops::Range;
 
-use midnight_typed_state::{Aligned, AlignedValue, Secp256k1Base, Secp256k1Point, Secp256k1Scalar};
+use midnight_typed_state::{Aligned, AlignedValue};
 
 use compact_codegen::ir::{Curve, Type, uint_byte_width};
 use num_bigint::BigUint;
 
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
 use crate::error::InterpreterError;
-use crate::secp256k1::{ForeignField, encode_point};
+use crate::secp256k1::{
+    ForeignField, Secp256k1Base, Secp256k1Point, Secp256k1Scalar, encode_point,
+};
 use crate::value::Value;
 
 /// Precomputed layout of a struct: field name → (atom offset, atom count).
