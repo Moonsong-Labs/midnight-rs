@@ -969,18 +969,12 @@ impl Wallet {
                 .map_err(|_| WalletError::Sync("ledger state lock poisoned".into()))?;
             let mut ledger_state = (**guard).clone();
 
-            // intent_hash + output_no are part of a UTXO's identity; falling back
-            // to default values silently creates collisions between distinct UTXOs
-            // and synthesizes inputs the chain will reject.
             let mut utxo_state = (*ledger_state.utxo).clone();
             for tracked in &self.unshielded_utxos {
-                if tracked
-                    .spent_key()
-                    .is_some_and(|key| pending_unshielded.contains(&&key))
-                {
+                if pending_unshielded.contains(&&tracked.spent_key()) {
                     continue;
                 }
-                let utxo = tracked_to_ledger_utxo(tracked, owner)?;
+                let utxo = tracked_to_ledger_utxo(tracked, owner);
                 utxo_state = utxo_state.insert(utxo, UtxoMeta { ctime: utxo_ctime });
             }
             ledger_state.utxo = Sp::new(utxo_state);
@@ -1555,41 +1549,14 @@ fn event_spend_nullifier(event: &Event<DefaultDB>) -> Option<DustNullifier> {
     }
 }
 
-fn tracked_to_ledger_utxo(
-    tracked: &TrackedUtxo,
-    owner: helpers::UserAddress,
-) -> Result<LedgerUtxo, WalletError> {
-    let type_ = tracked
-        .unshielded_token_type()
-        .map(IntoLedger::into_ledger)
-        .ok_or_else(|| {
-            WalletError::Sync(format!(
-                "tracked UTXO has malformed token_type {}",
-                tracked.token_type
-            ))
-        })?;
-    let intent_hash = tracked
-        .parsed_intent_hash()
-        .map(helpers::IntentHash)
-        .ok_or_else(|| {
-            WalletError::Sync(match &tracked.intent_hash {
-                None => "tracked UTXO has no intent_hash".into(),
-                Some(hex) => format!("tracked UTXO has malformed intent_hash {hex}"),
-            })
-        })?;
-    let output_no = tracked.output_number().ok_or_else(|| {
-        WalletError::Sync(match tracked.output_index {
-            None => "tracked UTXO has no output_index".into(),
-            Some(idx) => format!("tracked UTXO output_index {idx} out of range"),
-        })
-    })?;
-    Ok(LedgerUtxo {
+fn tracked_to_ledger_utxo(tracked: &TrackedUtxo, owner: helpers::UserAddress) -> LedgerUtxo {
+    LedgerUtxo {
         value: tracked.value,
         owner,
-        type_,
-        intent_hash,
-        output_no,
-    })
+        type_: tracked.token_type.into_ledger(),
+        intent_hash: helpers::IntentHash(tracked.intent_hash),
+        output_no: tracked.output_index,
+    }
 }
 
 #[cfg(test)]
@@ -1886,15 +1853,14 @@ mod tests {
         );
     }
 
-    /// A NIGHT UTXO with both identity fields, so `tracked_to_ledger_utxo`
-    /// accepts it.
+    /// A NIGHT UTXO that `ukey(0xab, 0)` names.
     fn tracked_night_utxo() -> TrackedUtxo {
         TrackedUtxo {
             owner: "mn_addr_undeployed1test".into(),
-            token_type: "00".repeat(32),
+            token_type: midnight_types::NIGHT,
             value: 42,
-            intent_hash: Some("ab".repeat(32)),
-            output_index: Some(0),
+            intent_hash: midnight_types::HashOutput([0xab; 32]),
+            output_index: 0,
             ctime: Some(0),
             registered_for_dust_generation: Some(false),
         }
@@ -1946,7 +1912,7 @@ mod tests {
         wallet.unshielded_utxos = vec![tracked_night_utxo()];
         wallet.reserve_pending(
             Vec::new(),
-            vec![ukey(&"ab".repeat(32), 0)],
+            vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
         );
@@ -2004,7 +1970,7 @@ mod tests {
         let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
         wallet.reserve_pending(
             Vec::new(),
-            vec![ukey("abcd", 0)],
+            vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
         );
@@ -2283,7 +2249,7 @@ mod tests {
     #[test]
     fn resync_commit_persists_when_reservation_cleared() {
         let (dir, mut wallet) = saved_wallet();
-        let key = ukey("abcd", 0);
+        let key = ukey(0xab, 0);
         wallet.reserve_pending(
             Vec::new(),
             vec![key.clone()],
@@ -2347,7 +2313,7 @@ mod tests {
         // confirmed, preserve reservations made after the snapshot.
         let mut wallet = test_wallet(None);
         wallet.last_tx_id = Some(3);
-        let confirmed = ukey("aaaa", 0);
+        let confirmed = ukey(0xaa, 0);
         wallet.reserve_pending(
             Vec::new(),
             vec![confirmed.clone()],
@@ -2359,7 +2325,7 @@ mod tests {
         let _plan = wallet.resync_plan();
 
         // A transfer build interleaves while the (conceptual) replay runs.
-        let late = ukey("bbbb", 1);
+        let late = ukey(0xbb, 1);
         wallet.reserve_pending(
             Vec::new(),
             vec![late.clone()],
@@ -2391,7 +2357,7 @@ mod tests {
         wallet.dust_wallet.dust_local_state = None;
         wallet.reserve_pending(
             vec![dust_batch(&[7])],
-            vec![ukey("abcd", 0)],
+            vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
         );

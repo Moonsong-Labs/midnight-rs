@@ -63,11 +63,9 @@ impl Wallet {
     pub fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
         self.unshielded_utxos()
             .iter()
-            .filter_map(|utxo| {
-                Some(UnshieldedUtxoInfo {
-                    token_type: utxo.unshielded_token_type()?,
-                    value: utxo.value,
-                })
+            .map(|utxo| UnshieldedUtxoInfo {
+                token_type: utxo.token_type,
+                value: utxo.value,
             })
             .collect()
     }

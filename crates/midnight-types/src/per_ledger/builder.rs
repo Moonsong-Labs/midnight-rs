@@ -576,7 +576,7 @@ impl<'a> TransferBuilder<'a> {
                 let intent_hash = s.intent_hash.as_ref()?;
                 let output_index = s.output_number?;
                 Some(SpentUtxoKey {
-                    intent_hash: hex::encode(intent_hash.0.0),
+                    intent_hash: intent_hash.0,
                     output_index,
                 })
             })
@@ -723,8 +723,8 @@ impl<'a> TransferBuilder<'a> {
                     value: utxo.value,
                     owner: seed.clone(),
                     token_type: NIGHT,
-                    intent_hash: utxo.parsed_intent_hash().map(helpers::IntentHash),
-                    output_number: utxo.output_number(),
+                    intent_hash: Some(helpers::IntentHash(utxo.intent_hash)),
+                    output_number: Some(utxo.output_index),
                 };
                 Box::new(info) as Box<dyn BuildUtxoSpend<DefaultDB, BuildContext>>
             })
@@ -772,7 +772,7 @@ impl<'a> TransferBuilder<'a> {
         tx_info.use_mock_proofs_for_fees(true);
 
         let spent_unshielded_inputs: Vec<SpentUtxoKey> =
-            night_utxos.iter().filter_map(|u| u.spent_key()).collect();
+            night_utxos.iter().map(|u| u.spent_key()).collect();
 
         let mut prepared = prepare_no_validate(tx_info).await?;
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
@@ -1448,10 +1448,10 @@ mod tests {
     fn night_utxo(value: u128, ctime: Option<i64>, registered: bool) -> TrackedUtxo {
         TrackedUtxo {
             owner: "owner".into(),
-            token_type: crate::sync::NIGHT_TOKEN_HEX.clone(),
+            token_type: crate::NIGHT,
             value,
-            intent_hash: None,
-            output_index: None,
+            intent_hash: crate::HashOutput([0; 32]),
+            output_index: 0,
             ctime,
             registered_for_dust_generation: Some(registered),
         }
