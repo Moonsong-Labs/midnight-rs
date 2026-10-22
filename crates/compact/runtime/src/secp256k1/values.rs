@@ -28,7 +28,7 @@ const HIGH_BYTES: usize = 8;
 /// # Examples
 ///
 /// ```
-/// use midnight_typed_state::Secp256k1Base;
+/// use compact_runtime::Secp256k1Base;
 ///
 /// let mut bytes = [0u8; 32];
 /// bytes[31] = 7;
@@ -51,7 +51,7 @@ pub struct Secp256k1Scalar(Fq);
 /// # Examples
 ///
 /// ```
-/// use midnight_typed_state::{Secp256k1Base, Secp256k1Point};
+/// use compact_runtime::{Secp256k1Base, Secp256k1Point};
 ///
 /// assert_eq!(Secp256k1Point::default().coordinates(), None);
 ///

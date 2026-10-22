@@ -30,7 +30,7 @@ pub use conversions::{
 };
 pub use error::InterpreterError;
 pub use result::ExecutionResult;
-pub use secp256k1::{ArithOp, ForeignField};
+pub use secp256k1::{ArithOp, ForeignField, Secp256k1Base, Secp256k1Point, Secp256k1Scalar};
 pub use standard_library::{Either, Maybe};
 pub use value::{Value, integer_fallback_aligned};
 pub use witness::{NoWitnesses, WitnessContext, WitnessOutcome, WitnessProvider};

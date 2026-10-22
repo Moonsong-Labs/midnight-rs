@@ -17,8 +17,10 @@
 //!
 //! The TS driver has the mirror converter in `ts-driver/driver.mjs`.
 
-use midnight_contract::runtime::{Value, bytes_aligned_value};
-use midnight_typed_state::{AlignedValue, Secp256k1Base, Secp256k1Point, Secp256k1Scalar};
+use midnight_contract::runtime::{
+    Secp256k1Base, Secp256k1Point, Secp256k1Scalar, Value, bytes_aligned_value,
+};
+use midnight_typed_state::AlignedValue;
 use serde_json::Value as Json;
 
 use crate::state_json::hex_from_json;
