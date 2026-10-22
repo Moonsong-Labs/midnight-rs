@@ -15,7 +15,9 @@ use midnight_types::{
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::replay::{latest_block, progress_cancelled, replay_unshielded_events, send_progress};
+use crate::replay::{
+    latest_block, ledger_of, progress_cancelled, replay_unshielded_events, send_progress,
+};
 use crate::storage::wallet_storage_id;
 use crate::sync::SyncPlan;
 use crate::{SyncProgress, ledger_8, ledger_9};
@@ -572,7 +574,7 @@ impl ResyncPlan {
             ))),
             ResyncPlanKind::Ledger8 { plan, identity } => {
                 let block = latest_block(indexer_url).await?;
-                let block = if LedgerVersion::of_block(&block)? == LedgerVersion::V8 {
+                let block = if ledger_of(&block)? == LedgerVersion::V8 {
                     // The chain can fork before this replay ends, and the
                     // replay then meets the later generation's events.
                     match plan.clone().run(indexer_url).await {
@@ -923,7 +925,7 @@ async fn sync_once(
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<State, WalletError> {
     let block = latest_block(sync.indexer_url).await?;
-    let chain = LedgerVersion::of_block(&block)?;
+    let chain = ledger_of(&block)?;
     let wallet_id = wallet_storage_id(sync.address);
 
     info!("loading cached state from disk");
@@ -1018,7 +1020,7 @@ async fn sync_on_chain(
     resume: Option<Resume>,
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<State, WalletError> {
-    let chain = LedgerVersion::of_block(block)?;
+    let chain = ledger_of(block)?;
     let resuming = resume.is_some();
     // Where each stream starts. When resuming, start from the next event
     // after the last one applied; the subscription is inclusive, so the

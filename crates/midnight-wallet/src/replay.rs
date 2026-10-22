@@ -207,7 +207,8 @@ pub(crate) async fn latest_block(
     indexer_url: &str,
 ) -> Result<midnight_indexer_client::Block, WalletError> {
     info!("fetching latest block from indexer");
-    let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)?;
+    let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)
+        .map_err(|e| gave_up("latest block", e))?;
     let mut retries = 0;
     loop {
         match indexer_client.get_block(None).await {
@@ -225,9 +226,32 @@ pub(crate) async fn latest_block(
     }
 }
 
+/// The generation that `block` ran, from the ledger parameters the indexer
+/// serves on it.
+pub(crate) fn ledger_of(
+    block: &midnight_indexer_client::Block,
+) -> Result<LedgerVersion, WalletError> {
+    LedgerVersion::of_ledger_parameters(&encoded_ledger_parameters(block)?)
+        .map_err(WalletError::from)
+}
+
+/// The encoded ledger parameters that the indexer serves on `block`.
+pub(crate) fn encoded_ledger_parameters(
+    block: &midnight_indexer_client::Block,
+) -> Result<Vec<u8>, WalletError> {
+    let params_hex = block
+        .ledger_parameters
+        .as_deref()
+        .ok_or_else(|| WalletError::Sync("latest block has no ledger_parameters".into()))?;
+    hex::decode(params_hex).map_err(|e| WalletError::Sync(format!("decode ledger params hex: {e}")))
+}
+
 fn gave_up(request: &'static str, error: IndexerError) -> WalletError {
     warn!(request, error = %with_causes(&error), "giving up on the indexer");
-    WalletError::Indexer(error)
+    WalletError::Indexer {
+        retryable: error.is_retryable(),
+        source: Box::new(error),
+    }
 }
 
 /// `error` with the causes its own message leaves out, such as the
@@ -836,7 +860,7 @@ mod tests {
                 .expect_err("no connection serves a block");
             server.abort();
             assert!(
-                matches!(&err, WalletError::Indexer(e) if e.is_retryable() == retryable),
+                matches!(&err, WalletError::Indexer { retryable: r, .. } if *r == retryable),
                 "answer: {answer:?}, got: {err:?}"
             );
             assert_eq!(
@@ -1101,7 +1125,7 @@ mod tests {
                     .await
                     .expect_err("must fail after exhausting reconnect attempts");
                 assert!(
-                    matches!(&err, WalletError::Indexer(e) if e.is_retryable()),
+                    matches!(&err, WalletError::Indexer { retryable, .. } if *retryable),
                     "complete: {complete}, got: {err:?}"
                 );
 
@@ -1151,7 +1175,7 @@ mod tests {
                 .await
                 .expect_err("duplicate-only re-deliveries must not reset the bound");
             assert!(
-                matches!(&err, WalletError::Indexer(e) if e.is_retryable()),
+                matches!(&err, WalletError::Indexer { retryable, .. } if *retryable),
                 "got: {err:?}"
             );
 

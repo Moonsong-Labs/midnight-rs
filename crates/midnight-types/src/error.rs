@@ -85,12 +85,15 @@ pub enum WalletError {
     },
 
     /// The sync gave up on the indexer.
-    ///
-    /// [`IndexerError::is_retryable`] tells whether a later sync can succeed.
-    ///
-    /// [`IndexerError::is_retryable`]: midnight_indexer_client::IndexerError::is_retryable
-    #[error("indexer: {0}")]
-    Indexer(#[from] midnight_indexer_client::IndexerError),
+    #[error("indexer: {source}")]
+    Indexer {
+        /// Whether a later sync can succeed: true for a transient failure,
+        /// such as a dropped connection, and false for one that repeats, such
+        /// as a GraphQL error.
+        retryable: bool,
+        /// The error that the indexer client returned.
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     /// Transfer transaction failed.
     #[error("transfer failed: {0}")]

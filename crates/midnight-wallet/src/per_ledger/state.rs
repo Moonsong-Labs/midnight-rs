@@ -246,12 +246,7 @@ fn decode_event(raw: &[u8], kind: &str) -> Result<Event<DefaultDB>, WalletError>
 fn decode_ledger_parameters(
     block: &midnight_indexer_client::Block,
 ) -> Result<LedgerParameters, WalletError> {
-    let params_hex = block
-        .ledger_parameters
-        .as_deref()
-        .ok_or_else(|| WalletError::Sync("latest block has no ledger_parameters".into()))?;
-    let params_bytes = hex::decode(params_hex)
-        .map_err(|e| WalletError::Sync(format!("decode ledger params hex: {e}")))?;
+    let params_bytes = crate::replay::encoded_ledger_parameters(block)?;
     let parameters: LedgerParameters = tagged_deserialize(&params_bytes[..])
         .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))?;
     validate_ledger_parameters(&parameters)?;
@@ -386,7 +381,7 @@ impl ResyncPlan {
         let block = block_res?;
         // A chain that moved to a later generation since the plan was taken
         // needs the wallet to cross, which is not this generation's to do.
-        expect_ledger(crate::LedgerVersion::of_block(&block)?)?;
+        expect_ledger(crate::replay::ledger_of(&block)?)?;
         if let Some((_, found)) = zswap.later_ledger {
             expect_ledger(found)?;
         }

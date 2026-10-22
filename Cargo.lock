@@ -3587,7 +3587,6 @@ dependencies = [
  "futures-util",
  "hex",
  "midnight-helpers",
- "midnight-indexer-client",
  "primitive-types",
  "rand 0.8.6",
  "serde",
