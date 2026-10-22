@@ -603,14 +603,13 @@ impl MidnightProvider {
     /// Returns a [`PendingTx`] handle that lets the caller await inclusion
     /// (`wait_best`) and finalization (`wait_finalized`). The provider's
     /// `node_url` is used as the connection target — callers don't repeat it.
-    /// A failed connect gives [`SubmitError::NotSubmitted`](crate::SubmitError::NotSubmitted).
     ///
     /// This is for bytes that this wallet did not build. It carries no
     /// reservation, so a rejection hands no inputs back. For a
     /// [`TransferResult`] that this wallet built, use
     /// [`Self::submit_reserved`].
     pub async fn submit(&self, tx_bytes: &[u8]) -> Result<PendingTx, ProviderError> {
-        let conn = self.connect_to_submit().await?;
+        let conn = self.get_or_connect().await?;
         submit::submit_bytes(&conn.client, tx_bytes).await
     }
 
@@ -623,22 +622,10 @@ impl MidnightProvider {
     ///
     /// This builds the extrinsic locally from the node's metadata, which
     /// checks only the call's shape. The node validates the transaction only
-    /// at submit. A failed connect gives
-    /// [`SubmitError::NotSubmitted`](crate::SubmitError::NotSubmitted).
+    /// at submit.
     pub async fn prepare(&self, tx_bytes: &[u8]) -> Result<submit::PreparedTx, ProviderError> {
-        let conn = self.connect_to_submit().await?;
+        let conn = self.get_or_connect().await?;
         submit::prepare_bytes(&conn.client, tx_bytes).await
-    }
-
-    /// [`Self::get_or_connect`] for a submission. A transaction whose connect
-    /// fails never left this process, so a build can hand its inputs back.
-    async fn connect_to_submit(&self) -> Result<NodeConnection, ProviderError> {
-        self.get_or_connect().await.map_err(|e| {
-            crate::SubmitError::NotSubmitted {
-                message: e.to_string(),
-            }
-            .into()
-        })
     }
 
     /// Merge proven transactions into one, for multi-party flows: e.g. combining
@@ -1532,25 +1519,6 @@ mod tests {
             matches!(err, ProviderError::Transaction(ref m) if m.contains("deserialize")),
             "got {err:?}"
         );
-    }
-
-    #[tokio::test]
-    async fn a_submit_that_cannot_connect_was_not_submitted() {
-        // A URL that does not parse fails the connect at once, with no retry.
-        let provider = MidnightProvider::new("not a node url", "http://127.0.0.1:1");
-        let submitted = provider.submit(&[0; 8]).await.map(|_| ());
-        let prepared = provider.prepare(&[0; 8]).await.map(|_| ());
-        for (call, result) in [("submit", submitted), ("prepare", prepared)] {
-            assert!(
-                matches!(
-                    result,
-                    Err(ProviderError::Submission(
-                        crate::SubmitError::NotSubmitted { .. }
-                    ))
-                ),
-                "{call}: {result:?}"
-            );
-        }
     }
 
     #[tokio::test]
