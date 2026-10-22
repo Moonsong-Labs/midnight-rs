@@ -538,9 +538,9 @@ mod tests {
         assert_eq!(batches[0].spends[0].old_nullifier, nullifier(9));
     }
 
-    /// The snapshot directory is named by public address precisely so it holds
-    /// nothing secret, and `pending.json` is a file in it. A seed written there
-    /// would sit in the clear beside the confirmed-state files.
+    /// The snapshot directory is named by public address, so no file in it
+    /// needs the seed, and `pending.json` is a file in it. A seed written there
+    /// would sit in the clear beside the other state files.
     #[test]
     fn pending_json_contains_no_seed_material() {
         let dir = tempfile::TempDir::new().unwrap();
