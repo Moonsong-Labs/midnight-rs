@@ -118,6 +118,112 @@
     {
       "circuit": "copy_members",
       "args": []
+    },
+    {
+      "circuit": "widen_first_id",
+      "args": []
+    },
+    {
+      "circuit": "members_are",
+      "args": [
+        {
+          "vector": [
+            {
+              "struct": [
+                {
+                  "id": {
+                    "uint": "11"
+                  }
+                },
+                {
+                  "key": {
+                    "bytes": "41414141"
+                  }
+                }
+              ]
+            },
+            {
+              "struct": [
+                {
+                  "id": {
+                    "uint": "22"
+                  }
+                },
+                {
+                  "key": {
+                    "bytes": "42424242"
+                  }
+                }
+              ]
+            },
+            {
+              "struct": [
+                {
+                  "id": {
+                    "uint": "33"
+                  }
+                },
+                {
+                  "key": {
+                    "bytes": "43434343"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "circuit": "members_are",
+      "args": [
+        {
+          "vector": [
+            {
+              "struct": [
+                {
+                  "id": {
+                    "uint": "11"
+                  }
+                },
+                {
+                  "key": {
+                    "bytes": "41414141"
+                  }
+                }
+              ]
+            },
+            {
+              "struct": [
+                {
+                  "id": {
+                    "uint": "22"
+                  }
+                },
+                {
+                  "key": {
+                    "bytes": "42424242"
+                  }
+                }
+              ]
+            },
+            {
+              "struct": [
+                {
+                  "id": {
+                    "uint": "33"
+                  }
+                },
+                {
+                  "key": {
+                    "bytes": "43434344"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ]
 }

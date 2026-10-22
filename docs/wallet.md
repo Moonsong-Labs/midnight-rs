@@ -151,7 +151,7 @@ let wallet = Wallet::from_mnemonic(phrase)?
 let provider = provider.with_wallet(wallet);
 ```
 
-A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider)` runs three concurrent indexer subscriptions in the current task, and returns the `Wallet` once all three have caught up:
+A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider)` replays three indexer subscriptions in the current task: the zswap and unshielded streams at the same time, then the Dust stream. It returns the `Wallet` once all three have caught up:
 
 | Subscription | What it fills |
 |---|---|
@@ -278,11 +278,13 @@ With `.with_storage(dir)`, the sync writes to:
   ├── metadata.json     event cursors, last block, last tx id, generation pointers,
   │                     and the ledger generation that wrote the state files
   ├── zswap-N.bin       tagged-serialized ZswapLocalState
-  ├── dust_wallet-N.bin tagged-serialized DustWallet
+  ├── dust_wallet-N.bin tagged-serialized DustWallet, which holds the Dust secret key
   └── pending.json      in-flight spend reservations (see below)
 ```
 
 `{network}` is the network that `.with_network(..)` names or, without `.with_network(..)`, the node's network.
+
+The directory holds the Dust secret key, so protect it as key material. On Unix, the SDK creates the wallet's directory with mode 0700 and its files with mode 0600.
 
 Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the old generation is cleaned up. A crash mid-write leaves the previous generation intact.
 
@@ -427,7 +429,7 @@ To check the outcome, look for the coin in `provider.spendable_shielded_coins()`
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). The wallet serializes each step of the two provider methods against resyncs: the registration, and each replay. A resync that runs between the registration and the replay keeps the registration. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
+Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On a handle (`Arc<LocalWallet>`), `watch_for_coins` registers and `rescan_shielded` replays. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet serializes each step of the two provider methods against resyncs: the registration, and each replay. A resync that runs between the registration and the replay keeps the registration. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
 
 ## Pending reservations
 

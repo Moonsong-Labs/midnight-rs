@@ -534,6 +534,471 @@
         "serializedUntagged": "4c008c6001b73419d6af2d0395d80f3cd4420636c6704ee729724e128aec092ec07bb32c404104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c9003043f801040000010400000104000001040000010400000104000001040000010400000044015020304ff010201040304010804140801040104018c6001b73419d6af2d0395d80f3cd4420636c6704ee729724e128aec092ec07bb32c404100010802104001040000010801040401040104010c4020010001080104040104020401040000010801040401040204010400000108010404010401040108400800010400000104000001040000001430144414141003000400"
       },
       "zswapOutputs": []
+    },
+    {
+      "circuit": "field_arith",
+      "input": {
+        "value": [
+          "",
+          "05"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "fcfffffffefffffffe5bfeff02a4bd5305d8a10908d83933487d9d2953a7ed73"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "fcfffffffefffffffe5bfeff02a4bd5305d8a10908d83933487d9d2953a7ed73"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "fcfffffffefffffffe5bfeff02a4bd5305d8a10908d83933487d9d2953a7ed73"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 8
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serializedUntagged": "4c008c6001fcfffffffefffffffe5bfeff02a4bd5305d8a10908d83933487d9d2953a7ed734104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c9003043f801040000010400000104000001040000010400000104000001040000010400000044015020304ff010201040304010804140801040104018c6001fcfffffffefffffffe5bfeff02a4bd5305d8a10908d83933487d9d2953a7ed734100010802104001040000010801040401040104010c4020010001080104040104020401040000010801040401040204010400000108010404010401040108400800010400000104000001040000001430144414141003000400"
+      },
+      "zswapOutputs": []
+    },
+    {
+      "circuit": "field_arith",
+      "input": {
+        "value": [
+          "01000000000000000000000000000080",
+          "01"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "0100000000000000000000000000000001"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "0100000000000000000000000000000001"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "0100000000000000000000000000000001"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 8
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serializedUntagged": "4c004c5101000000000000000000000000000000014104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c5003041f4010400000104000001040000010400000044015020304ff010201040304010804140801040104014c5101000000000000000000000000000000014100010802104001040000010801040401040104010c402001000108010404010402040104000001080104040104020401040000010801040401040104010840080001040000010400000104000001040000010400000104000001040000001430144414141003000400"
+      },
+      "zswapOutputs": []
+    },
+    {
+      "circuit": "field_arith",
+      "input": {
+        "value": [
+          "000000000000000001",
+          "000000000000000001"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "0000000000000000000000000000000001"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "0000000000000000000000000000000001"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "0000000000000000000000000000000001"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 8
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serializedUntagged": "4c004c5100000000000000000000000000000000014104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c5003041f4010400000104000001040000010400000044015020304ff010201040304010804140801040104014c5100000000000000000000000000000000014100010802104001040000010801040401040104010c402001000108010404010402040104000001080104040104020401040000010801040401040104010840080001040000010400000104000001040000010400000104000001040000001430144414141003000400"
+      },
+      "zswapOutputs": []
     }
   ]
 }
