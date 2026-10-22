@@ -1,7 +1,7 @@
 use proc_macro2::{Literal, TokenStream};
 use quote::quote;
 
-use crate::ir::{Curve, Type, uint_byte_width};
+use crate::ir::{Curve, FieldType, Type, uint_byte_width};
 
 use super::helpers::Lit;
 
@@ -10,6 +10,8 @@ use super::helpers::Lit;
 pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
     match ty {
         Type::Boolean => quote! { bool },
+        Type::Field(FieldType::Base(Curve::Secp256k1)) => quote! { Secp256k1Base },
+        Type::Field(FieldType::Scalar(Curve::Secp256k1)) => quote! { Secp256k1Scalar },
         Type::Field(_) => quote! { TransientFr },
         Type::Unsigned(maxval) => uint_tokens(maxval),
         Type::Bytes(length) => {
@@ -44,10 +46,11 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
         // The runtime's EC values carry the wire spelling the generated
         // bindings already used for a Jubjub point.
         Type::Point(Curve::Jubjub) => opaque_tokens("JubjubPoint"),
+        Type::Point(Curve::Secp256k1) => quote! { Secp256k1Point },
         Type::Opaque(name) => opaque_tokens(name),
         Type::Contract { .. } => type_to_tokens(&Type::contract_address()),
         // Rejected at load by `artifact::check_type`; unreachable here.
-        Type::Point(_) | Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
             quote! { Vec<u8> }
         }
     }

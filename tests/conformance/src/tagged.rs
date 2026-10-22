@@ -10,11 +10,15 @@
 //! - `{"bool": true}`
 //! - `{"enum": <ordinal>}`
 //! - `{"vector": [ ... ]}`: element-wise tagged values
+//! - `{"secp256k1Base": "<decimal>"}`, `{"secp256k1Scalar": "<decimal>"}`: an
+//!   element of that field
+//! - `{"secp256k1Point": {"x": "<decimal>", "y": "<decimal>"}}`: a point of
+//!   the curve, and `{"secp256k1Point": "identity"}` the identity
 //!
 //! The TS driver has the mirror converter in `ts-driver/driver.mjs`.
 
 use midnight_contract::runtime::{Value, bytes_aligned_value};
-use midnight_typed_state::AlignedValue;
+use midnight_typed_state::{AlignedValue, Secp256k1Base, Secp256k1Point, Secp256k1Scalar};
 use serde_json::Value as Json;
 
 use crate::state_json::hex_from_json;
@@ -109,8 +113,44 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
             }
             Ok(Value::Struct(named))
         }
+        "secp256k1Base" => Ok(Value::AlignedValue(AlignedValue::from(secp256k1_base(
+            body,
+        )?))),
+        "secp256k1Scalar" => {
+            let scalar = Secp256k1Scalar::from_be_bytes(parse_decimal_be_32(body)?)
+                .ok_or_else(|| format!("Secp256k1Scalar out of range: {body}"))?;
+            Ok(Value::AlignedValue(AlignedValue::from(scalar)))
+        }
+        "secp256k1Point" => {
+            let point = match body.as_str() {
+                Some("identity") => Secp256k1Point::default(),
+                _ => Secp256k1Point::from_coordinates(
+                    secp256k1_base(&body["x"])?,
+                    secp256k1_base(&body["y"])?,
+                )
+                .ok_or_else(|| format!("not a point of secp256k1: {body}"))?,
+            };
+            Ok(Value::AlignedValue(AlignedValue::from(point)))
+        }
         other => Err(format!("unknown value tag {other:?}")),
     }
+}
+
+fn secp256k1_base(body: &Json) -> Result<Secp256k1Base, String> {
+    Secp256k1Base::from_be_bytes(parse_decimal_be_32(body)?)
+        .ok_or_else(|| format!("Secp256k1Base out of range: {body}"))
+}
+
+/// Parse a decimal string below 2^256 into 32 big-endian bytes.
+fn parse_decimal_be_32(body: &Json) -> Result<[u8; 32], String> {
+    let le = parse_decimal_le_bytes(body)?;
+    let mut bytes = [0u8; 32];
+    bytes
+        .get_mut(..le.len())
+        .ok_or_else(|| format!("decimal wider than 32 bytes: {body}"))?
+        .copy_from_slice(&le);
+    bytes.reverse();
+    Ok(bytes)
 }
 
 pub(crate) fn parse_decimal(body: &Json) -> Result<u128, String> {

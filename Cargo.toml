@@ -127,6 +127,7 @@ midnight-onchain-state = { version = "=4.0.0", git = "https://github.com/RomarQ/
 midnight-transient-crypto = { version = "=3.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f" }
 midnight-coin-structure = { version = "=3.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f" }
 midnight-curves = { version = "=0.3.1" }
+midnight-zkir-v3 = { version = "=3.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f" }
 # Ledger 8's state types, to read state a ledger 8 chain wrote.
 midnight-onchain-state-ledger-8 = { package = "midnight-onchain-state", version = "=3.0.1", git = "https://github.com/RomarQ/midnight-ledger", rev = "ef6d06989ec523cc2013d8dc0839f4d4da3dafa1" }
 midnight-coin-structure-ledger-8 = { package = "midnight-coin-structure", version = "=2.0.2", git = "https://github.com/RomarQ/midnight-ledger", rev = "ef6d06989ec523cc2013d8dc0839f4d4da3dafa1" }

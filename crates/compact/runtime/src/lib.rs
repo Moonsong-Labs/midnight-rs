@@ -13,6 +13,7 @@ mod compact_types;
 mod conversions;
 mod error;
 mod result;
+mod secp256k1;
 mod value;
 mod witness;
 mod zswap;
@@ -28,6 +29,7 @@ pub use conversions::{
 };
 pub use error::InterpreterError;
 pub use result::ExecutionResult;
+pub use secp256k1::{ArithOp, ForeignField};
 pub use value::{Value, integer_fallback_aligned};
 pub use witness::{NoWitnesses, WitnessContext, WitnessOutcome, WitnessProvider};
 pub use zswap::{CircuitZswapInput, CircuitZswapOutput, WitnessNative};
