@@ -15,7 +15,9 @@ mod counter {
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use midnight_provider::{Builds, LedgerVersion, MidnightProvider, NIGHT, Network, Nullifier};
+use midnight_provider::{
+    Builds, HashOutput, LedgerVersion, MidnightProvider, NIGHT, Network, Nullifier,
+};
 use midnight_wallet::{LocalWallet, Wallet, WalletFacade};
 
 #[tokio::test]
@@ -233,11 +235,11 @@ async fn wait_for_dust(provider: &MidnightProvider) {
 }
 
 /// The UTXOs that generate Dust, as `(intent hash, output index)`.
-fn generating(utxos: &[midnight_provider::TrackedUtxo]) -> Vec<(Option<String>, Option<i64>)> {
+fn generating(utxos: &[midnight_provider::TrackedUtxo]) -> Vec<(HashOutput, u32)> {
     let mut generating: Vec<_> = utxos
         .iter()
         .filter(|u| u.is_registered_for_dust())
-        .map(|u| (u.intent_hash.clone(), u.output_index))
+        .map(|u| (u.intent_hash, u.output_index))
         .collect();
     generating.sort();
     generating

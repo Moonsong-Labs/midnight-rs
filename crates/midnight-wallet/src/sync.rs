@@ -266,7 +266,12 @@ impl WalletBuilder {
     /// Without this call, the wallet takes the network that the node
     /// reports. Name the network to guard against a node URL of the wrong
     /// network. A pinned sync (the default) then fails with
-    /// [`WalletError::NetworkMismatch`] before it reads the indexer.
+    /// [`WalletError::NetworkMismatch`] before it reads the indexer. A node
+    /// that cannot answer, reports no network, or reports an id that is not
+    /// a valid name for a [`Network`] does not fail the sync.
+    ///
+    /// For a name from configuration, parse it first with
+    /// `name.parse::<Network>()?`.
     pub fn with_network(mut self, network: impl Into<Network>) -> Self {
         self.network = Some(network.into());
         self
@@ -303,11 +308,11 @@ impl WalletBuilder {
     /// resyncs. `MidnightProvider` is a source.
     ///
     /// Before the replay, the sync asks the source's node which network it
-    /// runs. A wallet with no network takes that network, if its name passes
-    /// [`Network::is_valid_name`]. A wallet with a network fails the sync with
-    /// [`WalletError::NetworkMismatch`] when the node runs another one. A node
-    /// that reports no network fails the sync only when the wallet has no
-    /// network.
+    /// runs. A wallet with no network takes that network. A wallet with a
+    /// network fails the sync with [`WalletError::NetworkMismatch`] when the
+    /// node runs another one. A node that reports no network, or an id that
+    /// is not a valid name for a [`Network`], fails the sync only when the
+    /// wallet has no network.
     ///
     /// The source's node also pins the wallet to the chain. This pin is the
     /// chain-reset guard. A snapshot's cursors are counts, so a snapshot
@@ -326,8 +331,7 @@ impl WalletBuilder {
     /// # Errors
     ///
     /// - [`WalletError::NetworkUnknown`] when the wallet has no network, and
-    ///   the node reports none or a name that fails
-    ///   [`Network::is_valid_name`].
+    ///   the node reports none.
     /// - [`WalletError::NetworkMismatch`] and [`WalletError::ChainMismatch`]
     ///   as above.
     /// - The [`WalletError`] of a replay that fails.
@@ -398,28 +402,15 @@ impl WalletBuilder {
         } = self;
         let network = match network {
             Some(wallet) if pin => {
-                // Compare the id strings: they are what the chain and the
-                // bech32 HRP use, and `Network::Other("preprod")` is still
-                // preprod.
                 if let Some(chain) = source.network().await
-                    && chain.as_str() != wallet.as_str()
+                    && chain != wallet
                 {
                     return Err(WalletError::NetworkMismatch { wallet, chain });
                 }
                 wallet
             }
             Some(wallet) => wallet,
-            None => {
-                let network = source.network().await.ok_or(WalletError::NetworkUnknown)?;
-                if !network.is_valid_name() {
-                    warn!(
-                        network = ?network.as_str(),
-                        "the node reports a network name that is not valid"
-                    );
-                    return Err(WalletError::NetworkUnknown);
-                }
-                network
-            }
+            None => source.network().await.ok_or(WalletError::NetworkUnknown)?,
         };
         let address = seed.unshielded_address(network.clone());
 
@@ -660,14 +651,6 @@ mod tests {
             // refuse every sync against that node.
             (None, None),
             (Some(Network::Undeployed), None),
-            // The same network, named through `Other`.
-            (Some(Network::Other("undeployed".to_string())), None),
-            // A name that fails `is_valid_name` is still another network, so
-            // the check compares it rather than skipping it.
-            (
-                Some(Network::Other("../undeployed".to_string())),
-                Some(Network::Other("../undeployed".to_string())),
-            ),
         ];
         for (reported, refused_as) in cases {
             let node = Node {
@@ -700,9 +683,7 @@ mod tests {
     /// A wallet with no network takes the node's, pinned or not, and its
     /// address follows that network. Unpinned, the sync asks the node only
     /// that query and takes no pin. A node that reports none leaves no
-    /// network to take. The sync also refuses a node that reports `..`: it is
-    /// a valid HRP, so only the refusal keeps the wallet's files in the
-    /// storage dir.
+    /// network to take.
     #[tokio::test]
     async fn a_wallet_with_no_network_takes_the_nodes() {
         for pin in [true, false] {
@@ -733,16 +714,6 @@ mod tests {
                 Err(WalletError::NetworkUnknown) => {}
                 Err(err) => panic!("pin {pin}: expected NetworkUnknown, got {err:?}"),
                 Ok(plan) => panic!("pin {pin}: the sync took {} from nowhere", plan.network),
-            }
-
-            let unsafe_name = Node {
-                network: Some(Network::Other("..".to_string())),
-                ..Node::default()
-            };
-            match builder().prepare(&unsafe_name).await {
-                Err(WalletError::NetworkUnknown) => {}
-                Err(err) => panic!("pin {pin}: expected NetworkUnknown, got {err:?}"),
-                Ok(plan) => panic!("pin {pin}: the sync took {:?}", plan.network),
             }
         }
     }

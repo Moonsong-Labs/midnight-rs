@@ -15,7 +15,9 @@ use midnight_types::{
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::replay::{latest_block, progress_cancelled, replay_unshielded_events, send_progress};
+use crate::replay::{
+    latest_block, ledger_of, progress_cancelled, replay_unshielded_events, send_progress,
+};
 use crate::storage::wallet_storage_id;
 use crate::sync::SyncPlan;
 use crate::{SyncProgress, ledger_8, ledger_9};
@@ -120,7 +122,7 @@ impl Wallet {
             indexer_url: &plan.indexer_url,
             seed: &plan.seed,
             address: &plan.address,
-            network_id: plan.network.as_str(),
+            network: &plan.network,
             storage_dir: plan.storage_dir.as_deref(),
             save: true,
             chain_pin: plan.chain_pin,
@@ -248,11 +250,9 @@ impl Wallet {
         each!(&self.state, w => w.shielded_public_keys())
     }
 
-    /// The network identifier this wallet derives addresses for
-    /// (e.g. `"undeployed"`, `"testnet"`). Returned as `&str` because the
-    /// wallet stores the literal name from the bech32 HRP; callers that want
-    /// the typed form can use `Network::from(wallet.network())`.
-    pub fn network(&self) -> &str {
+    /// The network this wallet derives addresses for. [`Network::as_str`]
+    /// gives its literal name in the bech32 HRP.
+    pub fn network(&self) -> &Network {
         each!(&self.state, w => w.network())
     }
 
@@ -385,7 +385,7 @@ impl Wallet {
                 plan: w.resync_plan(),
                 identity: WalletIdentity {
                     seed: self.seed.clone(),
-                    network_id: w.network().to_string(),
+                    network: w.network().clone(),
                     storage_dir: w.storage_dir().map(Path::to_path_buf),
                     chain_pin: w.chain_pin().cloned(),
                     last_block_height: w.last_block_height(),
@@ -538,7 +538,7 @@ enum ResyncPlanKind {
 /// the wallet again in the later generation.
 struct WalletIdentity {
     seed: Seed,
-    network_id: String,
+    network: Network,
     storage_dir: Option<PathBuf>,
     chain_pin: Option<ChainPin>,
     last_block_height: i64,
@@ -574,7 +574,7 @@ impl ResyncPlan {
             ))),
             ResyncPlanKind::Ledger8 { plan, identity } => {
                 let block = latest_block(indexer_url).await?;
-                let block = if LedgerVersion::of_block(&block)? == LedgerVersion::V8 {
+                let block = if ledger_of(&block)? == LedgerVersion::V8 {
                     // The chain can fork before this replay ends, and the
                     // replay then meets the later generation's events.
                     match plan.clone().run(indexer_url).await {
@@ -627,7 +627,7 @@ async fn cross(
             indexer_url,
             seed: &identity.seed,
             address: &unshielded_address,
-            network_id: &identity.network_id,
+            network: &identity.network,
             storage_dir: identity.storage_dir.as_deref(),
             save: false,
             chain_pin: identity.chain_pin,
@@ -906,7 +906,7 @@ pub(crate) struct ChainSync<'a> {
     pub(crate) indexer_url: &'a str,
     pub(crate) seed: &'a Seed,
     pub(crate) address: &'a str,
-    pub(crate) network_id: &'a str,
+    pub(crate) network: &'a Network,
     pub(crate) storage_dir: Option<&'a Path>,
     /// Whether the sync writes its state under `storage_dir` as it goes:
     /// Dust checkpoints, the pending reservations it loads, and the synced
@@ -925,12 +925,12 @@ async fn sync_once(
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<State, WalletError> {
     let block = latest_block(sync.indexer_url).await?;
-    let chain = LedgerVersion::of_block(&block)?;
+    let chain = ledger_of(&block)?;
     let wallet_id = wallet_storage_id(sync.address);
 
     info!("loading cached state from disk");
     let snapshot = match sync.storage_dir {
-        Some(dir) => load_snapshot(dir, sync.network_id, &wallet_id, chain)?,
+        Some(dir) => load_snapshot(dir, sync.network.as_str(), &wallet_id, chain)?,
         None => None,
     };
     let (resume, sync) = match snapshot {
@@ -1020,7 +1020,7 @@ async fn sync_on_chain(
     resume: Option<Resume>,
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<State, WalletError> {
-    let chain = LedgerVersion::of_block(block)?;
+    let chain = ledger_of(block)?;
     let resuming = resume.is_some();
     // Where each stream starts. When resuming, start from the next event
     // after the last one applied; the subscription is inclusive, so the

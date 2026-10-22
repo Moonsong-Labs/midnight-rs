@@ -85,12 +85,15 @@ pub enum WalletError {
     },
 
     /// The sync gave up on the indexer.
-    ///
-    /// [`IndexerError::is_retryable`] tells whether a later sync can succeed.
-    ///
-    /// [`IndexerError::is_retryable`]: midnight_indexer_client::IndexerError::is_retryable
-    #[error("indexer: {0}")]
-    Indexer(#[from] midnight_indexer_client::IndexerError),
+    #[error("indexer: {source}")]
+    Indexer {
+        /// Whether a later sync can succeed: true for a transient failure,
+        /// such as a dropped connection, and false for one that repeats, such
+        /// as a GraphQL error.
+        retryable: bool,
+        /// The error that the indexer client returned.
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     /// Transfer transaction failed.
     #[error("transfer failed: {0}")]
@@ -259,10 +262,10 @@ pub enum WalletError {
 
     /// The sync names no network, and the node reported no valid one.
     ///
-    /// The node could not answer, it has no network id set, or its id fails
-    /// [`Network::is_valid_name`]. A wallet with no network takes the network
-    /// that the node runs. To recover, check the node URL and that the node is
-    /// up, or name the network with `WalletBuilder::with_network` in
+    /// The node could not answer, it has no network id set, or its id is not
+    /// a valid name for a [`Network`]. A wallet with no network takes the
+    /// network that the node runs. To recover, check the node URL and that the
+    /// node is up, or name the network with `WalletBuilder::with_network` in
     /// `midnight-wallet`.
     #[error(
         "the node did not report a valid network: check the node URL and that the node is up, \

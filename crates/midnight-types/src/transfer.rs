@@ -5,7 +5,7 @@
 //! The builds themselves are per ledger generation, in
 //! [`crate::ledger_8`] and [`crate::ledger_9`].
 
-use midnight_helpers::{CoinSelectionStrategy, Timestamp};
+use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 
 use crate::coin::{DustNullifier, Nullifier, ShieldedTokenType, UnshieldedTokenType};
 use crate::ledger_version::LedgerVersion;
@@ -53,7 +53,9 @@ impl std::fmt::Debug for TransferResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpentUtxoKey {
-    pub intent_hash: String,
+    /// The intent hash of the transaction that created the UTXO.
+    pub intent_hash: HashOutput,
+    /// The number of the UTXO among that transaction's outputs.
     pub output_index: u32,
 }
 
