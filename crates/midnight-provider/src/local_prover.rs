@@ -20,7 +20,6 @@ use midnight_helpers::ledger_9::{
 /// as the ledger's proof server does, and proves ZKIR v3 IR with
 /// `midnight-zkir-v3`. Ledger 8 keeps the helpers' prover: its chain does not
 /// verify a ZKIR v3 key.
-// TODO: use the helpers' `LocalProofServer` again once it proves ZKIR v3.
 pub(crate) struct LocalProver;
 
 #[async_trait]
