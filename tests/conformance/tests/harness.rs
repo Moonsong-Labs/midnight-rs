@@ -1,7 +1,6 @@
 //! The conformance gate: replay every case in `cases/` through the Rust IR
 //! interpreter and diff the canonical report against the golden emitted by
-//! the canonical TS runtime (`expected/`, regenerated with
-//! `make conformance-regen`).
+//! the canonical TS runtime (`expected/`, which `make goldens` writes).
 //!
 //! A step with `"error": "<substring>"` must fail on both sides, and both
 //! error messages must contain the substring. The next step starts from the
@@ -99,7 +98,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
     assert_eq!(
         steps.len(),
         expected_steps.len(),
-        "step count mismatch between case and golden; run `make conformance-regen`"
+        "step count mismatch between case and golden; run `make goldens`"
     );
 
     for (i, (step, expected_step)) in steps.iter().zip(expected_steps).enumerate() {
@@ -114,7 +113,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
             let ts_error = expected_step["error"].as_str().unwrap_or_else(|| {
                 panic!(
                     "{context}: the case expects an error, but the golden has none; \
-                     run `make conformance-regen`"
+                     run `make goldens`"
                 )
             });
             let rust_error = match run_step(

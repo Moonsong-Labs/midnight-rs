@@ -34,7 +34,7 @@ pub fn golden(fixture: &str, case: &str) -> Json {
         .join(format!("{case}.json"));
     assert!(
         path.is_file(),
-        "missing golden {}; run `make conformance-regen`",
+        "missing golden {}; run `make goldens`",
         path.display()
     );
     read_json(&path)
