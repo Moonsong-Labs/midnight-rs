@@ -7,6 +7,7 @@
 //! `midnight-curves`, as ZKIR v3 does. The casts match `convertBigintToBytes`
 //! and `convertBytesToField` in `casts.ts`.
 
+use midnight_circuits::CircuitField;
 use midnight_curves::pairing::group::ff::{Field, PrimeField};
 use midnight_typed_state::{Aligned, AlignedValue, InvalidBuiltinDecode, ValueSlice};
 
@@ -27,7 +28,7 @@ pub use fields::{
 pub(crate) use natives::native;
 pub use points::{Curve25519Point, Secp256k1Point, Secp256r1Point};
 
-use fields::{Emulated, FieldValue};
+use fields::FieldValue;
 
 /// A Compact value type that the interpreter holds as an `AlignedValue`.
 pub(crate) trait CompactValue:
@@ -162,7 +163,7 @@ fn arith<T: FieldValue>(
 }
 
 fn to_le_bytes<T: FieldValue>(value: &Value) -> Result<[u8; 32], InterpreterError> {
-    Ok(field::<T>(value, "a cast to Bytes")?.to_le_repr())
+    Ok(field::<T>(value, "a cast to Bytes")?.to_bytes_le())
 }
 
 fn from_le_bytes<T: FieldValue>(bytes: &[u8]) -> Value {

@@ -109,8 +109,10 @@ impl Secp256r1Point {
 }
 
 impl Curve25519Point {
-    /// The point at the affine coordinates `(x, y)`, if it is on the curve
-    /// and in its prime-order subgroup.
+    /// The point at the affine coordinates `(x, y)`, if it is in the subgroup.
+    ///
+    /// A point of small order is on the curve, but not in the prime-order
+    /// subgroup. This function gives `None` for it.
     pub fn from_coordinates(x: Curve25519Base, y: Curve25519Base) -> Option<Self> {
         let affine = Curve25519Affine::from_xy(x.into(), y.into())?;
         Curve25519Subgroup::from_edwards(affine.to_edwards()).map(Self)
@@ -321,9 +323,9 @@ fn decode_flagged<F: Emulated>(
     let x = decode_field(&atoms[0..2]).ok_or_else(err)?;
     let y = decode_field(&atoms[2..4]).ok_or_else(err)?;
     let flag = Fr::try_from(&atoms[4])?;
-    // The prover reads a flag of 1 as the identity, whatever the coordinates
-    // hold.
-    if flag == Fr::from(1u64) {
+    // Take only (0, 0) as the identity: the prover's decode_offcircuit refuses
+    // any other coordinates under a flag of 1.
+    if flag == Fr::from(1u64) && x == F::ZERO && y == F::ZERO {
         Ok(None)
     } else if flag == Fr::from(0u64) {
         Ok(Some((x, y)))
@@ -375,6 +377,17 @@ mod tests {
         let mut atoms = encode_field(one).to_vec();
         atoms.extend(encode_field(one));
         atoms.push(ValueAtom::from(Fr::from(0u64)));
+        assert!(Secp256k1Point::try_from(&*Value(atoms)).is_err());
+    }
+
+    /// An identity flag on other coordinates is not an encoding: the prover
+    /// refuses it, and a decode that reads only the flag accepts it.
+    #[test]
+    fn a_flagged_identity_with_coordinates_does_not_decode() {
+        let one = k256::Fp::ONE;
+        let mut atoms = encode_field(one).to_vec();
+        atoms.extend(encode_field(one));
+        atoms.push(ValueAtom::from(Fr::from(1u64)));
         assert!(Secp256k1Point::try_from(&*Value(atoms)).is_err());
     }
 

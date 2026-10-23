@@ -770,6 +770,7 @@ dependencies = [
  "compact-codegen",
  "hex",
  "midnight-base-crypto",
+ "midnight-circuits 7.2.4",
  "midnight-curves 0.3.1",
  "midnight-onchain-runtime 4.0.0",
  "midnight-transient-crypto 3.0.0",

@@ -23,7 +23,7 @@
     {
       "circuit": "base_ops",
       "args": [{ "secp256r1Base": "1" }, { "secp256r1Base": "0" }],
-      "error": "has no inverse for 0"
+      "error": "secp256r1 base field has no inverse for 0"
     },
     {
       "circuit": "scalar_ops",
@@ -54,7 +54,7 @@
       "circuit": "scalar_ops",
       "args": [{ "secp256r1Scalar": "1" }, { "secp256r1Scalar": "0" }],
       "witnesses": { "secret_scalar": [{ "secp256r1Scalar": "1" }] },
-      "error": "has no inverse for 0"
+      "error": "secp256r1 scalar field has no inverse for 0"
     },
     {
       "circuit": "casts",

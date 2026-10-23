@@ -23,7 +23,7 @@
     {
       "circuit": "base_ops",
       "args": [{ "curve25519Base": "5" }, { "curve25519Base": "0" }],
-      "error": "has no inverse for 0"
+      "error": "Curve25519 base field has no inverse for 0"
     },
     {
       "circuit": "scalar_ops",
@@ -54,7 +54,7 @@
       "circuit": "scalar_ops",
       "args": [{ "curve25519Scalar": "5" }, { "curve25519Scalar": "0" }],
       "witnesses": { "secret_scalar": [{ "curve25519Scalar": "3" }] },
-      "error": "has no inverse for 0"
+      "error": "Curve25519 scalar field has no inverse for 0"
     },
     {
       "circuit": "casts",

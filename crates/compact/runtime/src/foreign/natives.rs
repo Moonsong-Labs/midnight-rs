@@ -220,25 +220,42 @@ mod tests {
 
     /// The Compact runtime throws where these natives have no value. A zero in
     /// its place, as `jubjubPointX` gives for the Jubjub identity, would let a
-    /// circuit run that the runtime refuses.
+    /// circuit run that the runtime refuses. The conformance corpus checks the
+    /// secp256r1 and Curve25519 inverses and `secp256r1PointX` against the
+    /// runtime's messages.
     #[test]
-    fn natives_without_a_value_fail() {
-        for (name, arg) in [
-            ("secp256k1BaseInv", value(Secp256k1Base::default())),
-            ("secp256k1ScalarInv", value(Secp256k1Scalar::default())),
-            ("secp256k1PointX", value(Secp256k1Point::default())),
-            ("secp256k1PointY", value(Secp256k1Point::default())),
-            ("secp256r1BaseInv", value(Secp256r1Base::default())),
-            ("secp256r1ScalarInv", value(Secp256r1Scalar::default())),
-            ("secp256r1PointX", value(Secp256r1Point::default())),
-            ("secp256r1PointY", value(Secp256r1Point::default())),
-            ("curve25519BaseInv", value(Curve25519Base::default())),
-            ("curve25519ScalarInv", value(Curve25519Scalar::default())),
+    fn natives_without_a_value_fail_as_the_runtime_does() {
+        for (name, arg, message) in [
+            (
+                "secp256k1BaseInv",
+                value(Secp256k1Base::default()),
+                "secp256k1 base field has no inverse for 0",
+            ),
+            (
+                "secp256k1ScalarInv",
+                value(Secp256k1Scalar::default()),
+                "secp256k1 scalar field has no inverse for 0",
+            ),
+            (
+                "secp256k1PointX",
+                value(Secp256k1Point::default()),
+                "cannot extract the x-coordinate of the secp256k1 identity point",
+            ),
+            (
+                "secp256k1PointY",
+                value(Secp256k1Point::default()),
+                "cannot extract the y-coordinate of the secp256k1 identity point",
+            ),
+            (
+                "secp256r1PointY",
+                value(Secp256r1Point::default()),
+                "cannot extract the y-coordinate of the secp256r1 identity point",
+            ),
         ] {
-            assert!(
-                matches!(native(name, &[arg]), Some(Err(_))),
-                "{name} must fail"
-            );
+            match native(name, &[arg]) {
+                Some(Err(e)) => assert!(e.to_string().contains(message), "{name}: {e}"),
+                other => panic!("{name} must fail, got {other:?}"),
+            }
         }
     }
 }

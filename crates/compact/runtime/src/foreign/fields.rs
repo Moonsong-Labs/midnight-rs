@@ -16,7 +16,7 @@ use midnight_base_crypto::fab::{
     Aligned, Alignment, AlignmentAtom, AlignmentSegment, InvalidBuiltinDecode, Value, ValueAtom,
     ValueSlice,
 };
-use midnight_curves::pairing::group::ff::PrimeField;
+use midnight_circuits::CircuitField;
 use midnight_curves::{curve25519, k256, p256};
 use num_bigint::BigUint;
 
@@ -27,65 +27,35 @@ use super::CompactValue;
 const ENCODED_BITS: usize = 256;
 
 /// A prime field that Compact emulates, and where its encoding splits.
-pub(crate) trait Emulated: PrimeField {
+pub(crate) trait Emulated: CircuitField<Bytes = [u8; 32]> {
     /// The number of low bits that the first atom holds.
     const LOW_BITS: usize;
-    /// Whether `Repr` holds big-endian bytes. Otherwise it holds
-    /// little-endian bytes.
-    const BIG_ENDIAN_REPR: bool;
-
-    /// The element with the little-endian encoding `bytes`, if it is below
-    /// the field order.
-    fn from_le_repr(mut bytes: [u8; 32]) -> Option<Self> {
-        if Self::BIG_ENDIAN_REPR {
-            bytes.reverse();
-        }
-        let mut repr = Self::Repr::default();
-        repr.as_mut().copy_from_slice(&bytes);
-        Self::from_repr(repr).into()
-    }
-
-    /// The little-endian encoding of this element.
-    fn to_le_repr(self) -> [u8; 32] {
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(self.to_repr().as_ref());
-        if Self::BIG_ENDIAN_REPR {
-            bytes.reverse();
-        }
-        bytes
-    }
 }
 
 impl Emulated for k256::Fp {
     const LOW_BITS: usize = 192;
-    const BIG_ENDIAN_REPR: bool = true;
 }
 
 impl Emulated for k256::Fq {
     const LOW_BITS: usize = 192;
-    const BIG_ENDIAN_REPR: bool = true;
 }
 
 impl Emulated for p256::Fp {
     const LOW_BITS: usize = 192;
-    const BIG_ENDIAN_REPR: bool = true;
 }
 
 impl Emulated for p256::Fq {
     const LOW_BITS: usize = 192;
-    const BIG_ENDIAN_REPR: bool = true;
 }
 
 impl Emulated for curve25519::Fp {
     const LOW_BITS: usize = 192;
-    const BIG_ENDIAN_REPR: bool = false;
 }
 
-// ZKIR v3 emulates this field in 51-bit limbs, and packs four of them in the
-// first field element.
+// The compiler aligns this field as 26 and 7 bytes, because ZKIR v3 packs four
+// of its 51-bit limbs in the first field element.
 impl Emulated for curve25519::Scalar {
     const LOW_BITS: usize = 204;
-    const BIG_ENDIAN_REPR: bool = false;
 }
 
 /// A Compact foreign field type and the field that it computes in.
@@ -107,16 +77,13 @@ macro_rules! foreign_field {
         impl $name {
             /// The element with the big-endian encoding `bytes`, if it is below
             /// the field order.
-            pub fn from_be_bytes(mut bytes: [u8; 32]) -> Option<Self> {
-                bytes.reverse();
-                <$field as Emulated>::from_le_repr(bytes).map(Self)
+            pub fn from_be_bytes(bytes: [u8; 32]) -> Option<Self> {
+                <$field as CircuitField>::from_bytes_be(&bytes).map(Self)
             }
 
             /// The big-endian encoding of this element.
             pub fn to_be_bytes(self) -> [u8; 32] {
-                let mut bytes = self.0.to_le_repr();
-                bytes.reverse();
-                bytes
+                self.0.to_bytes_be()
             }
         }
 
@@ -213,15 +180,19 @@ foreign_field! {
 }
 
 foreign_field! {
-    /// An element of the Curve25519 base field, the integers modulo
-    /// 2^255 - 19, the Rust image of Compact's `Curve25519Base`. The default
-    /// is zero.
+    /// An element of the Curve25519 base field, the Rust image of Compact's
+    /// `Curve25519Base`.
+    ///
+    /// The field is the integers modulo 2^255 - 19. The default is zero.
     Curve25519Base(curve25519::Fp)
 }
 
 foreign_field! {
-    /// An element of the scalar field of the Curve25519 prime-order subgroup,
-    /// the Rust image of Compact's `Curve25519Scalar`. The default is zero.
+    /// An element of the Curve25519 scalar field, the Rust image of Compact's
+    /// `Curve25519Scalar`.
+    ///
+    /// The order of the field is the order of the prime-order subgroup of the
+    /// curve. The default is zero.
     ///
     /// # Examples
     ///
@@ -259,7 +230,11 @@ pub(super) fn field_alignment<F: Emulated>() -> Alignment {
 
 /// The two atoms of `value`.
 pub(super) fn encode_field<F: Emulated>(value: F) -> [ValueAtom; 2] {
-    let shifted = BigUint::from_bytes_le(&(value - F::ONE).to_le_repr());
+    split::<F>((value - F::ONE).to_biguint())
+}
+
+/// The low and the high atom of `shifted`, the integer `v - 1`.
+fn split<F: Emulated>(shifted: BigUint) -> [ValueAtom; 2] {
     let low_mask = (BigUint::from(1u8) << F::LOW_BITS) - 1u8;
     let atom = |n: BigUint| ValueAtom(n.to_bytes_le()).normalize();
     [atom(&shifted & low_mask), atom(shifted >> F::LOW_BITS)]
@@ -279,22 +254,19 @@ pub(super) fn decode_field<F: Emulated>(atoms: &[ValueAtom]) -> Option<F> {
         return None;
     }
     let shifted = (BigUint::from_bytes_le(&high.0) << F::LOW_BITS) | low;
-    let le = shifted.to_bytes_le();
-    let mut bytes = [0u8; 32];
-    bytes.get_mut(..le.len())?.copy_from_slice(&le);
-    Some(F::from_le_repr(bytes)? + F::ONE)
+    Some(F::from_biguint(&shifted)? + F::ONE)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_curves::pairing::group::ff::Field;
+    use midnight_curves::pairing::group::ff::{Field, PrimeField};
     use midnight_zkir_v3::ir_types::IrValue;
 
     use crate::foreign::test_support::{atoms_as_fields, decode_fields, ir_fields};
 
-    /// `T` encodes each of `values` as ZKIR v3 encodes `ir(value)`, and
-    /// decodes that encoding back to the value.
+    /// `T` encodes a fixed set of elements as ZKIR v3 encodes `ir(value)`,
+    /// and decodes that encoding back to the element.
     fn takes_the_provers_encoding<T: FieldValue + PartialEq + fmt::Debug>(
         ir: impl Fn(T::Field) -> IrValue,
     ) {
@@ -318,13 +290,31 @@ mod tests {
     }
 
     /// The low atom of a `Curve25519Scalar` has room for 208 bits, but holds
-    /// 204. A set bit above them would decode to a value that the prover reads
-    /// as another element.
+    /// 204. A set bit above them is an encoding that the prover and the TS
+    /// runtime refuse. Without a check, it decodes as 2^204 + 1.
     #[test]
     fn a_low_atom_wider_than_its_bits_does_not_decode() {
         let mut low = vec![0u8; 26];
         low[25] = 0x10;
         let value = Value(vec![ValueAtom(low), ValueAtom(Vec::new())]);
         assert!(Curve25519Scalar::try_from(&*value).is_err());
+    }
+
+    fn the_order_does_not_decode<T: FieldValue>() {
+        let value = Value(split::<T::Field>(T::Field::modulus()).to_vec());
+        assert!(T::try_from(&*value).is_err(), "{}", T::NAME);
+    }
+
+    /// The atoms of the field order are no encoding: the prover and the TS
+    /// runtime refuse them. A decode that reduces modulo the order, as a cast
+    /// from bytes does, reads them as one.
+    #[test]
+    fn an_encoding_at_the_order_does_not_decode() {
+        the_order_does_not_decode::<Secp256k1Base>();
+        the_order_does_not_decode::<Secp256k1Scalar>();
+        the_order_does_not_decode::<Secp256r1Base>();
+        the_order_does_not_decode::<Secp256r1Scalar>();
+        the_order_does_not_decode::<Curve25519Base>();
+        the_order_does_not_decode::<Curve25519Scalar>();
     }
 }
