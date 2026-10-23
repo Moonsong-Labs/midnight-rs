@@ -21,7 +21,7 @@ crates/midnight-contract/tests/fixtures/*/compiler/
 crates/midnight-contract/tests/fixtures/*/compiled.tmp/
 tests/fixtures/compiled/
 
-# The runtime tarball that `make vendor-compact-runtime` builds with Nix from
+# The runtime tarball that `make vendor-compact-runtime` builds from
 # the compiler fork at COMPACT_REV. Only the driver installs it, and the target
 # builds it again on demand.
 tests/conformance/ts-driver/vendor/

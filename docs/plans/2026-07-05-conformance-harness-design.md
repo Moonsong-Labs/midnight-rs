@@ -75,9 +75,9 @@ No compiler output is committed, and no golden either. `make fixtures` writes `c
 
 ## Canonical runtime versioning
 
-compactc writes its own `--runtime-version` into every generated `index.js` as a `checkRuntimeVersion(...)` call, and the runtime throws when the minor differs. That version is not published to npm, so the driver installs the runtime that Nix builds from the compiler fork at `COMPACT_REV` (`runtime/` in `RomarQ/compact`).
+compactc writes its own `--runtime-version` into every generated `index.js` as a `checkRuntimeVersion(...)` call, and the runtime throws when the minor differs. That version is not published to npm, so the driver installs a runtime built from the compiler fork at `COMPACT_REV` (`runtime/` in `RomarQ/compact`).
 
-`make vendor-compact-runtime` builds it: it nix-builds the runtime package of the fork's flake at `COMPACT_REV`, drops the build scripts (they need the compiler toolchain, and `npm pack` would run them), and packs the tarball to `ts-driver/vendor/compact-runtime.tgz`. The name carries no version, so `package.json` never moves with the runtime. The tarball is generated rather than committed, on the same rule as the codegen: only the driver reads it, and a `Makefile` target builds it again on demand.
+`make vendor-compact-runtime` builds it: it fetches the runtime sources of the fork at `COMPACT_REV`, writes `src/version.ts` with the Chez Scheme of the compactc image, runs `tsc`, drops the build scripts (`npm pack` would run them), and packs the tarball to `ts-driver/vendor/compact-runtime.tgz`. The name carries no version, so `package.json` never moves with the runtime. The tarball is generated rather than committed, on the same rule as the codegen: only the driver reads it, and a `Makefile` target builds it again on demand.
 
 The comment above `COMPACT_REV` in the root `Makefile` gives the steps after a change of `COMPACT_REV`.
 
@@ -88,7 +88,7 @@ The runtime brings its own `@midnightntwrk/onchain-runtime-v4` and re-exports th
 - `cargo test -p conformance` (part of `make test`, so it runs in the ordinary CI `test` job): Rust interpreter vs the goldens. `make test` runs `make fixtures goldens` first, and in CI the `compact` job builds both and the other jobs download them.
 - `make fixtures`: compile each corpus contract whose output is missing or stale, with the compactc at `COMPACT_REV` (needs Docker).
 - `make goldens`: run the TS driver when a golden is missing or stale (needs Node).
-- `make vendor-compact-runtime`: rebuild the driver's runtime from the fork at `COMPACT_REV` (needs Nix and Node). `make goldens` runs it when the tarball is missing or comes from another `COMPACT_REV`.
+- `make vendor-compact-runtime`: rebuild the driver's runtime from the fork at `COMPACT_REV` (needs curl, Docker and Node). `make goldens` runs it when the tarball is missing or comes from another `COMPACT_REV`.
 
 Adding coverage for a new op is: extend a fixture's `.compact` (or add a case JSON), and commit it. `make test` compiles the fixture and writes its goldens. Adding a whole fixture also means listing it in the Makefile's `CONFORMANCE_FIXTURES`. A fixture that needs ZKIR v3 also goes in `CONFORMANCE_ZKIR_V3_FIXTURES`. To cover a check that must make a circuit fail, add a step with `"error"` set to a part of the message that names the check.
 

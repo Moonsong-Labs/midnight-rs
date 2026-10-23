@@ -96,6 +96,9 @@ CONFORMANCE_DIR := tests/conformance
 # carries no version, so package.json never moves with the runtime.
 COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
 COMPACT_RUNTIME_REV := ts-driver/vendor/compact-runtime.rev
+# The fork sources that the runtime build reads: export-version.ss imports the
+# compiler's (field) library.
+COMPACT_RUNTIME_SRC := runtime compiler/json.ss compiler/utils.ss compiler/field.ss third_party/compiler/state-case.ss
 
 # Each fixture as <output directory>:<source>. `make fixtures` writes the
 # analyzed IR to <output directory>/compiler/, and the TS codegen of a
@@ -126,7 +129,7 @@ help:
 	@echo "midnight-rs make targets:"
 	@echo ""
 	@echo "  Lint / build / test (a missing or stale contract or fixture compiles first, in Docker;"
-	@echo "  test also writes the goldens, with Node 22, and with Nix the first time after a COMPACT_REV change)"
+	@echo "  test also writes the goldens, which needs Node 22)"
 	@echo "    fmt           cargo fmt --all"
 	@echo "    fmt-check     cargo fmt --all --check"
 	@echo "    clippy        cargo clippy --workspace --all-targets -- -D warnings"
@@ -160,9 +163,9 @@ help:
 	@echo "    contracts           compile each devnet contract whose compiled/ output is missing or stale (needs Docker)"
 	@echo "    compile-contracts   recompile devnet/contracts/*, with keys (needs Docker)"
 	@echo "    fixtures            compile each test and conformance fixture whose output is missing or stale (needs Docker)"
-	@echo "    goldens             write the conformance goldens with the TS driver when stale (needs Node, and Nix for the runtime)"
+	@echo "    goldens             write the conformance goldens with the TS driver when stale (needs Node)"
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
-	@echo "    vendor-compact-runtime  build the driver's compact-runtime at COMPACT_REV (needs Nix and Node)"
+	@echo "    vendor-compact-runtime  build the driver's compact-runtime at COMPACT_REV (needs curl, Docker and Node)"
 	@echo "    compact-natives     fetch the compiler's native symbols at COMPACT_REV (needs curl)"
 
 # ============================================================
@@ -432,26 +435,35 @@ fixtures:
 		$(FIXTURE_CKSUM) > "$$dir/compiler/source.cksum"; \
 	done
 
-# Rebuild the runtime tarball the driver installs, from the fork at
-# COMPACT_REV (needs Nix and Node). The runtime that this compactc targets is
-# not published to npm, so the driver runs the one the fork builds. The
-# package's own build scripts need the compiler toolchain, which `npm pack`
-# cannot run here, so the packed copy drops them.
+# Rebuild the runtime tarball the driver installs, from the runtime sources of
+# the fork at COMPACT_REV (needs curl, Docker and Node). The runtime that this
+# compactc targets is not published to npm. Its build writes src/version.ts
+# with the Chez Scheme of the compactc image, then runs tsc. The packed
+# manifest drops the build scripts, because `npm pack` runs them, and sorts its
+# keys, the order of the tarball that package-lock.json pins.
 vendor-compact-runtime:
 	@set -e; \
-	out="$$(nix --extra-experimental-features 'nix-command flakes' build --no-link \
-		--print-out-paths 'github:RomarQ/compact/$(COMPACT_REV)#runtime.forPublish')" || exit 1; \
-	src="$$out/lib/node_modules/@midnight-ntwrk/compact-runtime"; \
-	tmp="$$(mktemp -d)"; \
-	cp -R "$$src/dist" "$$src/package.json" "$$src/README.md" "$$tmp/"; \
-	chmod -R u+w "$$tmp"; \
-	( cd "$$tmp" && node -e 'const fs = require("fs"); const p = "package.json"; const j = JSON.parse(fs.readFileSync(p)); delete j.scripts; delete j.devDependencies; fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n")' ); \
-	version="$$(node -p "require(\"$$tmp/package.json\").version")"; \
-	packed="$$(cd "$$tmp" && npm pack --silent --pack-destination "$$tmp")"; \
+	work="$(CURDIR)/target/compact-runtime"; \
+	rm -rf "$$work"; \
+	mkdir -p "$$work/src" "$$work/pack"; \
+	curl -fsSL 'https://github.com/RomarQ/compact/archive/$(COMPACT_REV).tar.gz' \
+		| tar -xz -C "$$work/src" --strip-components=1 \
+			$(addprefix compact-$(COMPACT_REV)/,$(COMPACT_RUNTIME_SRC)); \
+	cd "$$work/src/runtime"; \
+	npm ci --ignore-scripts --no-audit --no-fund --silent; \
+	docker run --rm --user $$(id -u):$$(id -g) -v "$$work/src:/src" -w /src/runtime \
+		-e CHEZSCHEMELIBDIRS=../compiler:../third_party/compiler $(COMPACTC_IMAGE) \
+		'/nix/store/*-chez-scheme-*/bin/scheme --script export-version.ss'; \
+	./node_modules/.bin/tsc -b; \
+	cp -R dist package.json README.md "$$work/pack/"; \
+	cd "$$work/pack"; \
+	node -e 'const fs = require("fs"); const sort = (v) => Array.isArray(v) ? v.map(sort) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sort(v[k])])) : v; const j = sort(JSON.parse(fs.readFileSync("package.json"))); delete j.scripts; delete j.devDependencies; fs.writeFileSync("package.json", JSON.stringify(j, null, 2) + "\n")'; \
+	version="$$(node -p 'require("./package.json").version')"; \
+	packed="$$(npm pack --silent --pack-destination "$$work")"; \
 	dest="$(CURDIR)/$(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)"; \
 	mkdir -p "$$(dirname "$$dest")"; \
-	mv "$$tmp/$$packed" "$$dest"; \
-	rm -rf "$$tmp"; \
+	mv "$$work/$$packed" "$$dest"; \
+	rm -rf "$$work"; \
 	echo "$(COMPACT_REV)" > "$(CURDIR)/$(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_REV)"; \
 	echo "OK: compact-runtime $$version vendored"
 
@@ -465,8 +477,8 @@ conformance: fixtures goldens
 # canonical @midnight-ntwrk/compact-runtime (needs Node 22+). The target skips
 # when every case has a golden and the goldens carry the fingerprint of what
 # the driver reads. A checkout can delete tracked goldens and leave the ignored
-# fingerprint behind, hence the first check. It builds the runtime tarball (with
-# Nix) only when the tarball is missing or comes from another COMPACT_REV.
+# fingerprint behind, hence the first check. It builds the runtime tarball only
+# when the tarball is missing or comes from another COMPACT_REV.
 # NB: the generated contract/index.js and the vendored runtime are a matched
 # pair. compactc writes its own --runtime-version into every index.js, and the
 # runtime refuses a mismatched minor. So after a change of COMPACT_REV, follow

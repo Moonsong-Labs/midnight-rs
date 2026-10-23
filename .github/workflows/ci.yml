@@ -25,31 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Read COMPACT_REV
-        id: compact-rev
-        run: echo "rev=$(sed -n 's/^COMPACT_REV *:= *//p' Makefile)" >> "$GITHUB_OUTPUT"
-      # The runtime tarball that the TS driver installs. Only a change of
-      # COMPACT_REV changes it, and Nix takes minutes to build it.
-      - name: Restore the compact-runtime tarball
-        id: runtime
-        uses: actions/cache@v4
-        with:
-          path: tests/conformance/ts-driver/vendor
-          key: compact-runtime-${{ steps.compact-rev.outputs.rev }}
-      - if: steps.runtime.outputs.cache-hit != 'true'
-        uses: ./.github/actions/free-disk-space
-      - name: Install Nix
-        if: steps.runtime.outputs.cache-hit != 'true'
-        uses: cachix/install-nix-action@v31
-        with:
-          # The fork's flake declares this substituter, and the dependencies
-          # of the runtime build come from there.
-          extra_nix_config: |
-            extra-substituters = https://cache.iog.io
-            extra-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
-            accept-flake-config = true
       # No npm cache: from a cache, `npm ci` installs the runtime that the
-      # lockfile names, not the tarball above, and skips its integrity check.
+      # lockfile names, not the tarball that `make goldens` builds, and skips
+      # its integrity check.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
