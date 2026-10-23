@@ -6,8 +6,10 @@ name: Natives drift
 # job fetches the tables again and fails when the file no longer matches them.
 # It runs nightly and on a change to the Makefile or the file.
 #
-# The CI workflow compiles every other compiler output from source on each run,
-# so nothing else can drift.
+# The CI workflow builds the devnet contracts, the test and conformance
+# fixtures, and the goldens from source on each run, so none of them can drift.
+# The parser fixtures of crates/compact/analyzed-ir stay pinned to one compiler
+# version on purpose.
 
 on:
   schedule:

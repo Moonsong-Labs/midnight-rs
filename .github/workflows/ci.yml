@@ -48,11 +48,11 @@ jobs:
             extra-substituters = https://cache.iog.io
             extra-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
             accept-flake-config = true
+      # No npm cache: from a cache, `npm ci` installs the runtime that the
+      # lockfile names, not the tarball above, and skips its integrity check.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: tests/conformance/package-lock.json
       - run: make compile-contracts fixtures goldens
       # The artifact keeps each path below the repository root, and the
       # compact-outputs action puts it back there. It lives as long as GitHub

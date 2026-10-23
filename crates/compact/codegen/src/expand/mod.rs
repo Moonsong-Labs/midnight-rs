@@ -249,7 +249,7 @@ mod tests {
         }
     }
 
-    /// Collect every committed `analyzed-ir.sexp` fixture under the
+    /// Collect every `analyzed-ir.sexp` that `make fixtures` writes under the
     /// compiled fixture roots.
     fn contract_info_fixtures() -> Vec<std::path::PathBuf> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");

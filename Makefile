@@ -125,7 +125,8 @@ GOLDENS_CKSUM = { echo $(COMPACT_REV) $(CONFORMANCE_ZKIR_V3_FIXTURES); \
 help:
 	@echo "midnight-rs make targets:"
 	@echo ""
-	@echo "  Lint / build / test (a missing or stale contract or fixture compiles first, in Docker)"
+	@echo "  Lint / build / test (a missing or stale contract or fixture compiles first, in Docker;"
+	@echo "  test also writes the goldens, with Node 22, and with Nix the first time after a COMPACT_REV change)"
 	@echo "    fmt           cargo fmt --all"
 	@echo "    fmt-check     cargo fmt --all --check"
 	@echo "    clippy        cargo clippy --workspace --all-targets -- -D warnings"
@@ -437,7 +438,8 @@ fixtures:
 # package's own build scripts need the compiler toolchain, which `npm pack`
 # cannot run here, so the packed copy drops them.
 vendor-compact-runtime:
-	@out="$$(nix --extra-experimental-features 'nix-command flakes' build --no-link \
+	@set -e; \
+	out="$$(nix --extra-experimental-features 'nix-command flakes' build --no-link \
 		--print-out-paths 'github:RomarQ/compact/$(COMPACT_REV)#runtime.forPublish')" || exit 1; \
 	src="$$out/lib/node_modules/@midnight-ntwrk/compact-runtime"; \
 	tmp="$$(mktemp -d)"; \
@@ -461,16 +463,24 @@ conformance: fixtures goldens
 
 # Write the conformance goldens: the TS driver runs every case through the
 # canonical @midnight-ntwrk/compact-runtime (needs Node 22+). The target skips
-# when the goldens carry the fingerprint of what the driver reads, and it
-# builds the runtime tarball (with Nix) only when the tarball is missing or
-# comes from another COMPACT_REV.
+# when every case has a golden and the goldens carry the fingerprint of what
+# the driver reads. A checkout can delete tracked goldens and leave the ignored
+# fingerprint behind, hence the first check. It builds the runtime tarball (with
+# Nix) only when the tarball is missing or comes from another COMPACT_REV.
 # NB: the generated contract/index.js and the vendored runtime are a matched
 # pair. compactc writes its own --runtime-version into every index.js, and the
 # runtime refuses a mismatched minor. So after a change of COMPACT_REV, follow
 # the steps above COMPACT_REV.
 goldens: fixtures
-	@[ "$$($(GOLDENS_CKSUM))" = "$$(cat $(CONFORMANCE_DIR)/expected/source.cksum 2>/dev/null)" ] && exit 0; \
-	[ "$$(cat $(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_REV) 2>/dev/null)" = "$(COMPACT_REV)" ] \
+	@missing=; \
+	for c in $(wildcard $(CONFORMANCE_DIR)/cases/*/*.json); do \
+		[ -f "$(CONFORMANCE_DIR)/expected/$${c#$(CONFORMANCE_DIR)/cases/}" ] || missing=1; \
+	done; \
+	[ -z "$$missing" ] \
+		&& [ "$$($(GOLDENS_CKSUM))" = "$$(cat $(CONFORMANCE_DIR)/expected/source.cksum 2>/dev/null)" ] \
+		&& exit 0; \
+	[ -f $(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ) ] \
+		&& [ "$$(cat $(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_REV) 2>/dev/null)" = "$(COMPACT_REV)" ] \
 		|| $(MAKE) --no-print-directory vendor-compact-runtime || exit 1; \
 	rm -rf $(CONFORMANCE_DIR)/expected; \
 	( cd $(CONFORMANCE_DIR) && npm ci --silent && node ts-driver/driver.mjs ) || exit 1; \

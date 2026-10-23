@@ -154,7 +154,7 @@ Before you judge a candidate, read all of these:
 - the sibling implementations and every overlapping test (unit, integration, devnet, conformance)
 - the route that runs it: the `Makefile` targets, `.github/workflows/`, and for a devnet test, the E2E job's log on `main`
 - its history: `git log -S '<name>'`, `git log -L '/fn <name>/,+20:<path>'`, and the PR that added it. An early commit can have no PR, so read its message.
-- the fixtures it reads, the target that regenerates each one, and the job that checks it for drift
+- the fixtures it reads, the target that builds each one, and the CI step that runs that target
 - the dependency source when the test claims dependency behavior, such as midnight-ledger or subxt. `cargo metadata --format-version 1` gives each package's `manifest_path`.
 - for node or indexer behavior, the images in `devnet/docker-compose.yml`. Read the upstream source at those tags, or read the captured output in the E2E log. The node crates in `Cargo.toml` come from a node fork at a pinned rev. They can declare an RPC method that the devnet image does not serve.
 
@@ -232,7 +232,7 @@ Prefer a net-negative line count in production code. Do not add replacement test
 
 Do not edit source or tests while a cargo build or test runs in the same checkout. Its result then covers an unknown mix of old and new code.
 
-Run `make contracts` before a plain `cargo` command. Git does not track the compiled devnet contracts, and cargo does not compile them. The target compiles each contract whose output is missing or out of date.
+Run `make contracts fixtures` before a plain `cargo` command, and `make goldens` too before a test run. Git tracks none of their output, and cargo does not build it. Each target builds what is missing or out of date.
 
 1. Run the owner and sibling tests. Name a unit test by its full path from the crate root, such as `tests::<name>` for a test module in `lib.rs`: `cargo test -p <crate> --lib -- --exact <test-path>`. For an integration test, run `cargo test -p <crate> --test <file> <name>`. Make sure that the `running N tests` line shows a count above zero, because a filter that matches nothing also passes. With no devnet, a devnet test skips and still reports `ok`, so use step 2 for it. For interpreter changes, also run `make conformance`.
 2. For a devnet test, use a fresh devnet. CI always starts one, and an older chain can change which branch a test takes.
