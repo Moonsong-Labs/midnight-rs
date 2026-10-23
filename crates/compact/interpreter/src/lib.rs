@@ -2622,9 +2622,57 @@ mod tests {
     /// `docs/compact-natives.md`.
     #[test]
     fn every_compact_native_is_handled_or_known_unimplemented() {
-        // The runtime symbols of the compiler's natives, which `make
-        // compact-natives` writes. A call dispatches on this symbol.
-        let natives = include_str!("compact-natives.txt");
+        // The runtime symbols of the compiler's native tables at COMPACT_REV,
+        // which `make check-natives` compares with the tables. A call
+        // dispatches on this symbol.
+        const COMPACT_NATIVES: &[&str] = &[
+            "constructJubjubPoint",
+            "createZswapInput",
+            "createZswapOutput",
+            "curve25519Add",
+            "curve25519BaseInv",
+            "curve25519BaseNeg",
+            "curve25519Mul",
+            "curve25519MulGenerator",
+            "curve25519PointX",
+            "curve25519PointY",
+            "curve25519ScalarInv",
+            "curve25519ScalarNeg",
+            "degradeToTransient",
+            "ecAdd",
+            "ecMul",
+            "ecMulGenerator",
+            "ecNeg",
+            "hashToCurve",
+            "jubjubPointX",
+            "jubjubPointY",
+            "keccak256",
+            "ownPublicKey",
+            "persistentCommit",
+            "persistentHash",
+            "secp256k1Add",
+            "secp256k1BaseInv",
+            "secp256k1BaseNeg",
+            "secp256k1Mul",
+            "secp256k1MulGenerator",
+            "secp256k1PointX",
+            "secp256k1PointY",
+            "secp256k1ScalarInv",
+            "secp256k1ScalarNeg",
+            "secp256r1Add",
+            "secp256r1BaseInv",
+            "secp256r1BaseNeg",
+            "secp256r1Mul",
+            "secp256r1MulGenerator",
+            "secp256r1PointX",
+            "secp256r1PointY",
+            "secp256r1ScalarInv",
+            "secp256r1ScalarNeg",
+            "sha512",
+            "transientCommit",
+            "transientHash",
+            "upgradeFromTransient",
+        ];
         // Natives with no implementation yet: the secp256r1 and Curve25519
         // natives of the ZKIR v3 table, whose types the analyzed-IR parser
         // does not know. The witness natives are not here: `WitnessNative`
@@ -2651,7 +2699,7 @@ mod tests {
             "secp256r1ScalarNeg",
         ];
 
-        for name in natives.lines() {
+        for &name in COMPACT_NATIVES {
             let handled =
                 WitnessNative::from_name(name).is_some() || try_builtin(name, &[]).is_some();
             let known_unimplemented = KNOWN_UNIMPLEMENTED.contains(&name);

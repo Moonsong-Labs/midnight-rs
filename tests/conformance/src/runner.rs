@@ -102,12 +102,15 @@ impl Fixture {
     ///
     /// # Errors
     ///
-    /// When the file cannot be read or does not parse.
+    /// When the file is missing, cannot be read or does not parse.
     pub fn open(name: &str) -> Result<Self, String> {
         let path = corpus_dir()
             .join("fixtures")
             .join(name)
             .join("compiler/analyzed-ir.sexp");
+        if !path.is_file() {
+            return Err(format!("missing {}; run `make fixtures`", path.display()));
+        }
         let info = compact_codegen::artifact::load(&path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(Self { info })

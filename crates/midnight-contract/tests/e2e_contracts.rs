@@ -46,7 +46,8 @@ mod bboard {
 // ---------------------------------------------------------------------------
 
 /// Where the interpreter fixtures live: `<name>/compiler/analyzed-ir.sexp`
-/// per contract. Defaults to this crate's own committed fixtures.
+/// per contract. Defaults to this crate's own fixtures, which `make fixtures`
+/// compiles.
 fn fixtures_dir() -> String {
     common::env_dir("MIDNIGHT_COMPILED_DIR")
         .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures").to_string())

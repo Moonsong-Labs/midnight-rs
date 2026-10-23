@@ -249,7 +249,7 @@ mod tests {
         }
     }
 
-    /// Collect every committed `analyzed-ir.sexp` fixture under the
+    /// Collect every `analyzed-ir.sexp` that `make fixtures` writes under the
     /// compiled fixture roots.
     fn contract_info_fixtures() -> Vec<std::path::PathBuf> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -282,13 +282,14 @@ mod tests {
         to_pascal_case(raw)
     }
 
-    /// Expand every committed fixture and assert the output is panic-free.
+    /// Expand every compiled fixture and assert the output is panic-free.
     #[test]
     fn generated_code_has_no_panic_paths() {
         let fixtures = contract_info_fixtures();
-        // 8 fixtures are committed today; finding fewer means the directory
-        // scan regressed (e.g. a moved fixture root), not that contracts went
-        // away. Keep this in sync when fixtures are added or removed.
+        // `make fixtures` compiles more than this; finding fewer means the
+        // directory scan regressed (e.g. a moved fixture root) or the fixtures
+        // were not compiled, not that contracts went away. Keep this in sync
+        // when fixtures are added or removed.
         assert!(
             fixtures.len() >= 8,
             "fixture scan found only {} analyzed-ir files, expected at least 8",

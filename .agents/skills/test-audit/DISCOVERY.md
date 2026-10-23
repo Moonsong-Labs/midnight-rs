@@ -83,11 +83,11 @@ git grep -n -w '<name>' -- '*.rs'
 
 ## Fixtures
 
-For each fixture that a test reads, find the target that regenerates it and the workflow that checks it for drift:
+For each fixture that a test reads, find the target that builds it, and the CI step that runs that target:
 
 ```sh
-grep -n -E '^(regen-[a-z-]+|compile-contracts|conformance-regen):' Makefile
-grep -n 'make ' .github/workflows/codegen-drift.yml
+grep -n -E '^(contracts|compile-contracts|fixtures|goldens):' Makefile
+grep -n 'make ' .github/workflows/ci.yml
 ```
 
-A fixture that no target regenerates is hand-built. It can drift from the compiler, and no job reports the drift.
+A fixture that no target builds is hand-built. It can drift from the compiler, and no job reports the drift.
