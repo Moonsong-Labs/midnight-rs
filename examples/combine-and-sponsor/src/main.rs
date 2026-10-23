@@ -19,6 +19,8 @@
 //!   combine proven transactions into one that lands atomically.
 //! - `provider.balance_transaction(bytes)` (↔ midnight-js
 //!   `walletProvider.balanceTransaction`) — pay another party's Dust fees.
+//!   `provider.submit_reserved(result)` submits it, and hands the fee Dust
+//!   back when the node never gets the transaction or rejects it.
 //!
 //! Nobody but the genesis-funded A needs Dust, so this runs on a fresh devnet
 //! (a freshly funded wallet accrues Dust only over ~a week, so B could not
@@ -155,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
     let merged =
         provider_a.merge_transactions(&[call_tx.into_bytes(), transfer_tx.into_bytes()])?;
     let sponsored = provider_a.balance_transaction(&merged).await?;
-    let pending = provider_a.submit(&sponsored).await?;
+    let pending = provider_a.submit_reserved(sponsored).await?;
     println!("   ext hash:  {}", pending.extrinsic_hash_hex());
     let (_best, pending) = pending.wait_best().await?;
     let (finalized, _) = pending.wait_finalized().await?;

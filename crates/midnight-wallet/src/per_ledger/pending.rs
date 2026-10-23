@@ -41,7 +41,7 @@ use crate::storage::{
     StoredPending, StoredPendingDustBatch, StoredPendingShielded, StoredPendingUnshielded,
     tagged_from_hex, tagged_to_hex,
 };
-use crate::{SpentUtxoKey, WalletError};
+use crate::{ReservedInput, SpentUtxoKey, WalletError};
 
 /// One pending batch of dust spends from a single `speculative_spend` call.
 ///
@@ -63,9 +63,11 @@ impl PendingDustBatch {
     /// transaction applies atomically. The other spends landed with the
     /// matched one, or none did.
     fn spends_any_of(&self, nullifiers: &[DustNullifier]) -> bool {
-        self.spends
-            .iter()
-            .any(|s| nullifiers.contains(&s.old_nullifier))
+        nullifiers.iter().any(|n| self.spends(n))
+    }
+
+    fn spends(&self, nullifier: &DustNullifier) -> bool {
+        self.spends.iter().any(|s| s.old_nullifier == *nullifier)
     }
 }
 
@@ -181,11 +183,12 @@ impl PendingReservations {
     /// know the transaction is dead hand back what the build reported spending.
     ///
     /// Matching mirrors [`Self::clear_confirmed`]: an unshielded entry goes by
-    /// its exact key, a shielded entry by its nullifier, and a dust batch by
-    /// [`PendingDustBatch::spends_any_of`].
+    /// its exact key, a shielded entry by its nullifier, and a dust batch when
+    /// it spends a named nullifier.
     ///
-    /// An entry must also carry `reserved_at`, so a build hands back only what
-    /// it reserved. Two builds cannot hold one input at the same `reserved_at`,
+    /// Each named input also carries its own `reserved_at`, and an entry goes
+    /// only when its stamp matches, so a build hands back only what it
+    /// reserved. Two builds cannot hold one input at the same `reserved_at`,
     /// because the first one's reservation takes that input out of the second
     /// one's selection. Without the timestamp a late release drops whatever
     /// entry now holds the input, and a third build then selects an input the
@@ -196,23 +199,25 @@ impl PendingReservations {
     /// in that same block after the first release freed them.
     pub(crate) fn release(
         &mut self,
-        dust_nullifiers: &[DustNullifier],
-        unshielded: &[SpentUtxoKey],
-        shielded: &[Nullifier],
-        reserved_at: Timestamp,
+        dust: &[ReservedInput<DustNullifier>],
+        unshielded: &[ReservedInput<SpentUtxoKey>],
+        shielded: &[ReservedInput<Nullifier>],
     ) {
-        if !dust_nullifiers.is_empty() {
-            self.dust
-                .retain(|b| b.reserved_at != reserved_at || !b.spends_any_of(dust_nullifiers));
-        }
-        if !unshielded.is_empty() {
-            self.unshielded
-                .retain(|p| p.reserved_at != reserved_at || !unshielded.contains(&p.key));
-        }
-        if !shielded.is_empty() {
-            self.shielded
-                .retain(|p| p.reserved_at != reserved_at || !shielded.contains(&p.nullifier));
-        }
+        self.dust.retain(|b| {
+            !dust
+                .iter()
+                .any(|d| d.reserved_at == b.reserved_at && b.spends(&d.input))
+        });
+        self.unshielded.retain(|p| {
+            !unshielded
+                .iter()
+                .any(|u| u.reserved_at == p.reserved_at && u.input == p.key)
+        });
+        self.shielded.retain(|p| {
+            !shielded
+                .iter()
+                .any(|s| s.reserved_at == p.reserved_at && s.input == p.nullifier)
+        });
     }
 
     /// Evict the entries outside [`within_ttl`], so a later build can select
@@ -656,10 +661,9 @@ mod tests {
         );
 
         p.release(
-            &[nullifier(1)],
-            &[ukey(0xaa, 0)],
-            &[shielded_nf(1)],
-            Timestamp::from_secs(100),
+            &[at(nullifier(1), 100)],
+            &[at(ukey(0xaa, 0), 100)],
+            &[at(shielded_nf(1), 100)],
         );
 
         // A dust batch is atomic, so matching one of its spends drops the whole
@@ -699,10 +703,9 @@ mod tests {
 
         // A releases late, naming the same inputs but its own older stamp.
         p.release(
-            &[nullifier(1)],
-            &[ukey(0xaa, 0)],
-            &[shielded_nf(1)],
-            Timestamp::from_secs(100),
+            &[at(nullifier(1), 100)],
+            &[at(ukey(0xaa, 0), 100)],
+            &[at(shielded_nf(1), 100)],
         );
 
         assert_eq!(p.dust_batches().count(), 1, "A's release dropped B's dust");
@@ -716,5 +719,61 @@ mod tests {
             1,
             "A's release dropped B's shielded entry"
         );
+    }
+
+    /// One release can name the entries of two reservations with different
+    /// stamps, as a deploy with a shielded offer does: its pinned coins carry
+    /// the stamp of its own build context, and its fee Dust that of a fresh
+    /// one. Each entry goes by its own stamp. A release that applied one stamp
+    /// to every entry would keep one of the two reservations.
+    #[test]
+    fn one_release_hands_back_entries_of_two_stamps() {
+        let mut p = PendingReservations::default();
+        // Build A, the pinned coins.
+        p.reserve(
+            Vec::new(),
+            vec![ukey(0xaa, 0)],
+            vec![shielded_nf(1)],
+            Timestamp::from_secs(100),
+        );
+        // Build B, the fee Dust.
+        p.reserve(
+            vec![dust_batch(&[1])],
+            Vec::new(),
+            Vec::new(),
+            Timestamp::from_secs(200),
+        );
+        // Build D, which the release does not name.
+        p.reserve(
+            Vec::new(),
+            vec![ukey(0xbb, 1)],
+            Vec::new(),
+            Timestamp::from_secs(200),
+        );
+
+        p.release(
+            &[at(nullifier(1), 200)],
+            &[at(ukey(0xaa, 0), 100)],
+            &[at(shielded_nf(1), 100)],
+        );
+
+        assert_eq!(p.dust_batches().count(), 0, "B's Dust stayed reserved");
+        assert_eq!(
+            p.shielded_nullifiers().count(),
+            0,
+            "A's shielded coin stayed reserved"
+        );
+        assert_eq!(
+            p.unshielded_keys().cloned().collect::<Vec<_>>(),
+            vec![ukey(0xbb, 1)],
+            "the release must drop A's UTXO and keep D's"
+        );
+    }
+
+    fn at<T>(input: T, reserved_at_secs: u64) -> ReservedInput<T> {
+        ReservedInput {
+            input,
+            reserved_at: Timestamp::from_secs(reserved_at_secs),
+        }
     }
 }

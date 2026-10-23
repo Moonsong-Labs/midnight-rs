@@ -54,9 +54,13 @@ async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
         .balance_transaction(dustless.as_bytes())
         .await
         .expect("balance the bare call");
+    assert!(
+        !funded.spent.dust.is_empty(),
+        "the sponsor's result must name the fee Dust, or nothing can hand it back"
+    );
 
     let pending = provider
-        .submit(&funded)
+        .submit_reserved(funded)
         .await
         .expect("submit balanced call");
     let (_, pending) = pending

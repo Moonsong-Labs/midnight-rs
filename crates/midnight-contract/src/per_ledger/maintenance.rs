@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use midnight_base_crypto::signatures::{Signature, VerifyingKey};
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::TransferResult;
 
 use super::deploy::{build_with_mock_fee_proofs, single_action_tx_info};
 use super::helpers;
@@ -133,7 +134,7 @@ pub(crate) async fn maintenance_funded(
     builds: &Builds<'_>,
     update: MaintenanceUpdate<DefaultDB>,
     signatures: &[(u32, Signature)],
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<TransferResult, ContractError> {
     let update = signatures
         .iter()
         .fold(update, |update, (index, signature)| {

@@ -83,12 +83,14 @@ pub enum ContractError {
     ///
     /// - `Invalid`: the node rejected the transaction, and the rejection is
     ///   final. Mark any pending private-state snapshot failed, then build
-    ///   again.
+    ///   again. The wallet has the inputs that the call reserved back before
+    ///   the error returns.
     /// - `SubmitRpc`, `Dropped`, `NodeError` or `WatchStream`: the fate of the
     ///   transaction is unknown, and it can still land until its TTL passes. A
     ///   `SubmitRpc` comes from the submit call, before any wait. It does not
     ///   say whether the node holds the transaction (see
-    ///   [`SubmitRpc`](SubmitError::SubmitRpc)).
+    ///   [`SubmitRpc`](SubmitError::SubmitRpc)). The inputs that the call
+    ///   reserved stay reserved.
     /// - [`VerdictFetch`]: the transaction is in a block, and only its verdict
     ///   is unknown. Do not resubmit. Find the verdict with the check below.
     ///
@@ -254,8 +256,9 @@ pub enum ContractError {
     /// A circuit call could not record its pending private-state snapshot.
     ///
     /// The call records the snapshot before it submits the transaction, so it
-    /// stopped before the submit. Nothing reached the chain, and no snapshot
-    /// exists. Fix the store error in `source`, then call again.
+    /// stopped before the submit. Nothing reached the chain, no snapshot
+    /// exists, and the wallet has the inputs that the call reserved back. Fix
+    /// the store error in `source`, then call again.
     #[error(
         "`append_pending` failed for extrinsic {extrinsic_hash:x}: {source}. The \
          transaction was not submitted, and nothing reached the chain: fix the \

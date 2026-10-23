@@ -137,9 +137,11 @@ provider
       b.add_funding(&ctx) / b.build_funded(tx_info) / b.prepare_shielded_inputs(..)
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
+  .prepare_reserved(result).await  → PreparedTx that holds the reservation of the build
   .submit(tx_bytes).await          → PendingTx
+  .submit_reserved(result).await   → PendingTx that carries the reservation of the build
   .merge_transactions(&[..])       → one transaction from several proven ones
-  .balance_transaction(bytes).await → fund someone else's fee-less transaction
+  .balance_transaction(bytes).await → TransferResult: someone else's fee-less transaction, funded
   .balance() / .dust_synced() / .parameters() / .unshielded_utxos() / .sync_cursors()
   .release(&spent)                 // hand back a build's reserved inputs
   .health().await                  → node reachability
@@ -154,7 +156,7 @@ Arc<LocalWallet>                                    // a handle on the attached 
 
 Each node read of the provider, its connect included, ends within 10 s (60 s for a contract state read), and a read with no answer returns `ProviderError::Rpc`.
 
-`transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md). A contract call's `.build()` and `.without_dust()` record no private state, so they fail with `ContractError::UnrecordedPrivateState` when the call's witnesses change it. The refusal comes after the local run and before the build reserves an input or makes a proof.
+`transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits with `submit_reserved`. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md). A contract call's `.build()` and `.without_dust()` record no private state, so they fail with `ContractError::UnrecordedPrivateState` when the call's witnesses change it. The refusal comes after the local run and before the build reserves an input or makes a proof.
 
 `with_network` takes a `Network` (via `impl Into<Network>`). Parse a name with `.parse::<Network>()?`, which refuses a name that is not safe in an address or in the storage path. See [`docs/wallet.md`](wallet.md#address-derivation) for the rule.
 
@@ -218,19 +220,20 @@ deploy_funded(state, provider, shielded_offer)
   ├─ builds.execution_context().await         // build that generation's context
   ├─ builds.proof_provider()                  // that generation's prover (ProofProviders)
   ├─ build deploy intent (state re-encoded for the generation)
-  ├─ no offer: builds.build_funded(tx_info).await  → DeployResult { address, tx_bytes }
+  ├─ no offer: builds.build_funded(tx_info).await  → DeployResult { address, transaction }
   │   ├─ one transition: add the funding view, balance the fee with mock
   │   │  proofs (speculative_spend loop), record what it drew
   │   └─ prove the balanced tx once, for real, with the wallet free
-  └─ an offer:                                → DeployResult { address, tx_bytes }
+  └─ an offer:                                → DeployResult { address, transaction }
       ├─ builds.add_funding(context), then builds.prepare_shielded_inputs:
       │  the wallet spends and reserves the offer's coins
       ├─ refuse a token the coins do not cover (ShieldedOfferShortfall)
       ├─ guaranteed offer: the coins, the payments, one change output per token
       ├─ build_no_validate: prove with no fee
-      └─ builds.balance_transaction: the Dust fee in its own intent
+      ├─ builds.balance_transaction: the Dust fee in its own intent
+      └─ the result's spent: the fee Dust, merged with the offer's coins
   ↓
-provider.submit(tx_bytes).await               → PendingTx
+provider.submit_reserved(transaction).await   → PendingTx (carries the reservation)
   ↓
 into_contract
   ├─ one deadline: deploy_timeout from the start of into_contract
@@ -307,16 +310,20 @@ builds.prepare_shielded_inputs(..)                             // only if the ca
 if pay_fees: builds.balance_transaction(bytes)
   └─ the wallet draws the Dust and reserves it as one transition (prepare_fees),
      then the fee is proved on its own and merged in at its own intent segment,
-     so the circuit proof is not redone
+     so the circuit proof is not redone.
   ↓
-provider.prepare(tx_bytes) → PreparedTx                   // the extrinsic hash, before the submit
+TransferResult: the merged bytes, and the pinned coins and the fee Dust in spent
+  ↓
+provider.prepare_reserved(result) → PreparedTx            // the extrinsic hash, before the submit
   ↓
 .send() only: decode the typed return value from ExecutionResult.result
+  └─ an error: PreparedTx::release hands the inputs back
   ↓
 append the Pending private-state snapshot, if the witnesses changed the state
+  └─ an error: PreparedTx::release, then PendingSnapshotFailed
   ↓
 prepared.submit().await → PendingTx → PendingCall<T>      // .send() returns here
-  └─ SubmitRpc: SubmissionWait, and the snapshot stays Pending
+  └─ SubmitRpc: SubmissionWait, the snapshot stays Pending, and the inputs stay reserved
   ↓
 PendingCall::wait_finalized → PendingTx::wait_finalized   // .await bounds it by DEFAULT_TX_FINALIZE_TIMEOUT
   ↓
@@ -355,10 +362,10 @@ ledger_N::WalletBuilds::prepare_transfer(request, proof_provider)   // one hold 
 (wallet released)    PreparedTransfer::prove       // the only real proving
   → TransferResult { tx_bytes, ledger_version, spent, fee_speck }
   ↓
-(.await path only)   provider.submit(tx_bytes).await → PendingTx
+(.await path only)   provider.submit_reserved(result).await → PendingTx
 ```
 
-`.await` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops before submitting and returns `TransferResult`, which the caller can submit (or route) themselves. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time a funded build runs `add_funding`.
+`.await` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops before submitting and returns `TransferResult`, which the caller can submit with `submit_reserved`. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time a funded build runs `add_funding`.
 
 ## Transaction submission
 
@@ -380,7 +387,9 @@ Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancel
 
 `MidnightProvider::prepare` stops one step earlier: it builds the unsigned `send_mn_transaction` extrinsic locally from the node's metadata and returns a `PreparedTx` whose extrinsic hash is already known, so a caller can durably record state keyed by that hash before the transaction reaches the mempool. The metadata checks only the call's shape, so the node validates the transaction only at submit. `PreparedTx::submit` then hands back the same `PendingTx`.
 
-A build that reserved inputs carries the reservation on its `PendingTx`, so a terminal rejection arriving long after the builder returned still hands them back.
+`MidnightProvider::prepare_reserved` prepares a `TransferResult`, and the `PreparedTx` holds the reservation of its build. A failed prepare hands the inputs back before it returns. A `PreparedTx` that drops before its submit hands them back too, and `PreparedTx::release` does the same and waits for it. `PreparedTx::submit` moves the reservation to the `PendingTx`, so a wait that reads `Invalid` hands the inputs back. A failed submit keeps them reserved.
+
+`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call prepares with `prepare_reserved`, because it records its private-state snapshot between the prepare and the submit. So an error before its submit, or an `Invalid` at its wait, hands its inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
 
 ## Block pinning
 

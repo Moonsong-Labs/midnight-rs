@@ -139,10 +139,11 @@ pub(crate) fn run_call(
 }
 
 /// Build the funded, proven transaction of a circuit run on the chain's
-/// generation, and return its bytes.
+/// generation.
 ///
 /// `exec_result` is the run of `circuit` on `state`. The build resyncs the
-/// wallet and reserves the inputs that the transaction spends.
+/// wallet and reserves the inputs that the transaction spends, and the result
+/// names them.
 #[expect(
     clippy::too_many_arguments,
     reason = "the inputs of the generation's own `call_transaction`, before the dispatch"
@@ -161,7 +162,7 @@ pub(crate) async fn call_transaction(
     // When false, skip Dust funding: the call is built proven but fee-less, for
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
     pay_fees: bool,
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<midnight_types::TransferResult, ContractError> {
     // Each arm is boxed so this frame holds one generation's future, not
     // both (see the frame-size note on `MidnightProvider::resync_wallet`).
     match provider.builds().await? {

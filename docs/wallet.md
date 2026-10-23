@@ -366,7 +366,7 @@ let pending = provider
 4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
 5. Submits the proven bytes to the node and returns a `PendingTx`.
 
-To inspect the proven transaction without submitting (e.g. to route submission elsewhere, to size-check, or to show the user the fee before they confirm), call `.build()` on the builder instead of awaiting it:
+To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder instead of awaiting it:
 
 ```rust
 let result = provider
@@ -375,10 +375,10 @@ let result = provider
     .await?;
 // result: TransferResult { tx_bytes, ledger_version, spent, fee_speck }
 println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / SPECKS_PER_DUST as f64);
-let pending = provider.submit(&result.tx_bytes).await?;
+let pending = provider.submit_reserved(result).await?;
 ```
 
-`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved.
+`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved. `submit_reserved` hands them back when the node never gets the transaction or rejects it (see [Pending reservations](#pending-reservations)).
 
 ## Submission and waiting
 
@@ -440,7 +440,14 @@ In-flight spends that have been built but not yet confirmed on-chain are tracked
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
-You don't normally interact with this directly: `transfer_*` and `register_dust` reserve, and the sync loop clears.
+A release also drops a reservation, for a transaction that can never land. It matches each entry by its input and by the stamp of its reservation, so a late release cannot drop an entry that a later build made over the same input. These paths release:
+
+- `MidnightProvider::submit_reserved`, when its prepare fails (the connect included), and its `PendingTx` when a wait reads `Invalid`. The transfers, `register_dust`, a deploy and a maintenance update submit this way. Submit the result of a `.build()` or of `balance_transaction` with it too.
+- `MidnightProvider::prepare_reserved`, when the prepare fails, and its `PreparedTx` when it drops before its submit or when you call `PreparedTx::release`. Its submit moves the reservation to the `PendingTx`, which releases when a wait reads `Invalid`. A contract call prepares this way, so a call that stops before its submit releases, for example on a failed `append_pending`.
+- A build whose proof fails, and a deploy whose shielded offer fails before its fee is paid.
+- `MidnightProvider::release(&spent)`, for a `TransferResult` that you build and never submit.
+
+A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node can still hold the transaction. The bytes of a contract call's `.build()` or `.without_dust()` do not name their inputs, so their reservation ends only when a sync sees the chain spend them, or when their TTL ends. Other than that, you don't normally interact with this directly: the builds reserve, and the sync loop clears.
 
 ## Lifecycle summary
 

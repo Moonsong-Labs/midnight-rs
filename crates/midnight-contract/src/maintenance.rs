@@ -15,7 +15,7 @@ use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPointBuf};
 use midnight_provider::{Builds, PendingTx, Provider};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
-use midnight_types::{LedgerVersion, WalletError};
+use midnight_types::{LedgerVersion, TransferResult, WalletError};
 
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
@@ -364,6 +364,12 @@ pub(crate) enum OpSpec {
 /// [`ProviderError::NotApplied`](midnight_provider::ProviderError::NotApplied)
 /// when the update did not apply. (`call_with` and deploy surface the same
 /// failure as [`ContractError::TransactionFailed`].)
+///
+/// `.await` submits with
+/// [`MidnightProvider::submit_reserved`](midnight_provider::MidnightProvider::submit_reserved),
+/// so the fee Dust goes back to the wallet when the node never gets the
+/// update, or when a wait on the [`PendingTx`] reads
+/// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid).
 #[must_use = "does nothing until awaited or built"]
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
@@ -442,15 +448,20 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     /// An update prepared before the chain's hard fork cannot be built after
     /// it: its signatures cover the earlier generation's bytes. Prepare it
     /// again and collect new signatures.
+    ///
+    /// The build reserves the Dust that pays the fee, and returns only the
+    /// bytes. So when the bytes never land, nothing can hand that Dust back,
+    /// and it stays reserved until its TTL passes. `.await` submits with the
+    /// reservation instead.
     pub async fn build(self) -> Result<Vec<u8>, ContractError>
     where
         P: Provider + AsMidnightProvider,
     {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.build_inner()).await
+        Ok(Box::pin(self.build_inner()).await?.tx_bytes)
     }
 
-    async fn build_inner(self) -> Result<Vec<u8>, ContractError>
+    async fn build_inner(self) -> Result<TransferResult, ContractError>
     where
         P: Provider + AsMidnightProvider,
     {
@@ -494,8 +505,8 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let provider = self.contract.provider().as_midnight_provider();
-            let bytes = self.build_inner().await?;
-            Ok(provider.submit(&bytes).await?)
+            let transaction = self.build_inner().await?;
+            Ok(provider.submit_reserved(transaction).await?)
         })
     }
 }

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use midnight_types::{SpendableShieldedCoin, TransferRequest, TransferResult};
+use midnight_types::{SpendableShieldedCoin, SpentInputs, TransferRequest, TransferResult};
 
 use super::facade::{ReservedBuild, WalletBuilds};
 use super::helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
@@ -11,7 +11,7 @@ use super::helpers::{
     BuildContext, DefaultDB, FinalizedTransaction, FromContext, ProofProvider,
     StandardTransactionInfo, StdRng, TokenType,
 };
-use super::types::PreparedInput;
+use super::types::{PreparedInput, fee_speck};
 use crate::{HeldInputs, MidnightProvider, ProviderError};
 
 /// The attached wallet's builds on this generation.
@@ -144,13 +144,19 @@ impl<'a> Builds<'a> {
 
     /// Pay the fees for an external party's proven, fee-less transaction from
     /// the attached wallet. See [`MidnightProvider::balance_transaction`].
-    pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+    pub async fn balance_transaction(
+        &self,
+        tx_bytes: &[u8],
+    ) -> Result<TransferResult, ProviderError> {
         // Boxed so a caller's future stays small. See the frame-size note on
         // `MidnightProvider::resync_wallet`.
         Box::pin(self.balance_transaction_inner(tx_bytes)).await
     }
 
-    async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+    async fn balance_transaction_inner(
+        &self,
+        tx_bytes: &[u8],
+    ) -> Result<TransferResult, ProviderError> {
         let external = deserialize_transaction(tx_bytes)?;
 
         // Refuse any non-fee token deficit: this path only adds Dust, so a
@@ -171,12 +177,17 @@ impl<'a> Builds<'a> {
         }
 
         let context = self.execution_context().await?;
-        let tx_info = StandardTransactionInfo::new_from_context(context, self.prover.clone(), None);
+        let tx_info =
+            StandardTransactionInfo::new_from_context(context.clone(), self.prover.clone(), None);
         let Some(reserved) = self.wallet.prepare_fees(tx_info, &external).await? else {
-            return Ok(tx_bytes.to_vec());
+            return Ok(TransferResult {
+                tx_bytes: tx_bytes.to_vec(),
+                ledger_version: super::LEDGER,
+                spent: SpentInputs::default(),
+                fee_speck: fee_speck(&context, &external)?,
+            });
         };
-        let fee = self.prove_reserved(reserved).await?;
-        merge_transactions(&[tx_bytes.to_vec(), fee.tx_bytes])
+        self.prove_reserved(reserved).await
     }
 
     /// Ask the wallet to select and reserve, then prove without it.
@@ -202,7 +213,8 @@ impl<'a> Builds<'a> {
     /// reaches the prover only through a wallet that says it reserved the
     /// inputs first. A proof that fails hands them back, because the
     /// reservation outlives the decision that made it and would otherwise
-    /// strand them until their TTL elapses.
+    /// strand them until their TTL elapses. For a sponsored fee, the proof
+    /// includes the merge into the external transaction and its price.
     async fn prove_reserved(
         &self,
         reserved: ReservedBuild,

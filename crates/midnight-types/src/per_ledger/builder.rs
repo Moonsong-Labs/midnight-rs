@@ -25,8 +25,8 @@ use helpers::{
 use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
 use crate::{
-    Network, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest, TransferResult, WalletError,
-    panic_message,
+    Network, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
+    TransferResult, WalletError, panic_message,
 };
 
 type UnprovenTx = helpers::UnprovenTransaction<DefaultDB>;
@@ -62,6 +62,9 @@ pub struct PreparedTransfer {
     /// was handed. The reservation carries the same stamp, so a release can
     /// name this build's own entry.
     reserved_at: Timestamp,
+    /// The finished transaction whose fee this build pays, which
+    /// [`Self::prove`] merges the proven fee into.
+    external: Option<FinalizedTx>,
 }
 
 impl PreparedTransfer {
@@ -84,6 +87,7 @@ impl PreparedTransfer {
             spent_unshielded_inputs: Vec::new(),
             spent_shielded_inputs: Vec::new(),
             reserved_at,
+            external: None,
         }
     }
 
@@ -111,42 +115,63 @@ impl PreparedTransfer {
         &self.spent_shielded_inputs
     }
 
+    /// The chain time this build selected against. Reserve its inputs with
+    /// this stamp, which [`Self::spent_inputs`] gives each of them.
+    pub fn reserved_at(&self) -> Timestamp {
+        self.reserved_at
+    }
+
     /// Everything this build will spend, in the form a reservation takes.
     pub fn spent_inputs(&self) -> SpentInputs {
         SpentInputs {
-            dust: dust_nullifiers(&self.dust_batches),
-            unshielded: self.spent_unshielded_inputs.clone(),
-            shielded: sdk_nullifiers(&self.spent_shielded_inputs),
-            reserved_at: self.reserved_at,
+            dust: self.stamped(dust_nullifiers(&self.dust_batches)),
+            unshielded: self.stamped(self.spent_unshielded_inputs.iter().cloned()),
+            shielded: self.stamped(self.spent_shielded_inputs.iter().map(|n| n.into_sdk())),
         }
+    }
+
+    fn stamped<T>(&self, inputs: impl IntoIterator<Item = T>) -> Vec<ReservedInput<T>> {
+        inputs
+            .into_iter()
+            .map(|input| ReservedInput {
+                input,
+                reserved_at: self.reserved_at,
+            })
+            .collect()
     }
 
     /// Prove the transaction and serialize it. The slowest step in a build,
     /// and it touches no wallet.
+    ///
+    /// A build from [`balance_external`] proves the fee intent and merges it
+    /// into the transaction whose fee it pays. The result then holds the
+    /// merged transaction and its fee, and its `spent` names only the Dust of
+    /// this build.
     pub async fn prove(self) -> Result<TransferResult, WalletError> {
         let spent = self.spent_inputs();
         let PreparedTransfer {
-            mut tx_info, tx, ..
+            mut tx_info,
+            tx,
+            external,
+            ..
         } = self;
 
         // Keep a handle to the ledger context so we can read `parameters`
         // after proving to compute the fee. `Arc::clone` is cheap and the lock
         // inside `with_ledger_state` is held only for the closure.
         let context = tx_info.context.clone();
-        let finalized = prove_tx_no_validate(&mut tx_info, tx).await?;
+        let proven = prove_tx_no_validate(&mut tx_info, tx).await?;
+        let finalized = match external {
+            Some(external) => external
+                .merge(&proven)
+                .map_err(transfer_err("merge fee intent"))?,
+            None => proven,
+        };
 
         let mut bytes = Vec::new();
         helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
             .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
-
-        // Mirrors the node's own estimation RPC: `enforce_time_to_dismiss =
-        // false`, i.e. report the deterministic SPECK cost without the
-        // chain-side mempool-eviction check. The chain charges the same number
-        // at inclusion; if the tx exceeds the eviction-time bound, that
-        // surfaces at submit, not here.
-        let fee_speck = context
-            .with_ledger_state(|s| finalized.fees(&s.parameters, false))
-            .map_err(transfer_err("fees"))?;
+        let fee_speck = fee_speck(&context, &finalized)?;
 
         Ok(TransferResult {
             tx_bytes: bytes,
@@ -157,13 +182,29 @@ impl PreparedTransfer {
     }
 }
 
+/// The Dust fee, in SPECK, that the chain charges for `tx`, against the
+/// ledger parameters in `context`. See [`TransferResult::fee_speck`].
+///
+/// # Errors
+///
+/// [`WalletError::Transfer`] when the ledger cannot price `tx`.
+pub fn fee_speck(context: &BuildContext, tx: &FinalizedTx) -> Result<u128, WalletError> {
+    // Mirrors the node's own estimation RPC: `enforce_time_to_dismiss =
+    // false`, i.e. report the deterministic SPECK cost without the
+    // chain-side mempool-eviction check. The chain charges the same number
+    // at inclusion; if the tx exceeds the eviction-time bound, that
+    // surfaces at submit, not here.
+    context
+        .with_ledger_state(|s| tx.fees(&s.parameters, false))
+        .map_err(transfer_err("fees"))
+}
+
 /// The nullifier of every Dust spend in `batches`, which is how a release
 /// names them.
-fn dust_nullifiers(batches: &[DustSpendBatch]) -> Vec<crate::DustNullifier> {
+fn dust_nullifiers(batches: &[DustSpendBatch]) -> impl Iterator<Item = crate::DustNullifier> {
     batches
         .iter()
         .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier.into_sdk()))
-        .collect()
 }
 
 fn flat_spends(batches: &[DustSpendBatch]) -> Vec<DustSpend<ProofPreimageMarker, DefaultDB>> {
@@ -171,10 +212,6 @@ fn flat_spends(batches: &[DustSpendBatch]) -> Vec<DustSpend<ProofPreimageMarker,
         .iter()
         .flat_map(|b| b.spends.iter().cloned())
         .collect()
-}
-
-fn sdk_nullifiers(nullifiers: &[Nullifier]) -> Vec<crate::Nullifier> {
-    nullifiers.iter().map(|n| n.into_sdk()).collect()
 }
 
 /// Wrap a foreign error as [`WalletError::Transfer`], naming the failing
@@ -956,8 +993,9 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 /// Draw the fee for a finished transaction this wallet did not build, and
 /// stop before proving.
 ///
-/// The fee rides an intent of its own at a segment `external` does not use,
-/// merged in after proving, so `external` and its proofs stay as they are.
+/// The fee rides an intent of its own at a segment `external` does not use.
+/// [`PreparedTransfer::prove`] merges it in after proving, so `external` and
+/// its proofs stay as they are.
 /// Each round prices the merge with a mock proof, which is exact here
 /// because the fee intent carries only Dust spends.
 ///
@@ -1008,7 +1046,9 @@ pub fn balance_external(
             return Ok(None);
         };
         confirm_dust_spends(&mut tx_info, &batches);
-        return Ok(Some(PreparedTransfer::new(tx_info, fee_tx, batches)));
+        let mut prepared = PreparedTransfer::new(tx_info, fee_tx, batches);
+        prepared.external = Some(external.clone());
+        return Ok(Some(prepared));
     }
     Err(tracker.into_error())
 }

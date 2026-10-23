@@ -12,19 +12,23 @@ use std::time::Duration;
 
 use midnight_provider::{Builds, MidnightProvider, TxInBlock};
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::ContractAddress;
+use midnight_types::{ContractAddress, TransferResult};
 
 use crate::ShieldedOffer;
 use crate::address::format_address;
 use crate::error::ContractError;
 use crate::state::fetch_state_from_node;
 
-/// Result of deploying a contract (before or after submission).
+/// A deploy, built and proven, before its submit.
+#[derive(Debug)]
 pub struct DeployResult {
     /// The contract's on-chain address.
     pub address: ContractAddress,
-    /// The proven transaction bytes, ready for [`midnight_provider::MidnightProvider::submit`].
-    pub tx_bytes: Vec<u8>,
+    /// The proven deploy transaction, and the inputs that its build reserved:
+    /// the fee Dust, and the coins of a shielded offer. Submit it with
+    /// [`MidnightProvider::submit_reserved`], which hands the inputs back when
+    /// the node never gets the deploy or rejects it.
+    pub transaction: TransferResult,
 }
 
 impl DeployResult {
@@ -38,7 +42,8 @@ impl DeployResult {
 ///
 /// Builds the deploy for the ledger generation the wallet's state is in,
 /// runs the helpers' fee-balancing / proving pipeline, and returns a
-/// [`DeployResult`] containing the contract address and proven TX bytes. A
+/// [`DeployResult`] containing the contract address and the proven
+/// transaction with the inputs its build reserved. A
 /// `shielded_offer` rides in the same transaction, as
 /// [`DeployBuilder::with_shielded_offer`](crate::DeployBuilder::with_shielded_offer)
 /// describes.

@@ -18,12 +18,11 @@ use crate::LocalWallet;
 
 /// Reserve what `prepared` spends, and hand it over as reserved.
 fn reserve(wallet: &mut super::Wallet, prepared: PreparedTransfer) -> ReservedBuild {
-    let spent = prepared.spent_inputs();
     wallet.reserve_pending(
         prepared.dust_batches().to_vec(),
-        spent.unshielded,
+        prepared.spent_unshielded_inputs().to_vec(),
         prepared.spent_shielded_inputs().to_vec(),
-        spent.reserved_at,
+        prepared.reserved_at(),
     );
     ReservedBuild::reserved(prepared)
 }

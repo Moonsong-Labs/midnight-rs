@@ -539,7 +539,7 @@ impl MidnightProvider {
     /// let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
     /// let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
     /// let funded = sponsor.balance_transaction(&merged).await?;
-    /// sponsor.submit(&funded).await?;
+    /// sponsor.submit_reserved(funded).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -613,6 +613,11 @@ impl MidnightProvider {
     /// Returns a [`PendingTx`] handle that lets the caller await inclusion
     /// (`wait_best`) and finalization (`wait_finalized`). The provider's
     /// `node_url` is used as the connection target — callers don't repeat it.
+    ///
+    /// This is for bytes that this wallet did not build. It carries no
+    /// reservation, so a rejection hands no inputs back. For a
+    /// [`TransferResult`] that this wallet built, use
+    /// [`Self::submit_reserved`].
     pub async fn submit(&self, tx_bytes: &[u8]) -> Result<PendingTx, ProviderError> {
         let conn = query_within(QUERY_TIMEOUT, self.get_or_connect()).await?;
         submit::submit_bytes(&conn.client, tx_bytes).await
@@ -628,9 +633,46 @@ impl MidnightProvider {
     /// This builds the extrinsic locally from the node's metadata, which
     /// checks only the call's shape. The node validates the transaction only
     /// at submit.
+    ///
+    /// This is for bytes that this wallet did not build. The `PreparedTx`
+    /// carries no reservation. For a [`TransferResult`] that this wallet
+    /// built, use [`Self::prepare_reserved`].
     pub async fn prepare(&self, tx_bytes: &[u8]) -> Result<submit::PreparedTx, ProviderError> {
         let conn = query_within(QUERY_TIMEOUT, self.get_or_connect()).await?;
         submit::prepare_bytes(&conn.client, tx_bytes).await
+    }
+
+    /// [`Self::prepare`] for a transaction that this provider's wallet built,
+    /// with the reservation of its build on the returned
+    /// [`PreparedTx`](crate::PreparedTx).
+    ///
+    /// The inputs in `result.spent` go back to the wallet when the prepare
+    /// fails, before the error returns, and when the `PreparedTx` drops or is
+    /// released before its submit. Its submit moves the reservation to the
+    /// [`PendingTx`], which hands the inputs back when a wait reads
+    /// [`SubmitError::Invalid`](crate::SubmitError::Invalid).
+    ///
+    /// Submit the transaction only through the returned `PreparedTx`. Bytes
+    /// that you send another way can land after a drop of the `PreparedTx`
+    /// hands their inputs back, and a later build can then spend the same
+    /// inputs.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Self::prepare`].
+    pub async fn prepare_reserved(
+        &self,
+        result: TransferResult,
+    ) -> Result<submit::PreparedTx, ProviderError> {
+        let held = HeldInputs::of(result.spent, self.facade());
+        match self.prepare(&result.tx_bytes).await {
+            Ok(prepared) => Ok(prepared.holding(held)),
+            // Release on every error: a prepare sends nothing to the node.
+            Err(err) => {
+                held.release().await;
+                Err(err)
+            }
+        }
     }
 
     /// Merge proven transactions into one, for multi-party flows: e.g. combining
@@ -697,14 +739,27 @@ impl MidnightProvider {
     /// covering it from the funding wallet is a planned follow-up.
     ///
     /// The wallet draws the Dust and reserves it as one transition, so two
-    /// calls on one provider cannot draw the same Dust. Proving runs
-    /// afterwards, with the wallet free, and hands the Dust back if it fails.
-    pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+    /// calls on one provider cannot draw the same Dust. Proving, the merge
+    /// and the price run afterwards, with the wallet free, and a failure in
+    /// any of them hands the Dust back.
+    ///
+    /// The result holds the merged transaction, the Dust it reserved in
+    /// `spent`, and the fee of the merged transaction in `fee_speck`. Submit
+    /// it with [`Self::submit_reserved`], which hands the Dust back when the
+    /// node never gets the transaction or rejects it. A transaction that
+    /// already pays its own fee comes back unchanged, with nothing reserved.
+    pub async fn balance_transaction(
+        &self,
+        tx_bytes: &[u8],
+    ) -> Result<TransferResult, ProviderError> {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
         Box::pin(self.balance_transaction_inner(tx_bytes)).await
     }
 
-    async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+    async fn balance_transaction_inner(
+        &self,
+        tx_bytes: &[u8],
+    ) -> Result<TransferResult, ProviderError> {
         let ledger = transaction_ledger_version(tx_bytes)?;
         match self.builds().await? {
             Builds::Ledger8(builds) if ledger == LedgerVersion::V8 => {
@@ -739,42 +794,30 @@ impl MidnightProvider {
         Ok(())
     }
 
-    /// Submit a built transaction and keep its reservation alive on the
-    /// returned handle.
+    /// Submit a transaction that this provider's wallet built, and carry the
+    /// reservation of its build on the returned handle.
     ///
-    /// A node's definitive rejection arrives as a terminal status while
-    /// awaiting inclusion, after this has already returned, so the inputs a
-    /// build reserved have to travel with the handle for anything to hand them
-    /// back.
+    /// Use it for the [`TransferResult`] of a `.build()` on a transfer, of
+    /// [`Self::balance_transaction`], or of a deploy. The inputs in
+    /// `result.spent` then go back to the wallet in two cases:
     ///
-    /// Failing here frees them only when the transaction provably never left
-    /// this process. A failed RPC call may still have delivered it, so those
-    /// inputs stay reserved and wait out their TTL.
-    pub(crate) async fn submit_reserved(
+    /// - The prepare fails: the connect, the metadata read, or the encoding of
+    ///   the extrinsic. The transaction never left this process, whatever the
+    ///   error, and the release completes before the error returns.
+    /// - A wait on the [`PendingTx`] reads
+    ///   [`SubmitError::Invalid`](crate::SubmitError::Invalid), the node's
+    ///   definitive rejection. It arrives after this method returns, so the
+    ///   reservation travels with the handle.
+    ///
+    /// Any other failure keeps the inputs reserved until their TTL passes,
+    /// because the node can still hold the transaction. Use [`Self::submit`]
+    /// for bytes that this wallet did not build. This is
+    /// [`Self::prepare_reserved`], then [`PreparedTx::submit`](crate::PreparedTx::submit).
+    pub async fn submit_reserved(
         &self,
-        result: &TransferResult,
+        result: TransferResult,
     ) -> Result<PendingTx, ProviderError> {
-        match self.submit(&result.tx_bytes).await {
-            Ok(pending) => Ok(match self.facade() {
-                Some(wallet) => pending.with_reservation(crate::submit::Reservation::new(
-                    wallet,
-                    result.spent.clone(),
-                )),
-                None => pending,
-            }),
-            Err(err) => {
-                if crate::submit::never_reached_the_node(&err)
-                    && let Err(release_err) = self.release(&result.spent).await
-                {
-                    tracing::warn!(
-                        error = %release_err,
-                        "could not release the inputs of a transaction that never reached the \
-                         node; they stay reserved until their TTL elapses"
-                    );
-                }
-                Err(err)
-            }
-        }
+        self.prepare_reserved(result).await?.submit().await
     }
 
     /// The attached wallet's shielded public keys. See
@@ -1294,6 +1337,14 @@ impl HeldInputs {
         Self { wallet, spent }
     }
 
+    /// The inputs this guard holds. A build reads them before
+    /// [`Self::keep_on_ok`] when its result has to name them beside the
+    /// inputs of a later reservation (see
+    /// [`SpentInputs::merge`](midnight_types::SpentInputs::merge)).
+    pub fn spent(&self) -> &SpentInputs {
+        &self.spent
+    }
+
     /// Run `work` and keep the inputs reserved only if it succeeds.
     ///
     /// `work` is the rest of the build. On `Ok` the build can reach the chain,
@@ -1329,22 +1380,50 @@ impl HeldInputs {
             let wallet = self.wallet.take();
             let spent = std::mem::take(&mut self.spent);
             if result.is_err()
-                && !spent.is_empty()
                 && let Some(wallet) = wallet
             {
-                // Spawned so that dropping this future cannot cut the release
-                // short, and awaited so the caller observes the inputs back.
-                match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => {
-                        let _ = handle
-                            .spawn(async move { wallet.release(&spent).await })
-                            .await;
-                    }
-                    Err(_) => wallet.release(&spent).await,
-                }
+                hand_back(wallet, spent).await;
             }
             result
         }
+    }
+
+    /// Hand the inputs back now. They are back when this returns, as with an
+    /// `Err` of [`Self::keep_on_ok`].
+    pub(crate) async fn release(mut self) {
+        let spent = std::mem::take(&mut self.spent);
+        if let Some(wallet) = self.wallet.take() {
+            hand_back(wallet, spent).await;
+        }
+    }
+
+    /// Disarm the guard and keep the inputs reserved, for a transaction that
+    /// the node can hold. The returned reservation lets a later definitive
+    /// rejection hand them back. `None` when no wallet holds them.
+    pub(crate) fn into_reservation(mut self) -> Option<crate::submit::Reservation> {
+        let wallet = self.wallet.take()?;
+        Some(crate::submit::Reservation::new(
+            wallet,
+            std::mem::take(&mut self.spent),
+        ))
+    }
+}
+
+/// Hand `spent` back to `wallet`, and return when the wallet has them.
+///
+/// Under a Tokio runtime the release runs as a task of its own, so a drop of
+/// this future cannot cut it short. With no runtime, it runs inline.
+async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
+    if spent.is_empty() {
+        return;
+    }
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            let _ = handle
+                .spawn(async move { wallet.release(&spent).await })
+                .await;
+        }
+        Err(_) => wallet.release(&spent).await,
     }
 }
 
