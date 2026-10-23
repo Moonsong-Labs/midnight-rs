@@ -2781,7 +2781,7 @@ dependencies = [
 [[package]]
 name = "midnight-base-crypto"
 version = "1.1.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "anyhow",
  "atomic-write-file",
@@ -2813,7 +2813,7 @@ dependencies = [
 [[package]]
 name = "midnight-base-crypto-derive"
 version = "1.1.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -2871,7 +2871,7 @@ dependencies = [
 [[package]]
 name = "midnight-coin-structure"
 version = "2.0.2"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=22f4651449e671e9f0fc2602be0109ec3a2b990f#22f4651449e671e9f0fc2602be0109ec3a2b990f"
 dependencies = [
  "fake",
  "lazy_static",
@@ -2887,7 +2887,7 @@ dependencies = [
 [[package]]
 name = "midnight-coin-structure"
 version = "3.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "fake",
  "lazy_static",
@@ -3036,7 +3036,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger"
 version = "8.1.2"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=22f4651449e671e9f0fc2602be0109ec3a2b990f#22f4651449e671e9f0fc2602be0109ec3a2b990f"
 dependencies = [
  "anyhow",
  "derive-where",
@@ -3068,7 +3068,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger-static"
 version = "9.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=22f4651449e671e9f0fc2602be0109ec3a2b990f#22f4651449e671e9f0fc2602be0109ec3a2b990f"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -3077,7 +3077,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger-static"
 version = "10.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -3086,7 +3086,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger-unsafe-helpers"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-node?rev=f7166181a833abdc2cc2aa72c27847403907dfd9#f7166181a833abdc2cc2aa72c27847403907dfd9"
+source = "git+https://github.com/RomarQ/midnight-node?rev=ef1330ebbc9f7b7f7f3f3210a91bef2422b0d74f#ef1330ebbc9f7b7f7f3f3210a91bef2422b0d74f"
 dependencies = [
  "async-trait",
  "bech32",
@@ -3117,7 +3117,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger-v9"
 version = "1.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "anyhow",
  "derive-where",
@@ -3154,7 +3154,7 @@ dependencies = [
 [[package]]
 name = "midnight-node-ledger-helpers"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-node?rev=f7166181a833abdc2cc2aa72c27847403907dfd9#f7166181a833abdc2cc2aa72c27847403907dfd9"
+source = "git+https://github.com/RomarQ/midnight-node?rev=ef1330ebbc9f7b7f7f3f3210a91bef2422b0d74f#ef1330ebbc9f7b7f7f3f3210a91bef2422b0d74f"
 dependencies = [
  "anyhow",
  "bip39",
@@ -3192,7 +3192,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-runtime"
 version = "3.1.1"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=22f4651449e671e9f0fc2602be0109ec3a2b990f#22f4651449e671e9f0fc2602be0109ec3a2b990f"
 dependencies = [
  "derive-where",
  "enum_index",
@@ -3217,7 +3217,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-runtime"
 version = "4.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "derive-where",
  "enum_index",
@@ -3242,7 +3242,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-state"
 version = "3.0.1"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=22f4651449e671e9f0fc2602be0109ec3a2b990f#22f4651449e671e9f0fc2602be0109ec3a2b990f"
 dependencies = [
  "derive-where",
  "fake",
@@ -3260,7 +3260,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-state"
 version = "4.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "derive-where",
  "fake",
@@ -3279,7 +3279,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-vm"
 version = "3.1.1"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=22f4651449e671e9f0fc2602be0109ec3a2b990f#22f4651449e671e9f0fc2602be0109ec3a2b990f"
 dependencies = [
  "derive-where",
  "fake",
@@ -3300,7 +3300,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-vm"
 version = "4.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "derive-where",
  "fake",
@@ -3413,7 +3413,7 @@ dependencies = [
 [[package]]
 name = "midnight-serialize"
 version = "1.2.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "crypto",
  "konst 0.4.3",
@@ -3426,7 +3426,7 @@ dependencies = [
 [[package]]
 name = "midnight-serialize-macros"
 version = "1.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -3436,7 +3436,7 @@ dependencies = [
 [[package]]
 name = "midnight-storage"
 version = "2.0.4"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "crypto",
  "derive-where",
@@ -3456,7 +3456,7 @@ dependencies = [
 [[package]]
 name = "midnight-storage-core"
 version = "1.2.2"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "archery",
  "crypto",
@@ -3483,7 +3483,7 @@ dependencies = [
 [[package]]
 name = "midnight-storage-macros"
 version = "1.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "midnight-serialize-macros",
  "proc-macro2",
@@ -3494,7 +3494,7 @@ dependencies = [
 [[package]]
 name = "midnight-transient-crypto"
 version = "2.2.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "anyhow",
  "blake2b_simd",
@@ -3530,7 +3530,7 @@ dependencies = [
 [[package]]
 name = "midnight-transient-crypto"
 version = "3.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "anyhow",
  "blake2b_simd",
@@ -3677,7 +3677,7 @@ dependencies = [
 [[package]]
 name = "midnight-zkir"
 version = "2.2.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "anyhow",
  "const-hex",
@@ -3706,8 +3706,8 @@ dependencies = [
 
 [[package]]
 name = "midnight-zkir-v3"
-version = "3.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+version = "3.1.0-rc.1"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "anyhow",
  "const-hex",
@@ -3736,7 +3736,7 @@ dependencies = [
 [[package]]
 name = "midnight-zswap"
 version = "8.1.2"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=22f4651449e671e9f0fc2602be0109ec3a2b990f#22f4651449e671e9f0fc2602be0109ec3a2b990f"
 dependencies = [
  "derive-where",
  "fake",
@@ -3760,7 +3760,7 @@ dependencies = [
 [[package]]
 name = "midnight-zswap"
 version = "9.0.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=425ef0c2f48fcbd188ee8324550b388e13160795#425ef0c2f48fcbd188ee8324550b388e13160795"
 dependencies = [
  "anyhow",
  "derive-where",
@@ -6553,7 +6553,7 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 [[package]]
 name = "v8-to-v9-state-translation"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=22f4651449e671e9f0fc2602be0109ec3a2b990f#22f4651449e671e9f0fc2602be0109ec3a2b990f"
 dependencies = [
  "midnight-base-crypto",
  "midnight-ledger",
