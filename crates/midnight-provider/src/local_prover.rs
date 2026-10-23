@@ -13,13 +13,6 @@ use midnight_helpers::ledger_9::{
 
 /// Proves a ledger 9 transaction in this process, for circuits of ZKIR v2
 /// and ZKIR v3.
-///
-/// The helpers' `LocalProofServer` builds its prover from the ZKIR v2 crate
-/// only, so it refuses the IR of a circuit compiled for ZKIR v3
-/// (`ir-source[v3-generic]`). This prover reads the tag of each circuit's IR,
-/// as the ledger's proof server does, and proves ZKIR v3 IR with
-/// `midnight-zkir-v3`. Ledger 8 keeps the helpers' prover: its chain does not
-/// verify a ZKIR v3 key.
 pub(crate) struct LocalProver;
 
 #[async_trait]
@@ -69,8 +62,7 @@ enum Ir {
 }
 
 impl VersionedProvingProvider<'_> {
-    /// The IR of the circuit that `preimage` proves. The provers resolve the
-    /// key again, from the resolver's cache.
+    /// The IR of the circuit that `preimage` proves.
     async fn ir(&self, preimage: &ProofPreimage) -> anyhow::Result<Ir> {
         let key = self
             .0
