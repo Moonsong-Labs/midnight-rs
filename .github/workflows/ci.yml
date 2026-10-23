@@ -20,6 +20,8 @@ jobs:
 
   # The devnet contracts, the test and conformance fixtures, and the goldens
   # that the TS runtime derives from the corpus. None of them is committed.
+  # The job also checks the interpreter's list of natives against the
+  # compiler's native tables.
   compact:
     name: Compile the Compact sources
     runs-on: ubuntu-latest
@@ -31,6 +33,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: make check-natives
       - run: make compile-contracts fixtures goldens
       # The artifact keeps each path below the repository root, and the
       # compact-outputs action puts it back there. It lives as long as GitHub

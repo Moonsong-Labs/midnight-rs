@@ -2,5 +2,3 @@
 # them in review and keeps them out of the language stats. Never edit these by
 # hand.
 tests/conformance/package-lock.json linguist-generated=true
-# Names that `make compact-natives` derives from the compiler source.
-crates/compact/interpreter/src/compact-natives.txt linguist-generated=true

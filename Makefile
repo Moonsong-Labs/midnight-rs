@@ -18,7 +18,7 @@ CARGO ?= cargo
 #    tests/conformance/ts-driver/driver.mjs. The fixtures, the contracts and the
 #    goldens carry COMPACT_REV in their fingerprints, so each target that needs
 #    them builds them again.
-# 3. Run `make compact-natives`.
+# 3. Run `make check-natives`, and update COMPACT_NATIVES with what it reports.
 # 4. For a new compiler `major.minor`, change SUPPORTED_COMPILER_FAMILY in
 #    crates/compact/codegen/src/types.rs and the version in
 #    crates/compact/bindgen-macro/tests/ui/fail/version-mismatch.stderr.
@@ -99,6 +99,8 @@ COMPACT_RUNTIME_REV := ts-driver/vendor/compact-runtime.rev
 # The fork sources that the runtime build reads: export-version.ss imports the
 # compiler's (field) library.
 COMPACT_RUNTIME_SRC := runtime compiler/json.ss compiler/utils.ss compiler/field.ss third_party/compiler/state-case.ss
+# The source file of the interpreter's native check, which holds COMPACT_NATIVES.
+NATIVES_TEST := crates/compact/interpreter/src/lib.rs
 
 # Each fixture as <output directory>:<source>. `make fixtures` writes the
 # analyzed IR to <output directory>/compiler/, and the TS codegen of a
@@ -123,7 +125,7 @@ GOLDENS_CKSUM = { echo $(COMPACT_REV) $(CONFORMANCE_ZKIR_V3_FIXTURES); \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         fork-up fork-upgrade fork-test fork-down \
         contracts compile-contracts fixtures goldens conformance \
-        vendor-compact-runtime compact-natives
+        vendor-compact-runtime check-natives
 
 help:
 	@echo "midnight-rs make targets:"
@@ -166,7 +168,7 @@ help:
 	@echo "    goldens             write the conformance goldens with the TS driver when stale (needs Node)"
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
 	@echo "    vendor-compact-runtime  build the driver's compact-runtime at COMPACT_REV (needs curl, Docker and Node)"
-	@echo "    compact-natives     fetch the compiler's native symbols at COMPACT_REV (needs curl)"
+	@echo "    check-natives       check the interpreter's native list against the compiler at COMPACT_REV (needs curl)"
 
 # ============================================================
 # Lint / build / test  (mirrors .github/workflows/ci.yml)
@@ -499,18 +501,27 @@ goldens: fixtures
 	$(GOLDENS_CKSUM) > $(CONFORMANCE_DIR)/expected/source.cksum; \
 	echo "OK: conformance goldens written"
 
-# Write the runtime symbols of the compiler's native primitives at
-# COMPACT_REV, one per line, for the native check of the interpreter's unit
-# tests. The symbol, not the source name, identifies a native: the ZKIR v3
-# table declares `ecAdd` again for each foreign curve. The file holds the
-# symbols only, so no compiler source enters this repository.
-compact-natives:
-	@base='https://raw.githubusercontent.com/RomarQ/compact/$(COMPACT_REV)/compiler'; \
-	natives="$$(curl -fsSL "$$base/midnight-natives.ss")" || exit 1; \
-	zkir_v3_natives="$$(curl -fsSL "$$base/zkir-v3-natives.ss")" || exit 1; \
-	names="$$(printf '%s\n%s\n' "$$natives" "$$zkir_v3_natives" \
+# Check that COMPACT_NATIVES, in the native check of the interpreter's unit
+# tests, holds the runtime symbols of the compiler's native tables at
+# COMPACT_REV (needs curl). The symbol, not the source name, identifies a
+# native: the ZKIR v3 table declares `ecAdd` again for each foreign curve.
+check-natives:
+	@set -e; \
+	base='https://raw.githubusercontent.com/RomarQ/compact/$(COMPACT_REV)/compiler'; \
+	tmp="$$(mktemp -d)"; \
+	curl -fsSL "$$base/midnight-natives.ss" "$$base/zkir-v3-natives.ss" \
 		| grep -o '"__compactRuntime\.[A-Za-z0-9_]*"' \
-		| sed 's/^"__compactRuntime\.//; s/"$$//' | LC_ALL=C sort -u)"; \
-	if [ -z "$$names" ]; then echo "no runtime symbols in the compiler's native tables"; exit 1; fi; \
-	printf '%s\n' "$$names" > crates/compact/interpreter/src/compact-natives.txt; \
-	echo "OK: crates/compact/interpreter/src/compact-natives.txt written"
+		| sed 's/^"__compactRuntime\.//; s/"$$//' | LC_ALL=C sort -u > "$$tmp/compiler"; \
+	sed -n '/const COMPACT_NATIVES/,/];/p' $(NATIVES_TEST) \
+		| grep -o '"[A-Za-z0-9_]*"' | tr -d '"' | LC_ALL=C sort -u > "$$tmp/test"; \
+	if [ ! -s "$$tmp/compiler" ] || [ ! -s "$$tmp/test" ]; then \
+		echo "no native symbols read from the compiler tables or from $(NATIVES_TEST)"; exit 1; \
+	fi; \
+	if ! cmp -s "$$tmp/compiler" "$$tmp/test"; then \
+		echo "COMPACT_NATIVES in $(NATIVES_TEST) does not match the compiler at COMPACT_REV."; \
+		echo "Add:"; LC_ALL=C comm -23 "$$tmp/compiler" "$$tmp/test" | sed 's/^/  /'; \
+		echo "Remove:"; LC_ALL=C comm -13 "$$tmp/compiler" "$$tmp/test" | sed 's/^/  /'; \
+		rm -rf "$$tmp"; exit 1; \
+	fi; \
+	rm -rf "$$tmp"; \
+	echo "OK: COMPACT_NATIVES matches the compiler at COMPACT_REV"
