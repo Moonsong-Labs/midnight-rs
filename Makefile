@@ -60,10 +60,15 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 # Examples that run against the devnet with no extra env (deploy + call).
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
 EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shielded-swap
-CONTRACTS := call-context counter events receive-shielded secret-counter shielded-mint unshielded-payout
-# The fingerprint of contract $$c: its source under the compiler at COMPACT_REV.
-# POSIX cksum, so a fingerprint from the Linux CI job matches on macOS.
-CONTRACT_CKSUM = { echo $(COMPACT_REV); cat devnet/contracts/$$c/*.compact; } | cksum
+CONTRACTS := call-context counter counter-zkir-v3 events receive-shielded secret-counter shielded-mint unshielded-payout
+# The contracts that compile for ZKIR v3. Only a ledger 9 chain verifies their keys.
+ZKIR_V3_CONTRACTS := counter-zkir-v3
+# The compiler flag of contract $$c, which only a ZKIR v3 contract has.
+CONTRACT_ZKIR = case " $(ZKIR_V3_CONTRACTS) " in (*" $$c "*) echo --feature-zkir-v3 ;; esac
+# The fingerprint of contract $$c: its source and its flag under the compiler at
+# COMPACT_REV. POSIX cksum, so a fingerprint from the Linux CI job matches on
+# macOS.
+CONTRACT_CKSUM = { echo $(COMPACT_REV); $(CONTRACT_ZKIR); cat devnet/contracts/$$c/*.compact; } | cksum
 
 # Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
 # Each one carries its source `.compact` alongside the regenerated
@@ -305,6 +310,7 @@ test-e2e: contracts
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test simulate_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test build_only_private_state -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test emit_event -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test zkir_v3_local_proving -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output
@@ -374,7 +380,7 @@ compile-contracts:
 		dir="devnet/contracts/$$c"; \
 		echo "Compiling $$dir ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		$(COMPACTC) --analyzed-ir "$$dir"/*.compact "$$dir/compiled.tmp"; \
+		$(COMPACTC) $$($(CONTRACT_ZKIR)) --analyzed-ir "$$dir"/*.compact "$$dir/compiled.tmp"; \
 		rm -rf "$$dir/compiled"; \
 		mkdir -p "$$dir/compiled/compiler"; \
 		mv "$$dir/compiled.tmp/keys" "$$dir/compiled.tmp/zkir" "$$dir/compiled/"; \
