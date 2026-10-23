@@ -1,0 +1,70 @@
+{
+  "fixture": "curve25519",
+  "constructor": { "args": [] },
+  "steps": [
+    {
+      "circuit": "base_ops",
+      "args": [
+        { "curve25519Base": "57896044618658097711785492504343953926634992332820282019728792003956564819948" },
+        { "curve25519Base": "2" }
+      ]
+    },
+    {
+      "circuit": "base_ops",
+      "args": [{ "curve25519Base": "0" }, { "curve25519Base": "1" }]
+    },
+    {
+      "circuit": "base_ops",
+      "args": [
+        { "curve25519Base": "31415926535897932384626433832795028841971693993751058209749445923078164062862" },
+        { "curve25519Base": "27182818284590452353602874713526624977572470936999595749669676277240766303535" }
+      ]
+    },
+    {
+      "circuit": "base_ops",
+      "args": [{ "curve25519Base": "5" }, { "curve25519Base": "0" }],
+      "error": "has no inverse for 0"
+    },
+    {
+      "circuit": "scalar_ops",
+      "args": [
+        { "curve25519Scalar": "7237005577332262213973186563042994240857116359379907606001950938285454250988" },
+        { "curve25519Scalar": "12345" }
+      ],
+      "witnesses": { "secret_scalar": [{ "curve25519Scalar": "98765432109876543210" }] }
+    },
+    {
+      "circuit": "scalar_ops",
+      "args": [{ "curve25519Scalar": "0" }, { "curve25519Scalar": "1" }],
+      "witnesses": { "secret_scalar": [{ "curve25519Scalar": "7" }] }
+    },
+    {
+      "circuit": "scalar_ops",
+      "args": [
+        { "curve25519Scalar": "3141592653589793238462643383279502884197169399375105820974944592307816406286" },
+        { "curve25519Scalar": "7182818284590452353602874713526624977572470936999595749669676277240766303535" }
+      ],
+      "witnesses": {
+        "secret_scalar": [
+          { "curve25519Scalar": "7237005577332262213973186563042994240857116359379907606001950938285454250988" }
+        ]
+      }
+    },
+    {
+      "circuit": "scalar_ops",
+      "args": [{ "curve25519Scalar": "5" }, { "curve25519Scalar": "0" }],
+      "witnesses": { "secret_scalar": [{ "curve25519Scalar": "3" }] },
+      "error": "has no inverse for 0"
+    },
+    {
+      "circuit": "casts",
+      "args": [
+        { "bytes": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" },
+        { "curve25519Base": "57896044618658097711785492504343953926634992332820282019728792003956564819948" },
+        {
+          "bytes": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ]
+    }
+  ]
+}

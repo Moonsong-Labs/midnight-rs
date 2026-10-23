@@ -1,0 +1,45 @@
+// Conformance corpus contract: the secp256r1 field arithmetic, the casts
+// between its fields and bytes, its curve natives, and the standard library
+// circuit built on them. A ledger cell of each type pins the encoding in the
+// state, and every circuit writes one, because the driver runs only circuits
+// that need a proof. The Makefile compiles this fixture for ZKIR v3
+// (CONFORMANCE_ZKIR_V3_FIXTURES).
+
+import CompactStandardLibrary;
+
+export ledger base_cell: Secp256r1Base;
+export ledger scalar_cell: Secp256r1Scalar;
+export ledger point_cell: Secp256r1Point;
+export ledger verified: Boolean;
+
+witness secret_scalar(): Secp256r1Scalar;
+
+export circuit base_ops(a: Secp256r1Base, b: Secp256r1Base): Vector<5, Secp256r1Base> {
+  const sum = a + b;
+  base_cell = disclose(sum);
+  return disclose([sum, a - b, a * b, neg(a), inv(b)]);
+}
+
+export circuit scalar_ops(a: Secp256r1Scalar, b: Secp256r1Scalar): Vector<5, Secp256r1Scalar> {
+  const k = secret_scalar();
+  scalar_cell = disclose(a * k);
+  return disclose([a + b, a - b, a * b, neg(a), inv(b)]);
+}
+
+export circuit curve_ops(p: Secp256r1Point, k: Secp256r1Scalar): [Secp256r1Base, Secp256r1Base, Boolean, Boolean] {
+  const q = ecAdd(ecMulGenerator(k), ecMul(p, k));
+  point_cell = disclose(q);
+  return disclose([secp256r1PointX(q), secp256r1PointY(q), q == p, ecMulGenerator(default<Secp256r1Scalar>) == default<Secp256r1Point>]);
+}
+
+export circuit casts(b: Bytes<32>, x: Secp256r1Base): [Secp256r1Scalar, Secp256r1Base, Bytes<32>] {
+  const s = b as Secp256r1Scalar;
+  scalar_cell = disclose(s);
+  return disclose([s, b as Secp256r1Base, x as Bytes<32>]);
+}
+
+export circuit verify(msg_hash: Bytes<32>, sig: Secp256r1EcdsaSignature, pk: Secp256r1Point): Boolean {
+  const valid = disclose(secp256r1EcdsaVerify(msg_hash, sig, pk));
+  verified = valid;
+  return valid;
+}
