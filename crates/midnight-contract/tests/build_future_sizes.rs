@@ -29,7 +29,7 @@ const MAX_FUTURE_BYTES: usize = 4096;
 const ADDR: &str = "0200aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
 
 fn provider() -> &'static MidnightProvider {
-    Box::leak(Box::new(MidnightProvider::new("ws://test", "http://test")))
+    Box::leak(Box::new(MidnightProvider::new("ws://test")))
 }
 
 #[track_caller]

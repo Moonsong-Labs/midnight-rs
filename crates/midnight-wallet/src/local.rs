@@ -77,9 +77,10 @@ impl LocalWallet {
     /// use midnight_provider::MidnightProvider;
     /// use midnight_wallet::{BackgroundSync, LocalWallet, Wallet};
     ///
+    /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// # async fn example(provider: MidnightProvider) -> Result<BackgroundSync, Box<dyn std::error::Error>> {
     /// let wallet = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?
-    ///     .sync(&provider)
+    ///     .sync(&provider, INDEXER_URL)
     ///     .await?;
     /// let wallet = Arc::new(LocalWallet::new(wallet));
     /// let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));

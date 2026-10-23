@@ -9,8 +9,8 @@ use midnight_indexer_client::{BlockOffset, IndexerClient};
 use midnight_provider::{BlockHash, LedgerVersion, MidnightProvider, Provider};
 
 fn provider() -> Option<MidnightProvider> {
-    let (node, indexer) = common::devnet_urls()?;
-    Some(MidnightProvider::new(&node, &indexer))
+    let (node, _indexer) = common::devnet_urls()?;
+    Some(MidnightProvider::new(&node))
 }
 
 /// Each CI leg names the ledger generation its devnet runs. A leg whose
@@ -111,10 +111,13 @@ async fn an_address_with_no_contract_reads_as_none() {
 /// Block 1 lies behind the tip, so a read that ignored `hash` would disagree.
 #[tokio::test]
 async fn block_timestamp_matches_the_indexer_at_a_past_block() {
-    let Some(p) = provider() else { return };
+    let Some((node, indexer)) = common::devnet_urls() else {
+        return;
+    };
+    let p = MidnightProvider::new(&node);
     let hash = p.get_block_hashes_by_height(1).await.unwrap()[0];
     let timestamp = p.get_block_timestamp(hash).await.unwrap();
-    let indexed = IndexerClient::new(p.indexer_url())
+    let indexed = IndexerClient::new(&indexer)
         .unwrap()
         .get_block(Some(BlockOffset::height(1)))
         .await

@@ -42,8 +42,8 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let cpk = recip_seed.shielded_recipient().coin_public_key;
 
     // --- Funder wallet deploys the mint contract ---
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let provider = midnight_provider::MidnightProvider::new(&node_url);
+    let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let contract = shielded_mint::Contract::deploy(provider)
@@ -76,8 +76,8 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
     // --- The recipient syncs and cannot see either coin ---
-    let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&recip_provider, common::RECIPIENT_SEED).await;
+    let recip_provider = midnight_provider::MidnightProvider::new(&node_url);
+    let wallet = common::synced_wallet(&recip_provider, &indexer_url, common::RECIPIENT_SEED).await;
     let recip_provider = recip_provider.with_wallet(wallet);
 
     let holds = |coins: &[midnight_provider::SpendableShieldedCoin], nonce: [u8; 32], value| {

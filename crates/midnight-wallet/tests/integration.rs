@@ -19,18 +19,18 @@ const DEV_SEED: &str = "00000000000000000000000000000000000000000000000000000000
 /// test in this file.
 const RECIPIENT_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000042";
 
-async fn synced_wallet(provider: &MidnightProvider, seed: &str) -> Wallet {
+async fn synced_wallet(provider: &MidnightProvider, indexer: &str, seed: &str) -> Wallet {
     Wallet::from_seed(seed)
         .expect("hex seed")
         .with_network(midnight_wallet::Network::Undeployed)
-        .sync(provider)
+        .sync(provider, indexer)
         .await
         .expect("indexer sync should succeed")
 }
 
 async fn synced_provider(node: &str, indexer: &str, seed: &str) -> MidnightProvider {
-    let provider = MidnightProvider::new(node, indexer);
-    let wallet = synced_wallet(&provider, seed).await;
+    let provider = MidnightProvider::new(node);
+    let wallet = synced_wallet(&provider, indexer, seed).await;
     provider.with_wallet(wallet)
 }
 
@@ -120,8 +120,8 @@ async fn provider_build_context_succeeds() {
         return;
     };
 
-    let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = synced_wallet(&provider, DEV_SEED).await;
+    let provider = MidnightProvider::new(&node);
+    let wallet = synced_wallet(&provider, &indexer, DEV_SEED).await;
     let seed = wallet.seed().clone();
     let provider = provider.with_wallet(wallet);
 
@@ -169,8 +169,8 @@ async fn build_shielded_transfer_arbitrary_token_id() {
         return;
     };
 
-    let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = synced_wallet(&provider, DEV_SEED).await;
+    let provider = MidnightProvider::new(&node);
+    let wallet = synced_wallet(&provider, &indexer, DEV_SEED).await;
     let recipient = wallet.shielded_address();
     let provider = provider.with_wallet(wallet);
 
@@ -224,8 +224,8 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
     // below any single dev coin so the sender must return change.
     const AMOUNT: u128 = 7;
 
-    let payee = MidnightProvider::new(&node, &indexer);
-    let wallet = synced_wallet(&payee, RECIPIENT_SEED).await;
+    let payee = MidnightProvider::new(&node);
+    let wallet = synced_wallet(&payee, &indexer, RECIPIENT_SEED).await;
     let recipient = wallet.shielded_address();
     let payee = payee.with_wallet(wallet);
     let before: std::collections::HashSet<_> = payee
@@ -303,8 +303,8 @@ async fn shielded_transfer_conserves_value() {
         return;
     };
 
-    let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = synced_wallet(&provider, DEV_SEED).await;
+    let provider = MidnightProvider::new(&node);
+    let wallet = synced_wallet(&provider, &indexer, DEV_SEED).await;
     let recipient = wallet.shielded_address();
     let provider = provider.with_wallet(wallet);
 
@@ -339,8 +339,8 @@ async fn shielded_transfer_spans_multiple_coins() {
         return;
     };
 
-    let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = synced_wallet(&provider, DEV_SEED).await;
+    let provider = MidnightProvider::new(&node);
+    let wallet = synced_wallet(&provider, &indexer, DEV_SEED).await;
     let recipient = wallet.shielded_address();
     let provider = provider.with_wallet(wallet);
 

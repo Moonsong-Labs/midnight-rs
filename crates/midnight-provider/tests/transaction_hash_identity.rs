@@ -20,8 +20,8 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
         return;
     };
 
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let provider = MidnightProvider::new(&node_url);
+    let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let recipient = wallet.unshielded_address();
     let provider = provider.with_wallet(wallet);
 

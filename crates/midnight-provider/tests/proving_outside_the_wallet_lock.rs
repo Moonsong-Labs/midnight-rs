@@ -149,8 +149,8 @@ async fn the_wallet_is_readable_while_a_build_proves() {
         return;
     };
     let prover = Arc::new(ParkedProver::default());
-    let provider = MidnightProvider::new(&node, &indexer).with_proof_provider(prover.clone());
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let provider = MidnightProvider::new(&node).with_proof_provider(prover.clone());
+    let wallet = common::synced_wallet(&provider, &indexer, common::DEV_WALLET_SEED).await;
     let recipient = wallet.shielded_address();
     let provider = Arc::new(provider.with_wallet(wallet));
 
@@ -209,8 +209,8 @@ async fn two_preparations_at_once_draw_different_inputs() {
     let Some((node, indexer)) = common::devnet_urls() else {
         return;
     };
-    let source = MidnightProvider::new(&node, &indexer);
-    let wallet = common::synced_wallet(&source, common::DEV_WALLET_SEED).await;
+    let source = MidnightProvider::new(&node);
+    let wallet = common::synced_wallet(&source, &indexer, common::DEV_WALLET_SEED).await;
     let address = wallet.unshielded_address();
 
     // Each preparation spends one tNIGHT UTXO and draws Dust for its fee, so
@@ -273,8 +273,8 @@ async fn the_spendable_dust_leaves_out_a_reservation() {
     let Some((node, indexer)) = common::devnet_urls() else {
         return;
     };
-    let source = MidnightProvider::new(&node, &indexer);
-    let wallet = common::synced_wallet(&source, common::DEV_WALLET_SEED).await;
+    let source = MidnightProvider::new(&node);
+    let wallet = common::synced_wallet(&source, &indexer, common::DEV_WALLET_SEED).await;
     let address = wallet.unshielded_address();
     let wallet = Arc::new(LocalWallet::new(wallet));
 
@@ -315,8 +315,8 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
     let Some((node, indexer)) = common::devnet_urls() else {
         return;
     };
-    let provider = MidnightProvider::new(&node, &indexer);
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let provider = MidnightProvider::new(&node);
+    let wallet = common::synced_wallet(&provider, &indexer, common::DEV_WALLET_SEED).await;
     let recipient = wallet.shielded_address();
     let provider = provider.with_wallet(wallet);
 

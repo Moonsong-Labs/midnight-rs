@@ -54,8 +54,10 @@
 //! # async fn example(phrase: &str) -> Result<(), Box<dyn std::error::Error>> {
 //! // The wallet syncs on its own (zswap + dust + unshielded subscriptions)
 //! // and is then attached to the provider.
-//! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088");
-//! let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider).await?;
+//! let provider = MidnightProvider::new("ws://localhost:9944");
+//! let wallet = Wallet::from_mnemonic(phrase)?
+//!     .sync(&provider, "http://localhost:8088")
+//!     .await?;
 //! let provider = provider.with_wallet(wallet);
 //!
 //! let balance = provider.balance().await?;

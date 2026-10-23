@@ -88,14 +88,18 @@ async fn main() -> anyhow::Result<()> {
 
     let seed_b = Seed::from_hex(SEED_B)?;
 
-    let provider_a = MidnightProvider::new(&node_url, &indexer_url);
+    let provider_a = MidnightProvider::new(&node_url);
     let wallet_a = Arc::new(LocalWallet::new(
-        Wallet::from_seed(SEED_A)?.sync(&provider_a).await?,
+        Wallet::from_seed(SEED_A)?
+            .sync(&provider_a, &indexer_url)
+            .await?,
     ));
     let provider_a = Arc::new(provider_a.with_wallet(Arc::clone(&wallet_a)));
-    let provider_b = MidnightProvider::new(&node_url, &indexer_url);
+    let provider_b = MidnightProvider::new(&node_url);
     let wallet_b = Arc::new(LocalWallet::new(
-        Wallet::from_seed(SEED_B)?.sync(&provider_b).await?,
+        Wallet::from_seed(SEED_B)?
+            .sync(&provider_b, &indexer_url)
+            .await?,
     ));
     let provider_b = Arc::new(provider_b.with_wallet(Arc::clone(&wallet_b)));
 

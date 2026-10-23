@@ -109,9 +109,8 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
     };
 
     let counter_proofs = Arc::new(ProofCounter::default());
-    let provider =
-        MidnightProvider::new(&node_url, &indexer_url).with_proof_provider(counter_proofs.clone());
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let provider = MidnightProvider::new(&node_url).with_proof_provider(counter_proofs.clone());
+    let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let authority = midnight_contract::SigningKey::sample(rand::thread_rng());

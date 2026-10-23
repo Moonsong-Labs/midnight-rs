@@ -55,16 +55,21 @@ pub(crate) fn devnet_urls() -> Option<(String, String)> {
     }
 }
 
-/// The wallet of `seed` on the undeployed network, synced through `provider`.
+/// The wallet of `seed` on the undeployed network, synced from the indexer at
+/// `indexer_url` and pinned through `provider`.
 ///
 /// # Panics
 ///
 /// When `seed` is not a 32-byte hex seed, or when the sync fails.
-pub(crate) async fn synced_wallet(provider: &MidnightProvider, seed: &str) -> Wallet {
+pub(crate) async fn synced_wallet(
+    provider: &MidnightProvider,
+    indexer_url: &str,
+    seed: &str,
+) -> Wallet {
     Wallet::from_seed(seed)
         .unwrap()
         .with_network(Network::Undeployed)
-        .sync(provider)
+        .sync(provider, indexer_url)
         .await
         .unwrap_or_else(|e| panic!("sync of seed {seed}: {e:?}"))
 }

@@ -58,10 +58,10 @@ async fn main() -> anyhow::Result<()> {
     println!();
 
     println!("Syncing wallet from indexer (zswap and unshielded, then dust)...");
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
+    let provider = MidnightProvider::new(&node_url);
     let wallet = Wallet::from_seed(DEV_SEED)?
         .with_network(&network)
-        .sync(&provider)
+        .sync(&provider, &indexer_url)
         .await?;
     let address = wallet.shielded_address();
     let wallet = Arc::new(LocalWallet::new(wallet));

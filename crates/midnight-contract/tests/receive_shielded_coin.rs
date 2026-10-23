@@ -38,8 +38,8 @@ async fn a_call_spends_the_callers_coin_and_returns_the_change() {
         return;
     };
 
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let provider = MidnightProvider::new(&node_url);
+    let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
     let (own_coin_public_key, _) = provider
         .shielded_public_keys()

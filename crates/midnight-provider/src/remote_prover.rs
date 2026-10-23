@@ -108,12 +108,11 @@ pub(crate) const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// ```rust,no_run
 /// # fn f() -> anyhow::Result<()> {
 /// # const NODE_URL: &str = "ws://localhost:9944";
-/// # const INDEXER_URL: &str = "http://localhost:8088";
 /// use std::sync::Arc;
 /// use midnight_provider::{MidnightProvider, RemoteProofServer};
 ///
 /// let prover = Arc::new(RemoteProofServer::new("http://localhost:6300".to_string()));
-/// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL).with_proof_provider(prover);
+/// let provider = MidnightProvider::new(NODE_URL).with_proof_provider(prover);
 /// # Ok(())
 /// # }
 /// ```

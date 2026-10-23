@@ -280,7 +280,7 @@ async fn a_build_only_call_with_witnesses_needs_a_store_before_any_node_query() 
     use midnight_contract::{Contract, ContractError, ShieldedInputs};
     use midnight_provider::MidnightProvider;
 
-    let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1");
+    let provider = MidnightProvider::new("ws://127.0.0.1:1");
     let contract = Contract::at(
         &provider,
         midnight_contract::ContractAddress(HashOutput([7; 32])),

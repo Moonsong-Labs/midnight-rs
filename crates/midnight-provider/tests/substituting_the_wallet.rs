@@ -168,8 +168,7 @@ stub_builds!(ledger_9);
 
 #[tokio::test]
 async fn the_provider_reads_whatever_wallet_it_was_given() {
-    let provider =
-        MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet::default());
+    let provider = MidnightProvider::new("ws://test").with_wallet(StubWallet::default());
 
     assert_eq!(
         provider.network().await.expect("attached"),
@@ -194,8 +193,7 @@ async fn the_provider_reads_whatever_wallet_it_was_given() {
 async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
     use midnight_helpers::ledger_9::{BuildContext, SeedableRng};
 
-    let provider =
-        MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet::default());
+    let provider = MidnightProvider::new("ws://test").with_wallet(StubWallet::default());
     let Builds::Ledger9(builds) = provider.builds().await.expect("the stub resyncs") else {
         panic!("the stub's state is on ledger 9");
     };
@@ -232,8 +230,7 @@ async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
 async fn a_reserved_build_whose_connect_fails_gets_its_inputs_back() {
     let wallet = Arc::new(StubWallet::default());
     // A URL that does not parse fails the connect at once, with no retry.
-    let provider =
-        MidnightProvider::new("not a node url", "http://test").with_wallet(wallet.clone());
+    let provider = MidnightProvider::new("not a node url").with_wallet(wallet.clone());
     let nullifier = Nullifier(HashOutput([7; 32]));
     let result = TransferResult {
         tx_bytes: vec![0; 8],

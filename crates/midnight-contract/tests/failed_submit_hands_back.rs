@@ -182,12 +182,11 @@ async fn a_deploy_or_a_call_that_the_node_never_gets_hands_its_inputs_back() {
     // The sync reads the network and the chain pin from the devnet's node. The
     // build reads no node: its resync finds no answer for the pin, keeps the
     // state, and replays from the indexer. Only the submit needs the node.
-    let devnet = MidnightProvider::new(&node_url, &indexer_url);
+    let devnet = MidnightProvider::new(&node_url);
     let wallet = Arc::new(LocalWallet::new(
-        common::synced_wallet(&devnet, common::DEV_WALLET_SEED).await,
+        common::synced_wallet(&devnet, &indexer_url, common::DEV_WALLET_SEED).await,
     ));
-    let refusing =
-        MidnightProvider::new(REFUSING_NODE_URL, &indexer_url).with_wallet(wallet.clone());
+    let refusing = MidnightProvider::new(REFUSING_NODE_URL).with_wallet(wallet.clone());
 
     let Err(err) = counter::Contract::deploy(&refusing)
         .with_initial_state(counter::LedgerInitialState::default())
