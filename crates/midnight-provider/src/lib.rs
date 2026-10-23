@@ -5,6 +5,7 @@ pub mod ledger_8;
     reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
 )]
 pub mod ledger_9;
+mod local_prover;
 pub mod node_error;
 mod proof_providers;
 mod provider;

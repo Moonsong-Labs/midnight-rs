@@ -22,11 +22,12 @@ pub struct ProofProviders {
 }
 
 impl ProofProviders {
-    /// Prove locally, in this process, on either generation.
+    /// Prove locally, in this process, on either generation. On ledger 9 it
+    /// proves circuits compiled for ZKIR v2 and for ZKIR v3.
     pub fn local() -> Self {
         Self {
             ledger_8: Arc::new(ledger_8::LocalProofServer::new()),
-            ledger_9: Arc::new(ledger_9::LocalProofServer::new()),
+            ledger_9: Arc::new(crate::local_prover::LocalProver),
         }
     }
 
