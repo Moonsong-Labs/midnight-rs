@@ -1,10 +1,6 @@
-# Compiler and driver output. It is committed because CI runs the conformance
-# gate and the contract tests with neither Nix nor compactc: see the Makefile
-# targets that regenerate each one. Marking it generated collapses it in review
-# and keeps it out of the language stats. Never edit these by hand.
-tests/conformance/fixtures/*/compiler/analyzed-ir.sexp linguist-generated=true
-tests/conformance/expected/** linguist-generated=true
+# Generated files that stay in the repository. Marking them generated collapses
+# them in review and keeps them out of the language stats. Never edit these by
+# hand.
 tests/conformance/package-lock.json linguist-generated=true
-crates/midnight-contract/tests/fixtures/*/compiler/analyzed-ir.sexp linguist-generated=true
 # Names that `make compact-natives` derives from the compiler source.
 crates/compact/interpreter/src/compact-natives.txt linguist-generated=true

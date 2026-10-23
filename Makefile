@@ -14,9 +14,11 @@ CARGO ?= cargo
 # 1. Run `make vendor-compact-runtime`. Then run
 #    `npm install ./ts-driver/vendor/compact-runtime.tgz` in tests/conformance,
 #    because a plain `npm install` keeps the lockfile entry of the old tarball.
-# 2. Run `make regen-conformance-fixtures`, fix any API drift in
-#    tests/conformance/ts-driver/driver.mjs, and run `make conformance-regen`.
-# 3. Run `make regen-test-fixtures compile-contracts compact-natives`.
+# 2. Run `make goldens`, and fix any API drift in
+#    tests/conformance/ts-driver/driver.mjs. The fixtures, the contracts and the
+#    goldens carry COMPACT_REV in their fingerprints, so each target that needs
+#    them builds them again.
+# 3. Run `make compact-natives`.
 # 4. For a new compiler `major.minor`, change SUPPORTED_COMPILER_FAMILY in
 #    crates/compact/codegen/src/types.rs and the version in
 #    crates/compact/bindgen-macro/tests/ui/fail/version-mismatch.stderr.
@@ -71,21 +73,17 @@ CONTRACT_ZKIR = case " $(ZKIR_V3_CONTRACTS) " in (*" $$c "*) echo --feature-zkir
 # macOS.
 CONTRACT_CKSUM = { echo $(COMPACT_REV); $(CONTRACT_ZKIR); cat devnet/contracts/$$c/*.compact; } | cksum
 
-# Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
-# Each one carries its source `.compact` alongside the regenerated
-# `compiler/analyzed-ir.sexp`; `regen-test-fixtures` re-emits it with
-# the compactc at COMPACT_REV so the diff is reproducible.
+# Interpreter test fixtures: crates/midnight-contract/tests/fixtures/<name>/<name>.compact.
 TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 # Codegen test fixtures: tests/fixtures/sources/<name>.compact compiles to
-# tests/fixtures/compiled/<name>/compiler/analyzed-ir.sexp.
+# tests/fixtures/compiled/<name>/.
 CODEGEN_FIXTURES := gateway many-fields mint-probe pairs results struct-shapes zerocash
 
-# Conformance corpus (tests/conformance/fixtures/<name>/). Each fixture
-# carries its source `.compact` plus the two compiler outputs both executors
-# consume: `compiler/analyzed-ir.sexp` (Rust IR interpreter) and
-# `contract/index.js` (TS codegen run by the ts-driver against the canonical
-# @midnight-ntwrk/compact-runtime).
+# Conformance corpus: tests/conformance/fixtures/<name>/<name>.compact. The two
+# executors read different compiler outputs of a fixture: the Rust IR
+# interpreter reads `compiler/analyzed-ir.sexp`, and the ts-driver runs
+# `contract/index.js` against the canonical @midnight-ntwrk/compact-runtime.
 CONFORMANCE_FIXTURES := bboard containers counter defaults events indexing keccak kernel loops ops \
                         peers scopes secp256k1 sha512 shadowing slices structs tiny trees vectors
 # The fixtures that compile for ZKIR v3. Without the flag, the compiler declares
@@ -93,23 +91,41 @@ CONFORMANCE_FIXTURES := bboard containers counter defaults events indexing kecca
 # in a circuit that needs a proof, and the driver runs only such circuits.
 CONFORMANCE_ZKIR_V3_FIXTURES := keccak secp256k1 sha512
 CONFORMANCE_DIR := tests/conformance
-# The runtime tarball the driver installs. Generated, not committed: only the
-# driver reads it, and `vendor-compact-runtime` builds it from COMPACT_REV.
-# The name carries no version, so package.json never moves with the runtime.
+# The runtime tarball the driver installs, which `vendor-compact-runtime` builds
+# from COMPACT_REV, and the file that names the revision it came from. The name
+# carries no version, so package.json never moves with the runtime.
 COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
+COMPACT_RUNTIME_REV := ts-driver/vendor/compact-runtime.rev
+
+# Each fixture as <output directory>:<source>. `make fixtures` writes the
+# analyzed IR to <output directory>/compiler/, and the TS codegen of a
+# conformance fixture to <output directory>/contract/.
+FIXTURES := $(foreach f,$(CONFORMANCE_FIXTURES),$(CONFORMANCE_DIR)/fixtures/$(f):$(CONFORMANCE_DIR)/fixtures/$(f)/$(f).compact) \
+            $(foreach f,$(TEST_FIXTURES),$(TEST_FIXTURE_DIR)/$(f):$(TEST_FIXTURE_DIR)/$(f)/$(f).compact) \
+            $(foreach f,$(CODEGEN_FIXTURES),tests/fixtures/compiled/$(f):tests/fixtures/sources/$(f).compact)
+# The compiler flag of the fixture in $$dir, which only a ZKIR v3 conformance
+# fixture has. The pattern opens with `(` for bash 3.2, as CONTRACT_ZKIR does.
+FIXTURE_ZKIR = case " $(foreach f,$(CONFORMANCE_ZKIR_V3_FIXTURES),$(CONFORMANCE_DIR)/fixtures/$(f)) " in (*" $$dir "*) echo --feature-zkir-v3 ;; esac
+# The fingerprint of the fixture $$src, as CONTRACT_CKSUM is for a contract.
+FIXTURE_CKSUM = { echo $(COMPACT_REV); $(FIXTURE_ZKIR); cat "$$src"; } | cksum
+# The fingerprint of the goldens: what the driver reads, under the compiler and
+# the runtime at COMPACT_REV. Make sorts the file list, so it is the same on
+# Linux and macOS.
+GOLDENS_CKSUM = { echo $(COMPACT_REV) $(CONFORMANCE_ZKIR_V3_FIXTURES); \
+	cat $(sort $(wildcard $(CONFORMANCE_DIR)/fixtures/*/*.compact $(CONFORMANCE_DIR)/cases/*/*.json)) \
+		$(CONFORMANCE_DIR)/ts-driver/driver.mjs $(CONFORMANCE_DIR)/package-lock.json; } | cksum
 
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
         dev-up dev-wait dev-settle dev-down dev-status dev-logs \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         fork-up fork-upgrade fork-test fork-down \
-        contracts compile-contracts regen-test-fixtures \
-        conformance conformance-regen regen-conformance-fixtures \
+        contracts compile-contracts fixtures goldens conformance \
         vendor-compact-runtime compact-natives
 
 help:
 	@echo "midnight-rs make targets:"
 	@echo ""
-	@echo "  Lint / build / test (a missing or stale devnet contract compiles first, in Docker)"
+	@echo "  Lint / build / test (a missing or stale contract or fixture compiles first, in Docker)"
 	@echo "    fmt           cargo fmt --all"
 	@echo "    fmt-check     cargo fmt --all --check"
 	@echo "    clippy        cargo clippy --workspace --all-targets -- -D warnings"
@@ -142,10 +158,9 @@ help:
 	@echo "  Contracts (compactc runs in $(COMPACTC_IMAGE))"
 	@echo "    contracts           compile each devnet contract whose compiled/ output is missing or stale (needs Docker)"
 	@echo "    compile-contracts   recompile devnet/contracts/*, with keys (needs Docker)"
-	@echo "    regen-test-fixtures recompile the interpreter and codegen test fixtures (needs Docker)"
-	@echo "    regen-conformance-fixtures  recompile the conformance corpus (needs Docker)"
+	@echo "    fixtures            compile each test and conformance fixture whose output is missing or stale (needs Docker)"
+	@echo "    goldens             write the conformance goldens with the TS driver when stale (needs Node, and Nix for the runtime)"
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
-	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
 	@echo "    vendor-compact-runtime  build the driver's compact-runtime at COMPACT_REV (needs Nix and Node)"
 	@echo "    compact-natives     fetch the compiler's native symbols at COMPACT_REV (needs curl)"
 
@@ -159,23 +174,23 @@ fmt:
 fmt-check:
 	$(CARGO) fmt --all --check
 
-clippy: contracts
+clippy: contracts fixtures
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 # Rustdoc's own lints: a link to an item that moved or was renamed, a public
 # doc pointing at a private item, a bare URL. `cargo check` and `cargo clippy`
 # see none of them, so without this gate they only surface for whoever next
 # builds the docs.
-doc: contracts
+doc: contracts fixtures
 	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps
 
-check: contracts
+check: contracts fixtures
 	$(CARGO) check --workspace
 
-test: contracts
+test: contracts fixtures goldens
 	$(CARGO) test --workspace
 
-build: contracts
+build: contracts fixtures
 	$(CARGO) build --workspace
 
 # cargo audit checks the lockfile against the RustSec advisory database.
@@ -296,7 +311,7 @@ E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDN
 	MIDNIGHT_LEDGER=$(DEVNET_LEDGER)
 
 # The devnet integration tests.
-test-e2e: contracts
+test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test node_e2e -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-wallet --test integration -- --show-output --test-threads=1
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test balance_bare_call -- --show-output
@@ -391,28 +406,30 @@ compile-contracts:
 	done; \
 	echo "OK: contracts compiled"
 
-# Recompile the interpreter and codegen test fixtures with the compactc at
-# COMPACT_REV. Each fixture keeps its source `<name>.compact` in the
-# repository beside the regenerated `compiler/analyzed-ir.sexp`. Only the
-# artifact is consumed by the SDK tests, but the source travels with it so a
-# regeneration is reproducible from inside the repo.
-regen-test-fixtures:
+# Compile each test and conformance fixture whose analyzed IR is missing, or
+# whose fingerprint differs from the one its output carries, as `contracts`
+# does for the devnet contracts. No fixture needs keys.
+fixtures:
 	@mkdir -p "$(ZK_PARAMS)"
-	@for pair in $(foreach f,$(TEST_FIXTURES),$(TEST_FIXTURE_DIR)/$(f):$(TEST_FIXTURE_DIR)/$(f)/$(f).compact) \
-		$(foreach f,$(CODEGEN_FIXTURES),tests/fixtures/compiled/$(f):tests/fixtures/sources/$(f).compact); do \
+	@set -e; \
+	for pair in $(FIXTURES); do \
 		dir="$${pair%%:*}"; \
 		src="$${pair#*:}"; \
-		if [ ! -f "$$src" ]; then \
-			echo "missing source $$src"; exit 1; \
-		fi; \
-		echo "Regenerating $$dir ..."; \
-		rm -rf "$$dir/compiled.tmp"; \
-		$(COMPACTC) --skip-zk --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		[ -f "$$dir/compiler/analyzed-ir.sexp" ] \
+			&& [ "$$($(FIXTURE_CKSUM))" = "$$(cat "$$dir/compiler/source.cksum" 2>/dev/null)" ] \
+			&& continue; \
+		echo "Compiling $$src ..."; \
+		rm -rf "$$dir/compiled.tmp" "$$dir/compiler" "$$dir/contract"; \
+		$(COMPACTC) --skip-zk $$($(FIXTURE_ZKIR)) --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null; \
 		mkdir -p "$$dir/compiler"; \
-		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiler/analyzed-ir.sexp"; \
+		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiler/"; \
+		case "$$dir" in ($(CONFORMANCE_DIR)/fixtures/*) \
+			mkdir -p "$$dir/contract"; \
+			mv "$$dir/compiled.tmp/contract/index.js" "$$dir/contract/" ;; \
+		esac; \
 		rm -rf "$$dir/compiled.tmp"; \
-	done; \
-	echo "OK: test fixtures regenerated"
+		$(FIXTURE_CKSUM) > "$$dir/compiler/source.cksum"; \
+	done
 
 # Rebuild the runtime tarball the driver installs, from the fork at
 # COMPACT_REV (needs Nix and Node). The runtime that this compactc targets is
@@ -433,62 +450,32 @@ vendor-compact-runtime:
 	mkdir -p "$$(dirname "$$dest")"; \
 	mv "$$tmp/$$packed" "$$dest"; \
 	rm -rf "$$tmp"; \
-	echo "OK: compact-runtime $$version vendored (now run 'make regen-conformance-fixtures')"
+	echo "$(COMPACT_REV)" > "$(CURDIR)/$(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_REV)"; \
+	echo "OK: compact-runtime $$version vendored"
 
 # Run the conformance gate: the Rust IR interpreter against the goldens
 # emitted by the canonical TS runtime (already part of `make test`; this
 # target is the focused loop).
-conformance:
+conformance: fixtures goldens
 	$(CARGO) test -p conformance
 
-# Regenerate the conformance goldens by running the corpus through the
-# canonical @midnight-ntwrk/compact-runtime (needs Node 22+). The goldens are
-# committed; `cargo test -p conformance` diffs the interpreter against them,
-# and the codegen-drift workflow re-derives them to prove they still follow
-# the compiler.
+# Write the conformance goldens: the TS driver runs every case through the
+# canonical @midnight-ntwrk/compact-runtime (needs Node 22+). The target skips
+# when the goldens carry the fingerprint of what the driver reads, and it
+# builds the runtime tarball (with Nix) only when the tarball is missing or
+# comes from another COMPACT_REV.
 # NB: the generated contract/index.js and the vendored runtime are a matched
 # pair. compactc writes its own --runtime-version into every index.js, and the
 # runtime refuses a mismatched minor. So after a change of COMPACT_REV, follow
 # the steps above COMPACT_REV.
-conformance-regen:
-	@if [ ! -f "$(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)" ]; then \
-		echo "no runtime tarball at $(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)."; \
-		echo "It is generated, not committed. Run 'make vendor-compact-runtime' (needs Nix and Node)."; \
-		exit 1; \
-	fi; \
-	for f in $(CONFORMANCE_FIXTURES); do \
-		if [ ! -f "$(CONFORMANCE_DIR)/fixtures/$$f/contract/index.js" ]; then \
-			echo "no codegen for fixture '$$f'. It is generated, not committed."; \
-			echo "Run 'make regen-conformance-fixtures' (needs Docker)."; \
-			exit 1; \
-		fi; \
-	done
-	cd $(CONFORMANCE_DIR) && npm ci && node ts-driver/driver.mjs
-
-# Recompile the conformance corpus with the compactc at COMPACT_REV,
-# refreshing both compiler outputs each fixture carries. Run
-# `conformance-regen` afterwards: new codegen means new goldens.
-regen-conformance-fixtures:
-	@mkdir -p "$(ZK_PARAMS)"
-	@for f in $(CONFORMANCE_FIXTURES); do \
-		dir="$(CONFORMANCE_DIR)/fixtures/$$f"; \
-		src="$$dir/$$f.compact"; \
-		if [ ! -f "$$src" ]; then \
-			echo "missing source $$src"; exit 1; \
-		fi; \
-		echo "Regenerating $$f ..."; \
-		rm -rf "$$dir/compiled.tmp"; \
-		case " $(CONFORMANCE_ZKIR_V3_FIXTURES) " in \
-			*" $$f "*) zkir=--feature-zkir-v3 ;; \
-			*) zkir= ;; \
-		esac; \
-		$(COMPACTC) --skip-zk $$zkir --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
-		mkdir -p "$$dir/compiler" "$$dir/contract"; \
-		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiler/analyzed-ir.sexp"; \
-		mv "$$dir/compiled.tmp/contract/index.js" "$$dir/contract/index.js"; \
-		rm -rf "$$dir/compiled.tmp"; \
-	done; \
-	echo "OK: conformance fixtures regenerated (now run 'make conformance-regen')"
+goldens: fixtures
+	@[ "$$($(GOLDENS_CKSUM))" = "$$(cat $(CONFORMANCE_DIR)/expected/source.cksum 2>/dev/null)" ] && exit 0; \
+	[ "$$(cat $(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_REV) 2>/dev/null)" = "$(COMPACT_REV)" ] \
+		|| $(MAKE) --no-print-directory vendor-compact-runtime || exit 1; \
+	rm -rf $(CONFORMANCE_DIR)/expected; \
+	( cd $(CONFORMANCE_DIR) && npm ci --silent && node ts-driver/driver.mjs ) || exit 1; \
+	$(GOLDENS_CKSUM) > $(CONFORMANCE_DIR)/expected/source.cksum; \
+	echo "OK: conformance goldens written"
 
 # Write the runtime symbols of the compiler's native primitives at
 # COMPACT_REV, one per line, for the native check of the interpreter's unit

@@ -42,7 +42,7 @@ A test is proof only where something runs it. Know the route before you judge a 
 | Shared bindings | `tests/integration` (the test modules in `src/lib.rs`), which compiles `contract!` over shared fixtures | `make test` |
 | Devnet | a test in `<crate>/tests/` or `tests/*/src/` that needs the node or the indexer, and returns early when `MIDNIGHT_NODE_URL` or `MIDNIGHT_INDEXER_URL` is absent | only a `make test-e2e` or `make test-e2e-node-restart` line that selects it, in the CI E2E job. The line selects the binary with `-p <crate>`, or by a binary name that no other crate uses. |
 | Ignored | `#[ignore]` on any test | only a target that runs its binary with `--ignored` |
-| Conformance | `tests/conformance` | `make test`, against goldens from the canonical TS runtime (`make conformance-regen`, in the codegen-drift workflow) |
+| Conformance | `tests/conformance` | `make test`, against goldens from the canonical TS runtime (`make goldens`, which the CI compile job runs) |
 | Macro UI | `crates/compact/bindgen-macro/tests/ui` (trybuild) | `make test` |
 | Example | `examples/*` | only an example with a `make dev-settle run-<example>` step in the CI E2E job. Other examples run nowhere. |
 

@@ -1,0 +1,14 @@
+name: Compact outputs
+description: >-
+  Put the compiler output of the Compact sources in place: the devnet contracts,
+  the test and conformance fixtures, and the conformance goldens. The compact
+  job of the CI workflow builds them and uploads the artifact, so a job that
+  uses this action needs that job.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: compact-outputs
+        path: .

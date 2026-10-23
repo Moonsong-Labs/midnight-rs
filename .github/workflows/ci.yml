@@ -16,22 +16,59 @@ env:
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
-  # ---------- Devnet contracts ----------
+  # ---------- Compact sources ----------
 
-  contracts:
-    name: Compile the devnet contracts
+  # The devnet contracts, the test and conformance fixtures, and the goldens
+  # that the TS runtime derives from the corpus. None of them is committed.
+  compact:
+    name: Compile the Compact sources
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make compile-contracts
-      # The artifact keeps the path after the wildcard, <contract>/compiled/,
-      # and the devnet-contracts action puts it back under devnet/contracts. It
-      # lives as long as GitHub allows a re-run, because a re-run of a failed
-      # job downloads it again. A re-run of this job replaces it.
+      - name: Read COMPACT_REV
+        id: compact-rev
+        run: echo "rev=$(sed -n 's/^COMPACT_REV *:= *//p' Makefile)" >> "$GITHUB_OUTPUT"
+      # The runtime tarball that the TS driver installs. Only a change of
+      # COMPACT_REV changes it, and Nix takes minutes to build it.
+      - name: Restore the compact-runtime tarball
+        id: runtime
+        uses: actions/cache@v4
+        with:
+          path: tests/conformance/ts-driver/vendor
+          key: compact-runtime-${{ steps.compact-rev.outputs.rev }}
+      - if: steps.runtime.outputs.cache-hit != 'true'
+        uses: ./.github/actions/free-disk-space
+      - name: Install Nix
+        if: steps.runtime.outputs.cache-hit != 'true'
+        uses: cachix/install-nix-action@v31
+        with:
+          # The fork's flake declares this substituter, and the dependencies
+          # of the runtime build come from there.
+          extra_nix_config: |
+            extra-substituters = https://cache.iog.io
+            extra-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
+            accept-flake-config = true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/conformance/package-lock.json
+      - run: make compile-contracts fixtures goldens
+      # The artifact keeps each path below the repository root, and the
+      # compact-outputs action puts it back there. It lives as long as GitHub
+      # allows a re-run, because a re-run of a failed job downloads it again.
+      # A re-run of this job replaces it. The fingerprint files go with it, so
+      # the make targets of the other jobs find every output up to date.
       - uses: actions/upload-artifact@v4
         with:
-          name: devnet-contracts
-          path: devnet/contracts/*/compiled
+          name: compact-outputs
+          path: |
+            devnet/contracts/*/compiled
+            tests/conformance/fixtures/*/compiler
+            tests/conformance/fixtures/*/contract
+            tests/conformance/expected
+            crates/midnight-contract/tests/fixtures/*/compiler
+            tests/fixtures/compiled
           if-no-files-found: error
           retention-days: 30
           overwrite: true
@@ -61,10 +98,10 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
-    needs: [contracts]
+    needs: [compact]
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/devnet-contracts
+      - uses: ./.github/actions/compact-outputs
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -78,10 +115,10 @@ jobs:
     # bare URL. Neither `check` nor `clippy` runs them, so without this job
     # they accumulate silently.
     runs-on: ubuntu-latest
-    needs: [contracts]
+    needs: [compact]
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/devnet-contracts
+      - uses: ./.github/actions/compact-outputs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: make doc
@@ -91,10 +128,10 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
-    needs: [contracts]
+    needs: [compact]
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/devnet-contracts
+      - uses: ./.github/actions/compact-outputs
       - uses: ./.github/actions/free-disk-space
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -102,15 +139,14 @@ jobs:
 
   # `make test` covers the conformance replay: the corpus is a workspace member,
   # so `cargo test --workspace` diffs the Rust IR interpreter against the
-  # committed goldens. Re-deriving those goldens from the TS runtime needs the
-  # compiler, so the codegen-drift workflow does it on its own schedule.
+  # goldens that the compact job derived from the TS runtime.
   test:
     name: Unit tests
     runs-on: ubuntu-latest
-    needs: [contracts]
+    needs: [compact]
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/devnet-contracts
+      - uses: ./.github/actions/compact-outputs
       - uses: ./.github/actions/free-disk-space
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -123,10 +159,10 @@ jobs:
     # Linux-only devnet e2e job never exercises. No devnet here: the node +
     # indexer stack is Linux Docker only.
     runs-on: macos-latest
-    needs: [contracts]
+    needs: [compact]
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/devnet-contracts
+      - uses: ./.github/actions/compact-outputs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: make check
@@ -154,7 +190,7 @@ jobs:
   e2e:
     name: E2E tests (devnet, ledger ${{ matrix.ledger }})
     runs-on: ubuntu-latest
-    needs: [check, contracts]
+    needs: [check, compact]
     strategy:
       fail-fast: false
       matrix:
@@ -164,7 +200,7 @@ jobs:
       DEVNET_LEDGER: ${{ matrix.ledger }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/devnet-contracts
+      - uses: ./.github/actions/compact-outputs
 
       # rust-lld bus-errors on ubuntu-latest when target/ + container data fill
       # the runner's ~14 GB free disk (symptom: `collect2: fatal error: ld
