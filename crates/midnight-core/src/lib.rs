@@ -22,8 +22,10 @@
 //! }
 //!
 //! async fn run(phrase: &str) -> anyhow::Result<()> {
-//!     let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088");
-//!     let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider).await?;
+//!     let provider = MidnightProvider::new("ws://localhost:9944");
+//!     let wallet = Wallet::from_mnemonic(phrase)?
+//!         .sync(&provider, "http://localhost:8088")
+//!         .await?;
 //!     let provider = provider.with_wallet(wallet);
 //!
 //!     let contract = counter::Contract::deploy(&provider)

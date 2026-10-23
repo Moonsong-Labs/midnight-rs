@@ -35,20 +35,24 @@ pub(crate) fn devnet_urls() -> Option<(String, String)> {
     Some((node, indexer))
 }
 
-/// The wallet of the hex seed `seed` on the undeployed network, synced
-/// through `provider`.
-pub(crate) async fn synced_wallet(provider: &MidnightProvider, seed: &str) -> Wallet {
+/// The wallet of the hex seed `seed` on the undeployed network, synced from
+/// the indexer at `indexer` and pinned through `provider`.
+pub(crate) async fn synced_wallet(
+    provider: &MidnightProvider,
+    indexer: &str,
+    seed: &str,
+) -> Wallet {
     Wallet::from_seed(seed)
         .expect("hex seed")
         .with_network(Network::Undeployed)
-        .sync(provider)
+        .sync(provider, indexer)
         .await
         .expect("sync")
 }
 
 /// A provider for the devnet, with the wallet of `seed` synced and attached.
 pub(crate) async fn synced_provider(node: &str, indexer: &str, seed: &str) -> MidnightProvider {
-    let provider = MidnightProvider::new(node, indexer);
-    let wallet = synced_wallet(&provider, seed).await;
+    let provider = MidnightProvider::new(node);
+    let wallet = synced_wallet(&provider, indexer, seed).await;
     provider.with_wallet(wallet)
 }

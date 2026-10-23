@@ -13,7 +13,7 @@ fn node_only_provider() -> Option<MidnightProvider> {
         common::skip("MIDNIGHT_NODE_URL");
         return None;
     };
-    Some(MidnightProvider::new(&node_url, "http://127.0.0.1:1"))
+    Some(MidnightProvider::new(&node_url))
 }
 
 // ---------------------------------------------------------------------------

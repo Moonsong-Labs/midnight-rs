@@ -37,8 +37,8 @@ async fn deploy_funded_with_shielded_offer() {
         StateValue::from(AlignedValue::from([0u8; 32])),
     ]);
 
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let provider = MidnightProvider::new(&node_url);
+    let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let recipient = wallet.seed().shielded_recipient();
     let provider = provider.with_wallet(wallet);
 

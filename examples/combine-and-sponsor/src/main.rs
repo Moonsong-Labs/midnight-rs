@@ -74,12 +74,16 @@ async fn main() -> anyhow::Result<()> {
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
 
     println!("0. Syncing both wallets...");
-    let provider_a = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(SEED_A)?.sync(&provider_a).await?;
+    let provider_a = MidnightProvider::new(&node_url);
+    let wallet = Wallet::from_seed(SEED_A)?
+        .sync(&provider_a, &indexer_url)
+        .await?;
     let address_a = wallet.shielded_address();
     let provider_a = provider_a.with_wallet(wallet);
-    let provider_b = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(SEED_B)?.sync(&provider_b).await?;
+    let provider_b = MidnightProvider::new(&node_url);
+    let wallet = Wallet::from_seed(SEED_B)?
+        .sync(&provider_b, &indexer_url)
+        .await?;
     let address_b = wallet.shielded_address();
     let wallet_b = Arc::new(LocalWallet::new(wallet));
     let provider_b = Arc::new(provider_b.with_wallet(Arc::clone(&wallet_b)));

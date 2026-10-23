@@ -142,16 +142,16 @@ let shielded   = wallet.shielded_address();
 ```rust
 use midnight_core::{MidnightProvider, Network, Wallet};
 
-let provider = MidnightProvider::new(node_url, indexer_url);
+let provider = MidnightProvider::new(node_url);
 let wallet = Wallet::from_mnemonic(phrase)?
     .with_network(Network::Preprod)   // optional; the node's network without it
     .with_storage(storage_dir)        // optional; in-memory only without it
-    .sync(&provider)
+    .sync(&provider, indexer_url)
     .await?;
 let provider = provider.with_wallet(wallet);
 ```
 
-A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider)` replays three indexer subscriptions in the current task: the zswap and unshielded streams at the same time, then the Dust stream. It returns the `Wallet` once all three have caught up:
+A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider, indexer_url)` replays three subscriptions of the indexer at `indexer_url` in the current task: the zswap and unshielded streams at the same time, then the Dust stream. It returns the `Wallet` once all three have caught up:
 
 | Subscription | What it fills |
 |---|---|
@@ -161,7 +161,7 @@ A `WalletBuilder` holds no connection and does no work until a sync step runs. `
 
 Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress is checkpointed to disk after each batch when `with_storage(...)` is set, so subsequent runs resume from the last cursor.
 
-The provider is the sync's source: the sync replays the provider's indexer, and the provider's node reports its network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the indexer URL and the node's network to the two-query `ChainView`.
+The wallet keeps `indexer_url` for its later resyncs. The provider is the sync's source: its node reports the network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the node's network to the two-query `ChainView`.
 
 Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. The sync then fails with `WalletError::NetworkUnknown` when the node cannot answer, reports no network, or reports an id that the parse of a `Network` refuses (see [Address derivation](#address-derivation)).
 
@@ -175,14 +175,14 @@ A node that cannot answer for the pin does not fail the sync. The sync continues
 
 Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. A non-retryable error fails the sync at once, and a retryable one fails it after the last retry. An indexer that keeps the socket alive but sends no event in time also fails the sync, unless a resync reads the silence as the tip. When the sync gives up on the indexer, it returns `WalletError::Indexer`, whose `retryable` field tells whether a later sync can succeed.
 
-For a long sync with UI updates, end the builder with `.sync_with_progress(&provider)` in place of `.sync(&provider)`:
+For a long sync with UI updates, end the builder with `.sync_with_progress(&provider, indexer_url)` in place of `.sync(&provider, indexer_url)`:
 
 ```rust
 use midnight_core::SyncProgress;
 
 let (mut rx, handle) = Wallet::from_mnemonic(phrase)?
     .with_storage(storage_dir)
-    .sync_with_progress(&provider)
+    .sync_with_progress(&provider, indexer_url)
     .await?;
 
 while let Some(progress) = rx.recv().await {
@@ -200,9 +200,9 @@ let wallet = handle.await?;
 let provider = provider.with_wallet(wallet);
 ```
 
-`.sync(&provider)` runs the sync in the current task. `.sync_with_progress(&provider)` does the network check and the pin work first, so it can refuse a sync as `.sync(&provider)` does. Then it spawns the sync in a background task, and gives you progress events and a `SyncHandle` that resolves to the synced `Wallet`.
+`.sync(&provider, indexer_url)` runs the sync in the current task. `.sync_with_progress(&provider, indexer_url)` does the network check and the pin work first, so it can refuse a sync as `.sync(&provider, indexer_url)` does. Then it spawns the sync in a background task, and gives you progress events and a `SyncHandle` that resolves to the synced `Wallet`.
 
-The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally. For a sync without progress events, use `.sync(&provider)`.
+The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally. For a sync without progress events, use `.sync(&provider, indexer_url)`.
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. To keep the reads fresh, run a [background sync](#background-sync). For one fresh read, call `resync_wallet()` before it. A resync takes the wallet's read/write lock only briefly, at its start (to snapshot replay inputs) and at its end (to commit). So reads like `balance()` keep completing while one is in flight. The wallet serializes concurrent resyncs.
 
@@ -452,12 +452,12 @@ A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node c
 ## Lifecycle summary
 
 ```
-MidnightProvider::new(node_url, indexer_url)
+MidnightProvider::new(node_url)
   ↓
 Wallet::from_seed(hex)? | Wallet::from_mnemonic(phrase)? | WalletBuilder::new(seed)
   [.with_network(network)][.with_storage(dir)][.unpinned()]
   ↓
-.sync(&provider).await  or  .sync_with_progress(&provider).await → (progress, handle)
+.sync(&provider, indexer_url).await  or  .sync_with_progress(&provider, indexer_url).await → (progress, handle)
   │ take the node's network when no network is named
   │ check the node's network and the stored pin, and take the pin this sync carries (not when unpinned)
   │ subscribe zswap + unshielded + dust  (parallel)

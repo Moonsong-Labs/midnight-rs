@@ -39,8 +39,8 @@ async fn a_call_that_emits_an_event_applies_on_chain() {
         events::ZK_CONFIG_DIR
     );
 
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let provider = MidnightProvider::new(&node_url);
+    let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let contract = events::Contract::deploy(&provider)

@@ -19,8 +19,8 @@ async fn a_simulated_call_returns_the_value_and_the_next_ledger_with_no_wallet()
         return;
     };
 
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let provider = MidnightProvider::new(&node_url);
+    let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     // The wallet reads finalized state, so this deploy stays invisible to
@@ -38,7 +38,7 @@ async fn a_simulated_call_returns_the_value_and_the_next_ledger_with_no_wallet()
     let contract = deployed.into_contract().await.expect("deploy");
 
     // No wallet and no zk config: a build, a proof or a submit fails on either.
-    let reader = MidnightProvider::new(&node_url, &indexer_url);
+    let reader = MidnightProvider::new(&node_url);
     let walletless = counter::Contract::at(&reader, contract.address()).build();
 
     let simulated = walletless

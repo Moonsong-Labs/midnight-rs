@@ -48,9 +48,9 @@ async fn a_build_only_call_that_changes_the_private_state_refuses_before_the_bui
         return;
     };
 
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
+    let provider = MidnightProvider::new(&node_url);
     let wallet = Arc::new(LocalWallet::new(
-        common::synced_wallet(&provider, common::DEV_WALLET_SEED).await,
+        common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await,
     ));
     let dir = tempfile::tempdir().expect("temp dir");
     let store: Arc<dyn PrivateStateProvider> = Arc::new(FsPrivateStateProvider::new(dir.path()));

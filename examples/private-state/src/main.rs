@@ -79,8 +79,10 @@ async fn main() -> anyhow::Result<()> {
     println!("0. Syncing wallet and attaching the private-state store...");
     let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)?.sync(&provider).await?;
+    let provider = MidnightProvider::new(&node_url);
+    let wallet = Wallet::from_seed(DEV_WALLET_SEED)?
+        .sync(&provider, &indexer_url)
+        .await?;
     let address = wallet.unshielded_address();
 
     // A durable private-state store for this one wallet. A real app would use

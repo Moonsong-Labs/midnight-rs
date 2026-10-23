@@ -27,9 +27,9 @@ async fn a_zkir_v3_contract_runs_only_on_ledger_9() {
         return;
     };
 
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
+    let provider = MidnightProvider::new(&node_url);
     let ledger = provider.ledger_version().await.expect("ledger version");
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let deploy = counter::Contract::deploy(&provider)

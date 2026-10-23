@@ -66,15 +66,12 @@ pub trait ChainView: Send + Sync {
     async fn finalized_height(&self) -> Option<u64>;
 }
 
-/// What a wallet sync reads: the indexer it replays, and the node that pins
-/// the chain and reports its network.
+/// What a wallet sync reads from the node: the chain it pins, and the network
+/// it reports.
 ///
-/// `MidnightProvider` implements it with its own indexer and node.
+/// `MidnightProvider` implements it with its node.
 #[async_trait::async_trait]
 pub trait SyncSource: ChainView {
-    /// The indexer the wallet replays from, and the one its later resyncs use.
-    fn indexer_url(&self) -> &str;
-
     /// The network the node's runtime reports; `None` when it cannot answer,
     /// reports none, or reports an id that is not a valid name for a
     /// [`Network`].

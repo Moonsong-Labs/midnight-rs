@@ -35,8 +35,8 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     let info = common::load_compiled(&keyed);
     let program = common::program(&info);
 
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&provider, common::DEV_WALLET_SEED).await;
+    let provider = MidnightProvider::new(&node_url);
+    let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
     let contract = Contract::deploy(provider)
@@ -74,8 +74,9 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
 
     // A different wallet from the one that deploys and pays the fees, so an
     // output wrongly owned by the caller would fail this.
-    let recipient_provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = common::synced_wallet(&recipient_provider, common::RECIPIENT_SEED).await;
+    let recipient_provider = MidnightProvider::new(&node_url);
+    let wallet =
+        common::synced_wallet(&recipient_provider, &indexer_url, common::RECIPIENT_SEED).await;
     let recipient = midnight_helpers::ledger_9::UnshieldedWallet::default(
         midnight_types::ledger_9::convert::IntoLedger::into_ledger(wallet.seed()),
     )

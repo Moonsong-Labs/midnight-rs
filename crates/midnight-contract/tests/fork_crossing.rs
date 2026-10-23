@@ -33,7 +33,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         return;
     };
     let network = Network::Undeployed;
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
+    let provider = MidnightProvider::new(&node_url);
     assert_eq!(
         provider.ledger_version().await.expect("the chain's ledger"),
         LedgerVersion::V8,
@@ -46,7 +46,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .unwrap()
         .with_network(network.clone())
         .with_storage(storage.path())
-        .sync(&provider)
+        .sync(&provider, &indexer_url)
         .await
         .expect("sync on ledger 8");
     let own_unshielded = wallet.unshielded_address();
@@ -75,7 +75,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .status()
         .expect("run the upgrade command");
     assert!(status.success(), "the upgrade command failed");
-    wait_for_ledger_9(&provider, &network, stored[2].path()).await;
+    wait_for_ledger_9(&provider, &indexer_url, &network, stored[2].path()).await;
 
     // A shielded rescan meets ledger 9 events first. It crosses the attached
     // wallet, then replays the shielded stream across the fork.
@@ -102,13 +102,13 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .unwrap()
         .with_network(network.clone())
         .with_storage(stored[0].path())
-        .sync(&provider)
+        .sync(&provider, &indexer_url)
         .await
         .expect("resume a ledger 8 snapshot on ledger 9");
     let fresh = Wallet::from_seed(common::DEV_WALLET_SEED)
         .unwrap()
         .with_network(network.clone())
-        .sync(&provider)
+        .sync(&provider, &indexer_url)
         .await
         .expect("sync from genesis across the fork");
     for (wallet, how) in [(&resumed, "resumed"), (&fresh, "synced from genesis")] {
@@ -160,13 +160,13 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .unwrap()
         .with_network(network.clone())
         .with_storage(stored[1].path())
-        .sync(&provider)
+        .sync(&provider, &indexer_url)
         .await
         .expect("resume a ledger 8 snapshot on ledger 9");
     let fresh = Wallet::from_seed(common::DEV_WALLET_SEED)
         .unwrap()
         .with_network(network)
-        .sync(&provider)
+        .sync(&provider, &indexer_url)
         .await
         .expect("sync from genesis across the fork");
     for (wallet, how) in [(&resumed, "resumed"), (&fresh, "synced from genesis")] {
@@ -250,7 +250,12 @@ fn generating(utxos: &[midnight_provider::TrackedUtxo]) -> Vec<(HashOutput, u32)
 /// The node can report the fork before the indexer serves a ledger 9 block. A
 /// probe wallet resumes the ledger 8 `snapshot` and resyncs until it crosses,
 /// so the attached wallet is still on ledger 8 for the rescan to cross.
-async fn wait_for_ledger_9(provider: &MidnightProvider, network: &Network, snapshot: &Path) {
+async fn wait_for_ledger_9(
+    provider: &MidnightProvider,
+    indexer_url: &str,
+    network: &Network,
+    snapshot: &Path,
+) {
     let deadline = Instant::now() + Duration::from_secs(300);
     while provider.ledger_version().await.expect("the chain's ledger") != LedgerVersion::V9 {
         assert!(Instant::now() < deadline, "the node did not run ledger 9");
@@ -261,7 +266,7 @@ async fn wait_for_ledger_9(provider: &MidnightProvider, network: &Network, snaps
             .unwrap()
             .with_network(network.clone())
             .with_storage(snapshot)
-            .sync(provider)
+            .sync(provider, indexer_url)
             .await
             .expect("resume the probe snapshot"),
     );

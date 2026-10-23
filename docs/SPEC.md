@@ -111,15 +111,15 @@ Each of those three splits into plan → run → commit, so the replay runs with
 `MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and never names an implementation. The local one is built on its own and attached:
 
 ```
-let provider = MidnightProvider::new(node_url, indexer_url)
+let provider = MidnightProvider::new(node_url)
 
 Wallet::from_mnemonic(phrase)?                      // midnight-wallet; or from_seed(hex),
                                                     // from_mnemonic_with_passphrase(phrase, passphrase), WalletBuilder::new(seed)
       .with_network(Network::Preprod)               // optional: the node's network without it
       .with_storage(dir)                            // optional persistence
       .unpinned()                                   // optional: skip the network check and the chain-reset guard
-      .sync(&provider).await                        // one-shot sync → Wallet; the source is any SyncSource
-    or .sync_with_progress(&provider).await         // streaming progress
+      .sync(&provider, indexer_url).await           // one-shot sync → Wallet; the source is any SyncSource
+    or .sync_with_progress(&provider, indexer_url).await // streaming progress
 
 provider
   .with_wallet(wallet)                              // a synced Wallet, or a WalletFacade that also

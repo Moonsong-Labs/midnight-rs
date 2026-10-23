@@ -54,8 +54,10 @@ async fn main() -> anyhow::Result<()> {
 
     // 0. Sync the minter wallet (deploys + pays fees).
     println!("0. Syncing minter wallet...");
-    let provider = MidnightProvider::new(&node_url, &indexer_url);
-    let wallet = Wallet::from_seed(MINTER_SEED)?.sync(&provider).await?;
+    let provider = MidnightProvider::new(&node_url);
+    let wallet = Wallet::from_seed(MINTER_SEED)?
+        .sync(&provider, &indexer_url)
+        .await?;
     let provider = provider.with_wallet(wallet);
     let network = provider.network().await?;
     println!("   synced.\n");
@@ -107,10 +109,10 @@ async fn main() -> anyhow::Result<()> {
 
     // 4. The recipient syncs from scratch and finds the coin — no watchFor.
     println!("4. Recipient syncing to discover the coin...");
-    let recipient_provider = MidnightProvider::new(&node_url, &indexer_url);
+    let recipient_provider = MidnightProvider::new(&node_url);
     let wallet = Arc::new(LocalWallet::new(
         Wallet::from_seed(RECIPIENT_SEED)?
-            .sync(&recipient_provider)
+            .sync(&recipient_provider, &indexer_url)
             .await?,
     ));
     let recipient_provider = Arc::new(recipient_provider.with_wallet(Arc::clone(&wallet)));

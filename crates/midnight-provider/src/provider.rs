@@ -57,8 +57,7 @@ struct NodeConnection {
 }
 
 /// A [`Provider`] backed by a node WebSocket connection for direct RPC
-/// communication. It also holds the indexer URL that a wallet synced from it
-/// replays.
+/// communication.
 ///
 /// The node connection is established lazily on first use, cached for the
 /// provider's lifetime, and auto-reconnects with backoff on network drops.
@@ -76,7 +75,6 @@ struct NodeConnection {
 /// SDK sets no deadline on the submit call or on the wait for a submitted
 /// transaction (see [`PendingTx`]).
 pub struct MidnightProvider {
-    indexer_url: String,
     node_url: String,
     wallet: Option<AttachedWallet>,
     /// Proof backends for transaction building, one per ledger generation.
@@ -92,7 +90,7 @@ pub struct MidnightProvider {
 }
 
 impl MidnightProvider {
-    /// Create a provider from node WebSocket URL and indexer HTTP URL.
+    /// Create a provider from the node's WebSocket URL.
     ///
     /// The node connection is **not** established here; it is deferred to
     /// the first call that requires it.
@@ -106,15 +104,14 @@ impl MidnightProvider {
     /// # async fn f(phrase: &str) -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
     /// # const INDEXER_URL: &str = "http://localhost:8088";
-    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
-    /// let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider).await?;
+    /// let provider = MidnightProvider::new(NODE_URL);
+    /// let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider, INDEXER_URL).await?;
     /// let provider = provider.with_wallet(wallet);
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(node_url: &str, indexer_url: &str) -> Self {
+    pub fn new(node_url: &str) -> Self {
         Self {
-            indexer_url: indexer_url.to_string(),
             node_url: node_url.to_string(),
             wallet: None,
             proof_provider: None,
@@ -133,12 +130,11 @@ impl MidnightProvider {
     /// ```rust,no_run
     /// # fn f() -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
-    /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// use std::sync::Arc;
     /// use midnight_provider::{MidnightProvider, RemoteProofServer};
     ///
     /// let prover = Arc::new(RemoteProofServer::new("http://localhost:6300".to_string()));
-    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL).with_proof_provider(prover);
+    /// let provider = MidnightProvider::new(NODE_URL).with_proof_provider(prover);
     /// # Ok(())
     /// # }
     /// ```
@@ -181,12 +177,11 @@ impl MidnightProvider {
     /// # use midnight_provider::MidnightProvider;
     /// # fn f(wallet_address: &str) -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
-    /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// use std::sync::Arc;
     /// use midnight_provider::FsPrivateStateProvider;
     ///
     /// let store = Arc::new(FsPrivateStateProvider::with_default_dir(wallet_address).unwrap());
-    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL).with_private_state(store);
+    /// let provider = MidnightProvider::new(NODE_URL).with_private_state(store);
     /// # Ok(())
     /// # }
     /// ```
@@ -202,12 +197,6 @@ impl MidnightProvider {
         self.private_state.clone()
     }
 
-    /// The indexer URL this provider was built with, which a wallet synced
-    /// from this provider replays.
-    pub fn indexer_url(&self) -> &str {
-        &self.indexer_url
-    }
-
     /// Attach a wallet, and build transaction contexts from it.
     ///
     /// A synced `Wallet` from `midnight-wallet` goes in behind a `LocalWallet`.
@@ -221,8 +210,9 @@ impl MidnightProvider {
     /// use midnight_provider::MidnightProvider;
     /// use midnight_wallet::{LocalWallet, Wallet, WalletFacade};
     ///
+    /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// # async fn example(provider: MidnightProvider, phrase: &str) -> Result<(), Box<dyn std::error::Error>> {
-    /// let wallet = Arc::new(LocalWallet::new(Wallet::from_mnemonic(phrase)?.sync(&provider).await?));
+    /// let wallet = Arc::new(LocalWallet::new(Wallet::from_mnemonic(phrase)?.sync(&provider, INDEXER_URL).await?));
     /// let provider = provider.with_wallet(Arc::clone(&wallet));
     /// let balance = wallet.balance().await;
     /// # Ok(())
@@ -1474,10 +1464,6 @@ impl midnight_types::chain_pin::ChainView for MidnightProvider {
 /// provider.
 #[async_trait]
 impl midnight_types::chain_pin::SyncSource for MidnightProvider {
-    fn indexer_url(&self) -> &str {
-        MidnightProvider::indexer_url(self)
-    }
-
     async fn network(&self) -> Option<Network> {
         match self.ledger_network_id().await {
             Ok(network) => Some(network),
@@ -1533,7 +1519,7 @@ mod tests {
     use tokio::sync::oneshot;
 
     fn test_provider() -> MidnightProvider {
-        MidnightProvider::new("ws://test", "http://test")
+        MidnightProvider::new("ws://test")
     }
 
     /// Merging nothing is a caller error, not an empty transaction.
@@ -1575,7 +1561,7 @@ mod tests {
 
     #[tokio::test]
     async fn health_returns_disconnected_on_bad_urls() {
-        let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1");
+        let provider = MidnightProvider::new("ws://127.0.0.1:1");
         let health = provider.health().await;
         assert!(!health.node_connected);
     }
@@ -1623,7 +1609,7 @@ mod tests {
             // on, it keeps each query in its queue.
             let _reconnect = listener.accept().await.unwrap();
         });
-        let provider = MidnightProvider::new(&node_url, "http://127.0.0.1:1");
+        let provider = MidnightProvider::new(&node_url);
         provider.get_or_connect().await.expect("the connect");
         outage_tx.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(5), node)
@@ -1788,7 +1774,7 @@ mod tests {
                 }
             }
         });
-        let provider = MidnightProvider::new(&node_url, "http://127.0.0.1:1");
+        let provider = MidnightProvider::new(&node_url);
 
         let answer = tokio::time::timeout(
             Duration::from_secs(30),
@@ -1838,7 +1824,7 @@ mod tests {
             .is_ok();
             let _ = closed_tx.send(closed);
         });
-        let provider = MidnightProvider::new(&node_url, "http://127.0.0.1:1");
+        let provider = MidnightProvider::new(&node_url);
 
         tokio::select! {
             connect = provider.get_or_connect() => {
