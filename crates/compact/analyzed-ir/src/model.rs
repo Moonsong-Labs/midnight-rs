@@ -151,6 +151,8 @@ pub enum FieldType {
 pub enum Curve {
     Jubjub,
     Secp256k1,
+    Secp256r1,
+    Curve25519,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -12,9 +12,7 @@ use num_bigint::BigUint;
 
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
 use crate::error::InterpreterError;
-use crate::secp256k1::{
-    ForeignField, Secp256k1Base, Secp256k1Point, Secp256k1Scalar, encode_point,
-};
+use crate::foreign::{Curve25519Point, ForeignField, Secp256k1Point, Secp256r1Point, encode_as};
 use crate::value::Value;
 
 /// Precomputed layout of a struct: field name → (atom offset, atom count).
@@ -42,14 +40,15 @@ impl StructLayout {
 pub fn atom_count_for_type(ty: &Type) -> Option<usize> {
     match ty {
         Type::Field(field) => Some(match ForeignField::of(field) {
-            Some(ForeignField::Base) => Secp256k1Base::alignment().0.len(),
-            Some(ForeignField::Scalar) => Secp256k1Scalar::alignment().0.len(),
+            Some(foreign) => foreign.alignment().0.len(),
             None => 1,
         }),
         Type::Boolean | Type::Unsigned(_) | Type::Bytes(_) => Some(1),
         // A Jubjub point is two atoms (x and y).
         Type::Point(Curve::Jubjub) => Some(2),
         Type::Point(Curve::Secp256k1) => Some(Secp256k1Point::alignment().0.len()),
+        Type::Point(Curve::Secp256r1) => Some(Secp256r1Point::alignment().0.len()),
+        Type::Point(Curve::Curve25519) => Some(Curve25519Point::alignment().0.len()),
         Type::Opaque(name) => match name.as_str() {
             "JubjubPoint" => Some(2),
             "Scalar<BLS12-381>" => Some(1),
@@ -290,7 +289,9 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
         },
         Type::Alias { ty: inner, .. } => encode_typed(val, inner),
         Type::Contract { .. } => encode_typed(val, &Type::contract_address()),
-        Type::Point(Curve::Secp256k1) => encode_point(val),
+        Type::Point(Curve::Secp256k1) => encode_as::<Secp256k1Point>(val),
+        Type::Point(Curve::Secp256r1) => encode_as::<Secp256r1Point>(val),
+        Type::Point(Curve::Curve25519) => encode_as::<Curve25519Point>(val),
         Type::Opaque(_) | Type::Point(Curve::Jubjub) => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
@@ -452,8 +453,7 @@ pub fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
         Type::Boolean => Ok(Value::Bool(false)),
         Type::Unsigned(_) | Type::Enum { .. } => Ok(Value::Integer(0)),
         Type::Field(field) => Ok(Value::AlignedValue(match ForeignField::of(field) {
-            Some(ForeignField::Base) => AlignedValue::from(Secp256k1Base::default()),
-            Some(ForeignField::Scalar) => AlignedValue::from(Secp256k1Scalar::default()),
+            Some(foreign) => foreign.zero(),
             None => AlignedValue::from(midnight_transient_crypto::curve::Fr::from(0u64)),
         })),
         Type::Bytes(length) => Ok(Value::AlignedValue(bytes_aligned_value(
@@ -471,6 +471,12 @@ pub fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
         ))),
         Type::Point(Curve::Secp256k1) => Ok(Value::AlignedValue(AlignedValue::from(
             Secp256k1Point::default(),
+        ))),
+        Type::Point(Curve::Secp256r1) => Ok(Value::AlignedValue(AlignedValue::from(
+            Secp256r1Point::default(),
+        ))),
+        Type::Point(Curve::Curve25519) => Ok(Value::AlignedValue(AlignedValue::from(
+            Curve25519Point::default(),
         ))),
         Type::Opaque(_) => Ok(Value::AlignedValue(empty_opaque())),
         Type::Struct { fields, .. } => {
