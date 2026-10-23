@@ -142,11 +142,18 @@ const taggedToJs = (tagged) => {
     case 'uint':
     case 'secp256k1Base':
     case 'secp256k1Scalar':
+    case 'secp256r1Base':
+    case 'secp256r1Scalar':
+    case 'curve25519Base':
+    case 'curve25519Scalar':
       return BigInt(body);
     case 'secp256k1Point':
+    case 'secp256r1Point':
       return body === 'identity'
         ? { x: 0n, y: 0n, identity: true }
         : { x: BigInt(body.x), y: BigInt(body.y), identity: false };
+    case 'curve25519Point':
+      return { x: BigInt(body.x), y: BigInt(body.y) };
     case 'enum':
       return Number(body);
     case 'bool':
