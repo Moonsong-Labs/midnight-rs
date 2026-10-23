@@ -63,7 +63,8 @@ EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shie
 CONTRACTS := call-context counter counter-zkir-v3 events receive-shielded secret-counter shielded-mint unshielded-payout
 # The contracts that compile for ZKIR v3. Only a ledger 9 chain verifies their keys.
 ZKIR_V3_CONTRACTS := counter-zkir-v3
-# The compiler flag of contract $$c, which only a ZKIR v3 contract has.
+# The compiler flag of contract $$c, which only a ZKIR v3 contract has. The
+# pattern opens with `(` so that bash 3.2, the macOS /bin/sh, parses it inside $(...).
 CONTRACT_ZKIR = case " $(ZKIR_V3_CONTRACTS) " in (*" $$c "*) echo --feature-zkir-v3 ;; esac
 # The fingerprint of contract $$c: its source and its flag under the compiler at
 # COMPACT_REV. POSIX cksum, so a fingerprint from the Linux CI job matches on
