@@ -58,7 +58,7 @@ NODE_WS        := ws://127.0.0.1:9944
 INDEXER_URL    := http://127.0.0.1:8088
 INDEXER_GQL    := $(INDEXER_URL)/api/v3/graphql
 PROOF_SERVER_URL := http://127.0.0.1:6300
-DEV_SEED       :=0000000000000000000000000000000000000000000000000000000000000001
+DEV_SEED       := 0000000000000000000000000000000000000000000000000000000000000001
 
 # Examples that run against the devnet with no extra env (deploy + call).
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
