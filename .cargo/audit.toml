@@ -1,6 +1,18 @@
 [advisories]
-# ruzstd is reachable only through subxt's `light-client` feature
-# (subxt-lightclient -> smoldot-light -> smoldot -> ruzstd), which no
-# workspace member enables, so the crate is never compiled. Every smoldot
-# release requires ruzstd ^0.8, and the fix is in 0.9.1.
-ignore = ["RUSTSEC-2026-0344"]
+ignore = [
+    # ruzstd is reachable only through subxt's `light-client` feature
+    # (subxt-lightclient -> smoldot-light -> smoldot -> ruzstd), which no
+    # workspace member enables, so the crate is never compiled. Every smoldot
+    # release requires ruzstd ^0.8, and the fix is in 0.9.1.
+    "RUSTSEC-2026-0344",
+    # crypto-bigint 0.5.5 comes only from elliptic-curve 0.13, which requires
+    # it. Only crypto-bigint 0.7.6 has the fix, and only elliptic-curve 0.14
+    # uses 0.7. midnight-curves, the ledger fork's base-crypto and
+    # transient-crypto, and bip32 0.5 hold the 0.13 line, and midnight-zk
+    # holds the 0.14 bumps for one coordinated migration. On secret values,
+    # these crates call no division, zero counting or Montgomery code of
+    # crypto-bigint. On x86_64, k256 scalar negation can show whether its
+    # operand is zero: keys and nonces never are, a circuit witness can be.
+    # Remove this entry when no crate depends on elliptic-curve 0.13.
+    "RUSTSEC-2026-0387",
+]
