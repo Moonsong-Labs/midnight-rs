@@ -10,15 +10,19 @@
 //! - `{"bool": true}`
 //! - `{"enum": <ordinal>}`
 //! - `{"vector": [ ... ]}`: element-wise tagged values
-//! - `{"secp256k1Base": "<decimal>"}`, `{"secp256k1Scalar": "<decimal>"}`: an
-//!   element of that field
-//! - `{"secp256k1Point": {"x": "<decimal>", "y": "<decimal>"}}`: a point of
-//!   the curve, and `{"secp256k1Point": "identity"}` the identity
+//! - `{"<curve>Base": "<decimal>"}`, `{"<curve>Scalar": "<decimal>"}`: an
+//!   element of that field, for `<curve>` one of `secp256k1`, `secp256r1` and
+//!   `curve25519`
+//! - `{"<curve>Point": {"x": "<decimal>", "y": "<decimal>"}}`: the point of the
+//!   curve at those affine coordinates. `{"secp256k1Point": "identity"}` and
+//!   `{"secp256r1Point": "identity"}` are the identity. The Curve25519
+//!   identity is the point at (0, 1).
 //!
 //! The TS driver has the mirror converter in `ts-driver/driver.mjs`.
 
 use midnight_contract::runtime::{
-    Secp256k1Base, Secp256k1Point, Secp256k1Scalar, Value, bytes_aligned_value,
+    Curve25519Base, Curve25519Point, Curve25519Scalar, Secp256k1Base, Secp256k1Point,
+    Secp256k1Scalar, Secp256r1Base, Secp256r1Point, Secp256r1Scalar, Value, bytes_aligned_value,
 };
 use midnight_typed_state::AlignedValue;
 use serde_json::Value as Json;
@@ -115,32 +119,77 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
             }
             Ok(Value::Struct(named))
         }
-        "secp256k1Base" => Ok(Value::AlignedValue(AlignedValue::from(secp256k1_base(
+        "secp256k1Base" => Ok(aligned(field(
             body,
-        )?))),
-        "secp256k1Scalar" => {
-            let scalar = Secp256k1Scalar::from_be_bytes(parse_decimal_be_32(body)?)
-                .ok_or_else(|| format!("Secp256k1Scalar out of range: {body}"))?;
-            Ok(Value::AlignedValue(AlignedValue::from(scalar)))
-        }
-        "secp256k1Point" => {
-            let point = match body.as_str() {
-                Some("identity") => Secp256k1Point::default(),
-                _ => Secp256k1Point::from_coordinates(
-                    secp256k1_base(&body["x"])?,
-                    secp256k1_base(&body["y"])?,
-                )
-                .ok_or_else(|| format!("not a point of secp256k1: {body}"))?,
-            };
-            Ok(Value::AlignedValue(AlignedValue::from(point)))
-        }
+            Secp256k1Base::from_be_bytes,
+            "Secp256k1Base",
+        )?)),
+        "secp256k1Scalar" => Ok(aligned(field(
+            body,
+            Secp256k1Scalar::from_be_bytes,
+            "Secp256k1Scalar",
+        )?)),
+        "secp256k1Point" => Ok(aligned(match body.as_str() {
+            Some("identity") => Secp256k1Point::default(),
+            _ => Secp256k1Point::from_coordinates(
+                field(&body["x"], Secp256k1Base::from_be_bytes, "Secp256k1Base")?,
+                field(&body["y"], Secp256k1Base::from_be_bytes, "Secp256k1Base")?,
+            )
+            .ok_or_else(|| format!("not a point of secp256k1: {body}"))?,
+        })),
+        "secp256r1Base" => Ok(aligned(field(
+            body,
+            Secp256r1Base::from_be_bytes,
+            "Secp256r1Base",
+        )?)),
+        "secp256r1Scalar" => Ok(aligned(field(
+            body,
+            Secp256r1Scalar::from_be_bytes,
+            "Secp256r1Scalar",
+        )?)),
+        "secp256r1Point" => Ok(aligned(match body.as_str() {
+            Some("identity") => Secp256r1Point::default(),
+            _ => Secp256r1Point::from_coordinates(
+                field(&body["x"], Secp256r1Base::from_be_bytes, "Secp256r1Base")?,
+                field(&body["y"], Secp256r1Base::from_be_bytes, "Secp256r1Base")?,
+            )
+            .ok_or_else(|| format!("not a point of secp256r1: {body}"))?,
+        })),
+        "curve25519Base" => Ok(aligned(field(
+            body,
+            Curve25519Base::from_be_bytes,
+            "Curve25519Base",
+        )?)),
+        "curve25519Scalar" => Ok(aligned(field(
+            body,
+            Curve25519Scalar::from_be_bytes,
+            "Curve25519Scalar",
+        )?)),
+        "curve25519Point" => Ok(aligned(
+            Curve25519Point::from_coordinates(
+                field(&body["x"], Curve25519Base::from_be_bytes, "Curve25519Base")?,
+                field(&body["y"], Curve25519Base::from_be_bytes, "Curve25519Base")?,
+            )
+            .ok_or_else(|| {
+                format!("not a point of the prime-order subgroup of Curve25519: {body}")
+            })?,
+        )),
         other => Err(format!("unknown value tag {other:?}")),
     }
 }
 
-fn secp256k1_base(body: &Json) -> Result<Secp256k1Base, String> {
-    Secp256k1Base::from_be_bytes(parse_decimal_be_32(body)?)
-        .ok_or_else(|| format!("Secp256k1Base out of range: {body}"))
+fn aligned(value: impl Into<AlignedValue>) -> Value {
+    Value::AlignedValue(value.into())
+}
+
+/// The element of a foreign field that the decimal `body` spells. `name` is
+/// the Compact type of the field.
+fn field<T>(
+    body: &Json,
+    from_be_bytes: fn([u8; 32]) -> Option<T>,
+    name: &str,
+) -> Result<T, String> {
+    from_be_bytes(parse_decimal_be_32(body)?).ok_or_else(|| format!("{name} out of range: {body}"))
 }
 
 /// Parse a decimal string below 2^256 into 32 big-endian bytes.

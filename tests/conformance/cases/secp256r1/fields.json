@@ -1,0 +1,74 @@
+{
+  "fixture": "secp256r1",
+  "constructor": { "args": [] },
+  "steps": [
+    {
+      "circuit": "base_ops",
+      "args": [
+        { "secp256r1Base": "115792089210356248762697446949407573530086143415290314195533631308867097853950" },
+        { "secp256r1Base": "2" }
+      ]
+    },
+    {
+      "circuit": "base_ops",
+      "args": [{ "secp256r1Base": "0" }, { "secp256r1Base": "1" }]
+    },
+    {
+      "circuit": "base_ops",
+      "args": [
+        { "secp256r1Base": "115792089210356248762697446949407573530086143415211086033019366971273553903615" },
+        { "secp256r1Base": "115792089210356248762697446949407573530086143415211086033019366971273553903615" }
+      ]
+    },
+    {
+      "circuit": "base_ops",
+      "args": [{ "secp256r1Base": "1" }, { "secp256r1Base": "0" }],
+      "error": "secp256r1 base field has no inverse for 0"
+    },
+    {
+      "circuit": "scalar_ops",
+      "args": [
+        { "secp256r1Scalar": "115792089210356248762697446949407573529996955224135760342422259061068512044368" },
+        { "secp256r1Scalar": "12345" }
+      ],
+      "witnesses": { "secret_scalar": [{ "secp256r1Scalar": "98765432109876543210" }] }
+    },
+    {
+      "circuit": "scalar_ops",
+      "args": [
+        { "secp256r1Scalar": "115792089210356248762697446949407573529996955224135760342422177075539295557473" },
+        { "secp256r1Scalar": "115792089210356248762697446949407573529996955224135760342422259061068512044368" }
+      ],
+      "witnesses": {
+        "secret_scalar": [
+          { "secp256r1Scalar": "115792089210356248762697446949407573529996955224135760342422177075539295557473" }
+        ]
+      }
+    },
+    {
+      "circuit": "scalar_ops",
+      "args": [{ "secp256r1Scalar": "0" }, { "secp256r1Scalar": "1" }],
+      "witnesses": { "secret_scalar": [{ "secp256r1Scalar": "1" }] }
+    },
+    {
+      "circuit": "scalar_ops",
+      "args": [{ "secp256r1Scalar": "1" }, { "secp256r1Scalar": "0" }],
+      "witnesses": { "secret_scalar": [{ "secp256r1Scalar": "1" }] },
+      "error": "secp256r1 scalar field has no inverse for 0"
+    },
+    {
+      "circuit": "casts",
+      "args": [
+        { "bytes": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" },
+        { "secp256r1Base": "115792089210356248762697446949407573530086143415290314195533631308867097853950" }
+      ]
+    },
+    {
+      "circuit": "casts",
+      "args": [
+        { "bytes": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" },
+        { "secp256r1Base": "1" }
+      ]
+    }
+  ]
+}

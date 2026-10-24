@@ -16,7 +16,21 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
         Type::Field(FieldType::Scalar(Curve::Secp256k1)) => {
             quote! { midnight_contract::runtime::Secp256k1Scalar }
         }
-        Type::Field(_) => quote! { TransientFr },
+        Type::Field(FieldType::Base(Curve::Secp256r1)) => {
+            quote! { midnight_contract::runtime::Secp256r1Base }
+        }
+        Type::Field(FieldType::Scalar(Curve::Secp256r1)) => {
+            quote! { midnight_contract::runtime::Secp256r1Scalar }
+        }
+        Type::Field(FieldType::Base(Curve::Curve25519)) => {
+            quote! { midnight_contract::runtime::Curve25519Base }
+        }
+        Type::Field(FieldType::Scalar(Curve::Curve25519)) => {
+            quote! { midnight_contract::runtime::Curve25519Scalar }
+        }
+        Type::Field(
+            FieldType::Native | FieldType::Base(Curve::Jubjub) | FieldType::Scalar(Curve::Jubjub),
+        ) => quote! { TransientFr },
         Type::Unsigned(maxval) => uint_tokens(maxval),
         Type::Bytes(length) => {
             let length = Lit(*length as usize);
@@ -61,6 +75,8 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
         // bindings already used for a Jubjub point.
         Type::Point(Curve::Jubjub) => opaque_tokens("JubjubPoint"),
         Type::Point(Curve::Secp256k1) => quote! { midnight_contract::runtime::Secp256k1Point },
+        Type::Point(Curve::Secp256r1) => quote! { midnight_contract::runtime::Secp256r1Point },
+        Type::Point(Curve::Curve25519) => quote! { midnight_contract::runtime::Curve25519Point },
         Type::Opaque(name) => opaque_tokens(name),
         Type::Contract { .. } => type_to_tokens(&Type::contract_address()),
         // Rejected at load by `artifact::check_type`; unreachable here.

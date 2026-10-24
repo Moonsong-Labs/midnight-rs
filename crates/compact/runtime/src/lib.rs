@@ -12,8 +12,8 @@ mod built_ins;
 mod compact_types;
 mod conversions;
 mod error;
+mod foreign;
 mod result;
-mod secp256k1;
 mod standard_library;
 mod value;
 mod witness;
@@ -29,8 +29,11 @@ pub use conversions::{
     aligned_atom_to_u128, value_to_embedded_group, value_to_fr, value_to_hash_output, value_to_u128,
 };
 pub use error::InterpreterError;
+pub use foreign::{
+    ArithOp, Curve25519Base, Curve25519Point, Curve25519Scalar, ForeignField, Secp256k1Base,
+    Secp256k1Point, Secp256k1Scalar, Secp256r1Base, Secp256r1Point, Secp256r1Scalar,
+};
 pub use result::ExecutionResult;
-pub use secp256k1::{ArithOp, ForeignField, Secp256k1Base, Secp256k1Point, Secp256k1Scalar};
 pub use standard_library::{Either, Maybe};
 pub use value::{Value, integer_fallback_aligned};
 pub use witness::{NoWitnesses, WitnessContext, WitnessOutcome, WitnessProvider};

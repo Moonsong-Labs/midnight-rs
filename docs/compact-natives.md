@@ -78,19 +78,19 @@ The compiler declares these natives only with `--feature-zkir-v3`. A contract co
 | Native | Symbols | Returns | Status |
 | --- | --- | --- | --- |
 | `sha512` | `sha512` | Bytes 64 | implemented (via `sha2::Sha512` over the `persistentHash` bytes, as ZKIR v3 does) |
-| `neg`, `inv` | `secp256k1{Base,Scalar}{Neg,Inv}` | the same field | implemented (`try_builtin`) |
-| `neg`, `inv` | `{secp256r1,curve25519}{Base,Scalar}{Neg,Inv}` | the same field | missing |
+| `neg`, `inv` | `{secp256k1,secp256r1,curve25519}{Base,Scalar}{Neg,Inv}` | the same field | implemented (`try_builtin`) |
 | `secp256k1PointX`, `secp256k1PointY` | the same | Secp256k1Base | implemented |
-| `secp256r1PointX`, `secp256r1PointY` | the same | Secp256r1Base | missing |
-| `curve25519PointX`, `curve25519PointY` | the same | Curve25519Base | missing |
-| `ecAdd`, `ecMul`, `ecMulGenerator` | `secp256k1{Add,Mul,MulGenerator}` | Secp256k1Point | implemented |
-| `ecAdd`, `ecMul`, `ecMulGenerator` | `{secp256r1,curve25519}{Add,Mul,MulGenerator}` | the curve's point | missing |
+| `secp256r1PointX`, `secp256r1PointY` | the same | Secp256r1Base | implemented |
+| `curve25519PointX`, `curve25519PointY` | the same | Curve25519Base | implemented |
+| `ecAdd`, `ecMul`, `ecMulGenerator` | `{secp256k1,secp256r1,curve25519}{Add,Mul,MulGenerator}` | the curve's point | implemented |
 
-The secp256k1 natives compute with the `k256` module of `midnight-curves`, as ZKIR v3 does. The interpreter holds a secp256k1 value as an `AlignedValue` in the encoding that the compiler gives it. `compact_runtime::{Secp256k1Base, Secp256k1Scalar, Secp256k1Point}` own that encoding. The `+`, `-` and `*` of a secp256k1 field are not natives: the IR types the operation with the field, and the interpreter computes it in that field. They match the `secp256k1BaseAdd` family of the TypeScript runtime.
+The interpreter implements every native of `zkir-v3-natives.ss`.
 
-A conditional gives `inv`, `secp256k1PointX` and `secp256k1PointY` no protection at proving time. The interpreter and the TypeScript runtime compute only the branch taken, but ZKIR v3 computes both branches and then selects one. So `b ? inv(x) : y` runs off-chain with `b` false and `x` zero, and the prover then fails on the inverse of zero. The same applies to the coordinates of the identity. A guarded-off witness or ledger read of a `Secp256k1Point` is the identity in ZKIR v3. So a coordinate of it fails at the prover each time the branch is not taken. Give these natives an argument that is valid on both branches.
+The foreign-curve natives compute with the `k256`, `p256` and `curve25519` modules of `midnight-curves`, as ZKIR v3 does. The interpreter holds a foreign field element or point as an `AlignedValue` in the encoding that the compiler gives it. The value types in `compact_runtime` own that encoding: `Secp256k1Base`, `Secp256r1Point`, `Curve25519Scalar` and the others, one for each native type. The `+`, `-` and `*` of a foreign field are not natives: the IR types the operation with the field, and the interpreter computes it in that field. They match the `secp256k1BaseAdd` family of the TypeScript runtime.
 
-The missing natives need secp256r1 and Curve25519 values, and the analyzed-IR parser knows neither type.
+A Curve25519 point is a point of the prime-order subgroup in the twisted Edwards form of Ed25519, as `Curve25519Subgroup` in ZKIR v3 is. Its identity is the affine point (0, 1), so `curve25519PointX` and `curve25519PointY` give a value for every point. The identity of secp256k1 and secp256r1 has no affine coordinates, so their coordinate natives fail on it.
+
+A conditional gives `inv` and the coordinate natives of secp256k1 and secp256r1 no protection at proving time. The interpreter and the TypeScript runtime compute only the branch taken, but ZKIR v3 computes both branches and then selects one. So `b ? inv(x) : y` runs off-chain with `b` false and `x` zero, and the prover then fails on the inverse of zero. The same applies to the coordinates of the identity. A guarded-off witness or ledger read of a `Secp256k1Point` or a `Secp256r1Point` is the identity in ZKIR v3. So a coordinate of it fails at the prover each time the branch is not taken. Give these natives an argument that is valid on both branches.
 
 ### Interpreter intrinsics outside the native table
 

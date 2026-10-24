@@ -313,7 +313,7 @@ fn check_type(ty: &Type) -> Result<(), InterpreterError> {
         .map_or(Ok(()), |what| Err(InterpreterError::Unsupported(what)))
 }
 
-/// Refuse a cast between a secp256k1 field and `Field` or a `Uint`, which the
+/// Refuse a cast between a foreign field and `Field` or a `Uint`, which the
 /// compiler never emits. The native cast would read the foreign encoding as a
 /// native field element.
 fn refuse_foreign_cast(field: &ir::FieldType) -> Result<(), InterpreterError> {
@@ -1104,7 +1104,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
 /// its source location.
 fn eval_cast(val: Value, from: &Type, to: &Type) -> Result<Value, InterpreterError> {
     match to.resolved() {
-        // A secp256k1 field takes its only cast, from bytes, modulo its order,
+        // A foreign field takes its only cast, from bytes, modulo its order,
         // where `Field` refuses a value at or above its own.
         Type::Field(field) if let Some(foreign) = ForeignField::of(field) => {
             let Type::Bytes(length) = from.resolved() else {
@@ -1679,7 +1679,7 @@ fn eval_equal(
 
 /// Evaluate `left <op> right` at `ty`, the type of the result.
 ///
-/// A secp256k1 field result computes in that field. A `Field` result computes
+/// A foreign field result computes in that field. A `Field` result computes
 /// in `Fr`, as compactc's TS does, so it wraps at the field modulus. A `Uint`
 /// result is exact. compactc gives it a bound that holds every result, and
 /// asserts before a subtraction that the result is not negative. So an exact
@@ -2673,31 +2673,10 @@ mod tests {
             "transientHash",
             "upgradeFromTransient",
         ];
-        // Natives with no implementation yet: the secp256r1 and Curve25519
-        // natives of the ZKIR v3 table, whose types the analyzed-IR parser
-        // does not know. The witness natives are not here: `WitnessNative`
-        // dispatches each of them, so they count as handled. See
-        // docs/compact-natives.md.
-        const KNOWN_UNIMPLEMENTED: &[&str] = &[
-            "curve25519Add",
-            "curve25519BaseInv",
-            "curve25519BaseNeg",
-            "curve25519Mul",
-            "curve25519MulGenerator",
-            "curve25519PointX",
-            "curve25519PointY",
-            "curve25519ScalarInv",
-            "curve25519ScalarNeg",
-            "secp256r1Add",
-            "secp256r1BaseInv",
-            "secp256r1BaseNeg",
-            "secp256r1Mul",
-            "secp256r1MulGenerator",
-            "secp256r1PointX",
-            "secp256r1PointY",
-            "secp256r1ScalarInv",
-            "secp256r1ScalarNeg",
-        ];
+        // Natives with no implementation yet. The witness natives are not
+        // here: `WitnessNative` dispatches each of them, so they count as
+        // handled. See docs/compact-natives.md.
+        const KNOWN_UNIMPLEMENTED: &[&str] = &[];
 
         for &name in COMPACT_NATIVES {
             let handled =

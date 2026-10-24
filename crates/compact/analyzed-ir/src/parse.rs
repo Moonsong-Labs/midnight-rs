@@ -94,6 +94,8 @@ fn curve(s: &Sexp) -> R<Curve> {
     match s.head() {
         Some("curve-jubjub") => Ok(Curve::Jubjub),
         Some("curve-secp256k1") => Ok(Curve::Secp256k1),
+        Some("curve-secp256r1") => Ok(Curve::Secp256r1),
+        Some("curve-curve25519") => Ok(Curve::Curve25519),
         _ => err("curve", s),
     }
 }

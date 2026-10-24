@@ -84,12 +84,14 @@ CODEGEN_FIXTURES := gateway many-fields mint-probe pairs results struct-shapes z
 # executors read different compiler outputs of a fixture: the Rust IR
 # interpreter reads `compiler/analyzed-ir.sexp`, and the ts-driver runs
 # `contract/index.js` against the canonical @midnight-ntwrk/compact-runtime.
-CONFORMANCE_FIXTURES := bboard containers counter defaults events indexing keccak kernel loops ops \
-                        peers scopes secp256k1 sha512 shadowing slices structs tiny trees vectors
+CONFORMANCE_FIXTURES := bboard containers counter curve25519 defaults events indexing keccak kernel \
+                        loops ops peers scopes secp256k1 secp256r1 sha512 shadowing slices structs \
+                        tiny trees vectors
 # The fixtures that compile for ZKIR v3. Without the flag, the compiler declares
-# no sha512 and no secp256k1 types. Its ZKIR v2 backend also rejects keccak256
-# in a circuit that needs a proof, and the driver runs only such circuits.
-CONFORMANCE_ZKIR_V3_FIXTURES := keccak secp256k1 sha512
+# no sha512 and no foreign-curve types. Its ZKIR v2 backend also rejects
+# keccak256 in a circuit that needs a proof, and the driver runs only such
+# circuits.
+CONFORMANCE_ZKIR_V3_FIXTURES := curve25519 keccak secp256k1 secp256r1 sha512
 CONFORMANCE_DIR := tests/conformance
 # The runtime tarball the driver installs, which `vendor-compact-runtime` builds
 # from COMPACT_REV, and the file that names the revision it came from. The name

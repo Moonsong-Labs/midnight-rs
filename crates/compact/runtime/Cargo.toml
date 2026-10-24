@@ -13,6 +13,7 @@ midnight-onchain-runtime = { workspace = true }
 midnight-base-crypto = { workspace = true }
 midnight-transient-crypto = { workspace = true }
 midnight-curves = { workspace = true }
+midnight-circuits = { workspace = true }
 compact-codegen = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }

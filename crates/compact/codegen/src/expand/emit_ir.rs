@@ -171,6 +171,8 @@ fn curve(c: &Curve) -> TokenStream {
     match c {
         Curve::Jubjub => quote! { __ir::Curve::Jubjub },
         Curve::Secp256k1 => quote! { __ir::Curve::Secp256k1 },
+        Curve::Secp256r1 => quote! { __ir::Curve::Secp256r1 },
+        Curve::Curve25519 => quote! { __ir::Curve::Curve25519 },
     }
 }
 

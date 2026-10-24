@@ -1,0 +1,47 @@
+// Conformance corpus contract: the Curve25519 field arithmetic, the casts
+// between its fields and bytes, its curve natives, and the Ed25519 signature
+// check of the standard library. A ledger cell of each type pins the encoding
+// in the state, and every circuit writes one, because the driver runs only
+// circuits that need a proof. The Makefile compiles this fixture for ZKIR v3
+// (CONFORMANCE_ZKIR_V3_FIXTURES).
+
+import CompactStandardLibrary;
+
+export ledger base_cell: Curve25519Base;
+export ledger scalar_cell: Curve25519Scalar;
+export ledger point_cell: Curve25519Point;
+export ledger verified: Boolean;
+
+witness secret_scalar(): Curve25519Scalar;
+
+export circuit base_ops(a: Curve25519Base, b: Curve25519Base): Vector<5, Curve25519Base> {
+  const sum = a + b;
+  base_cell = disclose(sum);
+  return disclose([sum, a - b, a * b, neg(a), inv(b)]);
+}
+
+export circuit scalar_ops(a: Curve25519Scalar, b: Curve25519Scalar): Vector<5, Curve25519Scalar> {
+  const k = secret_scalar();
+  scalar_cell = disclose(a * k);
+  return disclose([a + b, a - b, a * b, neg(a), inv(b)]);
+}
+
+// No default<Curve25519*> in a circuit: the ZKIR v3 backend of the compiler
+// does not implement it (`(assert not-implemented)` in reduce-to-zkir.ss).
+export circuit curve_ops(p: Curve25519Point, k: Curve25519Scalar): [Curve25519Base, Curve25519Base, Boolean] {
+  const q = ecAdd(ecMulGenerator(k), ecMul(p, k));
+  point_cell = disclose(q);
+  return disclose([curve25519PointX(q), curve25519PointY(q), q == p]);
+}
+
+export circuit casts(b: Bytes<32>, x: Curve25519Base, w: Bytes<64>): [Curve25519Scalar, Curve25519Base, Bytes<32>, Curve25519Scalar] {
+  const s = b as Curve25519Scalar;
+  scalar_cell = disclose(s);
+  return disclose([s, b as Curve25519Base, x as Bytes<32>, w as Curve25519Scalar]);
+}
+
+export circuit verify(msg: Bytes<1>, sig: Ed25519Signature, pk: Curve25519Point): Boolean {
+  const valid = disclose(ed25519Verify<1>(msg, sig, pk));
+  verified = valid;
+  return valid;
+}
