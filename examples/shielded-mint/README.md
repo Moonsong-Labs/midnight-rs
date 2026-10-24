@@ -29,7 +29,7 @@ A shielded coin is owned by a **coin public key** and discovered through an **en
 
 ## Run
 
-Start the devnet (node + indexer) from the repository root:
+Start the devnet (node, indexer and proof server) from the repository root:
 
 ```bash
 make dev-up   # from the repo root

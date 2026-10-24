@@ -36,3 +36,11 @@ services:
     depends_on:
       node:
         condition: service_healthy
+
+  proof-server:
+    container_name: midnight-example-proof-server-l9
+    # The proof server of crate-ledger-9.1.0.0-rc.5, the ledger 9 that the SDK
+    # links.
+    image: "midnightntwrk/proof-server:9.0.0-rc.7"
+    ports:
+      - "6300:6300"

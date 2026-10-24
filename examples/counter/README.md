@@ -26,7 +26,7 @@ Each circuit wraps its return value in `disclose(...)`, so the value can leave t
 
 ## Run
 
-Start the devnet (node + indexer) from the repository root:
+Start the devnet (node, indexer and proof server) from the repository root:
 
 ```bash
 make dev-up   # from the repo root
