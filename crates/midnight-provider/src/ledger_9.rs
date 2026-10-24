@@ -38,6 +38,6 @@ impl helpers::transient_crypto::proofs::ProvingProvider for proving::ProofServer
     // Ledger 9's trait also hands out the resolver its proving looks keys up
     // in. Ledger 8's has no such method.
     fn resolver(&self) -> &impl helpers::ResolverTrait {
-        self.resolver
+        self.server.resolver
     }
 }

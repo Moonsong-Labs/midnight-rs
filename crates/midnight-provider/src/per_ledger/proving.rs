@@ -7,15 +7,14 @@ use std::time::Instant;
 use async_trait::async_trait;
 use tracing::{info, warn};
 
-use super::helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+use super::helpers::midnight_serialize::tagged_deserialize;
 use super::helpers::mn_ledger::error::TransactionProvingError;
 use super::helpers::mn_ledger::structure::{ProofPreimageVersioned, ProofVersioned};
 use super::helpers::transient_crypto::curve::Fr;
-use super::helpers::transient_crypto::proofs::{
-    KeyLocation, Proof, ProofPreimage, Resolver as ResolverTrait, WrappedIr,
-};
+use super::helpers::transient_crypto::proofs::{Proof, ProofPreimage};
 use super::helpers::{
-    CostModel, DB, ProofProvider, ProvenTransaction, Resolver, StdRng, UnprovenTransaction,
+    CostModel, DB, ProofProvider, ProofServerProvider, ProvenTransaction, Resolver, StdRng,
+    UnprovenTransaction,
 };
 use crate::remote_prover::{
     INITIAL_BACKOFF, MAX_BACKOFF, PROOF_SERVER_TIMEOUT, ProofServerError, RemoteProofServer,
@@ -92,8 +91,10 @@ async fn prove_with_retries<D: DB + Clone>(
     let mut delay = INITIAL_BACKOFF;
     loop {
         let client = ProofServerClient {
-            base_url: base_url.clone(),
-            resolver,
+            server: ProofServerProvider {
+                base_url: base_url.clone(),
+                resolver,
+            },
             http: http.clone(),
         };
         match tx.clone().prove(client, &cost_model).await {
@@ -123,69 +124,12 @@ async fn prove_with_retries<D: DB + Clone>(
 }
 
 /// One-shot `ProvingProvider` that speaks the proof server's `/check` and
-/// `/prove` HTTP protocol. Holds a borrow of the [`Resolver`] so it can attach
-/// each circuit's IR to requests for non-builtin keys.
+/// `/prove` HTTP protocol. The ledger's `ProofServerProvider` builds each
+/// request body, and this client sends it.
 #[derive(Clone)]
 pub(super) struct ProofServerClient<'a> {
-    base_url: String,
-    pub(super) resolver: &'a Resolver,
+    pub(super) server: ProofServerProvider<'a>,
     http: reqwest::Client,
-}
-
-impl ProofServerClient<'_> {
-    /// Keys the proof server already has built in: no circuit IR is sent for
-    /// these, the server resolves them itself.
-    fn is_builtin_key(loc: &KeyLocation) -> bool {
-        [
-            "midnight/zswap/spend",
-            "midnight/zswap/output",
-            "midnight/zswap/sign",
-            "midnight/dust/spend",
-        ]
-        .contains(&loc.0.as_ref())
-    }
-
-    /// Serialize the `/check` request body: the preimage, plus the circuit's IR
-    /// for non-builtin keys.
-    async fn check_request_body(
-        &self,
-        preimage: &ProofPreimageVersioned,
-    ) -> Result<Vec<u8>, anyhow::Error> {
-        let ir = if Self::is_builtin_key(preimage.key_location()) {
-            None
-        } else {
-            let data = self
-                .resolver
-                .resolve_key(preimage.key_location().clone())
-                .await?
-                .ok_or_else(|| {
-                    ProofServerError::MissingKey(preimage.key_location().0.to_string())
-                })?;
-            Some(WrappedIr(data.ir_source))
-        };
-        let mut res = Vec::new();
-        tagged_serialize(&(preimage.clone(), ir), &mut res)?;
-        Ok(res)
-    }
-
-    /// Serialize the `/prove` request body: the preimage, the resolved key
-    /// material for non-builtin keys, and the optional binding-input override.
-    async fn proving_request_body(
-        &self,
-        preimage: &ProofPreimageVersioned,
-        overwrite_binding_input: Option<Fr>,
-    ) -> Result<Vec<u8>, anyhow::Error> {
-        let data = if Self::is_builtin_key(preimage.key_location()) {
-            None
-        } else {
-            self.resolver
-                .resolve_key(preimage.key_location().clone())
-                .await?
-        };
-        let mut res = Vec::new();
-        tagged_serialize(&(preimage.clone(), data, overwrite_binding_input), &mut res)?;
-        Ok(res)
-    }
 }
 
 impl ProofServerClient<'_> {
@@ -195,9 +139,10 @@ impl ProofServerClient<'_> {
         preimage: &ProofPreimage,
     ) -> Result<Vec<Option<usize>>, anyhow::Error> {
         let ser = self
+            .server
             .check_request_body(&ProofPreimageVersioned::V2(Arc::new(preimage.clone())))
             .await?;
-        let bytes = post(&self.http, &self.base_url, "/check", ser).await?;
+        let bytes = post(&self.http, &self.server.base_url, "/check", ser).await?;
         let res: Vec<Option<u64>> = tagged_deserialize(bytes.as_slice())?;
         Ok(res.into_iter().map(|i| i.map(|i| i as usize)).collect())
     }
@@ -209,12 +154,13 @@ impl ProofServerClient<'_> {
         overwrite_binding_input: Option<Fr>,
     ) -> Result<Proof, anyhow::Error> {
         let ser = self
+            .server
             .proving_request_body(
                 &ProofPreimageVersioned::V2(Arc::new(preimage.clone())),
                 overwrite_binding_input,
             )
             .await?;
-        let bytes = post(&self.http, &self.base_url, "/prove", ser).await?;
+        let bytes = post(&self.http, &self.server.base_url, "/prove", ser).await?;
         let proof: ProofVersioned = tagged_deserialize(bytes.as_slice())?;
         match proof {
             ProofVersioned::V2(proof) => Ok(proof),
