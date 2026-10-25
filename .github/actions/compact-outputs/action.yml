@@ -8,7 +8,7 @@ description: >-
 runs:
   using: composite
   steps:
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v7
       with:
         name: compact-outputs
         path: .
