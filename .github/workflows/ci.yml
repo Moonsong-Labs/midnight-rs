@@ -26,13 +26,14 @@ jobs:
     name: Compile the Compact sources
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # No npm cache: from a cache, `npm ci` installs the runtime that the
       # lockfile names, not the tarball that `make goldens` builds, and skips
       # its integrity check.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
+          package-manager-cache: false
       - run: make check-natives
       - run: make compile-contracts fixtures goldens
       # The artifact keeps each path below the repository root, and the
@@ -40,7 +41,7 @@ jobs:
       # allows a re-run, because a re-run of a failed job downloads it again.
       # A re-run of this job replaces it. The fingerprint files go with it, so
       # the make targets of the other jobs find every output up to date.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: compact-outputs
           path: |
@@ -60,7 +61,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -70,7 +71,7 @@ jobs:
     name: Workspace Inheritance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: RomarQ/cargo-workspace-inheritance-check@v1
         with:
           promotion-threshold: 1
@@ -81,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [compact]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/compact-outputs
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -98,7 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [compact]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/compact-outputs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -111,7 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [compact]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/compact-outputs
       - uses: ./.github/actions/free-disk-space
       - uses: dtolnay/rust-toolchain@stable
@@ -126,7 +127,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [compact]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/compact-outputs
       - uses: ./.github/actions/free-disk-space
       - uses: dtolnay/rust-toolchain@stable
@@ -142,7 +143,7 @@ jobs:
     runs-on: macos-latest
     needs: [compact]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/compact-outputs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -153,7 +154,7 @@ jobs:
     name: Cargo audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
@@ -173,7 +174,7 @@ jobs:
     env:
       DEVNET_LEDGER: ${{ matrix.ledger }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/compact-outputs
 
       # rust-lld bus-errors on ubuntu-latest when target/ + container data fill
