@@ -18,7 +18,9 @@ use midnight_base_crypto::fab::{
 };
 use midnight_circuits::CircuitField;
 use midnight_curves::{curve25519, k256, p256};
-use num_bigint::BigUint;
+use midnight_transient_crypto::curve::Fr;
+use midnight_zkir_v3::ir_instructions::encode::{decode_offcircuit, encode_offcircuit};
+use midnight_zkir_v3::ir_types::{IrType, IrValue};
 
 use super::CompactValue;
 
@@ -27,7 +29,9 @@ use super::CompactValue;
 const ENCODED_BITS: usize = 256;
 
 /// A prime field that Compact emulates, and where its encoding splits.
-pub(crate) trait Emulated: CircuitField<Bytes = [u8; 32]> {
+pub(crate) trait Emulated:
+    CircuitField<Bytes = [u8; 32]> + Into<IrValue> + TryFrom<IrValue>
+{
     /// The number of low bits that the first atom holds.
     const LOW_BITS: usize;
 }
@@ -64,6 +68,9 @@ pub(crate) trait FieldValue:
 {
     /// The field that the type computes in.
     type Field: Emulated;
+
+    /// The ZKIR v3 type of the field.
+    const IR_TYPE: IrType;
 }
 
 /// Declares the Rust image of a Compact foreign field type: a newtype over the
@@ -93,6 +100,7 @@ macro_rules! foreign_field {
 
         impl FieldValue for $name {
             type Field = $field;
+            const IR_TYPE: IrType = IrType::$name;
         }
 
         impl From<$field> for $name {
@@ -127,7 +135,7 @@ macro_rules! foreign_field {
 
         impl From<$name> for Value {
             fn from(value: $name) -> Value {
-                Value(encode_field(value.0).to_vec())
+                Value(to_atoms(value.0))
             }
         }
 
@@ -135,7 +143,7 @@ macro_rules! foreign_field {
             type Error = InvalidBuiltinDecode;
 
             fn try_from(value: &ValueSlice) -> Result<Self, InvalidBuiltinDecode> {
-                decode_field(&value.0)
+                from_atoms(&value.0, &Self::IR_TYPE)
                     .map(Self)
                     .ok_or(InvalidBuiltinDecode(stringify!($name)))
             }
@@ -228,93 +236,24 @@ pub(super) fn field_alignment<F: Emulated>() -> Alignment {
     Alignment(vec![atom(low_bytes::<F>()), atom(high_bytes::<F>())])
 }
 
-/// The two atoms of `value`.
-pub(super) fn encode_field<F: Emulated>(value: F) -> [ValueAtom; 2] {
-    split::<F>((value - F::ONE).to_biguint())
+/// The atoms of `value` in the public-input encoding of ZKIR v3, one atom per
+/// native field element.
+pub(super) fn to_atoms(value: impl Into<IrValue>) -> Vec<ValueAtom> {
+    encode_offcircuit(&value.into())
+        .into_iter()
+        .map(|field| {
+            ValueAtom::from(Fr::try_from(field).expect("ZKIR v3 encodes as native field elements"))
+        })
+        .collect()
 }
 
-/// The low and the high atom of `shifted`, the integer `v - 1`.
-fn split<F: Emulated>(shifted: BigUint) -> [ValueAtom; 2] {
-    let low_mask = (BigUint::from(1u8) << F::LOW_BITS) - 1u8;
-    let atom = |n: BigUint| ValueAtom(n.to_bytes_le()).normalize();
-    [atom(&shifted & low_mask), atom(shifted >> F::LOW_BITS)]
-}
-
-/// The field element of `atoms`, or `None` if they are not two atoms in the
-/// encoding of an element.
-pub(super) fn decode_field<F: Emulated>(atoms: &[ValueAtom]) -> Option<F> {
-    let [low, high] = atoms else {
-        return None;
-    };
-    if low.0.len() > low_bytes::<F>() || high.0.len() > high_bytes::<F>() {
-        return None;
-    }
-    let low = BigUint::from_bytes_le(&low.0);
-    if low.bits() > F::LOW_BITS as u64 {
-        return None;
-    }
-    let shifted = (BigUint::from_bytes_le(&high.0) << F::LOW_BITS) | low;
-    Some(F::from_biguint(&shifted)? + F::ONE)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use midnight_curves::pairing::group::ff::{Field, PrimeField};
-    use midnight_zkir_v3::ir_types::IrValue;
-
-    use crate::foreign::test_support::{atoms_as_fields, decode_fields, ir_fields};
-
-    /// `T` encodes a fixed set of elements as ZKIR v3 encodes `ir(value)`,
-    /// and decodes that encoding back to the element.
-    fn takes_the_provers_encoding<T: FieldValue + PartialEq + fmt::Debug>(
-        ir: impl Fn(T::Field) -> IrValue,
-    ) {
-        let one = T::Field::ONE;
-        let wide = T::Field::from_u128(u128::MAX).square();
-        for v in [T::Field::ZERO, one, -one, wide, -wide] {
-            let expected = ir_fields(&ir(v));
-            assert_eq!(atoms_as_fields(T::from(v)), expected, "{}", T::NAME);
-            assert_eq!(decode_fields::<T>(&expected), T::from(v), "{}", T::NAME);
-        }
-    }
-
-    #[test]
-    fn field_elements_take_the_provers_encoding() {
-        takes_the_provers_encoding::<Secp256k1Base>(IrValue::Secp256k1Base);
-        takes_the_provers_encoding::<Secp256k1Scalar>(IrValue::Secp256k1Scalar);
-        takes_the_provers_encoding::<Secp256r1Base>(IrValue::Secp256r1Base);
-        takes_the_provers_encoding::<Secp256r1Scalar>(IrValue::Secp256r1Scalar);
-        takes_the_provers_encoding::<Curve25519Base>(IrValue::Curve25519Base);
-        takes_the_provers_encoding::<Curve25519Scalar>(IrValue::Curve25519Scalar);
-    }
-
-    /// The low atom of a `Curve25519Scalar` has room for 208 bits, but holds
-    /// 204. A set bit above them is an encoding that the prover and the TS
-    /// runtime refuse. Without a check, it decodes as 2^204 + 1.
-    #[test]
-    fn a_low_atom_wider_than_its_bits_does_not_decode() {
-        let mut low = vec![0u8; 26];
-        low[25] = 0x10;
-        let value = Value(vec![ValueAtom(low), ValueAtom(Vec::new())]);
-        assert!(Curve25519Scalar::try_from(&*value).is_err());
-    }
-
-    fn the_order_does_not_decode<T: FieldValue>() {
-        let value = Value(split::<T::Field>(T::Field::modulus()).to_vec());
-        assert!(T::try_from(&*value).is_err(), "{}", T::NAME);
-    }
-
-    /// The atoms of the field order are no encoding: the prover and the TS
-    /// runtime refuse them. A decode that reduces modulo the order, as a cast
-    /// from bytes does, reads them as one.
-    #[test]
-    fn an_encoding_at_the_order_does_not_decode() {
-        the_order_does_not_decode::<Secp256k1Base>();
-        the_order_does_not_decode::<Secp256k1Scalar>();
-        the_order_does_not_decode::<Secp256r1Base>();
-        the_order_does_not_decode::<Secp256r1Scalar>();
-        the_order_does_not_decode::<Curve25519Base>();
-        the_order_does_not_decode::<Curve25519Scalar>();
-    }
+/// The value of the ZKIR v3 type `ty` that `atoms` hold in its public-input
+/// encoding, or `None` if they are not that encoding of a value.
+pub(super) fn from_atoms<V: TryFrom<IrValue>>(atoms: &[ValueAtom], ty: &IrType) -> Option<V> {
+    let fields = atoms
+        .iter()
+        .map(Fr::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    V::try_from(decode_offcircuit(&fields, ty).ok()?).ok()
 }

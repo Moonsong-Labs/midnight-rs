@@ -19,6 +19,4 @@ hex = { workspace = true }
 sha2 = { workspace = true }
 sha3 = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
 midnight-zkir-v3 = { workspace = true }
