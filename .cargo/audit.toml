@@ -7,14 +7,9 @@ ignore = [
     # The fix is ruzstd 0.9.1, which no smoldot release requires. Remove this
     # entry when a subxt release depends on a smoldot that does.
     "RUSTSEC-2026-0344",
-    # crypto-bigint 0.5.5 comes only from elliptic-curve 0.13, which requires
-    # it. Only crypto-bigint 0.7.6 has the fix, and only elliptic-curve 0.14
-    # uses 0.7. midnight-curves, the ledger fork's base-crypto and
-    # transient-crypto, and bip32 0.5 hold the 0.13 line, and midnight-zk
-    # holds the 0.14 bumps for one coordinated migration. On secret values,
-    # these crates call no division, zero counting or Montgomery code of
-    # crypto-bigint. On x86_64, k256 scalar negation can show whether its
-    # operand is zero: keys and nonces never are, a circuit witness can be.
-    # Remove this entry when no crate depends on elliptic-curve 0.13.
+    # crypto-bigint 0.5.5 comes from elliptic-curve 0.13, which
+    # midnight-curves, the ledger fork and bip32 0.5 require. The fix is in
+    # crypto-bigint 0.7.6, which only elliptic-curve 0.14 uses. Remove this
+    # entry when no crate depends on elliptic-curve 0.13.
     "RUSTSEC-2026-0387",
 ]
