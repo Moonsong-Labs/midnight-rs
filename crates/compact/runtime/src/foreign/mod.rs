@@ -8,8 +8,9 @@
 //! and `convertBytesToField` in `casts.ts`.
 
 use midnight_circuits::CircuitField;
-use midnight_curves::pairing::group::ff::{Field, PrimeField};
+use midnight_curves::pairing::group::ff::Field;
 use midnight_typed_state::{Aligned, AlignedValue, InvalidBuiltinDecode, ValueSlice};
+use midnight_zkir_v3::ir_instructions::from_bytes::from_bytes_offcircuit;
 
 use compact_codegen::ir::{Curve, FieldType};
 use midnight_base_crypto::fab::Alignment;
@@ -167,7 +168,11 @@ fn to_le_bytes<T: FieldValue>(value: &Value) -> Result<[u8; 32], InterpreterErro
 }
 
 fn from_le_bytes<T: FieldValue>(bytes: &[u8]) -> Value {
-    Value::AlignedValue(T::from(reduce_le_bytes(bytes)).into())
+    let element = from_bytes_offcircuit(&T::IR_TYPE, bytes)
+        .ok()
+        .and_then(|value| T::Field::try_from(value).ok())
+        .expect("ZKIR v3 reduces any bytes to an element of a field");
+    Value::AlignedValue(T::from(element).into())
 }
 
 fn alignment<T: Aligned>() -> Alignment {
@@ -198,50 +203,60 @@ fn field<T: FieldValue>(value: &Value, what: &str) -> Result<T::Field, Interpret
     decode::<T>(value, what).map(Into::into)
 }
 
-fn reduce_le_bytes<F: PrimeField>(bytes: &[u8]) -> F {
-    let radix = F::from(256);
-    bytes
-        .iter()
-        .rev()
-        .fold(F::ZERO, |acc, &b| acc * radix + F::from(u64::from(b)))
-}
-
 #[cfg(test)]
-mod test_support {
-    use midnight_base_crypto::fab::{InvalidBuiltinDecode, Value, ValueAtom, ValueSlice};
-    use midnight_transient_crypto::curve::Fr;
-    use midnight_typed_state::AlignedValue;
-    use midnight_zkir_v3::ir_instructions::encode::encode_offcircuit;
-    use midnight_zkir_v3::ir_types::IrValue;
+mod tests {
+    use std::fmt::Debug;
 
-    /// The field elements the prover reads for `value`, one per atom.
-    pub(super) fn atoms_as_fields(value: impl Into<AlignedValue>) -> Vec<Fr> {
-        let av: AlignedValue = value.into();
-        av.value
-            .0
-            .iter()
-            .map(|atom| Fr::try_from(atom).expect("each atom is a field element"))
-            .collect()
+    use midnight_base_crypto::fab;
+    use midnight_curves::curve25519::Curve25519Subgroup;
+    use midnight_curves::k256::{K256, K256Affine};
+    use midnight_curves::p256::{P256, P256Affine};
+    use midnight_curves::pairing::group::Group;
+    use midnight_curves::pairing::group::ff::PrimeField;
+
+    use super::*;
+
+    /// `value` encodes in the Compact alignment of `T`, and decodes back.
+    fn round_trips<T>(value: T)
+    where
+        T: CompactValue + PartialEq + Debug,
+        fab::Value: From<T>,
+    {
+        let encoded = fab::Value::from(value);
+        assert!(T::alignment().fits(&encoded), "{value:?}");
+        assert_eq!(T::try_from(&*encoded), Ok(value));
     }
 
-    /// The field elements that ZKIR v3 encodes `value` as.
-    pub(super) fn ir_fields(value: &IrValue) -> Vec<Fr> {
-        encode_offcircuit(value)
-            .into_iter()
-            .map(|v| match v {
-                IrValue::Native(fr) => fr,
-                other => panic!("encode gives native values, got {other:?}"),
-            })
-            .collect()
+    fn field_round_trips<T>()
+    where
+        T: FieldValue + PartialEq + Debug,
+        fab::Value: From<T>,
+    {
+        // An element `v` encodes as `v - 1`. So zero fills the high atom, and
+        // 2^208 fills the low atom of every split.
+        round_trips(T::from(<T::Field as Field>::ZERO));
+        round_trips(T::from(T::Field::from_u128(1 << 104).square()));
     }
 
-    /// The `T` that the prover's `fields` encode.
-    pub(super) fn decode_fields<
-        T: for<'a> TryFrom<&'a ValueSlice, Error = InvalidBuiltinDecode>,
-    >(
-        fields: &[Fr],
-    ) -> T {
-        let value = Value(fields.iter().map(|f| ValueAtom::from(*f)).collect());
-        T::try_from(&value).expect("the prover's encoding decodes")
+    #[test]
+    fn values_encode_in_their_alignment_and_decode_back() {
+        field_round_trips::<Secp256k1Base>();
+        field_round_trips::<Secp256k1Scalar>();
+        field_round_trips::<Secp256r1Base>();
+        field_round_trips::<Secp256r1Scalar>();
+        field_round_trips::<Curve25519Base>();
+        field_round_trips::<Curve25519Scalar>();
+        for point in [K256::identity(), K256::generator()] {
+            round_trips(Secp256k1Point::from(K256Affine::from(point)));
+        }
+        for point in [P256::identity(), P256::generator()] {
+            round_trips(Secp256r1Point::from(P256Affine::from(point)));
+        }
+        for point in [
+            Curve25519Subgroup::identity(),
+            Curve25519Subgroup::generator(),
+        ] {
+            round_trips(Curve25519Point::from(point));
+        }
     }
 }
