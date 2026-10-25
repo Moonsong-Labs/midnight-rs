@@ -1,11 +1,9 @@
 [advisories]
 ignore = [
-    # ruzstd comes only through subxt's `light-client` feature
-    # (subxt-lightclient -> smoldot-light -> smoldot -> ruzstd). No workspace
-    # member enables that feature, so the crate is never compiled, but
-    # Cargo.lock lists every optional dependency, and cargo audit reads it.
-    # The fix is ruzstd 0.9.1, which no smoldot release requires. Remove this
-    # entry when a subxt release depends on a smoldot that does.
+    # ruzstd comes only through subxt's unused `light-client` feature, so it
+    # is never compiled, but cargo audit reads every optional dependency in
+    # Cargo.lock. The fix is in ruzstd 0.9.1. Remove this entry when subxt
+    # uses a smoldot release that requires it.
     "RUSTSEC-2026-0344",
     # crypto-bigint 0.5.5 comes from elliptic-curve 0.13, which
     # midnight-curves, the ledger fork and bip32 0.5 require. The fix is in
