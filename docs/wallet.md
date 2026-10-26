@@ -297,17 +297,19 @@ Persistence is not a one-shot at initial sync: every successful `resync_wallet` 
 ```rust
 let balance = provider.balance().await?;
 
-balance.shielded.coins;          // Vec<ShieldedCoinBalance { token_type, value }>
-balance.shielded.total_count;    // usize
-balance.shielded_value(token);   // u128, summed over the coins of one ShieldedTokenType
-balance.unshielded;              // Vec<UnshieldedUtxoInfo { token_type, value }>
-balance.unshielded_value(NIGHT); // u128, summed over the UTXOs of one UnshieldedTokenType
-balance.dust.spendable_utxos;    // usize: the Dust UTXOs no pending build reserves
-balance.dust.balance_speck;      // u128: all the Dust, reserved or not (1 DUST = 10^15 SPECK)
-balance.dust.spendable_speck;    // u128: the Dust a new build can draw on now
+balance.shielded.coins;                    // Vec<ShieldedCoinBalance { token_type, value, spendable }>
+balance.shielded.total_count;              // usize
+balance.shielded_value(token);             // u128, summed over the coins of one ShieldedTokenType
+balance.spendable_shielded_value(token);   // u128, the same sum over the spendable coins only
+balance.unshielded;                        // Vec<UnshieldedUtxoInfo { token_type, value, spendable }>
+balance.unshielded_value(NIGHT);           // u128, summed over the UTXOs of one UnshieldedTokenType
+balance.spendable_unshielded_value(NIGHT); // u128, the same sum over the spendable UTXOs only
+balance.dust.spendable_utxos;              // usize: the Dust UTXOs no pending build reserves
+balance.dust.balance_speck;                // u128: all the Dust, reserved or not (1 DUST = 10^15 SPECK)
+balance.dust.spendable_speck;              // u128: the Dust a new build can draw on now
 ```
 
-A build reserves the Dust UTXOs it spends. The reservation ends when a sync or resync sees the chain confirm the transaction. It also ends when a release hands the UTXOs back, or when its TTL ends (see [Pending reservations](#pending-reservations)). `spendable_utxos` and `spendable_speck` leave the reserved Dust out, and `balance_speck` counts it. So a wallet whose only Dust UTXO a pending build reserves reads a `spendable_speck` of 0 and a positive `balance_speck`.
+A build reserves the inputs it spends: shielded coins, unshielded UTXOs and Dust UTXOs. The reservation ends when a sync or resync sees the chain confirm the transaction. It also ends when a release hands the inputs back, or when its TTL ends (see [Pending reservations](#pending-reservations)). A reserved coin or UTXO reads `spendable: false`. `spendable_shielded_value` and `spendable_unshielded_value` leave it out, and `shielded_value` and `unshielded_value` count it. In the same way, `spendable_utxos` and `spendable_speck` leave the reserved Dust out, and `balance_speck` counts it. So a wallet whose only Dust UTXO a pending build reserves reads a `spendable_speck` of 0 and a positive `balance_speck`.
 
 `token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_core::wallet::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT. See [`tokens.md`](tokens.md) for the two-ledger model.
 
