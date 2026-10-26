@@ -797,7 +797,8 @@ impl MidnightProvider {
     /// - A wait on the [`PendingTx`] reads
     ///   [`SubmitError::Invalid`](crate::SubmitError::Invalid), the node's
     ///   definitive rejection. It arrives after this method returns, so the
-    ///   reservation travels with the handle.
+    ///   reservation travels with the handle. Under a Tokio runtime, the
+    ///   release runs to its end, even when the caller drops the wait future.
     ///
     /// Any other failure keeps the inputs reserved until their TTL passes,
     /// because the node can still hold the transaction. Use [`Self::submit`]
@@ -1403,7 +1404,7 @@ impl HeldInputs {
 ///
 /// Under a Tokio runtime the release runs as a task of its own, so a drop of
 /// this future cannot cut it short. With no runtime, it runs inline.
-async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
+pub(crate) async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
     if spent.is_empty() {
         return;
     }

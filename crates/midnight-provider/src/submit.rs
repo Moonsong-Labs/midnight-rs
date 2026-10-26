@@ -332,8 +332,8 @@ impl Reservation {
         Self { wallet, spent }
     }
 
-    async fn release(&self) {
-        self.wallet.release(&self.spent).await;
+    async fn release(self) {
+        crate::provider::hand_back(self.wallet, self.spent).await;
     }
 }
 
