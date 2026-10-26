@@ -797,8 +797,7 @@ impl MidnightProvider {
     /// - A wait on the [`PendingTx`] reads
     ///   [`SubmitError::Invalid`](crate::SubmitError::Invalid), the node's
     ///   definitive rejection. It arrives after this method returns, so the
-    ///   reservation travels with the handle. Under a Tokio runtime, the
-    ///   release runs to its end, even when the caller drops the wait future.
+    ///   reservation travels with the handle.
     ///
     /// Any other failure keeps the inputs reserved until their TTL passes,
     /// because the node can still hold the transaction. Use [`Self::submit`]

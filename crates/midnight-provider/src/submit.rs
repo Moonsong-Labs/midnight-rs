@@ -310,6 +310,12 @@ impl std::fmt::Display for Verdict {
 /// and asynchronously closes the subxt subscription. It does **not**
 /// retract the transaction from the mempool; the node keeps it queued
 /// until it lands in a block or is dropped by the node itself.
+///
+/// A wait that reads [`SubmitError::Invalid`] starts the release of the
+/// reserved inputs (see [`PreparedTx`]). Under a Tokio runtime, that release
+/// runs to its end, even when the caller drops the wait future during it. A
+/// drop before the wait reads `Invalid` leaves the inputs reserved until their
+/// TTL passes.
 pub struct PendingTx {
     progress: subxt::tx::TransactionProgress<subxt::SubstrateConfig, AtBlock>,
     reservation: Option<Reservation>,
