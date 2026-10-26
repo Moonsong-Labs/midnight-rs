@@ -223,19 +223,6 @@ pub(crate) async fn call_transaction(
             .map_err(|e| ContractError::Construction(format!("empty operation: {e}")))?,
     };
 
-    // 3b. Insert the contract into the context's ledger state so client-side
-    //     well_formed() validation can find it. The indexed wallet state doesn't
-    //     include deployed contracts.
-    {
-        let mut guard = context
-            .ledger_state
-            .lock()
-            .map_err(|_| ContractError::Construction("ledger_state lock poisoned".into()))?;
-        let mut ls = (**guard).clone();
-        ls.contract = ls.contract.insert(helper_addr, state_db.clone());
-        *guard = helpers::Sp::new(ls);
-    }
-
     // 4. The circuit's input and output. Witness private values become the
     //    prototype's private transcript outputs (the ZKIR's private inputs).
     //    Without these, proving a witness-using circuit fails with "ran out of
