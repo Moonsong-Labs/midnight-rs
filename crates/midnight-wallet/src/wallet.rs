@@ -8,9 +8,8 @@ use midnight_indexer_client::SubscriptionClient;
 use midnight_types::chain_pin::ChainPin;
 use midnight_types::hd::Seed;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, DustBalance, EncryptionPublicKey, LedgerVersion,
-    Network, ShieldedBalance, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    UnshieldedUtxoInfo, WalletBalance, WalletError,
+    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
+    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -203,33 +202,10 @@ impl Wallet {
         each!(&mut self.state, w => w.set_chain_pin(pin))
     }
 
-    /// Height of the latest block seen in an unshielded transaction event.
-    ///
-    /// This is NOT a general chain-sync cursor. It only advances when the
-    /// wallet's unshielded address appears in a transaction.
-    pub fn last_block_height(&self) -> i64 {
-        each!(&self.state, w => w.last_block_height())
-    }
-
-    /// Indexer id of the latest transaction the wallet applied.
-    pub fn last_tx_id(&self) -> Option<i64> {
-        each!(&self.state, w => w.last_tx_id())
-    }
-
-    /// Highest zswap event id the wallet applied.
-    pub fn zswap_event_id(&self) -> i64 {
-        each!(&self.state, w => w.zswap_event_id())
-    }
-
-    /// Highest dust event id the wallet applied.
-    pub fn dust_event_id(&self) -> i64 {
-        each!(&self.state, w => w.dust_event_id())
-    }
-
     /// How far the sync has reached, as one snapshot.
     ///
     /// The four cursors advance together during a sync, so reading them one
-    /// at a time can report a mixture of two syncs. Take them here instead.
+    /// at a time can report a mixture of two syncs.
     pub fn sync_cursors(&self) -> SyncCursors {
         each!(&self.state, w => w.sync_cursors())
     }
@@ -278,18 +254,6 @@ impl Wallet {
 
     pub fn balance(&self) -> WalletBalance {
         each!(&self.state, w => w.balance())
-    }
-
-    pub fn dust_balance(&self) -> DustBalance {
-        each!(&self.state, w => w.dust_balance())
-    }
-
-    pub fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
-        each!(&self.state, w => w.unshielded_balance())
-    }
-
-    pub fn shielded_balance(&self) -> ShieldedBalance {
-        each!(&self.state, w => w.shielded_balance())
     }
 
     /// Enumerate the wallet's spendable shielded coins, each with its full
@@ -389,7 +353,7 @@ impl Wallet {
                     network: w.network().clone(),
                     storage_dir: w.storage_dir().map(Path::to_path_buf),
                     chain_pin: w.chain_pin().cloned(),
-                    last_block_height: w.last_block_height(),
+                    last_block_height: w.sync_cursors().last_block_height,
                 },
             },
             State::Ledger9(w) => ResyncPlanKind::Ledger9(w.resync_plan()),
