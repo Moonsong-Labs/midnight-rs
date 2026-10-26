@@ -29,29 +29,32 @@ pub fn format_address(address: &ContractAddress) -> String {
 }
 
 /// A value usable as a contract address at the connect boundary
-/// ([`Contract::at`](crate::Contract::at)). Strings pass through unchanged and
-/// keep their lazy, parse-on-use semantics; a typed [`ContractAddress`] is
-/// formatted to the same canonical hex, so callers holding one never convert
-/// by hand.
+/// ([`Contract::at`](crate::Contract::at)).
+///
+/// A typed [`ContractAddress`], and a string that [`parse_address`] accepts,
+/// become the hex form of [`format_address`]: lower case, without `0x`. A
+/// deploy gives the address in the same form. A string that does not parse
+/// stays as given, and the first call that needs the address fails with
+/// [`ContractError::InvalidAddress`].
 pub trait IntoAddress {
     fn into_address_string(self) -> String;
 }
 
-impl IntoAddress for String {
+impl IntoAddress for &str {
     fn into_address_string(self) -> String {
-        self
+        parse_address(self).map_or_else(|_| self.to_owned(), |address| format_address(&address))
     }
 }
 
-impl IntoAddress for &str {
+impl IntoAddress for String {
     fn into_address_string(self) -> String {
-        self.to_string()
+        self.as_str().into_address_string()
     }
 }
 
 impl IntoAddress for &String {
     fn into_address_string(self) -> String {
-        self.clone()
+        self.as_str().into_address_string()
     }
 }
 
@@ -122,10 +125,19 @@ mod tests {
     }
 
     #[test]
-    fn into_address_strings_pass_through_unvalidated() {
+    fn into_address_keeps_unparseable_strings() {
         assert_eq!("addr1".into_address_string(), "addr1");
         assert_eq!(String::from("addr1").into_address_string(), "addr1");
         assert_eq!((&String::from("addr1")).into_address_string(), "addr1");
+    }
+
+    #[test]
+    fn into_address_canonicalizes_parseable_strings() {
+        let input = "0x".to_string() + &"AB".repeat(32);
+        let canonical = "ab".repeat(32);
+        assert_eq!(input.as_str().into_address_string(), canonical);
+        assert_eq!((&input).into_address_string(), canonical);
+        assert_eq!(input.into_address_string(), canonical);
     }
 
     #[test]
