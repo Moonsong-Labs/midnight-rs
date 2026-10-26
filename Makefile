@@ -143,7 +143,7 @@ help:
 	@echo "    test          cargo test --workspace"
 	@echo "    build         cargo build --workspace"
 	@echo "    audit         cargo audit (fails on vulnerabilities; warnings allowed)"
-	@echo "    ci            fmt-check + clippy + doc + check + test + audit (the CI gates)"
+	@echo "    ci            fmt-check + clippy + doc + test + audit (the CI gates)"
 	@echo ""
 	@echo "  Devnet (node, indexer and proof server via $(DEVNET_COMPOSE); DEVNET_LEDGER=9 for ledger 9)"
 	@echo "    dev-up        start the devnet and wait until it is ready"
@@ -209,7 +209,7 @@ build: contracts fixtures
 audit:
 	$(CARGO) audit
 
-ci: fmt-check clippy doc check test audit
+ci: fmt-check clippy doc test audit
 	@echo "OK: local CI gates passed"
 
 # ============================================================
