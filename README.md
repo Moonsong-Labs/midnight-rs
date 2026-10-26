@@ -28,7 +28,7 @@ anyhow = "1"
 
 ## Quick start
 
-The Quick start runs against a local devnet (node and indexer) in Docker. Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
+The Quick start runs against a local devnet (node, indexer and proof server) in Docker. Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
 
 ```rust
 use midnight_core::provider::{NIGHT, STARS_PER_NIGHT};
@@ -186,7 +186,7 @@ The `Makefile` wraps the workflow, and [CI](.github/workflows/ci.yml) calls the 
 ```bash
 make ci              # the local CI gates
 make test            # cargo test --workspace
-make dev-up          # start the local devnet (node + indexer)
+make dev-up          # start the local devnet (node, indexer and proof server)
 make test-e2e        # devnet integration tests
 make examples        # run the examples of the EXAMPLES list against the devnet
 make conformance     # check the circuit interpreter against the TypeScript Compact runtime

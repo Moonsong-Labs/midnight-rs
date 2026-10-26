@@ -55,6 +55,26 @@ pub(crate) fn devnet_urls() -> Option<(String, String)> {
     }
 }
 
+/// The devnet's proof server URL, from `MIDNIGHT_PROOF_SERVER_URL`.
+///
+/// Returns `None` after a skip line when the variable is missing.
+///
+/// # Panics
+///
+/// When the variable is missing while `MIDNIGHT_E2E` is set.
+pub(crate) fn proof_server_url() -> Option<String> {
+    match std::env::var("MIDNIGHT_PROOF_SERVER_URL") {
+        Ok(url) => Some(url),
+        Err(_) if std::env::var_os("MIDNIGHT_E2E").is_some() => {
+            panic!("MIDNIGHT_PROOF_SERVER_URL is missing while MIDNIGHT_E2E is set")
+        }
+        Err(_) => {
+            eprintln!("skipping: needs MIDNIGHT_PROOF_SERVER_URL");
+            None
+        }
+    }
+}
+
 /// The wallet of `seed` on the undeployed network, synced from the indexer at
 /// `indexer_url` and pinned through `provider`.
 ///

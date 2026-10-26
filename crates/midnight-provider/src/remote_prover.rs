@@ -6,13 +6,12 @@
 //! and `/prove` endpoints, with retry / exponential backoff for transient
 //! network errors.
 //!
-//! The wire protocol (a tagged-serialized preimage plus optional circuit IR,
-//! POSTed to `/check` and `/prove`, with a tagged-serialized proof in the
-//! response) is implemented here directly. It deliberately does **not** reuse
-//! the ledger crate's `test_utilities::ProofServerProvider`: that type is
-//! test-only scaffolding (behind the crate's test utilities, logging with
-//! `println!` and asserting on fee bounds) and is not meant for production
-//! proving.
+//! Each ledger's `ProofServerProvider` builds the request bodies: the
+//! tagged-serialized preimage, plus the circuit's IR or keys when the server
+//! has no built-in key for it. This client does not use the `ProvingProvider`
+//! impl of that type. That impl prints with `println!`, opens a new HTTP client
+//! for each request, and returns an untyped error for a failed status, which
+//! the retry loop cannot classify.
 
 use std::time::Duration;
 
@@ -30,10 +29,6 @@ pub(crate) enum ProofServerError {
         status: u16,
         body: String,
     },
-    /// No proving key for this circuit. Points at the caller's zk config, not
-    /// at the network.
-    #[error("no proving key for circuit `{0}`; check the directory passed to `with_zk_config`")]
-    MissingKey(String),
     /// The server answered with a proof this SDK cannot represent.
     #[error("proof server returned an unsupported proof version: {0}")]
     UnsupportedProofVersion(String),
@@ -138,19 +133,6 @@ impl RemoteProofServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn missing_key_is_permanent() {
-        let err = anyhow::Error::new(ProofServerError::MissingKey("counter/increment".into()));
-        assert!(
-            !is_transient(&err),
-            "a missing proving key never resolves by retrying"
-        );
-        assert!(
-            err.to_string().contains("counter/increment"),
-            "the error must name the key"
-        );
-    }
 
     #[test]
     fn a_5xx_is_transient_and_a_4xx_or_decode_failure_is_not() {

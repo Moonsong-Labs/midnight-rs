@@ -36,3 +36,11 @@ services:
     depends_on:
       node:
         condition: service_healthy
+
+  proof-server:
+    container_name: midnight-example-proof-server-l9
+    # The ledger rc.5 sources with zkir-v3 3.1.0-rc.1, the pair that the SDK
+    # links. rc.7 cannot read ZKIR 3.1 IR, and rc.9 is ledger rc.6.
+    image: "midnightntwrk/proof-server:9.0.0-rc.8"
+    ports:
+      - "6300:6300"

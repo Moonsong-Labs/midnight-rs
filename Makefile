@@ -57,6 +57,7 @@ NODE_RPC       := http://127.0.0.1:9944
 NODE_WS        := ws://127.0.0.1:9944
 INDEXER_URL    := http://127.0.0.1:8088
 INDEXER_GQL    := $(INDEXER_URL)/api/v3/graphql
+PROOF_SERVER_URL := http://127.0.0.1:6300
 DEV_SEED       := 0000000000000000000000000000000000000000000000000000000000000001
 
 # Examples that run against the devnet with no extra env (deploy + call).
@@ -123,7 +124,7 @@ GOLDENS_CKSUM = { echo $(COMPACT_REV) $(CONFORMANCE_ZKIR_V3_FIXTURES); \
 		$(CONFORMANCE_DIR)/ts-driver/driver.mjs $(CONFORMANCE_DIR)/package-lock.json; } | cksum
 
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
-        dev-up dev-wait dev-settle dev-down dev-status dev-logs \
+        dev-up dev-wait proof-server-wait dev-settle dev-down dev-status dev-logs \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         fork-up fork-upgrade fork-test fork-down \
         contracts compile-contracts fixtures goldens conformance \
@@ -144,7 +145,7 @@ help:
 	@echo "    audit         cargo audit (fails on vulnerabilities; warnings allowed)"
 	@echo "    ci            fmt-check + clippy + doc + check + test + audit (the CI gates)"
 	@echo ""
-	@echo "  Devnet (node + indexer via $(DEVNET_COMPOSE); DEVNET_LEDGER=9 for ledger 9)"
+	@echo "  Devnet (node, indexer and proof server via $(DEVNET_COMPOSE); DEVNET_LEDGER=9 for ledger 9)"
 	@echo "    dev-up        start the devnet and wait until it is ready"
 	@echo "    dev-settle    wait until the indexer has every block the node calls best"
 	@echo "    dev-down      stop the devnet"
@@ -212,12 +213,13 @@ ci: fmt-check clippy doc check test audit
 	@echo "OK: local CI gates passed"
 
 # ============================================================
-# Devnet (node + indexer)
+# Devnet (node, indexer and proof server)
 # ============================================================
 
 dev-up:
 	docker compose -f $(DEVNET_COMPOSE) up -d
 	@$(MAKE) --no-print-directory dev-wait
+	@$(MAKE) --no-print-directory proof-server-wait
 
 # Waits for a block past genesis, not merely for the indexer to answer. A dev
 # devnet's genesis carries a `tblock` from months before wall clock, so a
@@ -239,6 +241,17 @@ dev-wait:
 	done; \
 	echo "ERROR: devnet did not reach a block past genesis"; \
 	docker compose -f $(DEVNET_COMPOSE) logs; \
+	exit 1
+
+# Not part of dev-wait: the fork devnet reuses dev-wait and has no proof server.
+proof-server-wait:
+	@echo "Waiting for the proof server..."
+	@for _ in $$(seq 1 60); do \
+		curl -sf $(PROOF_SERVER_URL)/health >/dev/null 2>&1 && { echo "Proof server ready."; exit 0; }; \
+		sleep 2; \
+	done; \
+	echo "ERROR: the proof server did not answer $(PROOF_SERVER_URL)/health"; \
+	docker compose -f $(DEVNET_COMPOSE) logs proof-server; \
 	exit 1
 
 # Waits until the indexer has every block the node calls best. The indexer
@@ -316,7 +329,7 @@ fork-down:
 # ============================================================
 
 E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-	MIDNIGHT_LEDGER=$(DEVNET_LEDGER)
+	MIDNIGHT_LEDGER=$(DEVNET_LEDGER) MIDNIGHT_PROOF_SERVER_URL=$(PROOF_SERVER_URL)
 
 # The devnet integration tests.
 test-e2e: contracts fixtures
@@ -335,6 +348,7 @@ test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test build_only_private_state -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test emit_event -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test zkir_v3_local_proving -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test remote_proving -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output

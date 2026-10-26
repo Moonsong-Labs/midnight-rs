@@ -160,7 +160,7 @@ jobs:
           tool: cargo-audit
       - run: make audit
 
-  # ---------- E2E (devnet: node + indexer) ----------
+  # ---------- E2E (devnet: node, indexer and proof server) ----------
 
   e2e:
     name: E2E tests (devnet, ledger ${{ matrix.ledger }})
@@ -196,7 +196,7 @@ jobs:
           cargo test --workspace --no-run
           cargo build -p example-counter -p example-contract-maintenance -p example-private-state -p example-shielded-transfer -p example-wallet-sync -p example-combine-and-sponsor -p example-shielded-swap
 
-      # --- Start devnet (node + indexer); waits until both are ready ---
+      # --- Start devnet (node, indexer and proof server); waits until each is ready ---
       - name: Start devnet
         run: make dev-up
 

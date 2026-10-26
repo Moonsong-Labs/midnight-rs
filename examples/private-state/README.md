@@ -35,7 +35,7 @@ The SDK loads the private state before the call and persists it after; the witne
 
 ## Run
 
-Start the devnet (node + indexer) from the repository root:
+Start the devnet (node, indexer and proof server) from the repository root:
 
 ```bash
 make dev-up   # from the repo root
