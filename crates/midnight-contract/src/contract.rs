@@ -1040,7 +1040,7 @@ impl<P: Provider> Contract<P> {
         P: AsMidnightProvider,
     {
         let provider = self.provider.as_midnight_provider();
-        crate::state::fetch_state_from_node(provider, &self.address, self.at_block).await
+        crate::state::fetch_state(provider, &self.address, self.at_block).await
     }
 
     /// Execute a circuit call on-chain.

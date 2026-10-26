@@ -2917,7 +2917,6 @@ dependencies = [
  "midnight-onchain-runtime 4.0.0",
  "midnight-provider",
  "midnight-serialize",
- "midnight-storage",
  "midnight-transient-crypto 3.0.0",
  "midnight-typed-state",
  "midnight-types",

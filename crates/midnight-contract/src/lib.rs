@@ -1,5 +1,5 @@
 mod address;
-pub mod call;
+mod call;
 mod change;
 mod contract;
 pub mod deploy;
@@ -83,13 +83,7 @@ pub use offer::{ShieldedOffer, ShieldedPayment};
 // The shielded coin a caller spends, from `MidnightProvider::spendable_shielded_coins`.
 pub use midnight_types::SpendableShieldedCoin;
 
-/// Trait for types that can be deserialized from hex-encoded contract state.
-pub trait FromHex: Sized {
-    fn from_hex(hex_state: &str) -> Result<Self, midnight_typed_state::StateError>;
-}
-
-// The `state`, `call`, and `deploy` modules expose a thin sliver of the
-// plumbing underneath `Contract::deploy`/`Contract::at` — `state::fetch_state`
-// and `state::fetch_state_from_node` are reached from bindgen-generated code,
-// and `deploy::deploy_funded` / `call::build_unproven_call_tx` are reached
-// from integration tests. Everything else is `pub(crate)`.
+// The `state` and `deploy` modules expose a small part of the code under
+// `Contract::deploy` and `Contract::at`. Bindgen-generated code reaches
+// `state::fetch_state`, and integration tests reach `deploy::deploy_funded`.
+// Everything else is `pub(crate)`.

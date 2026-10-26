@@ -92,7 +92,7 @@ pub(crate) fn emit_ledger_wrapper(
                 provider: &P,
                 address: &str,
             ) -> Result<Self, midnight_contract::ContractError> {
-                let state = midnight_contract::state::fetch_state(provider, address).await?;
+                let state = midnight_contract::state::fetch_state(provider, address, None).await?;
                 Ok(Self::new(state))
             }
 
@@ -101,12 +101,6 @@ pub(crate) fn emit_ledger_wrapper(
             #(#accessors)*
 
             #ir_constants
-        }
-
-        impl midnight_contract::FromHex for #struct_name {
-            fn from_hex(hex_state: &str) -> Result<Self, StateError> {
-                #struct_name::from_hex(hex_state)
-            }
         }
 
         #initial_state
@@ -369,7 +363,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// on all standard devnet nodes.
             pub async fn ledger(&self) -> Result<#struct_name, midnight_contract::ContractError> {
                 let provider = self.0.provider().as_midnight_provider();
-                let state = midnight_contract::state::fetch_state_from_node(
+                let state = midnight_contract::state::fetch_state(
                     provider,
                     self.0.address(),
                     self.0.at_block(),
