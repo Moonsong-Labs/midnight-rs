@@ -66,9 +66,10 @@ pub trait WalletFacade: Send + Sync {
     /// An implementation fills [`DustBalance::spendable_speck`] and
     /// [`DustBalance::spendable_utxos`] with the Dust that a new build can draw
     /// on, which leaves out the Dust that its pending builds reserve. A field
-    /// left at its `Default` reads as no spendable Dust. It sets
-    /// [`ShieldedCoinBalance::spendable`] and [`UnshieldedUtxoInfo::spendable`]
-    /// to `false` on each coin and UTXO that a pending build reserves.
+    /// left at its `Default` reads as no spendable Dust. An implementation
+    /// also sets [`ShieldedCoinBalance::spendable`] and
+    /// [`UnshieldedUtxoInfo::spendable`] to `false` on each coin and UTXO that
+    /// a pending build reserves.
     ///
     /// [`DustBalance::spendable_speck`]: midnight_types::DustBalance::spendable_speck
     /// [`DustBalance::spendable_utxos`]: midnight_types::DustBalance::spendable_utxos
