@@ -373,14 +373,9 @@ mod tests {
         assert!(generated.contains("TryFrom<&'a ValueSlice> for EgressJob"));
         assert!(generated.contains("from_hex"));
 
-        // Circuit call types
-        assert!(generated.contains("pub struct ClaimDepositCall"));
-        assert!(generated.contains("pub struct WithdrawCall"));
+        // Circuit return types
         assert!(generated.contains("ClaimDepositReturn"));
         assert!(generated.contains("WithdrawReturn"));
-        assert!(generated.contains("pub enum Calls"));
-        assert!(generated.contains("ClaimDeposit"));
-        assert!(generated.contains("Withdraw"));
 
         // Struct types referenced only in circuits (not in ledger)
         assert!(generated.contains("pub struct ValidatorSignature"));
@@ -441,13 +436,8 @@ mod tests {
         assert!(generated.contains("FIELD_ROUND"));
         assert!(generated.contains("fn round("));
 
-        // Circuit types
-        assert!(generated.contains("pub struct IncrementCall"));
+        // Circuit return type
         assert!(generated.contains("IncrementReturn"));
-
-        // Calls enum with the single circuit
-        assert!(generated.contains("pub enum Calls"));
-        assert!(generated.contains("Increment"));
 
         // Ledger wrapper struct
         assert!(generated.contains("pub struct Counter"));
@@ -481,10 +471,9 @@ mod tests {
         let generated = generated_source(&info, "Election");
 
         // Multiple circuits
-        assert!(generated.contains("pub enum Calls"));
-        assert!(generated.contains("AdvanceCall"));
-        assert!(generated.contains("SetTopicCall"));
-        assert!(generated.contains("AddVoterCall"));
+        assert!(generated.contains("AdvanceReturn"));
+        assert!(generated.contains("SetTopicReturn"));
+        assert!(generated.contains("AddVoterReturn"));
 
         // Enum types from witnesses
         assert!(generated.contains("pub enum PermissibleVotes"));
@@ -542,15 +531,14 @@ mod tests {
         );
         let generated = generated_source(&info, "Tiny");
 
-        // Circuit types
-        assert!(generated.contains("pub struct SetCall"));
-        assert!(generated.contains("pub struct GetCall"));
-        assert!(generated.contains("pub struct ClearCall"));
-        assert!(generated.contains("pub struct PublicKeyCall"));
-        assert!(generated.contains("pub enum Calls"));
+        // Circuit return types
+        assert!(generated.contains("SetReturn"));
+        assert!(generated.contains("GetReturn"));
+        assert!(generated.contains("ClearReturn"));
+        assert!(generated.contains("PublicKeyReturn"));
 
-        // Witness call type
-        assert!(generated.contains("pub struct PrivateSecretKeyCall"));
+        // Witness return type
+        assert!(generated.contains("PrivateSecretKeyReturn"));
 
         // Ledger wrapper
         assert!(generated.contains("pub struct Tiny"));
@@ -562,10 +550,8 @@ mod tests {
             load_fixture("../../../tests/fixtures/compiled/zerocash/compiler/analyzed-ir.sexp");
         let generated = generated_source(&info, "Zerocash");
 
-        // Circuit types
-        assert!(generated.contains("pub struct SpendCall"));
+        // Circuit return type
         assert!(generated.contains("SpendReturn"));
-        assert!(generated.contains("pub enum Calls"));
 
         // Custom struct types from witnesses
         assert!(generated.contains("pub struct Nonce"));
@@ -761,7 +747,7 @@ mod tests {
 
         assert!(generated.contains("pub struct Empty"));
         assert!(generated.contains("fn new("));
-        assert!(generated.contains("NoopCall"));
+        assert!(generated.contains("NoopReturn"));
         // No FIELD_ constants for empty ledger
         assert!(!generated.contains("FIELD_"));
 
