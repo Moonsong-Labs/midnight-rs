@@ -273,7 +273,7 @@ async fn utxo_selection_error(context: &BuildContext, e: UtxoSelectionError) -> 
     }
 }
 
-pub async fn prove_tx_no_validate(
+async fn prove_tx_no_validate(
     tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
     tx: UnprovenTx,
 ) -> Result<FinalizedTx, WalletError> {
@@ -852,15 +852,6 @@ fn generationless_fee_availability(
     u128::min(dt.saturating_mul(rate), vfull)
 }
 
-/// The proven transaction plus the dust batches that funded it.
-///
-/// Each [`DustSpendBatch`] groups per-seed `(spends, updated_state)` from a
-/// single `speculative_spend` call, which `mark_spent` takes together.
-pub struct BuiltTransaction {
-    pub finalized: FinalizedTx,
-    pub dust_batches: Vec<DustSpendBatch>,
-}
-
 /// The chain time of `context`, and the TTL derived from it: that time plus the
 /// ledger's `global_ttl`.
 fn now_and_ttl(context: &BuildContext) -> (Timestamp, Timestamp) {
@@ -908,29 +899,6 @@ async fn assemble_unproven(
     let tx = Transaction::new(network_id, intents, guaranteed_offer, fallible_offer);
 
     Ok((tx, now, ttl))
-}
-
-/// Build and prove a transaction without the helpers' final `well_formed()`
-/// check. The chain validates with its own `root_history`; matching that
-/// locally would require a 55MB+ global `DustState`. Matches midnight-js.
-pub async fn build_no_validate(
-    mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-) -> Result<BuiltTransaction, WalletError> {
-    if pays_own_fee(&tx_info) && !tx_info.mock_proofs_for_fees {
-        let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
-        return balance_fees_with_proofs(&mut tx_info, tx, now, ttl).await;
-    }
-    let PreparedTransfer {
-        mut tx_info,
-        tx,
-        dust_batches,
-        ..
-    } = prepare_no_validate(tx_info).await?;
-    let finalized = prove_tx_no_validate(&mut tx_info, tx).await?;
-    Ok(BuiltTransaction {
-        finalized,
-        dust_batches,
-    })
 }
 
 /// Whether `tx_info` draws Dust for its own fee: it names a funding seed or
@@ -1132,33 +1100,6 @@ fn balance_fees_with_mocks(
         }
         confirm_dust_spends(tx_info, &batches);
         return Ok((paid_tx, batches));
-    }
-    Err(tracker.into_error())
-}
-
-/// Converge the Dust fee with a real proof of each candidate, and return the
-/// proof of the candidate that balances.
-async fn balance_fees_with_proofs(
-    tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
-    tx: UnprovenTx,
-    now: Timestamp,
-    ttl: Timestamp,
-) -> Result<BuiltTransaction, WalletError> {
-    let mut tracker = FeeBalanceTracker::default();
-
-    for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
-        let (paid_tx, batches) = dust_candidate(tx_info, &tx, tracker.request(), now, ttl)?;
-        let proven = prove_tx_no_validate(tx_info, paid_tx).await?;
-        let (fee, shortfall) = compute_missing_dust(tx_info, &proven)?;
-        if let Some(dust) = shortfall {
-            tracker.record_shortfall(fee, dust);
-            continue;
-        }
-        confirm_dust_spends(tx_info, &batches);
-        return Ok(BuiltTransaction {
-            finalized: proven,
-            dust_batches: batches,
-        });
     }
     Err(tracker.into_error())
 }

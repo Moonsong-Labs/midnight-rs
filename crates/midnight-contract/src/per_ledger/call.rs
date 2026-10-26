@@ -23,7 +23,7 @@ use midnight_base_crypto::fab::{InvalidBuiltinDecode, ValueSlice};
 use midnight_base_crypto::time::Timestamp;
 use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::{SpentInputs, TransferResult};
+use midnight_types::TransferResult;
 
 use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
@@ -537,14 +537,11 @@ async fn attach_and_prove(
     }
     // Build fee-less, even when this call pays for itself.
     //
-    // Handing the funding seed to the wallet's fee-balancing fixpoint makes it
-    // rebuild the candidate from the unpaid transaction and re-prove the whole
-    // thing on every iteration, circuit included, and the first iteration always
-    // requests zero Dust so it always reports a shortfall and loops. Proving is
-    // the most expensive operation in the SDK, so the circuit's proof is paid
-    // for once per iteration rather than once per call. Dust is attached below,
-    // after proving, in its own intent segment, which leaves the circuit proof
-    // untouched. A transaction with no user circuit can take
+    // A fee balanced in the same transaction prices each round with a proof.
+    // `mock_prove` refuses a user circuit, and a real proof would prove the
+    // circuit again on every round. Dust is attached below, after proving, in
+    // its own intent segment, which leaves the circuit proof untouched. A
+    // transaction with no user circuit can take
     // `super::deploy::build_with_mock_fee_proofs` instead.
     let unpaid = prove_without_fee(tx_info).await?;
     if !pay_fees {
@@ -562,22 +559,13 @@ async fn attach_and_prove(
 /// `tx_info` must carry no funding seed. The build then draws no Dust, so it
 /// leaves nothing to reserve, and the result names no input.
 /// `Builds::balance_transaction` reserves the Dust that it draws for the fee.
-/// The built transaction is large, and it lives only after this function's
-/// last await, so it never sits in a caller's future.
 pub(super) async fn prove_without_fee(
     tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
 ) -> Result<TransferResult, ContractError> {
-    let context = tx_info.context.clone();
-    let built = super::types::build_no_validate(tx_info)
+    let prepared = super::types::prepare_no_validate(tx_info)
         .await
         .map_err(ProviderError::Wallet)?;
-    Ok(TransferResult {
-        tx_bytes: crate::call::tagged_bytes(&built.finalized, "transaction")?,
-        ledger_version: super::LEDGER,
-        spent: SpentInputs::default(),
-        fee_speck: super::types::fee_speck(&context, &built.finalized)
-            .map_err(ProviderError::Wallet)?,
-    })
+    Ok(prepared.prove().await.map_err(ProviderError::Wallet)?)
 }
 
 /// Pick the segment a caller-provided shielded input should ride in: the same
