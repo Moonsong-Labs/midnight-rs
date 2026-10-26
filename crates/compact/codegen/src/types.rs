@@ -10,22 +10,27 @@ use crate::error::CodegenError;
 /// compiler that wrote it, so the compiler version alone decides.
 ///
 /// When `COMPACT_REV` moves to a new `major.minor`, change this value too.
-/// Until then, `contract!` refuses the regenerated devnet contracts.
+/// Until then, [`crate::artifact::load_str`] and `contract!` refuse the
+/// regenerated devnet contracts.
 pub const SUPPORTED_COMPILER_FAMILY: &str = "0.35";
 
-/// Check the `compiler-version` of the artifact against
-/// [`SUPPORTED_COMPILER_FAMILY`]. Called before expansion; a mismatch aborts
-/// code generation with a compile error that names the version found.
-pub fn check_compiler_version(info: &ContractInfo) -> Result<(), CodegenError> {
-    let found = &info.compiler_version;
+/// Check the `compiler-version` of an artifact, `found`, against
+/// [`SUPPORTED_COMPILER_FAMILY`].
+///
+/// # Errors
+///
+/// [`CodegenError::MalformedCompilerVersion`] when `found` does not start with
+/// a numeric `major.minor`, and [`CodegenError::UnsupportedCompilerVersion`]
+/// when it is of another family.
+pub fn check_compiler_version(found: &str) -> Result<(), CodegenError> {
     let family = version_family(found).ok_or_else(|| CodegenError::MalformedCompilerVersion {
-        found: found.clone(),
+        found: found.to_string(),
     })?;
     if family == SUPPORTED_COMPILER_FAMILY {
         Ok(())
     } else {
         Err(CodegenError::UnsupportedCompilerVersion {
-            found: found.clone(),
+            found: found.to_string(),
         })
     }
 }
@@ -152,5 +157,26 @@ impl Circuit {
 
     pub fn result_type(&self) -> &crate::ir::Type {
         &self.def.result_type
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_a_compiler_outside_the_supported_family() {
+        let msg = check_compiler_version("0.0.1").unwrap_err().to_string();
+        let supported = format!("{SUPPORTED_COMPILER_FAMILY}.x");
+        for part in ["compiler-version", "0.0.1", supported.as_str()] {
+            assert!(msg.contains(part), "the error should name `{part}`: {msg}");
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_version() {
+        let msg = check_compiler_version("nightly").unwrap_err().to_string();
+        assert!(msg.contains("malformed compiler-version"), "{msg}");
+        assert!(msg.contains("nightly"), "{msg}");
     }
 }

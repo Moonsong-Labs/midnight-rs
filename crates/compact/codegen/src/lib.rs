@@ -8,7 +8,6 @@ pub mod artifact;
 pub mod error;
 pub mod expand;
 pub mod types;
-pub mod validate;
 
 /// The analyzed-IR model: the single type and expression vocabulary
 /// shared by the code generator, the interpreter, and generated bindings.
@@ -28,5 +27,5 @@ pub fn generate_bindings_from_artifact(
     crate_path: Option<&TokenStream>,
 ) -> Result<TokenStream, Box<dyn std::error::Error>> {
     let info = artifact::load_str(text)?;
-    Ok(expand::generate_bindings(&info, contract_name, crate_path)?)
+    Ok(expand::generate_bindings(&info, contract_name, crate_path))
 }

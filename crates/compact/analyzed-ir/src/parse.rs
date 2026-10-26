@@ -647,9 +647,21 @@ fn version(s: &Sexp, key: &str) -> R<String> {
     string(keyed(s, key, key)?, key)
 }
 
+/// The `compiler-version` in the header of the artifact `s`.
+///
+/// It reads no other element, so a caller can check the version before
+/// [`parse`] meets a form that another compiler version writes differently.
+pub fn compiler_version(s: &Sexp) -> R<String> {
+    tagged(s, "analyzed-ir", "analyzed-ir")?
+        .iter()
+        .find(|e| e.head() == Some("compiler-version"))
+        .ok_or_else(|| Error::new("missing compiler-version"))
+        .and_then(|e| version(e, "compiler-version"))
+}
+
 pub fn parse(s: &Sexp) -> R<AnalyzedIr> {
+    let compiler_version = compiler_version(s)?;
     let rest = tagged(s, "analyzed-ir", "analyzed-ir")?;
-    let mut compiler_version = None;
     let mut language_version = None;
     let mut runtime_version = None;
     let mut exports = Vec::new();
@@ -657,7 +669,7 @@ pub fn parse(s: &Sexp) -> R<AnalyzedIr> {
     let mut elements = Vec::new();
     for e in rest {
         match e.head() {
-            Some("compiler-version") => compiler_version = Some(version(e, "compiler-version")?),
+            Some("compiler-version") => {}
             Some("language-version") => language_version = Some(version(e, "language-version")?),
             Some("runtime-version") => runtime_version = Some(version(e, "runtime-version")?),
             Some("exports") => {
@@ -679,7 +691,7 @@ pub fn parse(s: &Sexp) -> R<AnalyzedIr> {
         }
     }
     Ok(AnalyzedIr {
-        compiler_version: compiler_version.ok_or_else(|| Error::new("missing compiler-version"))?,
+        compiler_version,
         language_version: language_version.ok_or_else(|| Error::new("missing language-version"))?,
         runtime_version: runtime_version.ok_or_else(|| Error::new("missing runtime-version"))?,
         exports,

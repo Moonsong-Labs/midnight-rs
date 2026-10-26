@@ -4,8 +4,8 @@ use std::fmt;
 
 /// A validation error found in `analyzed-ir.sexp`.
 ///
-/// All variants abort code generation: the proc macro surfaces them as
-/// compile errors.
+/// Every variant makes [`crate::artifact::load_str`] fail, and the proc macro
+/// surfaces it as a compile error.
 #[derive(Debug)]
 pub enum CodegenError {
     /// The `compiler-version` is outside
