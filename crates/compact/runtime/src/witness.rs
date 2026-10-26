@@ -40,16 +40,15 @@ impl<'a> WitnessContext<'a> {
 
 /// Outcome of dispatching a witness call to a [`WitnessProvider`].
 ///
-/// Distinguishes "the provider doesn't implement this name" (a normal,
-/// non-error outcome that lets the interpreter fall through to builtins and
-/// IR helpers) from witness-level failures, which are `Err` on the
-/// surrounding `Result` and always abort execution.
+/// Distinguishes "the provider doesn't implement this name" from
+/// witness-level failures, which are `Err` on the surrounding `Result`. Both
+/// abort execution: the interpreter turns [`WitnessOutcome::Unknown`] into an
+/// [`InterpreterError::Witness`] that names the witness.
 #[derive(Debug, Clone)]
 pub enum WitnessOutcome {
     /// The provider handled the call and produced the witness value.
     Value(Value),
-    /// The provider doesn't implement a witness with this name. The
-    /// interpreter falls through to builtin and helper dispatch.
+    /// The provider doesn't implement a witness with this name.
     Unknown,
 }
 
@@ -67,10 +66,9 @@ pub trait WitnessProvider: Send + Sync {
     ///
     /// Return [`WitnessOutcome::Value`] when the call was handled, and
     /// [`WitnessOutcome::Unknown`] when this provider has no witness named
-    /// `name` (the interpreter then falls through to builtins and helpers).
-    /// Return `Err` only for genuine failures — a signer that is unreachable,
-    /// undecodable private state, bad arguments — which abort the circuit;
-    /// errors are never treated as "unknown name".
+    /// `name`. Return `Err` only for genuine failures — a signer that is
+    /// unreachable, undecodable private state, bad arguments — which abort the
+    /// circuit; errors are never treated as "unknown name".
     fn call_witness(
         &self,
         ctx: &mut WitnessContext<'_>,

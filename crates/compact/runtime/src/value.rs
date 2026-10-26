@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, cell_value, variant_name};
+use midnight_typed_state::AlignedValue;
 
 use crate::error::InterpreterError;
 
@@ -12,7 +12,6 @@ pub enum Value {
     Bool(bool),
     Integer(u128),
     AlignedValue(AlignedValue),
-    StateValue(StateValue<InMemoryDB>),
     /// A struct/record with named fields.
     Struct(HashMap<String, Value>),
     /// A tuple/array with indexed elements.
@@ -37,20 +36,17 @@ impl Value {
     /// `Value::Tuple` is flattened recursively into a concatenated
     /// `AlignedValue` so the prover sees one input value per leaf atom
     /// (matching the FAB encoding the circuit expects for `Vector<N, T>`
-    /// arguments). A `Value::StateValue` holding a `Cell` unwraps to the
-    /// `AlignedValue` the cell already contains.
+    /// arguments).
     ///
-    /// Two shapes have no type-free encoding and are an error rather than a
-    /// guess. A `Value::Struct` encodes field-by-field at each field's
-    /// *declared* width, which only the type carries: alignment participates in
+    /// A `Value::Struct` has no type-free encoding, so it is an error rather
+    /// than a guess. It encodes field-by-field at each field's *declared*
+    /// width, which only the type carries: alignment participates in
     /// `AlignedValue` equality and `persistentHash` zero-pads each atom to its
-    /// declared width, so inventing a width is a wrong digest. The container
-    /// `StateValue` variants (`Null`, `Map`, `Array`, `BoundedMerkleTree`) are
-    /// state-tree nodes with no aligned-value form at all. Encode those through
-    /// [`crate::compact_types::encode_typed`], which takes the type.
+    /// declared width, so inventing a width is a wrong digest. Encode it
+    /// through [`crate::compact_types::encode_typed`], which takes the type.
     ///
-    /// This returns a `Result` precisely so neither can collapse to the empty
-    /// value, which is what made a commitment silently bind to nothing.
+    /// This returns a `Result` precisely so a struct cannot collapse to the
+    /// empty value, which is what made a commitment silently bind to nothing.
     pub fn try_to_aligned_value(&self) -> Result<AlignedValue, InterpreterError> {
         match self {
             Value::AlignedValue(av) => Ok(av.clone()),
@@ -66,12 +62,6 @@ impl Value {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(AlignedValue::concat(parts.iter()))
             }
-            Value::StateValue(sv) => cell_value(sv).cloned().map_err(|_| {
-                InterpreterError::TypeError(format!(
-                    "cannot encode a {} state value: only a Cell holds an aligned value",
-                    variant_name(sv)
-                ))
-            }),
             Value::Struct(_) => Err(InterpreterError::TypeError(
                 "cannot encode a struct without its declared type: field widths come from the \
                  struct's declaration"

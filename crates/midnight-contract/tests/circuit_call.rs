@@ -78,8 +78,7 @@ fn no_program() -> interpreter::Program<'static> {
 // ---------------------------------------------------------------------------
 
 /// A witness declaration whose name collides with the interpreter builtin of
-/// the same name, which is exactly the collision the Unknown/Err distinction
-/// protects.
+/// the same name.
 fn persistent_hash_witness() -> ir::Witness {
     ir::Witness {
         name: id("%persistentHash.1"),
@@ -105,9 +104,6 @@ fn persistent_hash_witness_ir() -> ir::Circuit {
 
 /// A real provider failure (HSM down, decode error, ...) must propagate even
 /// when the witness name collides with a builtin: the builtin must NOT run.
-/// Under the old fall-through semantics every `InterpreterError::Witness` was
-/// treated as "unknown name", so this IR would silently reroute to the
-/// `persistentHash` builtin and return `Ok` — this test pins the fix.
 #[test]
 fn witness_failure_on_builtin_name_propagates() {
     use midnight_contract::interpreter;
@@ -145,30 +141,21 @@ fn witness_failure_on_builtin_name_propagates() {
     }
 }
 
-/// `WitnessOutcome::Unknown` for a builtin name still falls through and the
-/// builtin runs — pins the pre-existing fall-through path for providers that
-/// genuinely don't implement the name.
+/// A declared witness that the provider does not implement is an error, also
+/// when a builtin has its name: the builtin must not answer for the witness.
 #[test]
-fn unknown_witness_falls_through_to_builtin() {
-    use compact_bindgen::AlignedValue;
+fn unknown_witness_on_builtin_name_is_an_error() {
     use midnight_contract::interpreter;
-    use midnight_contract::runtime::Value;
+    use midnight_contract::runtime::InterpreterError;
 
     let witnesses = vec![persistent_hash_witness()];
     let program = interpreter::Program::new(&[], &witnesses, &[]);
     let state = common::contract_state(vec![]);
     // `epoch()` carries `NoWitnesses`, which answers `Unknown` for every name.
-    let result = interpreter::execute(&persistent_hash_witness_ir(), &program, state, &[], epoch())
-        .expect("Unknown must fall through to the persistentHash builtin");
-
-    // The builtin hashes the argument at the witness's declared type,
-    // `Uint<0..65535>`, which is a two-byte atom. Recompute the expected digest
-    // independently so a different code path (or no builtin at all) fails.
-    let expected = common::persistent_hash(AlignedValue::from(7u16));
-
-    match result.result {
-        Some(Value::AlignedValue(av)) => assert_eq!(av, expected, "builtin hash mismatch"),
-        other => panic!("expected the builtin's AlignedValue hash, got {other:?}"),
+    match interpreter::execute(&persistent_hash_witness_ir(), &program, state, &[], epoch()) {
+        Err(InterpreterError::Witness(_)) => {}
+        Ok(_) => panic!("an unknown witness must not fall back to the builtin"),
+        Err(other) => panic!("expected a witness error, got {other:?}"),
     }
 }
 

@@ -25,7 +25,7 @@ pub fn value_to_fr(v: &Value) -> Option<midnight_transient_crypto::curve::Fr> {
 /// affine `x`/`y` coordinates), matching the
 /// `TryFrom<&ValueSlice> for EmbeddedGroupAffine` impl in
 /// `midnight-transient-crypto`.
-pub fn value_to_embedded_group(
+pub(crate) fn value_to_embedded_group(
     v: &Value,
 ) -> Option<midnight_transient_crypto::curve::EmbeddedGroupAffine> {
     use midnight_transient_crypto::curve::EmbeddedGroupAffine;
@@ -71,6 +71,6 @@ pub fn value_to_u128(val: &Value) -> Option<u128> {
 /// midnight-base-crypto fab/conversions.rs), so the atom [0x2C, 0x01] is 300.
 /// The alignment is ignored because the prover already enforces shape.
 /// Returns `None` for a zero-atom value or an atom wider than 16 bytes.
-pub fn aligned_atom_to_u128(av: &AlignedValue) -> Option<u128> {
+pub(crate) fn aligned_atom_to_u128(av: &AlignedValue) -> Option<u128> {
     u128::try_from(av.value.0.first()?).ok()
 }
