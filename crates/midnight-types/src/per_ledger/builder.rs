@@ -24,9 +24,10 @@ use helpers::{
 
 use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
+use crate::transfer::panic_message;
 use crate::{
     Network, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
-    TransferResult, WalletError, panic_message,
+    TransferResult, WalletError,
 };
 
 type UnprovenTx = helpers::UnprovenTransaction<DefaultDB>;
