@@ -328,14 +328,14 @@ fn refuse_foreign_cast(field: &ir::FieldType) -> Result<(), InterpreterError> {
 /// FAB-encode a circuit's argument list into the single input value the
 /// prover binds (`ContractCallPrototype::input`).
 ///
-/// Each argument is encoded at its declared type's width when `arg_types`
-/// carries an entry for it: the canonical runtime routes arguments through
-/// per-type descriptors, so a `Uint<32>` argument is a 4-byte atom even
-/// though the interpreter's width-preserving fallback would pick 8 bytes.
+/// Each argument is encoded at its declared type's width when `arguments`
+/// declares it: the canonical runtime routes arguments through per-type
+/// descriptors, so a `Uint<32>` argument is a 4-byte atom even though the
+/// interpreter's width-preserving fallback would pick 8 bytes.
 /// Arguments without a declared type keep the fallback encoding.
 pub fn encode_circuit_input(
     args: &[(&str, Value)],
-    arg_types: &[(&str, Type)],
+    arguments: &[ir::Argument],
 ) -> Result<AlignedValue, InterpreterError> {
     if args.is_empty() {
         return Ok(AlignedValue::from(()));
@@ -343,8 +343,8 @@ pub fn encode_circuit_input(
     let parts: Vec<AlignedValue> = args
         .iter()
         .map(
-            |(name, value)| match arg_types.iter().find(|(n, _)| n == name) {
-                Some((_, ty)) => encode_typed(value, ty),
+            |(name, value)| match arguments.iter().find(|a| a.name.name() == *name) {
+                Some(argument) => encode_typed(value, &argument.ty),
                 None => value.try_to_aligned_value(),
             },
         )

@@ -228,12 +228,7 @@ pub(crate) fn call_input(
     circuit: &compact_codegen::ir::Circuit,
     args: &[(&str, runtime::Value)],
 ) -> Result<AlignedValue, ContractError> {
-    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
-        .arguments
-        .iter()
-        .map(|a| (a.name.name(), a.ty.clone()))
-        .collect();
-    Ok(interpreter::encode_circuit_input(args, &arg_types)?)
+    Ok(interpreter::encode_circuit_input(args, &circuit.arguments)?)
 }
 
 /// `value` in its tagged encoding. `what` names it in the error.
