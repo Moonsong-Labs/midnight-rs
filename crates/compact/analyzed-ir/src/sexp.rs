@@ -77,16 +77,13 @@ impl fmt::Display for ReadError {
 impl std::error::Error for ReadError {}
 
 pub struct Reader<'a> {
-    src: &'a [u8],
+    src: &'a str,
     pos: usize,
 }
 
 impl<'a> Reader<'a> {
     pub fn new(src: &'a str) -> Self {
-        Reader {
-            src: src.as_bytes(),
-            pos: 0,
-        }
+        Reader { src, pos: 0 }
     }
 
     fn err(&self, message: impl Into<String>) -> ReadError {
@@ -97,7 +94,7 @@ impl<'a> Reader<'a> {
     }
 
     fn peek(&self) -> Option<u8> {
-        self.src.get(self.pos).copied()
+        self.src.as_bytes().get(self.pos).copied()
     }
 
     fn bump(&mut self) -> Option<u8> {
@@ -179,29 +176,62 @@ impl<'a> Reader<'a> {
     /// A `.` is the pair dot only when it stands alone; symbols like
     /// `%tmp.2` contain dots inside one token.
     fn lone_dot(&self) -> bool {
-        self.src.get(self.pos + 1).is_none_or(|&c| is_delimiter(c))
+        self.src
+            .as_bytes()
+            .get(self.pos + 1)
+            .is_none_or(|&c| is_delimiter(c))
     }
 
+    /// A string as Chez Scheme `write` prints it.
     fn read_string(&mut self) -> Result<Sexp, ReadError> {
         self.pos += 1; // opening quote
         let mut out = String::new();
         loop {
+            let start = self.pos;
+            while self.peek().is_some_and(|c| c != b'"' && c != b'\\') {
+                self.pos += 1;
+            }
+            out.push_str(&self.src[start..self.pos]);
             match self.bump() {
                 None => return Err(self.err("unterminated string")),
                 Some(b'"') => return Ok(Sexp::Str(out)),
-                Some(b'\\') => match self.bump() {
-                    None => return Err(self.err("unterminated escape")),
-                    Some(b'n') => out.push('\n'),
-                    Some(b't') => out.push('\t'),
-                    Some(c) => out.push(c as char),
-                },
-                Some(c) => out.push(c as char),
+                Some(_) => out.push(self.read_escape()?),
             }
         }
     }
 
+    fn read_escape(&mut self) -> Result<char, ReadError> {
+        Ok(match self.bump() {
+            None => return Err(self.err("unterminated escape")),
+            Some(b'a') => '\u{7}',
+            Some(b'b') => '\u{8}',
+            Some(b't') => '\t',
+            Some(b'n') => '\n',
+            Some(b'v') => '\u{b}',
+            Some(b'f') => '\u{c}',
+            Some(b'r') => '\r',
+            Some(b'"') => '"',
+            Some(b'\\') => '\\',
+            Some(b'x') => {
+                let start = self.pos;
+                while self.peek().is_some_and(|c| c.is_ascii_hexdigit()) {
+                    self.pos += 1;
+                }
+                let digits = &self.src[start..self.pos];
+                if self.bump() != Some(b';') {
+                    return Err(self.err("unterminated \\x escape"));
+                }
+                u32::from_str_radix(digits, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .ok_or_else(|| self.err("\\x escape is not a Unicode scalar value"))?
+            }
+            Some(_) => return Err(self.err("unknown string escape")),
+        })
+    }
+
     fn read_hash(&mut self) -> Result<Sexp, ReadError> {
-        let rest = &self.src[self.pos..];
+        let rest = &self.src.as_bytes()[self.pos..];
         if rest.starts_with(b"#t") {
             self.pos += 2;
             Ok(Sexp::Bool(true))
@@ -247,8 +277,7 @@ impl<'a> Reader<'a> {
         if start == self.pos {
             return Err(self.err("empty token"));
         }
-        let tok = std::str::from_utf8(&self.src[start..self.pos])
-            .map_err(|_| self.err("non-utf8 token"))?;
+        let tok = &self.src[start..self.pos];
         let numeric = {
             let t = tok.strip_prefix('-').unwrap_or(tok);
             !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit())
@@ -276,4 +305,25 @@ pub fn read_one(src: &str) -> Result<Sexp, ReadError> {
         return Err(r.err("trailing content after the datum"));
     }
     Ok(datum)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The input is what Chez Scheme `pretty-print` writes for the expected
+    /// string.
+    #[test]
+    fn reads_a_string_as_chez_scheme_writes_it() {
+        let src =
+            "\"Prix é\\a\\b\\t\\n\\v\\f\\r\\x0;\\x1B;\\x7F;\\x85;\u{a0}\\x2028;😀\\\"\\\\\u{301}\"";
+        assert_eq!(
+            read_one(src),
+            Ok(Sexp::Str(
+                "Prix é\u{7}\u{8}\t\n\u{b}\u{c}\r\0\u{1b}\u{7f}\u{85}\u{a0}\u{2028}😀\"\\\u{301}"
+                    .into()
+            ))
+        );
+        assert!(read_one(r#""\q""#).is_err(), "an unknown escape is refused");
+    }
 }
