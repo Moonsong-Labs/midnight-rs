@@ -27,8 +27,9 @@
 //! filenames with new timestamps. `mark_failed` / `rollback_from` likewise
 //! walk the graph to cascade through dependents.
 //!
-//! Writes go to a `.tmp` sibling and are `rename`d into place, so a crash
-//! never leaves a half-written file. The wallet uses the same discipline.
+//! A write syncs a `.tmp` sibling to disk and then `rename`s it into place,
+//! so a crash or a power loss never leaves a half-written file. The wallet
+//! uses the same discipline.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -1001,14 +1002,19 @@ fn create_private_dir(dir: &Path) -> Result<(), PrivateStateError> {
         .map_err(|e| PrivateStateError::Io(format!("create dir {}: {e}", dir.display())))
 }
 
-/// Write `contents` to a `.tmp` sibling of `path`, then rename it into place
-/// (see the module docs).
+/// Write `contents` to a `.tmp` sibling of `path`, rename it into place, and
+/// sync the directory (see the module docs).
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), PrivateStateError> {
     let tmp = path.with_extension("tmp");
     midnight_owner_only::write(&tmp, contents)
         .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
     fs::rename(&tmp, path)
-        .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))
+        .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| PrivateStateError::Io(format!("{} has no parent", path.display())))?;
+    midnight_owner_only::sync_dir(dir)
+        .map_err(|e| PrivateStateError::Io(format!("sync {}: {e}", dir.display())))
 }
 
 /// `None` when `result` failed with `NotFound`. Any other error becomes

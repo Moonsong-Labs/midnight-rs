@@ -168,7 +168,9 @@ fn write_atomic(dir: &Path, filename: &str, contents: &[u8]) -> Result<(), Walle
     midnight_owner_only::write(&tmp, contents)
         .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
     std::fs::rename(&tmp, dir.join(filename))
-        .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))
+        .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))?;
+    midnight_owner_only::sync_dir(dir)
+        .map_err(|e| WalletError::Storage(format!("sync {}: {e}", dir.display())))
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, WalletError> {
