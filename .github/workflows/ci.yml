@@ -50,6 +50,7 @@ jobs:
             tests/conformance/fixtures/*/contract
             tests/conformance/expected
             crates/midnight-contract/tests/fixtures/*/compiler
+            crates/compact/analyzed-ir/tests/fixtures/*/compiler
             tests/fixtures/compiled
           if-no-files-found: error
           retention-days: 30

@@ -34,6 +34,6 @@ Reading only. Execution (an interpreter over `Expr` and `Instruction`), FAB enco
 
 The crate is `wasm32-unknown-unknown` clean (no I/O in the API, `num-bigint` as the only dependency) so a bindings layer (wasm-bindgen or hand-written C-ABI exports) can ship it as a wasm blob for SDKs in other languages; that layer is deliberately not chosen here.
 
-## Fixtures
+## Tests
 
-`tests/fixtures/*.sexp` are real compiler output (compactc 0.33.122) for the midnight-rs conformance corpus and probes: counter, bboard, events (`emit`), ser (`serialize`), ccc (cross-contract call), loops (map/fold), slices, mint-probe (kernel and coin operations, nonzero `dup` arities), zerocash. No `Makefile` target regenerates them. `every_fixture_parses` asserts compactc 0.33.122, and the image at `COMPACT_REV` writes a newer version. So if you regenerate them with the command above, change that assert too.
+The tests parse the analyzed IR that `make fixtures` compiles from the conformance corpus, from `tests/fixtures/sources` at the repository root, and from `tests/fixtures` in this crate. Git does not track that output, so run `make fixtures` before `cargo test -p compact-analyzed-ir`.
