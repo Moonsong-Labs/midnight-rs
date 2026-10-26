@@ -13,7 +13,6 @@
 //! here so `deploy` doesn't have to duplicate them.
 
 use std::borrow::Cow;
-use std::sync::Arc;
 
 use midnight_base_crypto::time::{Duration, Timestamp};
 use midnight_helpers::ledger_9::mn_ledger;
@@ -156,7 +155,7 @@ pub(crate) async fn call_transaction(
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     provider: &midnight_provider::MidnightProvider,
-    zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
+    key_location: String,
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     // When false, skip Dust funding: the call is built proven but fee-less, for
@@ -177,7 +176,7 @@ pub(crate) async fn call_transaction(
                 state.time,
                 circuit_name,
                 contract_address,
-                zk_config,
+                key_location,
                 coin_encryption_keys,
                 shielded,
                 pay_fees,
@@ -195,7 +194,7 @@ pub(crate) async fn call_transaction(
                 state.time,
                 circuit_name,
                 contract_address,
-                zk_config,
+                key_location,
                 coin_encryption_keys,
                 shielded,
                 pay_fees,

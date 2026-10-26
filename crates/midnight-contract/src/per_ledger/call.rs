@@ -27,10 +27,9 @@ use midnight_types::{SpentInputs, TransferResult};
 
 use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
-use crate::address::format_address;
 use crate::call::ShieldedInputs;
 use crate::change::{change_due, total_by_key};
-use crate::error::ContractError;
+use crate::error::{ContractError, KeyMismatch};
 use crate::runtime;
 
 /// The segment of the intent that a call, a deploy or a maintenance update
@@ -124,7 +123,8 @@ pub(crate) fn partition(
 ///
 /// `state` is the contract's state as the Compact side reads it, and
 /// `state_bytes` the encoding the chain served it in. `block_time` is the
-/// time the interpreter ran the circuit at.
+/// time the interpreter ran the circuit at. `key_location` names the
+/// circuit's keys in the shared resolver.
 #[expect(
     clippy::too_many_arguments,
     reason = "the neutral call path hands over what the interpreter ran with, one value each"
@@ -139,7 +139,7 @@ pub(crate) async fn call_transaction(
     block_time: Timestamp,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
-    zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
+    key_location: String,
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     pay_fees: bool,
@@ -210,18 +210,19 @@ pub(crate) async fn call_transaction(
     let guaranteed_payouts = payouts_of(guaranteed.as_ref());
     let fallible_payouts = payouts_of(fallible.as_ref());
 
-    // 3. Make the circuit's proving keys resolvable, and prove with the
-    //    resolver that finds them.
-    let key_location =
-        crate::resolver::register(&format_address(&contract_address), circuit_name, &zk_config)?;
+    // 3. Prove with the resolver that finds the circuit's keys at
+    //    `key_location`.
     context.update_resolver(super::resolver::shared()).await;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
-    let op = match state_db.operations.get(&entry_point) {
-        Some(op) => (*op).clone(),
-        None => helpers::contract_operation_new(None, None)
-            .map_err(|e| ContractError::Construction(format!("empty operation: {e}")))?,
-    };
+    let op = state_db
+        .operations
+        .get(&entry_point)
+        .map(|op| (*op).clone())
+        .ok_or_else(|| ContractError::VerifierKeyMismatch {
+            circuit: circuit_name.to_owned(),
+            reason: KeyMismatch::Missing,
+        })?;
 
     // 3b. Insert the contract into the context's ledger state so client-side
     //     well_formed() validation can find it. The indexed wallet state doesn't

@@ -33,7 +33,7 @@ pub use contract::{
     AsMidnightProvider, CallOutcome, ConnectBuilder, Contract, DeployBuilder, PendingCall,
     PendingDeploy, Simulated,
 };
-pub use error::ContractError;
+pub use error::{ContractError, KeyMismatch};
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };
