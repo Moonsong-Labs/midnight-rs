@@ -31,7 +31,9 @@ pub struct DustBalance {
     /// A wallet whose only Dust UTXO a pending build reserves reads 0 here and
     /// a positive [`Self::balance_speck`].
     pub spendable_speck: u128,
-    /// Whether any tNIGHT this wallet holds generates dust.
+    /// Whether any tNIGHT this wallet holds generates dust. The dust goes to
+    /// the Dust address that the registration named, which can be the address
+    /// of another wallet.
     ///
     /// Derived from the coins on hand, which is all the indexer reports, so it
     /// is not the same as "the address is registered". A wallet that registers

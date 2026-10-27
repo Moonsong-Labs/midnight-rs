@@ -344,7 +344,7 @@ Each of the four provider methods is a *sync constructor* that returns a builder
 provider.transfer_shielded(token_type, amount, recipient)       // bech32 address; no work yet
         .transfer_unshielded(token_type, amount, recipient)
         .shielded_swap(give_token, give_amount, receive_token, receive_amount)
-        .register_dust(utxo_ctime)
+        .register_dust(utxo_ctime)                              // .to(dust_key) sends the Dust to another wallet
 
   ↓ .await? (or .build().await? for the no-submit escape hatch)
 

@@ -46,7 +46,8 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
 use midnight_types::{
-    ShieldedTokenType, TransferKind, TransferRequest, TransferResult, UnshieldedTokenType,
+    DustPublicKey, ShieldedTokenType, TransferKind, TransferRequest, TransferResult,
+    UnshieldedTokenType,
 };
 
 use crate::{MidnightProvider, PendingTx, ProviderError};
@@ -328,6 +329,7 @@ impl DustlessTransaction {
 pub struct DustRegistration<'a> {
     provider: &'a MidnightProvider,
     utxo_ctime: Option<u64>,
+    target: Option<DustPublicKey>,
 }
 
 impl<'a> DustRegistration<'a> {
@@ -335,7 +337,26 @@ impl<'a> DustRegistration<'a> {
         Self {
             provider,
             utxo_ctime,
+            target: None,
         }
+    }
+
+    /// Register the tNIGHT to `target`, the Dust address of another wallet, in
+    /// place of this wallet's own. That wallet then gets the Dust the tNIGHT
+    /// generates, and can pay the fees of this wallet's transactions with
+    /// [`MidnightProvider::balance_transaction`]. Read `target` from an
+    /// address string with
+    /// [`parse_dust_address`](midnight_types::address::parse_dust_address).
+    ///
+    /// The registration sets the Dust address of the whole NIGHT address. A
+    /// later registration replaces it, so a registration without `.to()`
+    /// points it back to this wallet's own Dust address. tNIGHT that reaches
+    /// the address generates Dust for the Dust address that the last
+    /// registration set. tNIGHT that already generates Dust keeps its Dust
+    /// address until the wallet spends it.
+    pub fn to(mut self, target: DustPublicKey) -> Self {
+        self.target = Some(target);
+        self
     }
 
     /// Build the registration transaction without submitting. Spends and
@@ -348,6 +369,7 @@ impl<'a> DustRegistration<'a> {
     fn into_request(self) -> TransferRequest {
         TransferKind::DustRegistration {
             utxo_ctime: self.utxo_ctime,
+            target: self.target,
         }
         .into()
     }
