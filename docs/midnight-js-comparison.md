@@ -96,7 +96,7 @@ One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only
 
 ### Balancing someone else's transaction (one party pays the fees)
 
-**midnight-js:** `walletProvider.balanceTransaction(tx, newCoins)` is a single primitive that takes a transaction carrying only its *effects* and makes it submittable: the calling wallet adds inputs to cover any token deficit **and** pays the Dust fees from its own coins. Whoever calls it is the payer. In a two-party swap, Party 1 builds an unbalanced transaction and Party 2 `balanceTransaction`s it.
+**midnight-js:** `walletProvider.balanceTx(tx, ttl?)` is a single primitive that takes a transaction carrying only its *effects* and makes it submittable: the calling wallet adds inputs to cover any token deficit **and** pays the Dust fees from its own coins. Whoever calls it is the payer. In a two-party swap, Party 1 builds an unbalanced transaction and Party 2 balances it with `balanceTx`.
 
 **midnight-rs:** the same work is split across two calls, matching the two roles:
 
@@ -113,7 +113,7 @@ let complete = bob.balance_transaction(partial.as_bytes()).await?;
 bob.submit_reserved(complete).await?;
 ```
 
-**Covering a token deficit.** midnight-js's `balanceTransaction` also covers a **token deficit** from the balancing wallet, so the balancer can supply its *own* tokens in a *single* unbalanced transaction. Its `tokenKindsToBalance` option limits which token kinds it balances. midnight-rs makes this a separate call, so a fee-only sponsor cannot pay a token deficit by mistake: `balance_transaction` is **fee-only** and refuses a token deficit with a clear error, and [`MidnightProvider::balance_transaction_with_tokens(bytes)`](../crates/midnight-provider/src/provider.rs) balances every token too. For each token that a segment of the transaction lacks, the payer spends its own coins into that segment and takes the change. For each token that a segment holds in surplus, the payer takes the surplus as an output, as midnight-js does. Shielded tokens balance at any segment: segment 0 in a guaranteed offer, any other segment in a fallible offer at that segment. Unshielded tokens balance at segment 0, in the payer's fee intent. midnight-js also balances unshielded tokens at segment 0 only, and leaves a fallible segment as it is. midnight-rs refuses an unshielded deficit at a fallible segment with `WalletError::FallibleUnshieldedDeficit`, because a merge refuses a second intent at that segment, so no payer can cover it. The result is a `TransferResult` that names every coin, UTXO and Dust spend it reserved, so submit it with `submit_reserved`.
+**Covering a token deficit.** midnight-js's `balanceTx` also covers a **token deficit** from the balancing wallet, so the balancer can supply its *own* tokens in a *single* unbalanced transaction. The testkit's `MidnightWalletProvider` serves `balanceTx` with the wallet SDK facade's `balanceUnboundTransaction`. The facade's balance calls take a `tokenKindsToBalance` option that limits which token kinds they balance, and they balance every kind by default. `balanceFinalizedTransaction` is the facade call for a finalized transaction, which is what midnight-rs balances. midnight-rs makes this a separate call, so a fee-only sponsor cannot pay a token deficit by mistake: `balance_transaction` is **fee-only** and refuses a token deficit with a clear error, and [`MidnightProvider::balance_transaction_with_tokens(bytes)`](../crates/midnight-provider/src/provider.rs) balances every token too. For each token that a segment of the transaction lacks, the payer spends its own coins into that segment and takes the change. For each token that a segment holds in surplus, the payer takes the surplus as an output, as midnight-js does. Shielded tokens balance at any segment: segment 0 in a guaranteed offer, any other segment in a fallible offer at that segment. Unshielded tokens balance at segment 0, in the payer's fee intent. midnight-js also balances unshielded tokens at segment 0 only, and leaves a fallible segment as it is. midnight-rs refuses an unshielded deficit at a fallible segment with `WalletError::FallibleUnshieldedDeficit`, because a merge refuses a second intent at that segment, so no payer can cover it. The result is a `TransferResult` that names every coin, UTXO and Dust spend it reserved, so submit it with `submit_reserved`.
 
 This completes a one-sided offer, with no mirror half:
 
@@ -125,7 +125,7 @@ let complete = bob.balance_transaction_with_tokens(offer.as_bytes()).await?;
 bob.submit_reserved(complete).await?;
 ```
 
-`balance_transaction_with_tokens` pays every deficit the bytes carry. Use it only on a transaction whose deficit the payer agreed to cover, and use `balance_transaction` for bytes it does not trust.
+`balance_transaction_with_tokens` pays every deficit the bytes carry. Use it only on a transaction whose deficit the payer agreed to cover, and use `balance_transaction` for bytes it does not trust. What the payer spends or receives at a fallible segment lands only when that segment succeeds. Its cover at segment 0 and its fee land with the guaranteed phase. So a surplus at a fallible segment does not reach the payer when that segment fails.
 
 ### Native two-party token swaps
 

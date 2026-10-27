@@ -1050,6 +1050,10 @@ pub async fn balance_external(
 /// [`WalletError::InsufficientUnshielded`] when `payer` holds too little of a
 /// token, and [`WalletError::InsufficientDust`] when it holds too little Dust
 /// for the fee.
+///
+/// # Panics
+///
+/// Panics when the context of `tx_info` holds no funding view for `payer`.
 pub async fn balance_external_tokens(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     payer: &Seed,

@@ -720,7 +720,8 @@ impl MidnightProvider {
     /// this provider's wallet, returning the completed transaction ready to
     /// submit.
     ///
-    /// This is the "one party pays fees" flow (midnight-js `balanceTransaction`):
+    /// This is the "one party pays fees" flow (the wallet SDK facade's
+    /// `balanceFinalizedTransaction` with `tokenKindsToBalance: ['dust']`):
     /// the caller (fee payer) covers the Dust fees for a transaction someone
     /// else already built and proved, without holding their keys. Purely
     /// additive, the external transaction's proofs are untouched; a separately
@@ -755,8 +756,8 @@ impl MidnightProvider {
     /// this provider's wallet, pay its fees, and return the completed
     /// transaction ready to submit.
     ///
-    /// This is midnight-js `balanceTransaction` with every token kind. It
-    /// completes a one-sided offer: party 1 gives `X` and asks for `Y` in an
+    /// This is the wallet SDK facade's `balanceFinalizedTransaction` with its
+    /// default `tokenKindsToBalance: 'all'`. It completes a one-sided offer: party 1 gives `X` and asks for `Y` in an
     /// unbalanced transaction (see [`Self::shielded_swap`]), and the payer
     /// that calls this supplies `Y`, receives `X` and pays the fees:
     ///
@@ -789,7 +790,11 @@ impl MidnightProvider {
     ///
     /// This pays **every** deficit that the transaction carries. Call it only
     /// on a transaction whose deficit you agreed to cover, and use
-    /// [`Self::balance_transaction`] for bytes you do not trust.
+    /// [`Self::balance_transaction`] for bytes you do not trust. What the
+    /// wallet spends or receives at a fallible segment lands only when that
+    /// segment succeeds. Its cover at segment 0 and its fee land with the
+    /// guaranteed phase. So a surplus at a fallible segment does not reach
+    /// the wallet when that segment fails.
     ///
     /// The wallet selects the coins, UTXOs and Dust and reserves them as one
     /// transition, so two calls on one provider cannot draw the same inputs.
@@ -812,6 +817,9 @@ impl MidnightProvider {
     /// [`WalletError::InsufficientUnshielded`](crate::WalletError::InsufficientUnshielded)
     /// or [`WalletError::InsufficientDust`](crate::WalletError::InsufficientDust)
     /// when the wallet holds too little.
+    /// [`ProviderError::Wallet`] with
+    /// [`WalletError::LedgerMismatch`](crate::WalletError::LedgerMismatch)
+    /// when the bytes belong to another ledger generation than the wallet.
     /// [`ProviderError::Transaction`] when the bytes do not deserialize, and
     /// [`ProviderError::NoWallet`] when no wallet is attached.
     pub async fn balance_transaction_with_tokens(

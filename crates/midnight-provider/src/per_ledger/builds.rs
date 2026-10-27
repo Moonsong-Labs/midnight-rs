@@ -154,16 +154,6 @@ impl<'a> Builds<'a> {
         Box::pin(self.balance_external(tx_bytes, Balance::Fees)).await
     }
 
-    /// Balance the tokens of an external party's proven transaction and pay
-    /// its fees from the attached wallet. See
-    /// [`MidnightProvider::balance_transaction_with_tokens`].
-    pub async fn balance_transaction_with_tokens(
-        &self,
-        tx_bytes: &[u8],
-    ) -> Result<TransferResult, ProviderError> {
-        Box::pin(self.balance_external(tx_bytes, Balance::FeesAndTokens)).await
-    }
-
     pub(crate) async fn balance_external(
         &self,
         tx_bytes: &[u8],

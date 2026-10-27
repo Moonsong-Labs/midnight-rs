@@ -86,7 +86,7 @@ match provider.builds().await? {
 }
 ```
 
-Each `Builds` has `build_context`, `execution_context`, `add_funding`, `build_funded`, `prepare_shielded_inputs`, `balance_transaction`, `balance_transaction_with_tokens` and `proof_provider`. Their types come from `midnight_helpers::ledger_8` or `midnight_helpers::ledger_9`. The contract crate builds its calls, deploys and maintenance updates on them.
+Each `Builds` has `build_context`, `execution_context`, `add_funding`, `build_funded`, `prepare_shielded_inputs`, `balance_transaction` and `proof_provider`. Their types come from `midnight_helpers::ledger_8` or `midnight_helpers::ledger_9`. The contract crate builds its calls, deploys and maintenance updates on them.
 
 ### A custom wallet
 
