@@ -341,19 +341,18 @@ impl<'a> DustRegistration<'a> {
         }
     }
 
-    /// Register the tNIGHT to `target`, the Dust address of another wallet, in
-    /// place of this wallet's own. That wallet then gets the Dust the tNIGHT
-    /// generates, and can pay the fees of this wallet's transactions with
-    /// [`MidnightProvider::balance_transaction`]. Read `target` from an
-    /// address string with
+    /// Send the Dust of the registered tNIGHT to `target`, another wallet's
+    /// Dust public key. That wallet can then pay the fees of this wallet's
+    /// transactions with [`MidnightProvider::balance_transaction`]. Read
+    /// `target` from the Dust address of that wallet with
     /// [`parse_dust_address`](midnight_types::address::parse_dust_address).
     ///
-    /// The registration sets the Dust address of the whole NIGHT address. A
-    /// later registration replaces it, so a registration without `.to()`
-    /// points it back to this wallet's own Dust address. tNIGHT that reaches
-    /// the address generates Dust for the Dust address that the last
-    /// registration set. tNIGHT that already generates Dust keeps its Dust
-    /// address until the wallet spends it.
+    /// The registration sets the Dust public key of the whole NIGHT address.
+    /// A later registration replaces it, so a registration without `.to()`
+    /// points the NIGHT address back to this wallet's own key. tNIGHT that
+    /// reaches the address generates Dust for the key that the last
+    /// registration set. tNIGHT that already generates Dust keeps its key
+    /// until the wallet spends it.
     pub fn to(mut self, target: DustPublicKey) -> Self {
         self.target = Some(target);
         self

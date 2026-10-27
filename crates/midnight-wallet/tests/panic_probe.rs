@@ -2,8 +2,9 @@
 //! panics and not silently-accepted recipients. Both hazards live upstream:
 //! `TryFrom<&WalletAddress> for ShieldedWallet` asserts the payload length
 //! instead of returning its `InvalidCoinKeyLen` variant, and it validates the
-//! HRP's prefix and credential segments but never its network segment, and
-//! `TryFrom<&WalletAddress> for DustWallet` does the same.
+//! HRP's prefix and credential segments but never its network segment.
+//! `TryFrom<&WalletAddress> for DustWallet` also never checks the network
+//! segment.
 
 use midnight_wallet::{Network, Seed, WalletError, parse_dust_address, parse_shielded_recipient};
 

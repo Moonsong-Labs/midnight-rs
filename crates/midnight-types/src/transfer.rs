@@ -163,8 +163,8 @@ pub enum TransferKind {
         /// Fallback creation time for the UTXOs whose own creation time the
         /// indexer did not report.
         utxo_ctime: Option<u64>,
-        /// The Dust address that gets the Dust the registered tNIGHT
-        /// generates. `None` names this wallet's own Dust address.
+        /// The Dust public key that gets the Dust of the registered tNIGHT.
+        /// `None` names this wallet's own key.
         target: Option<DustPublicKey>,
     },
 }

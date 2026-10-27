@@ -699,14 +699,14 @@ impl<'a> TransferBuilder<'a> {
     /// used only for UTXOs whose own creation time the indexer did not report.
     /// If `None`, those UTXOs fall back to `now - 1 hour`.
     ///
-    /// `target` is the Dust address that gets the Dust the registered tNIGHT
-    /// generates, for example the address of another wallet that pays fees.
-    /// `None` names this wallet's own Dust address. The registration sets the
-    /// Dust address of the whole NIGHT address. A later registration replaces
-    /// it, also when its `target` is `None`. tNIGHT that reaches the address
-    /// after a registration generates Dust for the Dust address that the last
-    /// registration set. tNIGHT that already generates Dust keeps its Dust
-    /// address until the wallet spends it.
+    /// `target` is the Dust public key that gets the Dust of the registered
+    /// tNIGHT, for example the key of another wallet that pays fees. `None`
+    /// names this wallet's own key. The registration sets the Dust public key
+    /// of the whole NIGHT address. A later registration replaces it, also when
+    /// its `target` is `None`. tNIGHT that reaches the address after a
+    /// registration generates Dust for the key that the last registration set.
+    /// tNIGHT that already generates Dust keeps its key until the wallet spends
+    /// it.
     pub async fn prepare_register_dust(
         self,
         utxo_ctime: Option<u64>,
