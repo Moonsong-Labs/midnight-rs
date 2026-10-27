@@ -316,6 +316,16 @@ pub struct PendingTx {
     transaction_hash: TransactionHash,
 }
 
+impl std::fmt::Debug for PendingTx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingTx")
+            .field("extrinsic_hash", &self.extrinsic_hash())
+            .field("transaction_hash", &self.transaction_hash)
+            .field("reserved", &self.reservation.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 /// What a build reserved, kept alive so it can be handed back if the
 /// transaction turns out to be dead.
 ///
@@ -489,6 +499,16 @@ pub struct PreparedTx {
     tx: subxt::tx::SubmittableTransaction<subxt::SubstrateConfig, AtBlock>,
     transaction_hash: TransactionHash,
     held: Option<HeldInputs>,
+}
+
+impl std::fmt::Debug for PreparedTx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedTx")
+            .field("extrinsic_hash", &self.extrinsic_hash())
+            .field("transaction_hash", &self.transaction_hash)
+            .field("held", &self.held)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PreparedTx {
