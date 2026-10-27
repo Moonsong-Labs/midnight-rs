@@ -159,7 +159,7 @@ mod tests {
         let location = register("ee", "increment", &config).unwrap();
 
         let (_, hash) = parse(&location).unwrap();
-        let registry = REGISTRY.lock().unwrap();
-        assert_eq!(registry[&hash].len(), 1);
+        let entries = REGISTRY.lock().unwrap()[&hash].len();
+        assert_eq!(entries, 1);
     }
 }
