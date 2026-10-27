@@ -3,8 +3,8 @@
 //! [`RemoteProofServer`] implements each ledger generation's `ProofProvider`
 //! (see the generation modules) by delegating ZK proving to an HTTP proof
 //! server (e.g. midnightntwrk/proof-server) over its `/check`
-//! and `/prove` endpoints. Each request has a deadline, and a transient
-//! failure is retried with exponential backoff before that deadline.
+//! and `/prove` endpoints. Each request has a deadline, and the client retries
+//! a transient failure with exponential backoff before that deadline.
 //!
 //! Each ledger's `ProofServerProvider` builds the request bodies: the
 //! tagged-serialized preimage, plus the circuit's IR or keys when the server
@@ -38,11 +38,11 @@ pub(crate) enum ProofServerError {
 
 /// POST `body` to the proof server's `endpoint` and return the response body.
 ///
-/// `timeout` bounds the whole request, retries included. A transient failure
-/// (see [`is_transient`]) is retried at most [`MAX_RETRIES`] times, and only
-/// while the backoff ends before the deadline. A non-2xx status becomes
-/// [`ProofServerError::Http`]. A transport failure, a timeout included, passes
-/// through as a `reqwest::Error`.
+/// `timeout` bounds the whole request, retries included. This function retries
+/// a transient failure (see [`is_transient`]) at most [`MAX_RETRIES`] times,
+/// and only while the backoff ends before the deadline. A non-2xx status
+/// becomes [`ProofServerError::Http`]. A malformed URL or a transport failure,
+/// a timeout included, passes through as a `reqwest::Error`.
 pub(crate) async fn post(
     http: &reqwest::Client,
     base_url: &str,
@@ -50,14 +50,18 @@ pub(crate) async fn post(
     body: Vec<u8>,
     timeout: Duration,
 ) -> Result<Vec<u8>, anyhow::Error> {
-    let url = format!("{base_url}{endpoint}");
+    let request = http
+        .post(format!("{base_url}{endpoint}"))
+        .body(body)
+        .build()?;
     let start = Instant::now();
     let remaining = || timeout.saturating_sub(start.elapsed());
     let mut delay = INITIAL_BACKOFF;
     let mut retries = 0;
     loop {
-        let request = http.post(&url).body(body.clone()).timeout(remaining());
-        match send(request, endpoint).await {
+        let mut attempt = request.try_clone().expect("a byte body is reusable");
+        *attempt.timeout_mut() = Some(remaining());
+        match send(http, attempt, endpoint).await {
             Ok(bytes) => return Ok(bytes),
             Err(err) if retries < MAX_RETRIES && is_transient(&err) && delay < remaining() => {
                 warn!(endpoint, ?err, retry_in = ?delay, "proof server request failed, retrying");
@@ -71,10 +75,11 @@ pub(crate) async fn post(
 }
 
 async fn send(
-    request: reqwest::RequestBuilder,
+    http: &reqwest::Client,
+    request: reqwest::Request,
     endpoint: &'static str,
 ) -> Result<Vec<u8>, anyhow::Error> {
-    let resp = request.send().await?;
+    let resp = http.execute(request).await?;
     let status = resp.status();
     if !status.is_success() {
         return Err(ProofServerError::Http {
@@ -281,6 +286,25 @@ mod tests {
         assert_eq!(
             *bodies.lock().unwrap(),
             vec![b"preimage".to_vec(); attempts]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_url_with_no_host_fails_the_request_with_no_panic() {
+        let err = post(
+            &reqwest::Client::new(),
+            "localhost:6300",
+            "/prove",
+            b"preimage".to_vec(),
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_builder),
+            "{err:#}"
         );
     }
 
