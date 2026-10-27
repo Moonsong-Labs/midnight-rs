@@ -316,12 +316,10 @@ pub struct DustlessTransaction {
 }
 
 impl DustlessTransaction {
-    /// Wrap already-proven, Dustless transaction bytes. Called by the
-    /// `.without_dust()` build paths of generated contract-call builders; not
-    /// intended for wrapping arbitrary bytes.
+    /// Wrap already-proven, Dustless transaction bytes that do not name their
+    /// reserved inputs. Do not use it to wrap arbitrary bytes.
     ///
-    /// The bytes do not name the inputs that their build reserved, so
-    /// [`Self::spent`] is empty.
+    /// [`Self::spent`] of the result is empty.
     pub fn from_proven_bytes(tx_bytes: Vec<u8>) -> Self {
         DustlessTransaction {
             tx_bytes,
@@ -352,22 +350,24 @@ impl DustlessTransaction {
     ///
     /// They stay reserved while the fee payer completes and submits the
     /// transaction, so a later build of that wallet does not select them.
-    /// When the transaction will not land, for example because the
-    /// counterparty or the fee payer gives up, pass them to
-    /// [`MidnightProvider::release`] on that provider. Otherwise they stay
-    /// reserved until a sync sees the chain spend them, or until their TTL
-    /// passes. A fee payer that submits with
-    /// [`MidnightProvider::submit_reserved`] hands back only its own Dust
-    /// when the node rejects the transaction, so these inputs need this
-    /// release too.
+    /// When the transaction will not land, pass them to
+    /// [`MidnightProvider::release`] on that provider. For example, the
+    /// counterparty or the fee payer gives up. Otherwise they stay reserved
+    /// until a sync sees the chain spend them, or until their TTL passes. A
+    /// fee payer that submits with [`MidnightProvider::submit_reserved`]
+    /// hands back only its own Dust when the node rejects the transaction.
+    /// So these inputs need this release too.
     ///
     /// Release only a transaction that cannot land. A shielded transfer or a
-    /// swap half is a bare Zswap offer with no TTL, so the fee payer can
-    /// still submit it at any later time. A later build can then select the
+    /// swap half has no TTL of its own. The chain accepts it while it keeps
+    /// the Merkle root that the inputs prove against. The chain keeps a root
+    /// for the ledger's `global_ttl` after its coin tree moves past that
+    /// root, and for a fixed hour on ledger 8. Until then, the fee payer can
+    /// still submit the transaction. A later build can then select the
     /// released inputs, and the chain rejects one of the two transactions.
     ///
-    /// Empty for [`Self::from_proven_bytes`], so for the `.without_dust()` of
-    /// a generated contract call. The inputs of such a call stay reserved
+    /// Empty for [`Self::from_proven_bytes`], and so for the `.without_dust()`
+    /// of a generated contract call. The inputs of such a call stay reserved
     /// until a sync sees the chain spend them, or until their TTL passes.
     pub fn spent(&self) -> &SpentInputs {
         &self.spent
