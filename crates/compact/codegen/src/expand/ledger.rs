@@ -64,10 +64,12 @@ pub(crate) fn emit_ledger_wrapper(
     };
 
     // Generate InitialState struct with typed fields
-    let initial_state = emit_initial_state(fields, name, info.has_constructor);
+    let initial_state = emit_initial_state(fields, name, info.constructor.as_ref());
 
     // Generate Circuits struct with async on-chain call methods
     let circuit_methods_struct = emit_circuits_struct(info, &struct_name);
+
+    let (deploy_fn, deploy_builder) = emit_deploy(info, &struct_name, name, &declared_circuits);
 
     quote! {
         /// Typed access to the contract's ledger state and circuit calls.
@@ -117,7 +119,6 @@ pub(crate) fn emit_ledger_wrapper(
         ///
         /// ```rust,ignore
         /// let contract = Contract::deploy(&provider)
-        ///     .with_initial_state(LedgerInitialState::default())
         ///     .with_zk_config("compiled")
         ///     .await?;
         ///
@@ -127,23 +128,7 @@ pub(crate) fn emit_ledger_wrapper(
         pub struct Contract<P>(midnight_contract::Contract<P>);
 
         impl Contract<()> {
-            /// Start building a deployment for this contract.
-            ///
-            /// Returns a `DeployBuilder` that can be awaited directly. The
-            /// provider must have a synced wallet attached via
-            /// `MidnightProvider::with_wallet(...)`.
-            pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
-            where
-                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
-            {
-                // Typed so a contract with no impure circuits still infers.
-                const DECLARED_CIRCUITS: &[&str] = &[#(#declared_circuits),*];
-                DeployBuilder(
-                    midnight_contract::Contract::deploy(provider)
-                        .with_declared_circuits(DECLARED_CIRCUITS.iter().copied())
-                        .with_declared_witnesses(#declares_witnesses),
-                )
-            }
+            #deploy_fn
 
             /// Create a handle for an already-deployed contract at the given
             /// address: a hex string or a typed `ContractAddress`.
@@ -164,82 +149,7 @@ pub(crate) fn emit_ledger_wrapper(
             }
         }
 
-        /// Builder wrapper around `midnight_contract::DeployBuilder` that
-        /// yields the generated `Contract<P>` on deploy.
-        #[must_use = "does nothing until awaited or sent"]
-        pub struct DeployBuilder<'a, P>(midnight_contract::DeployBuilder<'a, P>);
-
-        impl<P> DeployBuilder<'_, P> {
-            /// Set the initial contract state.
-            pub fn with_initial_state(self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
-                Self(self.0.with_initial_state(state))
-            }
-
-            /// Attach a shielded offer that the deploy transaction carries: the
-            /// deploy spends the offer's coins from the attached wallet and pays
-            /// each of its outputs. See
-            /// [`midnight_contract::DeployBuilder::with_shielded_offer`].
-            pub fn with_shielded_offer(self, offer: midnight_contract::ShieldedOffer) -> Self {
-                Self(self.0.with_shielded_offer(offer))
-            }
-
-            /// Make the deployed contract governable by setting its maintenance
-            /// authority committee (verifying keys) and threshold. See
-            /// [`midnight_contract::DeployBuilder::with_maintenance_authority`].
-            pub fn with_maintenance_authority(
-                self,
-                committee: Vec<midnight_contract::VerifyingKey>,
-                threshold: u32,
-            ) -> Self {
-                Self(self.0.with_maintenance_authority(committee, threshold))
-            }
-
-            /// Set the source of the contract's compiled ZK artifacts (a directory
-            /// path or a custom `ZkConfigProvider`); see `midnight_contract::IntoZkConfig`.
-            pub fn with_zk_config(self, zk_config: impl midnight_contract::IntoZkConfig) -> Self {
-                Self(self.0.with_zk_config(zk_config))
-            }
-
-            /// Set the deadline of `midnight_contract::PendingDeploy::into_contract`
-            /// (default: 60s).
-            ///
-            /// The deadline starts when `into_contract` starts, after `send` returns.
-            /// It bounds the best-block wait that `into_contract` does when no wait
-            /// ran before it, and then the read of the deployed contract. The SDK sets
-            /// no deadline on an explicit `wait_best` or `wait_finalized`. See
-            /// `midnight_contract::PendingTx` to bound one with `tokio::time::timeout`.
-            pub fn with_deploy_timeout(self, timeout: std::time::Duration) -> Self {
-                Self(self.0.with_deploy_timeout(timeout))
-            }
-
-            /// Submit the deploy transaction and return a `PendingDeploy` handle.
-            ///
-            /// Use [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`]
-            /// to observe inclusion states, then [`PendingDeploy::into_contract`]
-            /// to obtain the typed `Contract<P>`. Each wait fails with
-            /// `ContractError::TransactionFailed` when the chain did not apply
-            /// the deploy. `into_contract` waits for the best block itself when
-            /// no wait ran, and then reads the deployed contract from the node.
-            pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
-            where
-                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
-            {
-                // Boxed for the same reason the `IntoFuture` impl below is.
-                Box::pin(async move { Ok(PendingDeploy(self.0.send().await?)) }).await
-            }
-        }
-
-        impl<'a, P> std::future::IntoFuture for DeployBuilder<'a, P>
-        where
-            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'a,
-        {
-            type Output = Result<Contract<P>, midnight_contract::ContractError>;
-            type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
-
-            fn into_future(self) -> Self::IntoFuture {
-                Box::pin(async move { self.0.await.map(Contract) })
-            }
-        }
+        #deploy_builder
 
         /// Wrapper around `midnight_contract::PendingDeploy` that yields the
         /// generated `Contract<P>` from `into_contract`.
@@ -421,6 +331,298 @@ pub(crate) fn emit_ledger_wrapper(
     }
 }
 
+/// `Contract::deploy`, and the items of the `DeployBuilder` that it returns.
+///
+/// The generated deploy runs the contract's constructor when the interpreter
+/// can run it, and deploys the default state when the contract has no
+/// constructor.
+fn emit_deploy(
+    info: &crate::types::ContractInfo,
+    ledger_name: &Ident,
+    contract_name: &str,
+    declared_circuits: &[&str],
+) -> (TokenStream, TokenStream) {
+    let initial_state_name = format_ident!("{}InitialState", contract_name);
+    let default_state = format!("`{contract_name}InitialState::default()`");
+    let declares_witnesses = !info.witnesses.is_empty();
+    let takes_arguments = info
+        .runnable_constructor()
+        .is_some_and(|c| !c.arguments.is_empty());
+
+    let (source, source_doc) = match &info.constructor {
+        None => (
+            quote! { .with_initial_state(#initial_state_name::default()) },
+            format!(
+                "The deploy deploys {default_state}. `DeployBuilder::with_initial_state` \
+                 deploys another state."
+            ),
+        ),
+        Some(Ok(_)) => {
+            let mut doc = format!(
+                "The deploy runs the contract's constructor on {default_state}, and deploys \
+                 the state that the constructor leaves. `DeployBuilder::with_initial_state` \
+                 deploys a state as it is and skips the constructor."
+            );
+            if takes_arguments {
+                doc.push_str(
+                    " The constructor takes arguments: set them with \
+                     `DeployBuilder::with_constructor_args`. Without them, a deploy that runs \
+                     the constructor fails with `ContractError::MissingConstructorArgs` before \
+                     it proves anything.",
+                );
+            }
+            let source = quote! {
+                .with_constructor(midnight_contract::Constructor {
+                    circuit: #ledger_name::__constructor(),
+                    circuits: #ledger_name::__helpers(),
+                    witnesses: #ledger_name::__witnesses(),
+                    natives: #ledger_name::__natives(),
+                    state: #initial_state_name::default().build(),
+                })
+            };
+            (source, doc)
+        }
+        Some(Err(reason)) => (
+            TokenStream::new(),
+            format!(
+                "The SDK cannot run the contract's constructor ({reason}). Set the state to \
+                 deploy with `DeployBuilder::with_initial_state`. Without it, the deploy fails \
+                 with `ContractError::Construction` before it proves anything."
+            ),
+        ),
+    };
+
+    // The leading space matches the `///` lines above it.
+    let source_doc = format!(" {source_doc}");
+    let deploy_fn = quote! {
+        /// Start building a deployment for this contract.
+        ///
+        /// Returns a `DeployBuilder` that can be awaited directly. The
+        /// provider must have a synced wallet attached via
+        /// `MidnightProvider::with_wallet(...)`.
+        ///
+        #[doc = #source_doc]
+        pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
+        where
+            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
+        {
+            // Typed so a contract with no impure circuits still infers.
+            const DECLARED_CIRCUITS: &[&str] = &[#(#declared_circuits),*];
+            DeployBuilder {
+                inner: midnight_contract::Contract::deploy(provider)
+                    .with_declared_circuits(DECLARED_CIRCUITS.iter().copied())
+                    .with_declared_witnesses(#declares_witnesses)
+                    #source,
+                error: ::core::option::Option::None,
+                witnesses: ::core::marker::PhantomData,
+            }
+        }
+    };
+
+    let with_initial_state_doc = if info.runnable_constructor().is_none() {
+        "Set the state to deploy.".to_owned()
+    } else if declares_witnesses {
+        "Deploy `state` as it is, and skip the contract's constructor.\n\n\
+         The constructor arguments and the witnesses then have no use. The deploy still \
+         records the initial private state."
+            .to_owned()
+    } else {
+        "Deploy `state` as it is, and skip the contract's constructor.\n\n\
+         The constructor arguments then have no use."
+            .to_owned()
+    };
+
+    let with_constructor_args = info
+        .runnable_constructor()
+        .filter(|c| !c.arguments.is_empty())
+        .map(|c| {
+            let params = typed_params(&c.arguments);
+            let args = args_binding(&c.arguments);
+            quote! {
+                /// Set the arguments of the contract's constructor, which the deploy runs.
+                ///
+                /// Without them, a deploy that runs the constructor fails with
+                /// `ContractError::MissingConstructorArgs` before it proves anything.
+                /// `with_initial_state` skips the constructor, and the arguments then
+                /// have no use.
+                pub fn with_constructor_args(self #(, #params)*) -> Self {
+                    #args
+                    Self {
+                        inner: self.inner.with_constructor_args(
+                            ::std::iter::IntoIterator::into_iter(__args)
+                                .map(|(__name, __value)| {
+                                    (::std::borrow::ToOwned::to_owned(__name), __value)
+                                })
+                                .collect(),
+                        ),
+                        ..self
+                    }
+                }
+            }
+        });
+
+    // `Witnesses` and `WitnessesAdapter` exist only for a contract that
+    // declares witnesses.
+    let witness_impls = declares_witnesses.then(|| {
+        quote! {
+            impl<'a, P> DeployBuilder<'a, P, midnight_contract::runtime::NoWitnesses> {
+                /// Attach a typed [`Witnesses`] implementation.
+                ///
+                /// It answers the witness calls of the contract's constructor. Without
+                /// it, a constructor that calls a witness fails with
+                /// `ContractError::Interpreter` before the deploy proves anything. Chain
+                /// [`DeployBuilder::with_initial_private_state`] to set the private state
+                /// that the constructor starts from.
+                pub fn with_witnesses<W: Witnesses>(
+                    self,
+                    witnesses: &'a W,
+                ) -> DeployBuilder<'a, P, WitnessesAdapter<'a, W>> {
+                    DeployBuilder {
+                        inner: self.inner.with_witnesses(WitnessesAdapter(witnesses)),
+                        error: self.error,
+                        witnesses: ::core::marker::PhantomData,
+                    }
+                }
+            }
+
+            impl<'a, P, W: Witnesses> DeployBuilder<'a, P, WitnessesAdapter<'a, W>> {
+                /// Set the private state that the deploy starts from.
+                ///
+                /// The constructor's witnesses start from `state`, and the deploy records
+                /// the private state that they leave as the first snapshot of the new
+                /// contract. Its first call then starts from that snapshot. Without this
+                /// method, the private state starts at `Default`.
+                ///
+                /// A private state to record needs a private-state store on the provider
+                /// (`MidnightProvider::with_private_state`). Without one, the deploy fails
+                /// with `ContractError::Construction` before it proves anything. The deploy
+                /// encodes `state` with `serde_json`, and a state that does not encode
+                /// fails the deploy with `ContractError::Serialization`.
+                pub fn with_initial_private_state(self, state: W::PrivateState) -> Self {
+                    match serde_json::to_vec(&state) {
+                        ::core::result::Result::Ok(bytes) => Self {
+                            inner: self.inner.with_initial_private_state(bytes),
+                            ..self
+                        },
+                        ::core::result::Result::Err(e) => Self {
+                            error: self.error.or(::core::option::Option::Some(
+                                midnight_contract::ContractError::Serialization(::std::format!(
+                                    "encode the initial private state: {e}"
+                                )),
+                            )),
+                            ..self
+                        },
+                    }
+                }
+            }
+        }
+    });
+
+    let deploy_builder = quote! {
+        /// Builder wrapper around `midnight_contract::DeployBuilder` that
+        /// yields the generated `Contract<P>` on deploy.
+        ///
+        /// `Wp` is the witness provider that the constructor runs with.
+        #[must_use = "does nothing until awaited or sent"]
+        pub struct DeployBuilder<'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
+            inner: midnight_contract::DeployBuilder<'a, P>,
+            /// The first error of a setter, which `send` and `.await` return.
+            error: ::core::option::Option<midnight_contract::ContractError>,
+            witnesses: ::core::marker::PhantomData<fn() -> Wp>,
+        }
+
+        impl<'a, P, Wp> DeployBuilder<'a, P, Wp> {
+            #[doc = #with_initial_state_doc]
+            pub fn with_initial_state(self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
+                Self { inner: self.inner.with_initial_state(state), ..self }
+            }
+
+            #with_constructor_args
+
+            /// Attach a shielded offer that the deploy transaction carries: the
+            /// deploy spends the offer's coins from the attached wallet and pays
+            /// each of its outputs. See
+            /// [`midnight_contract::DeployBuilder::with_shielded_offer`].
+            pub fn with_shielded_offer(self, offer: midnight_contract::ShieldedOffer) -> Self {
+                Self { inner: self.inner.with_shielded_offer(offer), ..self }
+            }
+
+            /// Make the deployed contract governable by setting its maintenance
+            /// authority committee (verifying keys) and threshold. See
+            /// [`midnight_contract::DeployBuilder::with_maintenance_authority`].
+            pub fn with_maintenance_authority(
+                self,
+                committee: Vec<midnight_contract::VerifyingKey>,
+                threshold: u32,
+            ) -> Self {
+                Self { inner: self.inner.with_maintenance_authority(committee, threshold), ..self }
+            }
+
+            /// Set the source of the contract's compiled ZK artifacts (a directory
+            /// path or a custom `ZkConfigProvider`); see `midnight_contract::IntoZkConfig`.
+            pub fn with_zk_config(self, zk_config: impl midnight_contract::IntoZkConfig) -> Self {
+                Self { inner: self.inner.with_zk_config(zk_config), ..self }
+            }
+
+            /// Set the deadline of `midnight_contract::PendingDeploy::into_contract`
+            /// (default: 60s).
+            ///
+            /// The deadline starts when `into_contract` starts, after `send` returns.
+            /// It bounds the best-block wait that `into_contract` does when no wait
+            /// ran before it, and then the read of the deployed contract. The SDK sets
+            /// no deadline on an explicit `wait_best` or `wait_finalized`. See
+            /// `midnight_contract::PendingTx` to bound one with `tokio::time::timeout`.
+            pub fn with_deploy_timeout(self, timeout: std::time::Duration) -> Self {
+                Self { inner: self.inner.with_deploy_timeout(timeout), ..self }
+            }
+
+            /// Submit the deploy transaction and return a `PendingDeploy` handle.
+            ///
+            /// Use [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`]
+            /// to observe inclusion states, then [`PendingDeploy::into_contract`]
+            /// to obtain the typed `Contract<P>`. Each wait fails with
+            /// `ContractError::TransactionFailed` when the chain did not apply
+            /// the deploy. `into_contract` waits for the best block itself when
+            /// no wait ran, and then reads the deployed contract from the node.
+            /// See `midnight_contract::DeployBuilder::send` for the errors.
+            pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
+            where
+                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
+            {
+                // Boxed for the same reason the `IntoFuture` impl below is.
+                Box::pin(async move {
+                    if let ::core::option::Option::Some(error) = self.error {
+                        return Err(error);
+                    }
+                    Ok(PendingDeploy(self.inner.send().await?))
+                })
+                .await
+            }
+        }
+
+        #witness_impls
+
+        impl<'a, P, Wp: 'a> std::future::IntoFuture for DeployBuilder<'a, P, Wp>
+        where
+            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'a,
+        {
+            type Output = Result<Contract<P>, midnight_contract::ContractError>;
+            type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
+
+            fn into_future(self) -> Self::IntoFuture {
+                Box::pin(async move {
+                    if let ::core::option::Option::Some(error) = self.error {
+                        return Err(error);
+                    }
+                    self.inner.await.map(Contract)
+                })
+            }
+        }
+    };
+
+    (deploy_fn, deploy_builder)
+}
+
 fn emit_field_accessor(field: &LedgerField, const_name: &Ident) -> TokenStream {
     let method_name = make_ident(&field.name);
     let field_indices = field_indices_expr(const_name, &field.index);
@@ -556,29 +758,44 @@ fn state_array_expr(slots: Vec<(Vec<usize>, TokenStream)>) -> TokenStream {
     quote! { StateValue::Array(vec![#(#elements),*].into()) }
 }
 
-/// The doc of `{Name}InitialState`, with the constructor note when the
-/// contract has a constructor.
-fn initial_state_doc(has_constructor: bool) -> TokenStream {
+/// The doc of `{Name}InitialState`, with a note on the contract's
+/// constructor when it has one.
+fn initial_state_doc(constructor: Option<&Result<crate::ir::Circuit, String>>) -> TokenStream {
     let mut lines = vec![
-        " Initial state for deploying this contract.",
-        "",
-        " `Default` gives each field the compiler's initial value for its type.",
+        " Initial state for deploying this contract.".to_owned(),
+        String::new(),
+        " `Default` gives each field the compiler's initial value for its type.".to_owned(),
     ];
-    if has_constructor {
-        lines.extend([
-            "",
-            " The SDK does not run the contract's constructor, so this state is the",
-            " state before the constructor runs. Before you deploy, set each field that",
-            " the constructor writes to the value that the constructor writes.",
-        ]);
+    match constructor {
+        None => {}
+        Some(Ok(_)) => lines.extend([
+            String::new(),
+            " `Default` gives the state before the constructor runs. `Contract::deploy` runs"
+                .to_owned(),
+            " the constructor on it. `DeployBuilder::with_initial_state` deploys a state as it"
+                .to_owned(),
+            " is and skips the constructor.".to_owned(),
+        ]),
+        Some(Err(reason)) => lines.extend([
+            String::new(),
+            format!(" The SDK cannot run the contract's constructor ({reason})."),
+            " So `Default` is the state before the constructor runs. Before you deploy, set"
+                .to_owned(),
+            " each field that the constructor writes to the value that the constructor writes."
+                .to_owned(),
+        ]),
     }
     quote! { #(#[doc = #lines])* }
 }
 
-fn emit_initial_state(fields: &[LedgerField], name: &str, has_constructor: bool) -> TokenStream {
+fn emit_initial_state(
+    fields: &[LedgerField],
+    name: &str,
+    constructor: Option<&Result<crate::ir::Circuit, String>>,
+) -> TokenStream {
     let struct_name = format_ident!("{}InitialState", name);
     let ledger_name = format_ident!("{}", name);
-    let doc = initial_state_doc(has_constructor);
+    let doc = initial_state_doc(constructor);
 
     let mut field_defs = Vec::new();
     let mut field_defaults = Vec::new();
@@ -1407,6 +1624,40 @@ pub(crate) fn emit_simulator(
         })
         .collect();
 
+    let run_constructor = info.runnable_constructor().map(|c| {
+        let params = typed_params(&c.arguments);
+        let program = program_setup(&ledger_name);
+        let args = args_binding(&c.arguments);
+        let doc = format!(
+            "Run the contract's constructor in process, as a deploy does.\n\n\
+             The constructor runs on the simulator's ledger. A simulator over \
+             `{contract_name}InitialState::default()` then holds the state that a deploy with \
+             these arguments makes. On success, the simulator keeps the ledger and the private \
+             state after the constructor.\n\n\
+             The constructor runs at the address, the block time and the coin public key of the \
+             simulator. A deploy runs it at the zero address, the wall-clock time and the \
+             wallet's coin public key. The simulator refuses no effect, and a deploy refuses a \
+             constructor that mints, claims or spends a coin, or makes an unshielded input or \
+             output.\n\n\
+             # Errors\n\n\
+             `ContractError::Interpreter` when the constructor or a witness fails, for example \
+             on a failed `assert`. The simulator then keeps the state from before the run."
+        );
+        quote! {
+            #[doc = #doc]
+            pub fn run_constructor(
+                &mut self
+                #(, #params)*
+            ) -> ::core::result::Result<(), midnight_contract::ContractError> {
+                #program
+                #args
+                self.0
+                    .run(&#ledger_name::__constructor(), &program, &__args)
+                    .map(::core::mem::drop)
+            }
+        }
+    });
+
     // `Witnesses` and `WitnessesAdapter` exist only for a contract that
     // declares witnesses.
     let with_witnesses = if info.witnesses.is_empty() {
@@ -1493,6 +1744,8 @@ pub(crate) fn emit_simulator(
         }
 
         impl<Wp: midnight_contract::runtime::WitnessProvider> Simulator<Wp> {
+            #run_constructor
+
             #(#methods)*
         }
     }
@@ -1506,23 +1759,25 @@ pub(crate) fn emit_simulator(
 /// scope as a local of its own name.
 pub(super) fn circuit_setup(ledger_name: &Ident, circuit: &Circuit) -> TokenStream {
     let circuit_id = circuit.def.name.0.as_str();
-    let args_expr = if circuit.arguments().is_empty() {
-        quote! { let __args: [(&str, midnight_contract::runtime::Value); 0] = []; }
-    } else {
-        let binding_list: Vec<_> = circuit
-            .arguments()
-            .iter()
-            .map(|arg| {
-                let name_str = arg.name.name();
-                let name_ident = make_ident(name_str);
-                let conversion =
-                    super::circuit_calls::type_to_value_conversion(&name_ident, &arg.ty);
-                quote! { (#name_str, #conversion) }
-            })
-            .collect();
-        quote! { let __args = [#(#binding_list),*]; }
-    };
+    let program = program_setup(ledger_name);
+    let args = args_binding(circuit.arguments());
 
+    quote! {
+        #program
+        // The circuit travels once, in `__helpers()`; resolve it there
+        // rather than embedding a second copy per call site.
+        let ir = program.circuit(#circuit_id).ok_or_else(|| {
+            midnight_contract::ContractError::Serialization(::std::format!(
+                "the embedded program declares no circuit `{}`", #circuit_id
+            ))
+        })?;
+        #args
+    }
+}
+
+/// The statements that build the program that a body resolves its calls
+/// against, as `program`.
+fn program_setup(ledger_name: &Ident) -> TokenStream {
     quote! {
         let helpers = #ledger_name::__helpers();
         let witnesses = #ledger_name::__witnesses();
@@ -1532,15 +1787,26 @@ pub(super) fn circuit_setup(ledger_name: &Ident, circuit: &Circuit) -> TokenStre
             &witnesses,
             &natives,
         );
-        // The circuit travels once, in `__helpers()`; resolve it there
-        // rather than embedding a second copy per call site.
-        let ir = program.circuit(#circuit_id).ok_or_else(|| {
-            midnight_contract::ContractError::Serialization(::std::format!(
-                "the embedded program declares no circuit `{}`", #circuit_id
-            ))
-        })?;
-        #args_expr
     }
+}
+
+/// The statement that binds `arguments` as `__args`, an array of (source
+/// name, value) pairs. Each argument must be in scope as a local of its own
+/// name.
+fn args_binding(arguments: &[crate::ir::Argument]) -> TokenStream {
+    if arguments.is_empty() {
+        return quote! { let __args: [(&str, midnight_contract::runtime::Value); 0] = []; };
+    }
+    let binding_list: Vec<_> = arguments
+        .iter()
+        .map(|arg| {
+            let name_str = arg.name.name();
+            let name_ident = make_ident(name_str);
+            let conversion = super::circuit_calls::type_to_value_conversion(&name_ident, &arg.ty);
+            quote! { (#name_str, #conversion) }
+        })
+        .collect();
+    quote! { let __args = [#(#binding_list),*]; }
 }
 
 /// The type of the value of `circuit`, and `fn __decode`, which turns the
@@ -1603,7 +1869,7 @@ mod tests {
 
     /// The state expression `build()` hands to `ContractState::new`.
     fn built_state(fields: &[LedgerField]) -> String {
-        let out = emit_initial_state(fields, "Wide", false)
+        let out = emit_initial_state(fields, "Wide", None)
             .to_string()
             .replace(' ', "");
         out.split("ContractState::new(")

@@ -65,6 +65,36 @@ pub enum ContractError {
         paid: u128,
     },
 
+    /// A deploy runs the contract's constructor, and it does not set each
+    /// argument that the constructor takes.
+    ///
+    /// The deploy stops before it queries the node or proves anything. Set the
+    /// arguments with the generated `with_constructor_args`, or deploy a state
+    /// with `with_initial_state`, which skips the constructor.
+    #[error(
+        "the contract's constructor takes the arguments {missing:?}, and the deploy does not \
+         set them: call `with_constructor_args`, or `with_initial_state` to skip the constructor"
+    )]
+    MissingConstructorArgs {
+        /// The source names of the arguments with no value.
+        missing: Vec<String>,
+    },
+
+    /// The contract's constructor has an effect that a deploy cannot carry.
+    ///
+    /// A deploy carries the state that the constructor leaves, and no
+    /// transcript. The ledger takes a mint, a claim, an unshielded input or
+    /// output, and a shielded coin that a contract spends or creates only from
+    /// the transcript of a call. So the deploy stops after the constructor
+    /// runs, before it proves anything. Deploy a state with
+    /// `with_initial_state`, which skips the constructor, and make the effect
+    /// in a circuit call.
+    #[error(
+        "the constructor {0}, which a deploy cannot carry: deploy a state with \
+         `with_initial_state`, and make the effect in a circuit call"
+    )]
+    ConstructorEffect(ConstructorEffect),
+
     #[error("serialization failed: {0}")]
     Serialization(String),
 
@@ -253,19 +283,20 @@ pub enum ContractError {
         in_block: Option<Box<TxInBlock>>,
     },
 
-    /// A circuit call could not record its pending private-state snapshot.
+    /// A circuit call or a deploy could not record its pending private-state
+    /// snapshot.
     ///
-    /// The call records the snapshot before it submits the transaction, so it
-    /// stopped before the submit. Nothing reached the chain, no snapshot
-    /// exists, and the wallet has the inputs that the call reserved back. Fix
-    /// the store error in `source`, then call again.
+    /// The call or the deploy records the snapshot before it submits the
+    /// transaction, so it stopped before the submit. Nothing reached the
+    /// chain, no snapshot exists, and the wallet has the inputs that the build
+    /// reserved back. Fix the store error in `source`, then try again.
     #[error(
         "`append_pending` failed for extrinsic {extrinsic_hash:x}: {source}. The \
          transaction was not submitted, and nothing reached the chain: fix the \
-         store error, then call again."
+         store error, then try again."
     )]
     PendingSnapshotFailed {
-        /// The extrinsic hash of the transaction that the call did not submit.
+        /// The extrinsic hash of the transaction that the SDK did not submit.
         extrinsic_hash: ExtrinsicHash,
         /// The private-state store error that prevented the snapshot.
         source: midnight_provider::PrivateStateError,
@@ -290,6 +321,34 @@ pub enum ContractError {
 
     #[error("maintenance error: {0}")]
     Maintenance(String),
+}
+
+/// An effect of a contract's constructor that a deploy cannot carry.
+///
+/// [`ContractError::ConstructorEffect`] carries it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConstructorEffect {
+    /// A ledger effect: a mint, a claimed nullifier, coin or contract call,
+    /// or an unshielded input or output.
+    LedgerEffect,
+    /// A shielded coin that the constructor spends, with `createZswapInput`.
+    ShieldedInput,
+    /// A shielded coin that the constructor creates, with `createZswapOutput`.
+    ShieldedOutput,
+}
+
+impl std::fmt::Display for ConstructorEffect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::LedgerEffect => {
+                "makes a ledger effect (a mint, a claimed nullifier, coin or contract call, or \
+                 an unshielded input or output)"
+            }
+            Self::ShieldedInput => "spends a shielded coin",
+            Self::ShieldedOutput => "creates a shielded coin",
+        })
+    }
 }
 
 impl From<ProviderError> for ContractError {

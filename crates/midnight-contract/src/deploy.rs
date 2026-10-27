@@ -59,6 +59,7 @@ pub async fn deploy_funded(
     provider: &midnight_provider::MidnightProvider,
     shielded_offer: Option<ShieldedOffer>,
 ) -> Result<DeployResult, ContractError> {
+    let initial_state = &recharged(initial_state);
     let offer = shielded_offer.as_ref();
     // Each arm is boxed so this frame holds one generation's future, not both.
     match provider.builds().await? {
@@ -79,6 +80,20 @@ pub async fn deploy_funded(
             .await
         }
     }
+}
+
+/// `state` with the charged keys of its data, as the ledger computes them for
+/// a deploy.
+///
+/// The charged keys of a state that the interpreter or a simulator updated
+/// come from each update in turn, and they can differ from the keys of the
+/// data. Ledger 9 refuses such a deploy with `IncorrectChargedState`.
+fn recharged(state: &ContractState<InMemoryDB>) -> ContractState<InMemoryDB> {
+    ContractState::new(
+        (*state.data.get()).clone(),
+        state.operations.clone(),
+        state.maintenance_authority.clone(),
+    )
 }
 
 /// The pause before the next read of a deployed contract after a read fails.

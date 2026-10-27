@@ -1,6 +1,7 @@
 mod address;
 pub mod call;
 mod change;
+mod constructor;
 mod contract;
 pub mod deploy;
 mod error;
@@ -29,11 +30,12 @@ pub use midnight_types::{BlockHash, ExtrinsicHash};
 
 // Primary API: deploy / connect / call.
 pub use call::ShieldedInputs;
+pub use constructor::Constructor;
 pub use contract::{
     AsMidnightProvider, CallOutcome, ConnectBuilder, Contract, DeployBuilder, PendingCall,
     PendingDeploy, Simulated,
 };
-pub use error::ContractError;
+pub use error::{ConstructorEffect, ContractError};
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };

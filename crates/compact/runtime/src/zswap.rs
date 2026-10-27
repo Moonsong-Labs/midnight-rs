@@ -1,6 +1,6 @@
 //! ZSwap native primitives: the shielded-coin natives a Compact circuit can
 //! invoke (`createZswapInput`/`createZswapOutput`/`ownPublicKey`) and the
-//! captured output the call/deploy path turns into a transaction ZSwap offer.
+//! captured output the call path turns into a transaction ZSwap offer.
 //! The Rust counterpart of Minokawa's `zswap` runtime module.
 
 use crate::value::Value;
@@ -22,7 +22,8 @@ pub enum WitnessNative {
     /// of [`WitnessNative::CreateZswapOutput`]).
     CreateZswapInput,
     /// `createZswapOutput(coin, recipient) -> []`: a shielded output, captured
-    /// for the call/deploy path to build into the transaction's Zswap offer.
+    /// for the call path to build into the transaction's Zswap offer. A deploy
+    /// refuses it.
     CreateZswapOutput,
 }
 
@@ -44,7 +45,7 @@ impl WitnessNative {
 /// `createZswapOutput(coin, recipient)` records no ledger effect of its own
 /// (the mint/spend/receive effects are separate `ledger-query` ops); it marks
 /// "attach a Zswap output for this coin here". The interpreter captures the
-/// raw arg `Value`s so the call/deploy path can build the corresponding
+/// raw arg `Value`s so the call path can build the corresponding
 /// `Output` in the transaction's Zswap offer (optionally with a discovery
 /// ciphertext keyed to the recipient's encryption public key).
 #[derive(Debug, Clone)]
@@ -68,7 +69,7 @@ pub struct CircuitZswapOutput {
 /// `coinNullifier(coin, kernel.self())`); when the circuit created it earlier in
 /// the same call via `createZswapOutput` to itself (as `receiveShielded` does),
 /// the two pair into a Zswap transient. The interpreter captures the coin arg so
-/// the call/deploy path can build the corresponding `Input` / `Transient`.
+/// the call path can build the corresponding `Input` / `Transient`.
 #[derive(Debug, Clone)]
 pub struct CircuitZswapInput {
     /// The `QualifiedShieldedCoinInfo` the circuit passed (nonce, color/type,

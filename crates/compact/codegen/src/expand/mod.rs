@@ -56,6 +56,7 @@ impl<'a> EmitCtxt<'a> {
         let data_types = data_types::emit_data_types(
             &self.info.ledger,
             &self.info.circuits,
+            self.info.runnable_constructor(),
             &self.info.witnesses,
             &mut self.emitted_types,
         );
@@ -698,44 +699,6 @@ mod tests {
         assert!(
             generated.contains("async fn from_provider"),
             "missing from_provider on Gateway"
-        );
-    }
-
-    /// The `///` block directly above `item` in generated source.
-    fn doc_above(source: &str, item: &str) -> String {
-        let at = source.find(item).expect("the item is generated");
-        let mut doc: Vec<&str> = source[..at]
-            .lines()
-            .rev()
-            .skip_while(|line| line.trim().is_empty() || line.trim_start().starts_with("#["))
-            .take_while(|line| line.trim_start().starts_with("///"))
-            .collect();
-        doc.reverse();
-        doc.join("\n")
-    }
-
-    /// bboard's constructor takes no arguments and writes three fields, so a
-    /// flag that reads only the arguments misses it. counter declares none.
-    #[test]
-    fn the_initial_state_doc_notes_only_a_real_constructor() {
-        let initial_state_doc = |fixture: &str, name: &str| {
-            let info = load_fixture(&format!(
-                "../../../tests/conformance/fixtures/{fixture}/compiler/analyzed-ir.sexp"
-            ));
-            let generated = generated_source(&info, name);
-            doc_above(&generated, &format!("pub struct {name}InitialState"))
-        };
-        let note = "does not run the contract's constructor";
-
-        let bboard = initial_state_doc("bboard", "Bboard");
-        assert!(
-            bboard.contains(note),
-            "no constructor note on bboard:\n{bboard}"
-        );
-        let counter = initial_state_doc("counter", "Counter");
-        assert!(
-            !counter.contains(note),
-            "a constructor note on counter:\n{counter}"
         );
     }
 

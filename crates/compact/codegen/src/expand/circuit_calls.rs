@@ -3,6 +3,8 @@
 //! We generate:
 //! - `__helpers()`, `__natives()`, `__witnesses()`: the declarations a call
 //!   resolves against
+//! - `__constructor()`: the constructor that a deploy runs, for a contract
+//!   whose constructor the interpreter can run
 //! - One `__helpers()`, `__structs()`, `__enums()` constructor each,
 //!   shared across all circuits in the contract
 
@@ -33,6 +35,16 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     // transcript, so both must travel with the contract.
     let natives_ctor = super::emit_ir::natives(&info.natives);
     let witnesses_ctor = super::emit_ir::witnesses(&info.witnesses);
+    let constructor_fn = info.runnable_constructor().map(|c| {
+        let constructor_ctor = super::emit_ir::circuit(c);
+        quote! {
+            #[doc(hidden)]
+            pub fn __constructor() -> midnight_contract::compact_codegen::ir::Circuit {
+                #model_imports
+                #constructor_ctor
+            }
+        }
+    });
 
     quote! {
         #[doc(hidden)]
@@ -50,6 +62,7 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
             #model_imports
             #witnesses_ctor
         }
+        #constructor_fn
     }
 }
 
