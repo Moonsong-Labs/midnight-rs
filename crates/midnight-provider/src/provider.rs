@@ -504,11 +504,11 @@ impl MidnightProvider {
 
     /// Build one shielded (Zswap) transaction that makes each of `payments`.
     ///
-    /// Each payment becomes one output of the same guaranteed offer, so the
-    /// chain applies all of them or none. The transaction carries one proof
-    /// per input and output, and pays one Dust fee. The build selects the
-    /// inputs of each token for the sum of that token's payments, and returns
-    /// one change output per token to this wallet.
+    /// Each payment becomes one output of the same guaranteed offer. So the
+    /// chain applies all of the payments or none of them. The transaction
+    /// carries one proof per input and output, and pays one Dust fee. The
+    /// build selects the inputs of each token for the sum of the payments of
+    /// that token. It returns one change output per token to this wallet.
     ///
     /// ```rust,no_run
     /// # use midnight_provider::{MidnightProvider, Payment, ShieldedTokenType};
@@ -537,9 +537,10 @@ impl MidnightProvider {
     /// - [`WalletError::Transfer`] when `payments` is empty, when a payment
     ///   sends 0, or when the payments of one token add up to more than
     ///   `u128::MAX`.
-    /// - [`WalletError::InvalidAddress`] or
-    ///   [`WalletError::AddressNetworkMismatch`] for a recipient that is not a
-    ///   shielded address of the wallet's network.
+    /// - [`WalletError::InvalidAddress`] for a recipient that is not a
+    ///   shielded address. Its message names the index of the payment.
+    /// - [`WalletError::AddressNetworkMismatch`] for a recipient of another
+    ///   network. It names the network of the address, not the payment.
     /// - [`WalletError::InsufficientShielded`] when the wallet holds less of a
     ///   token than its payments add up to.
     ///
@@ -619,11 +620,11 @@ impl MidnightProvider {
 
     /// Build one unshielded (UTXO) transaction that makes each of `payments`.
     ///
-    /// Each payment becomes one output of the same guaranteed offer, so the
-    /// chain applies all of them or none, and the transaction pays one Dust
-    /// fee. The build selects the UTXOs of each token for the sum of that
-    /// token's payments, and returns one change output per token to this
-    /// wallet.
+    /// Each payment becomes one output of the same guaranteed unshielded
+    /// offer. So the chain applies all of the payments or none of them, and
+    /// the transaction pays one Dust fee. The build selects the UTXOs of each
+    /// token for the sum of the payments of that token. It returns one change
+    /// output per token to this wallet.
     ///
     /// Two unshielded transfers cannot merge into one transaction, because
     /// each carries its intent at segment 1 (see [`Self::merge_transactions`]).
@@ -651,9 +652,10 @@ impl MidnightProvider {
     /// - [`WalletError::Transfer`] when `payments` is empty, when a payment
     ///   sends 0, or when the payments of one token add up to more than
     ///   `u128::MAX`.
-    /// - [`WalletError::InvalidAddress`] or
-    ///   [`WalletError::AddressNetworkMismatch`] for a recipient that is not an
-    ///   unshielded address of the wallet's network.
+    /// - [`WalletError::InvalidAddress`] for a recipient that is not an
+    ///   unshielded address. Its message names the index of the payment.
+    /// - [`WalletError::AddressNetworkMismatch`] for a recipient of another
+    ///   network. It names the network of the address, not the payment.
     /// - [`WalletError::InsufficientUnshielded`] when the wallet holds less of
     ///   a token than its payments add up to.
     ///

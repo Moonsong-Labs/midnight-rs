@@ -24,7 +24,7 @@ use helpers::{
 
 use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
-use crate::transfer::totals_per_token;
+use crate::transfer::{at_payment, totals_per_token};
 use crate::{
     Network, Payment, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
     TransferResult, WalletError, panic_message,
@@ -407,9 +407,9 @@ impl<'a> TransferBuilder<'a> {
     /// `enc_public_key`, which is all the chain needs to construct the output
     /// coin commitment and encrypt the coin info for them.
     ///
-    /// Every payment becomes one output of the same guaranteed offer, so the
-    /// chain applies all of them or none, and a self-funded build pays one fee
-    /// for all of them.
+    /// Every payment becomes one output of the same guaranteed offer. So the
+    /// chain applies all of the payments or none of them. A self-funded build
+    /// pays one fee for all of them.
     ///
     /// When `pay_fees` is false the build skips Dust entirely, yielding a
     /// fee-unbalanced transaction for a multi-party flow where another
@@ -418,10 +418,10 @@ impl<'a> TransferBuilder<'a> {
     /// `MidnightProvider::balance_transaction` (in `midnight-provider`) and
     /// submits.
     ///
-    /// The inputs of each token are selected up front with
-    /// [`InputInfo::coins_to_cover_value`], for the sum of that token's
-    /// payments, and the remainder returns to this wallet as one change output
-    /// per token. So a payment is bounded by the wallet's total balance in its
+    /// The build selects the inputs of each token up front with
+    /// [`InputInfo::coins_to_cover_value`], for the sum of the payments of that
+    /// token. The remainder of each token returns to this wallet as one change
+    /// output. So a payment is bounded by the wallet's total balance in its
     /// token rather than by its largest single coin. Sending the full balance
     /// to this wallet's own address therefore consolidates it into one coin,
     /// and sending part of a coin splits it. The spent coins' nullifiers are in
@@ -431,10 +431,12 @@ impl<'a> TransferBuilder<'a> {
     ///
     /// [`WalletError::Transfer`] when `payments` is empty, when a payment sends
     /// 0, or when the payments of one token add up to more than `u128::MAX`.
-    /// [`WalletError::InvalidAddress`] or [`WalletError::AddressNetworkMismatch`]
-    /// for a recipient that is not a shielded address of this wallet's
-    /// network. [`WalletError::InsufficientShielded`] when the wallet holds
-    /// less of a token than its payments add up to.
+    /// [`WalletError::InvalidAddress`] for a recipient that is not a shielded
+    /// address. Its message names the index of the payment.
+    /// [`WalletError::AddressNetworkMismatch`] for a recipient of another
+    /// network. It names the network of the address, not the payment.
+    /// [`WalletError::InsufficientShielded`] when the wallet holds less of a
+    /// token than its payments add up to.
     pub async fn prepare_shielded(
         self,
         payments: &[Payment<crate::ShieldedTokenType>],
@@ -443,9 +445,10 @@ impl<'a> TransferBuilder<'a> {
         let totals = totals_per_token(payments)?;
         let mut outputs: Vec<Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>> =
             Vec::with_capacity(payments.len());
-        for payment in payments {
+        for (index, payment) in payments.iter().enumerate() {
             outputs.push(Box::new(OutputInfo {
-                destination: shielded_destination(&payment.recipient, self.state.network())?,
+                destination: shielded_destination(&payment.recipient, self.state.network())
+                    .map_err(at_payment(index))?,
                 token_type: payment.token_type.into_ledger(),
                 value: payment.amount,
             }));
@@ -592,12 +595,13 @@ impl<'a> TransferBuilder<'a> {
     /// public part) is needed; the chain derives the output's owner field
     /// directly from it.
     ///
-    /// The UTXOs of each token are selected with
-    /// [`UtxoSpendInfo::utxos_to_cover_value`], for the sum of that token's
-    /// payments. The change of each token, if any, goes back to the sender's
+    /// The build selects the UTXOs of each token with
+    /// [`UtxoSpendInfo::utxos_to_cover_value`], for the sum of the payments of
+    /// that token. The change of each token, if any, goes back to the sender's
     /// own seed-derived address as one output. Every payment becomes one
-    /// output of the same guaranteed offer, so the chain applies all of them
-    /// or none, and a self-funded build pays one fee for all of them.
+    /// output of the same guaranteed unshielded offer. So the chain applies all
+    /// of the payments or none of them. A self-funded build pays one fee for
+    /// all of them.
     ///
     /// When `pay_fees` is false the build skips Dust entirely, yielding a
     /// fee-unbalanced transaction for another wallet to sponsor (the
@@ -607,10 +611,12 @@ impl<'a> TransferBuilder<'a> {
     ///
     /// [`WalletError::Transfer`] when `payments` is empty, when a payment sends
     /// 0, or when the payments of one token add up to more than `u128::MAX`.
-    /// [`WalletError::InvalidAddress`] or [`WalletError::AddressNetworkMismatch`]
-    /// for a recipient that is not an unshielded address of this wallet's
-    /// network. [`WalletError::InsufficientUnshielded`] when the wallet holds
-    /// less of a token than its payments add up to.
+    /// [`WalletError::InvalidAddress`] for a recipient that is not an
+    /// unshielded address. Its message names the index of the payment.
+    /// [`WalletError::AddressNetworkMismatch`] for a recipient of another
+    /// network. It names the network of the address, not the payment.
+    /// [`WalletError::InsufficientUnshielded`] when the wallet holds less of a
+    /// token than its payments add up to.
     pub async fn prepare_unshielded(
         self,
         payments: &[Payment<crate::UnshieldedTokenType>],
@@ -621,10 +627,11 @@ impl<'a> TransferBuilder<'a> {
 
         let mut outputs: Vec<Box<dyn helpers::BuildUtxoOutput<DefaultDB, BuildContext>>> =
             Vec::with_capacity(payments.len());
-        for payment in payments {
+        for (index, payment) in payments.iter().enumerate() {
             outputs.push(Box::new(UtxoOutputInfo {
                 value: payment.amount,
-                owner: parse_unshielded_recipient(&payment.recipient, self.state.network())?,
+                owner: parse_unshielded_recipient(&payment.recipient, self.state.network())
+                    .map_err(at_payment(index))?,
                 token_type: payment.token_type.into_ledger(),
             }));
         }

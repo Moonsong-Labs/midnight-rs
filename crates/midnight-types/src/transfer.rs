@@ -191,6 +191,18 @@ pub(crate) fn totals_per_token<T: Copy + Ord + std::fmt::Display>(
     Ok(totals)
 }
 
+/// Name the payment at `index` in the message of a
+/// [`WalletError::InvalidAddress`], so a caller with many payments can find
+/// the bad one. Other errors pass unchanged.
+pub(crate) fn at_payment(index: usize) -> impl FnOnce(WalletError) -> WalletError {
+    move |error| match error {
+        WalletError::InvalidAddress(reason) => {
+            WalletError::InvalidAddress(format!("payment {index}: {reason}"))
+        }
+        other => other,
+    }
+}
+
 /// One transfer a build can make.
 ///
 /// Data rather than a closure over the builder, so a caller can hand a build
@@ -307,7 +319,8 @@ mod tests {
 
     /// Each input passes every other check, so only the refusal it names can
     /// turn it into an error. A zero payment beside a valid one is refused, not
-    /// dropped: the ledger refuses a zero-value UTXO output at submit.
+    /// dropped. A zero output is an empty coin, and ledger 9 also refuses a
+    /// zero-value UTXO output at submit.
     #[test]
     fn a_transfer_refuses_no_payments_a_zero_payment_and_an_overflowing_sum() {
         for (case, payments) in [

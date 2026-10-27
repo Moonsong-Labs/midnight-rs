@@ -373,11 +373,37 @@ let pending = provider
     .await?;
 ```
 
-`transfer_shielded_many` does the same for shielded payments, and a list can hold payments of several tokens. Each payment becomes one output of the same guaranteed offer, so the chain applies all of the payments or none of them, and the transaction pays one Dust fee. The build selects inputs for the sum of the payments of each token, and returns one change output per token to the wallet. The list form returns the same builder as the one-recipient method, so `.build()`, `.without_dust()` and `.with_coin_selection()` work the same way. The one-recipient method is the list form with one payment.
+`transfer_shielded_many` does the same for shielded payments. A list can hold payments of several tokens. Each payment becomes one output of the same offer, so the chain applies all of the payments or none of them. The transaction pays one Dust fee. The build selects inputs for the sum of the payments of each token. It returns one change output per token to the wallet.
 
-Two unshielded transfers cannot merge into one transaction, because each carries its intent at segment 1. So use `transfer_unshielded_many` to pay several unshielded recipients in one transaction. A list holds payments of one kind. To pay shielded and unshielded recipients in one transaction, build each list with `.without_dust()`, merge the two with `merge_transactions`, and pay the fee with `balance_transaction`. A Dustless shielded transfer carries no intent, so the merge has no segment collision.
+The list form returns the same builder as the one-recipient method, so `.build()`, `.without_dust()` and `.with_coin_selection()` work the same way. The one-recipient method is the list form with one payment.
 
-A build refuses an empty list, a payment of 0, and payments of one token that add up to more than `u128::MAX`, with `WalletError::Transfer`, before it reserves an input.
+Two unshielded transfers cannot merge into one transaction, because each carries its intent at segment 1. So use `transfer_unshielded_many` to pay several unshielded recipients in one transaction. A list holds payments of one kind. To pay shielded and unshielded recipients in one transaction:
+
+1. Build the shielded list with `.without_dust()`.
+2. Build the unshielded list with `.without_dust()`.
+3. Merge the two transactions with `merge_transactions`.
+4. Pay the fee of the merged transaction with `balance_transaction`.
+5. Submit the result with `submit_reserved`.
+
+```rust
+use midnight_core::provider::{DustlessBuilder, Payment};
+
+let shielded = provider
+    .transfer_shielded_many([Payment::new(token_type, 3, &alice_shielded_address)])
+    .without_dust()
+    .await?;
+let unshielded = provider
+    .transfer_unshielded_many([Payment::new(NIGHT, 5, &bob_address)])
+    .without_dust()
+    .await?;
+let merged = provider.merge_transactions(&[shielded.into_bytes(), unshielded.into_bytes()])?;
+let funded = provider.balance_transaction(&merged).await?;
+let pending = provider.submit_reserved(funded).await?;
+```
+
+A Dustless shielded transfer carries no intent, so the merge has no segment collision. The fee goes in an intent of its own.
+
+A build refuses an empty list, a payment of 0, and payments of one token that add up to more than `u128::MAX`. It returns `WalletError::Transfer` before it reserves an input. For a recipient that is not an address of the right kind, it returns `WalletError::InvalidAddress`, and the message names the index of the payment.
 
 Each builder:
 

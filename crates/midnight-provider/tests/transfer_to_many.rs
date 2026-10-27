@@ -1,8 +1,10 @@
 //! One transfer that pays several recipients.
 //!
 //! The list forms put every payment in one offer. The chain must accept that
-//! offer, and each recipient must receive its own amount, which no build-time
-//! check shows, so this test submits and reads what each recipient holds.
+//! offer, and each recipient must receive its own amount. No build-time check
+//! shows that, so this test submits and reads what each recipient holds. It
+//! also merges a Dustless list of each kind into one transaction, which
+//! `balance_transaction` funds.
 //!
 //! Needs a devnet. Every build funds from the genesis wallet, so the builds
 //! stay in one fn: a second fn would race it for the same Dust.
@@ -14,7 +16,8 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use midnight_provider::{
-    HashOutput, LedgerVersion, MidnightProvider, NIGHT, Network, Payment, Seed, ShieldedTokenType,
+    DustlessBuilder, HashOutput, LedgerVersion, MidnightProvider, NIGHT, Network, Payment, Seed,
+    ShieldedTokenType, TransferResult, UnshieldedTokenType,
 };
 use midnight_wallet::WalletBuilder;
 
@@ -28,7 +31,7 @@ const DEFAULT_SHIELDED_TOKEN: ShieldedTokenType = ShieldedTokenType(HashOutput([
 const AMOUNTS: [u128; 2] = [3, 5];
 
 #[tokio::test]
-async fn one_transfer_of_each_kind_pays_each_recipient_its_own_amount() {
+async fn a_transfer_to_many_pays_each_recipient_its_own_amount() {
     let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
@@ -42,54 +45,47 @@ async fn one_transfer_of_each_kind_pays_each_recipient_its_own_amount() {
     let recipients = [Seed::generate(), Seed::generate()];
 
     let shielded = funder
-        .transfer_shielded_many(recipients.iter().zip(AMOUNTS).map(|(seed, amount)| {
-            Payment::new(
-                DEFAULT_SHIELDED_TOKEN,
-                amount,
-                seed.shielded_address(Network::Undeployed),
-            )
-        }))
+        .transfer_shielded_many(shielded_payments(&recipients))
         .build()
         .await
         .expect("build the shielded transfer");
     assert_no_surplus(&shielded.tx_bytes, "the shielded transfer");
-    funder
-        .submit_reserved(shielded)
-        .await
-        .expect("submit the shielded transfer")
-        .wait_finalized()
-        .await
-        .expect("the chain applies the shielded transfer");
+    submit(&funder, shielded, "the shielded transfer").await;
 
     let unshielded = funder
-        .transfer_unshielded_many(recipients.iter().zip(AMOUNTS).map(|(seed, amount)| {
-            Payment::new(NIGHT, amount, seed.unshielded_address(Network::Undeployed))
-        }))
+        .transfer_unshielded_many(unshielded_payments(&recipients))
         .build()
         .await
         .expect("build the unshielded transfer");
     assert_no_surplus(&unshielded.tx_bytes, "the unshielded transfer");
-    funder
-        .submit_reserved(unshielded)
-        .await
-        .expect("submit the unshielded transfer")
-        .wait_finalized()
-        .await
-        .expect("the chain applies the unshielded transfer");
+    submit(&funder, unshielded, "the unshielded transfer").await;
 
-    for (seed, amount) in recipients.iter().zip(AMOUNTS) {
-        let (shielded, unshielded) = received(&node_url, &indexer_url, seed).await;
-        assert_eq!(
-            shielded,
-            vec![amount],
-            "each recipient receives one shielded coin of its own amount"
-        );
-        assert_eq!(
-            unshielded,
-            vec![amount],
-            "each recipient receives one NIGHT UTXO of its own amount"
-        );
-    }
+    assert_each_received_its_amounts(&node_url, &indexer_url, &recipients).await;
+
+    // The chain must accept the signed unshielded intent beside a fee intent
+    // that a later call added.
+    let recipients = [Seed::generate(), Seed::generate()];
+    let shielded = funder
+        .transfer_shielded_many(shielded_payments(&recipients))
+        .without_dust()
+        .await
+        .expect("build the Dustless shielded transfer");
+    let unshielded = funder
+        .transfer_unshielded_many(unshielded_payments(&recipients))
+        .without_dust()
+        .await
+        .expect("build the Dustless unshielded transfer");
+    let merged = funder
+        .merge_transactions(&[shielded.into_bytes(), unshielded.into_bytes()])
+        .expect("merge the Dustless transfers");
+    let both_kinds = funder
+        .balance_transaction(&merged)
+        .await
+        .expect("pay the fee of the merged transfers");
+    assert_no_surplus(&both_kinds.tx_bytes, "the merged transfers");
+    submit(&funder, both_kinds, "the merged transfers").await;
+
+    assert_each_received_its_amounts(&node_url, &indexer_url, &recipients).await;
 
     // Each token has its own inputs and its own change, and a change output
     // that is missing is value the chain accepts and destroys. The chain
@@ -118,6 +114,63 @@ async fn one_transfer_of_each_kind_pays_each_recipient_its_own_amount() {
         .release(&two_tokens.spent)
         .await
         .expect("wallet attached");
+}
+
+/// One payment of the default shielded token to each of `recipients`, of the
+/// matching amount in [`AMOUNTS`].
+fn shielded_payments(recipients: &[Seed]) -> Vec<Payment<ShieldedTokenType>> {
+    recipients
+        .iter()
+        .zip(AMOUNTS)
+        .map(|(seed, amount)| {
+            Payment::new(
+                DEFAULT_SHIELDED_TOKEN,
+                amount,
+                seed.shielded_address(Network::Undeployed),
+            )
+        })
+        .collect()
+}
+
+/// One NIGHT payment to each of `recipients`, of the matching amount in
+/// [`AMOUNTS`].
+fn unshielded_payments(recipients: &[Seed]) -> Vec<Payment<UnshieldedTokenType>> {
+    recipients
+        .iter()
+        .zip(AMOUNTS)
+        .map(|(seed, amount)| {
+            Payment::new(NIGHT, amount, seed.unshielded_address(Network::Undeployed))
+        })
+        .collect()
+}
+
+/// Submit `result` from `funder` and wait until the chain finalizes it.
+async fn submit(funder: &MidnightProvider, result: TransferResult, what: &str) {
+    funder
+        .submit_reserved(result)
+        .await
+        .unwrap_or_else(|e| panic!("submit {what}: {e}"))
+        .wait_finalized()
+        .await
+        .unwrap_or_else(|e| panic!("the chain applies {what}: {e}"));
+}
+
+/// Require that each of `recipients` holds one shielded coin and one NIGHT
+/// UTXO, both of its own amount in [`AMOUNTS`].
+async fn assert_each_received_its_amounts(node_url: &str, indexer_url: &str, recipients: &[Seed]) {
+    for (seed, amount) in recipients.iter().zip(AMOUNTS) {
+        let (shielded, unshielded) = received(node_url, indexer_url, seed).await;
+        assert_eq!(
+            shielded,
+            vec![amount],
+            "each recipient receives one shielded coin of its own amount"
+        );
+        assert_eq!(
+            unshielded,
+            vec![amount],
+            "each recipient receives one NIGHT UTXO of its own amount"
+        );
+    }
 }
 
 /// Require that the proven transaction `tx_bytes` gives back every token it
