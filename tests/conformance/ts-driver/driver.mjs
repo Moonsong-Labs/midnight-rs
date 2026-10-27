@@ -71,6 +71,13 @@ const stateValueToJson = (encoded) => {
   }
 };
 
+// The events of a step, without the address the runtime tags each with.
+const logToJson = (event) => ({
+  version: event.version,
+  eventType: event.eventType,
+  data: stateValueToJson(event.data),
+});
+
 const keyToJson = (key) =>
   key.tag === 'value' ? { tag: 'value', value: alignedValueToJson(key.value) } : { tag: 'stack' };
 
@@ -329,6 +336,7 @@ const runCase = async (fixture, caseName, caseJson) => {
       privateTranscriptOutputs: proofData.privateTranscriptOutputs.map(alignedValueToJson),
       state: stateReport(stateValue),
       zswapOutputs: [],
+      logs: result.context.events.map(logToJson),
     });
   }
 

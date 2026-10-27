@@ -266,6 +266,7 @@ contract.circuits().increment_by(5)                      // IncrementByCallBuild
     └─ .send().await   →  PendingCall<T>                 // explicit form: Contract::send_call_with
          ├─ .transaction_hash() / .extrinsic_hash()
          └─ .wait_finalized().await   → CallOutcome<T>   // no SDK deadline; .await bounds it to 60 s
+                                                         // value, hashes, and the logs of the run
 ```
 
 Internally:
@@ -280,7 +281,7 @@ provider.shielded_public_keys()               // the wallet's coin public key, w
   ↓
 interpreter::execute(ir, program, state, args,
                      Env { witnesses, private_state, address, block_time, coin_public_key })
-  → ExecutionResult { state, reads, gather_ops, communication_outputs, result }
+  → ExecutionResult { state, reads, gather_ops, communication_outputs, result, logs }
   ↓
 build verify-ops:
   gather_ops.iter().map(|op| op.clone().translate(|()| reads.next()))

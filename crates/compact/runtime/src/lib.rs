@@ -33,6 +33,7 @@ pub use foreign::{
     ArithOp, Curve25519Base, Curve25519Point, Curve25519Scalar, ForeignField, Secp256k1Base,
     Secp256k1Point, Secp256k1Scalar, Secp256r1Base, Secp256r1Point, Secp256r1Scalar,
 };
+pub use midnight_onchain_runtime::ops::{LogEventType, VersionedLogItem};
 pub use result::ExecutionResult;
 pub use standard_library::{Either, Maybe};
 pub use value::{Value, integer_fallback_aligned};
