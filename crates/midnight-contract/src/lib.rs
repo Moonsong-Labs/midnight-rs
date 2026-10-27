@@ -85,5 +85,5 @@ pub use midnight_types::SpendableShieldedCoin;
 
 // The `state` and `deploy` modules expose a small part of the code under
 // `Contract::deploy` and `Contract::at`. Bindgen-generated code reaches
-// `state::fetch_state`, and integration tests reach `deploy::deploy_funded`.
-// Everything else is `pub(crate)`.
+// `state::fetch_state`, and integration tests reach `deploy::deploy_funded`
+// and its `DeployResult`. Everything else stays inside the crate.
