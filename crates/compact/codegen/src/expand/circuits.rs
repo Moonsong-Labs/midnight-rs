@@ -5,8 +5,7 @@ use crate::ir::{Argument, Type, Witness};
 use crate::types::Circuit;
 
 use super::circuit_calls::{
-    has_typed_conversion, is_void_type, type_to_value_conversion, typed_params,
-    value_to_type_conversion,
+    is_void_type, type_to_value_conversion, typed_params, value_to_type_conversion,
 };
 use super::helpers::{make_ident, to_pascal_case};
 use super::ledger::{circuit_decode, circuit_setup};
@@ -120,8 +119,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     });
 
     // The witness names this contract declares; anything else is
-    // `WitnessOutcome::Unknown` (the runtime then falls through to its
-    // builtins/helpers), checked before touching the private state.
+    // `WitnessOutcome::Unknown`, checked before touching the private state.
     // Precondition: `witnesses` is non-empty (gated by the caller's
     // `!witnesses.is_empty()` check); an empty list would expand
     // `#(#known_names)|*` into an unparsable empty pattern.
@@ -143,17 +141,13 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                     )
                 })?
             };
-            if has_typed_conversion(&arg.ty) {
-                // The conversion evaluates to Result<_, InterpreterError>;
-                // `call_witness` returns the same error type, so `?` it.
-                let conv = value_to_type_conversion(
-                    &arg.ty,
-                    &format!("witness `{}` argument `{}`", name, arg.name.name()),
-                );
-                bindings.push(quote! { let #ident = { let __val = #fetch; #conv }?; });
-            } else {
-                bindings.push(quote! { let #ident = #fetch; });
-            }
+            // The conversion evaluates to Result<_, InterpreterError>;
+            // `call_witness` returns the same error type, so `?` it.
+            let conv = value_to_type_conversion(
+                &arg.ty,
+                &format!("witness `{}` argument `{}`", name, arg.name.name()),
+            );
+            bindings.push(quote! { let #ident = { let __val = #fetch; #conv }?; });
             idents.push(ident);
         }
 
@@ -243,9 +237,8 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                 midnight_contract::runtime::WitnessOutcome,
                 midnight_contract::runtime::InterpreterError,
             > {
-                // Unknown names are a non-error outcome (the runtime falls
-                // through to builtins/helpers); decide before decoding the
-                // private state so an undecodable blob can't mask it.
+                // Decide an unknown name before decoding the private state, so
+                // an undecodable blob can't mask it.
                 match __name {
                     #(#known_names)|* => {}
                     _ => {
