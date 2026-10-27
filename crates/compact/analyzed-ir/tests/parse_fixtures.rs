@@ -21,6 +21,7 @@ fn every_fixture_parses() {
         "tests/conformance/fixtures/loops",
         "tests/conformance/fixtures/slices",
         "tests/conformance/fixtures/peers",
+        "tests/conformance/fixtures/ops",
         "tests/fixtures/compiled/cross-contract",
         "tests/fixtures/compiled/mint-probe",
         "tests/fixtures/compiled/zerocash",

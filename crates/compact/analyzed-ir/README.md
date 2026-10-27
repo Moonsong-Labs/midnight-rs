@@ -36,4 +36,4 @@ The crate is `wasm32-unknown-unknown` clean (no I/O in the API, `num-bigint` as 
 
 ## Tests
 
-The tests parse the analyzed IR that `make fixtures` compiles from the conformance corpus, from `tests/fixtures/sources` at the repository root, and from `tests/fixtures` in this crate. Git does not track that output, so run `make fixtures` before `cargo test -p compact-analyzed-ir`.
+The tests parse the analyzed IR that `make fixtures` compiles. The sources are the conformance corpus, `tests/fixtures/sources` at the repository root, and `tests/fixtures` in this crate. Git does not track that output, so run `make fixtures` before `cargo test -p compact-analyzed-ir`.
