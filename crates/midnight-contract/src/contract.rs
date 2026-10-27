@@ -1222,7 +1222,10 @@ impl<P: Provider> Contract<P> {
     ///   ledger values does not serialize.
     /// - [`ContractError::Provider`] when the provider has no wallet, or when
     ///   the read of the state or the block time, the build or the proof
-    ///   fails.
+    ///   fails. For a `ttl` under one second or longer than `global_ttl`, it
+    ///   carries
+    ///   [`WalletError::TtlOutOfRange`](midnight_types::WalletError::TtlOutOfRange),
+    ///   before the build reserves an input or makes a proof.
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,
@@ -1509,7 +1512,10 @@ impl<P: Provider> Contract<P> {
     /// - [`ContractError::Provider`] when the read of the state or the block
     ///   time, the build or the proof fails. It is also the error when the
     ///   connection to the node or the build of the extrinsic fails. The call
-    ///   records no snapshot and submits nothing.
+    ///   records no snapshot and submits nothing. For a `ttl` under one second
+    ///   or longer than `global_ttl`, it carries
+    ///   [`WalletError::TtlOutOfRange`](midnight_types::WalletError::TtlOutOfRange),
+    ///   before the build reserves an input or makes a proof.
     /// - The error of `decode` when the circuit's result does not decode. For
     ///   a generated call builder, that is [`ContractError::Interpreter`].
     ///   The call records no snapshot and submits nothing.

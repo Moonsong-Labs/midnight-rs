@@ -170,11 +170,13 @@ fn block_context_at(anchor: Timestamp, chain_now: Timestamp) -> BlockContext {
     }
 }
 
-/// The window within which a dust-event-anchored `tblock` candidate is still
-/// valid relative to the chain's current time: the tighter of the intent
-/// `global_ttl` and the dust `dust_grace_period`. The chain enforces both, but
-/// the dust grace window (often much shorter than `global_ttl`) is what rejects
-/// a stale `ctime` with `OutOfDustValidityWindow`, so it must bound the anchor.
+/// How far a dust-event-anchored `tblock` candidate may trail the chain's
+/// current time: the tighter of `global_ttl` and the dust `dust_grace_period`.
+///
+/// The chain bounds the anchor only by `dust_grace_period`: it refuses an
+/// older `ctime` with `OutOfDustValidityWindow`. The cap at `global_ttl` keeps
+/// a margin under a longer grace period, for the time that a build takes to
+/// prove and to reach a block.
 fn anchor_window(
     global_ttl: helpers::Duration,
     dust_grace_period: helpers::Duration,

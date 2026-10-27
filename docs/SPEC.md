@@ -134,7 +134,7 @@ provider
   .builds().await                  → Builds::Ledger8(b) | Builds::Ledger9(b) (resyncs first)
       b.build_context().await      → Arc<BuildContext> (evicts expired pending)
       b.execution_context().await  → the half a circuit runs against, with no funding view
-      b.add_funding(&ctx) / b.build_funded(tx_info) / b.prepare_shielded_inputs(..)
+      b.add_funding(&ctx) / b.build_funded(tx_info, ttl) / b.prepare_shielded_inputs(..)
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
   .prepare_reserved(result).await  → PreparedTx that holds the reservation of the build

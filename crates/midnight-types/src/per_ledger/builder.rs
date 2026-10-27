@@ -58,9 +58,9 @@ pub struct PreparedTransfer {
     dust_batches: Vec<DustSpendBatch>,
     spent_unshielded_inputs: Vec<SpentUtxoKey>,
     spent_shielded_inputs: Vec<Nullifier>,
-    /// The chain time this build selected against, taken from the context it
-    /// was handed. The reservation carries the same stamp, so a release can
-    /// name this build's own entry.
+    /// The block time of the build context that this build selected against.
+    /// The reservation carries the same stamp, so a release can name this
+    /// build's own entry.
     reserved_at: Timestamp,
     /// The time after which the transaction can no longer land.
     expires_at: Timestamp,
@@ -123,8 +123,12 @@ impl PreparedTransfer {
         &self.spent_shielded_inputs
     }
 
-    /// The chain time this build selected against. Reserve its inputs with
-    /// this stamp, which [`Self::spent_inputs`] gives each of them.
+    /// The block time of the build context that this build selected against.
+    /// Reserve its inputs with this stamp, which [`Self::spent_inputs`] gives
+    /// each of them.
+    ///
+    /// A wallet anchors that block time at its Dust state, so the stamp can
+    /// trail the chain time that [`Self::expires_at`] counts from.
     pub fn reserved_at(&self) -> Timestamp {
         self.reserved_at
     }
