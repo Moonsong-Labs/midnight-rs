@@ -257,7 +257,9 @@ impl<'a> IntoFuture for ShieldedSwap<'a> {
 /// sponsor them. `.without_dust()` is uniform across builder kinds because
 /// paying fees is a general transaction concern, not tied to any transaction
 /// kind. Implemented for shielded transfers, unshielded transfers, and
-/// generated contract-call builders.
+/// generated contract-call builders. A contract deploy builder has an
+/// inherent `without_dust` of its own, which also returns the address of the
+/// contract.
 ///
 /// Bring this trait into scope to call [`without_dust`](Self::without_dust).
 pub trait DustlessBuilder: Sized {
@@ -301,6 +303,14 @@ impl<'a> DustlessBuilder for UnshieldedTransfer<'a> {
 /// [`MidnightProvider::merge_transactions`], then submit.
 pub struct DustlessTransaction {
     tx_bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for DustlessTransaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DustlessTransaction")
+            .field("tx_bytes", &format_args!("{} bytes", self.tx_bytes.len()))
+            .finish()
+    }
 }
 
 impl DustlessTransaction {

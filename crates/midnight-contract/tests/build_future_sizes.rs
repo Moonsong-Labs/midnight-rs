@@ -53,6 +53,12 @@ fn contract_entry_points_return_small_futures() {
             .send(),
     );
     assert_small(
+        "DeployBuilder::without_dust",
+        midnight_contract::Contract::deploy(p)
+            .with_zk_config("compiled")
+            .without_dust(),
+    );
+    assert_small(
         "generated DeployBuilder::send",
         counter::Contract::deploy(p)
             .with_zk_config("compiled")
@@ -63,6 +69,12 @@ fn contract_entry_points_return_small_futures() {
         counter::Contract::deploy(p)
             .with_zk_config("compiled")
             .into_future(),
+    );
+    assert_small(
+        "generated DeployBuilder::without_dust",
+        counter::Contract::deploy(p)
+            .with_zk_config("compiled")
+            .without_dust(),
     );
 
     let contract = counter::Contract::at(p, ADDR)

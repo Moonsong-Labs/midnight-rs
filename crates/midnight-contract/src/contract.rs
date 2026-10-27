@@ -5,12 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use midnight_base_crypto::signatures::VerifyingKey;
-use midnight_provider::{MidnightProvider, Provider};
+use midnight_provider::{DustlessTransaction, MidnightProvider, Provider};
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::{BlockHash, ExtrinsicHash, TransferResult};
+use midnight_types::{BlockHash, ContractAddress, ExtrinsicHash, TransferResult};
 
 use crate::address::IntoAddress;
-use crate::deploy::{deploy_funded, deployed_state};
+use crate::deploy::{deploy_funded, deploy_transaction, deployed_state};
 use crate::error::ContractError;
 use crate::state::populate_verifier_keys;
 use crate::zk_config::{IntoZkConfig, ZkConfigProvider};
@@ -451,7 +451,7 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 /// # Ok(())
 /// # }
 /// ```
-#[must_use = "does nothing until awaited or sent"]
+#[must_use = "does nothing until awaited, sent or built with .without_dust()"]
 pub struct DeployBuilder<'a, P> {
     provider: P,
     initial_state: Option<ContractState<InMemoryDB>>,
@@ -546,7 +546,9 @@ impl<P> DeployBuilder<'_, P> {
     /// Get the coins from [`MidnightProvider::spendable_shielded_coins`]. The
     /// deploy reserves them, so no other build of this wallet spends them.
     /// The wallet gets them back when the build fails, and in the cases after
-    /// the build that [`Self::send`] names. Each output pays
+    /// the build that [`Self::send`] names. After [`Self::without_dust`], they
+    /// stay reserved until a sync sees the chain spend them, or until their
+    /// TTL passes. Each output pays
     /// the keys of a user, so the offer cannot fund a contract's shielded
     /// balance.
     ///
@@ -612,24 +614,13 @@ where
 
     async fn send_inner(self) -> Result<PendingDeploy<P>, ContractError> {
         let provider = self.provider.as_midnight_provider();
-
         let zk_config = self.zk_config.ok_or_else(missing_zk_config)?;
-
-        let mut state = self.initial_state.ok_or_else(|| {
-            ContractError::Construction(
-                "missing initial_state, call .with_initial_state(...) on the builder".into(),
-            )
-        })?;
-
-        state =
-            populate_verifier_keys(state, zk_config.as_ref(), self.declared_circuits.as_deref())?;
-
-        // Stamp the maintenance authority committee into the deployed state, if
-        // requested. No signing key is stored — members sign ops externally.
-        if let Some((committee, threshold)) = self.maintenance_authority {
-            crate::maintenance::validate_committee(&committee, threshold)?;
-            state = crate::maintenance::set_maintenance_authority(state, committee, threshold);
-        }
+        let state = deploy_state(
+            self.initial_state,
+            zk_config.as_ref(),
+            self.declared_circuits.as_deref(),
+            self.maintenance_authority,
+        )?;
 
         let result = deploy_funded(&state, provider, self.shielded_offer).await?;
         let address = result.address_hex();
@@ -645,6 +636,89 @@ where
             seen: None,
         })
     }
+
+    /// Build and prove the deploy with no Dust fee, for another wallet to
+    /// sponsor, and return it with the address of the contract it deploys.
+    ///
+    /// The provider's wallet needs no Dust. A sponsor pays the fee with
+    /// [`MidnightProvider::balance_transaction`] on the bytes of
+    /// [`DustlessDeploy::transaction`], and submits the result with
+    /// [`MidnightProvider::submit_reserved`]. When the chain has applied the
+    /// deploy, connect to the contract with [`Contract::at`] at
+    /// [`DustlessDeploy::address`].
+    ///
+    /// With no shielded offer, the build reserves no wallet input. With an
+    /// offer, the build reserves the offer's coins, and the transaction bytes
+    /// do not name them. So they stay reserved until a sync sees the chain
+    /// spend them, or until their TTL passes.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::Construction`] when the builder has no initial state
+    ///   or no zk config, or when the zk config cannot give the verifier keys.
+    /// - [`ContractError::Maintenance`] when the maintenance committee or its
+    ///   threshold is not valid.
+    /// - [`ContractError::ShieldedOfferShortfall`] when the offer's outputs pay
+    ///   more of a token than its coins hold.
+    /// - [`ContractError::Provider`] when the provider has no wallet, when the
+    ///   wallet cannot spend a coin of the offer, or when the build or the
+    ///   proof fails.
+    pub async fn without_dust(self) -> Result<DustlessDeploy, ContractError> {
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.without_dust_inner()).await
+    }
+
+    async fn without_dust_inner(self) -> Result<DustlessDeploy, ContractError> {
+        let provider = self.provider.as_midnight_provider();
+        let zk_config = self.zk_config.ok_or_else(missing_zk_config)?;
+        let state = deploy_state(
+            self.initial_state,
+            zk_config.as_ref(),
+            self.declared_circuits.as_deref(),
+            self.maintenance_authority,
+        )?;
+
+        let result = deploy_transaction(&state, provider, self.shielded_offer, false).await?;
+        Ok(DustlessDeploy {
+            address: result.address,
+            transaction: DustlessTransaction::from_proven_bytes(result.transaction.tx_bytes),
+        })
+    }
+}
+
+/// The state that a deploy carries: `initial_state` with the verifier keys
+/// from `zk_config`, and the maintenance authority when one is set.
+fn deploy_state(
+    initial_state: Option<ContractState<InMemoryDB>>,
+    zk_config: &dyn ZkConfigProvider,
+    declared_circuits: Option<&[String]>,
+    maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
+) -> Result<ContractState<InMemoryDB>, ContractError> {
+    let state = initial_state.ok_or_else(|| {
+        ContractError::Construction(
+            "missing initial_state, call .with_initial_state(...) on the builder".into(),
+        )
+    })?;
+    let mut state = populate_verifier_keys(state, zk_config, declared_circuits)?;
+
+    // No signing key is stored: the members sign maintenance updates
+    // themselves.
+    if let Some((committee, threshold)) = maintenance_authority {
+        crate::maintenance::validate_committee(&committee, threshold)?;
+        state = crate::maintenance::set_maintenance_authority(state, committee, threshold);
+    }
+    Ok(state)
+}
+
+/// A contract deploy, built and proven with no Dust fee, and the address of
+/// the contract it deploys. [`DeployBuilder::without_dust`] returns it.
+#[derive(Debug)]
+pub struct DustlessDeploy {
+    /// The address of the contract that the deploy creates.
+    pub address: ContractAddress,
+    /// The proven deploy transaction, which pays no Dust fee. Hand its bytes
+    /// to the sponsor.
+    pub transaction: DustlessTransaction,
 }
 
 impl<'a, P> IntoFuture for DeployBuilder<'a, P>

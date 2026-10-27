@@ -238,6 +238,8 @@ Read the wallet's `DustBalance` (`provider.balance().await?.dust`) to find the n
 - When the wallet holds no tNIGHT, no Dust accrues. The wallet must receive tNIGHT first.
 - Otherwise, Dust accrues with time, so build again later.
 
+A wallet with no Dust can also let another wallet pay the fee. Build the transfer, the contract call or the contract deploy with `.without_dust()`. The other wallet then pays the fee with `balance_transaction` and submits the result with `submit_reserved` (see [Swaps and sponsored fees](../README.md#swaps-and-sponsored-fees)).
+
 ## Wallet Sync Phases
 
 The wallet sync has three independent phases:
