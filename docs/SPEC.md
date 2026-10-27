@@ -236,7 +236,7 @@ refuse a private state that is not empty when no store is attached (Construction
 populate_verifier_keys(state, zk_config)      // load *.verifier files into state.operations
   ↓
 deploy_funded(state, provider, shielded_offer)
-  ├─ ContractState::new(data, ..)             // charged keys of the data, which ledger 9 rechecks
+  ├─ ContractState::new(data, ..)             // charged keys of the data, which the ledger rechecks
   ├─ provider.builds().await                  // resync wallet, pick its generation's Builds
   ├─ builds.execution_context().await         // build that generation's context
   ├─ builds.proof_provider()                  // that generation's prover (ProofProviders)

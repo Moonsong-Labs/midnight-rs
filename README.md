@@ -166,11 +166,11 @@ let contract = owned_counter::Contract::deploy(&provider)
     .await?;
 ```
 
-The deploy records the private state after the constructor as the first snapshot of the new contract, so the first call on it starts from that state. The deploy fails before any proof with one of these errors:
+The deploy records the private state after the constructor as the first snapshot of the new contract. The first call on the contract starts from that state. The deploy fails before any proof with one of these errors:
 
 - `ContractError::MissingConstructorArgs` when the constructor takes arguments and the deploy does not set them.
 - `ContractError::Interpreter` when the constructor fails, for example on a failed `assert`, or calls a witness and the deploy has no witnesses.
-- `ContractError::ConstructorEffect` when the constructor mints, claims, or spends or creates a coin. A deploy carries no transcript, so the ledger cannot take these effects. Deploy a state with `with_initial_state`, and make the effect in a circuit call.
+- `ContractError::ConstructorEffect` when the constructor has an effect that the deploy does not carry. A deploy carries no transcript, so the ledger cannot take a mint, a claim or a spend of the contract. The SDK does not carry a coin that the constructor creates into the offer of the deploy. Deploy a state with `with_initial_state`, and make the effect in a circuit call.
 - `ContractError::Construction` when the deploy has a private state to record and the provider has no private-state store.
 
 [`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy) describes how the deploy records and settles the private state.

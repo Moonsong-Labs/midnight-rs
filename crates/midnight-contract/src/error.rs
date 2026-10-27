@@ -80,18 +80,18 @@ pub enum ContractError {
         missing: Vec<String>,
     },
 
-    /// The contract's constructor has an effect that a deploy cannot carry.
+    /// The contract's constructor has an effect that the deploy does not carry.
     ///
     /// A deploy carries the state that the constructor leaves, and no
-    /// transcript. The ledger takes a mint, a claim, an unshielded input or
-    /// output, and a shielded coin that a contract spends or creates only from
-    /// the transcript of a call. So the deploy stops after the constructor
-    /// runs, before it proves anything. Deploy a state with
-    /// `with_initial_state`, which skips the constructor, and make the effect
-    /// in a circuit call.
+    /// transcript. The ledger takes a ledger effect, and a shielded coin that a
+    /// contract spends, only from the transcript of a call. The SDK does not
+    /// carry a shielded coin that the constructor creates into the offer of
+    /// the deploy. So the deploy stops after the constructor runs, before it
+    /// proves anything. Deploy a state with `with_initial_state`, which skips
+    /// the constructor, and make the effect in a circuit call.
     #[error(
-        "the constructor {0}, which a deploy cannot carry: deploy a state with \
-         `with_initial_state`, and make the effect in a circuit call"
+        "the constructor {0}: deploy a state with `with_initial_state`, and make the \
+         effect in a circuit call"
     )]
     ConstructorEffect(ConstructorEffect),
 
@@ -326,18 +326,22 @@ pub enum ContractError {
     Maintenance(String),
 }
 
-/// An effect of a contract's constructor that a deploy cannot carry.
+/// An effect of a contract's constructor that the deploy does not carry.
 ///
-/// [`ContractError::ConstructorEffect`] carries it.
+/// [`ContractError::ConstructorEffect`] carries it. Its `Display` gives the
+/// reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConstructorEffect {
     /// A ledger effect: a mint, a claimed nullifier, coin or contract call,
-    /// or an unshielded input or output.
+    /// or an unshielded input or output. The ledger takes one only from the
+    /// transcript of a call.
     LedgerEffect,
     /// A shielded coin that the constructor spends, with `createZswapInput`.
+    /// The ledger takes a contract's spend only from the transcript of a call.
     ShieldedInput,
     /// A shielded coin that the constructor creates, with `createZswapOutput`.
+    /// The SDK does not carry it into the offer of the deploy.
     ShieldedOutput,
 }
 
@@ -346,10 +350,16 @@ impl std::fmt::Display for ConstructorEffect {
         f.write_str(match self {
             Self::LedgerEffect => {
                 "makes a ledger effect (a mint, a claimed nullifier, coin or contract call, or \
-                 an unshielded input or output)"
+                 an unshielded input or output), which the ledger takes only from the \
+                 transcript of a call"
             }
-            Self::ShieldedInput => "spends a shielded coin",
-            Self::ShieldedOutput => "creates a shielded coin",
+            Self::ShieldedInput => {
+                "spends a shielded coin, which the ledger takes from a contract only in the \
+                 transcript of a call"
+            }
+            Self::ShieldedOutput => {
+                "creates a shielded coin, which the SDK does not carry into the offer of a deploy"
+            }
         })
     }
 }

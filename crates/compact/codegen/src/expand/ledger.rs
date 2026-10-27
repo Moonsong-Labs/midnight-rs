@@ -464,18 +464,39 @@ fn emit_deploy(
             }
         });
 
+    let (with_witnesses_doc, with_initial_private_state_doc) =
+        if info.runnable_constructor().is_some() {
+            (
+                "Attach a typed [`Witnesses`] implementation.\n\n\
+                 It answers the witness calls of the contract's constructor. Without it, a \
+                 constructor that calls a witness fails with `ContractError::Interpreter` before \
+                 the deploy proves anything. Chain \
+                 [`DeployBuilder::with_initial_private_state`] to set the private state that the \
+                 constructor starts from.",
+                "Set the private state that the deploy starts from.\n\n\
+                 The constructor's witnesses start from `state`, and the deploy records the \
+                 private state that they leave as the first snapshot of the new contract. Its \
+                 first call then starts from that snapshot. Without this method, the private \
+                 state starts at `Default`.",
+            )
+        } else {
+            (
+                "Attach a typed [`Witnesses`] implementation.\n\n\
+                 The deploy runs no constructor, so the witnesses answer no call. They set the \
+                 private-state type of [`DeployBuilder::with_initial_private_state`].",
+                "Set the private state that the deploy records as the first snapshot of the new \
+                 contract.\n\n\
+                 The first call on the contract starts from that snapshot. Without this method, \
+                 the private state starts at `Default`.",
+            )
+        };
+
     // `Witnesses` and `WitnessesAdapter` exist only for a contract that
     // declares witnesses.
     let witness_impls = declares_witnesses.then(|| {
         quote! {
             impl<'a, P> DeployBuilder<'a, P, midnight_contract::runtime::NoWitnesses> {
-                /// Attach a typed [`Witnesses`] implementation.
-                ///
-                /// It answers the witness calls of the contract's constructor. Without
-                /// it, a constructor that calls a witness fails with
-                /// `ContractError::Interpreter` before the deploy proves anything. Chain
-                /// [`DeployBuilder::with_initial_private_state`] to set the private state
-                /// that the constructor starts from.
+                #[doc = #with_witnesses_doc]
                 pub fn with_witnesses<W: Witnesses>(
                     self,
                     witnesses: &'a W,
@@ -489,12 +510,7 @@ fn emit_deploy(
             }
 
             impl<'a, P, W: Witnesses> DeployBuilder<'a, P, WitnessesAdapter<'a, W>> {
-                /// Set the private state that the deploy starts from.
-                ///
-                /// The constructor's witnesses start from `state`, and the deploy records
-                /// the private state that they leave as the first snapshot of the new
-                /// contract. Its first call then starts from that snapshot. Without this
-                /// method, the private state starts at `Default`.
+                #[doc = #with_initial_private_state_doc]
                 ///
                 /// A private state to record needs a private-state store on the provider
                 /// (`MidnightProvider::with_private_state`). Without one, the deploy fails
@@ -1639,9 +1655,9 @@ pub(crate) fn emit_simulator(
              state after the constructor.\n\n\
              The constructor runs at the address, the block time and the coin public key of the \
              simulator. A deploy runs it at the zero address, the wall-clock time and the \
-             wallet's coin public key. The simulator refuses no effect, and a deploy refuses a \
-             constructor that mints, claims or spends a coin, or makes an unshielded input or \
-             output.\n\n\
+             wallet's coin public key. The simulator refuses no effect. A deploy refuses a \
+             constructor that mints, claims, spends a coin or creates a shielded coin, or makes \
+             an unshielded input or output.\n\n\
              # Errors\n\n\
              `ContractError::Interpreter` when the constructor or a witness fails, for example \
              on a failed `assert`. The simulator then keeps the state from before the run."

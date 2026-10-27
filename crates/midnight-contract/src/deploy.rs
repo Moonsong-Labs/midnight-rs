@@ -87,7 +87,8 @@ pub async fn deploy_funded(
 ///
 /// The charged keys of a state that the interpreter or a simulator updated
 /// come from each update in turn, and they can differ from the keys of the
-/// data. Ledger 9 refuses such a deploy with `IncorrectChargedState`.
+/// data. The ledger, on both generations, refuses such a deploy with
+/// `IncorrectChargedState`.
 fn recharged(state: &ContractState<InMemoryDB>) -> ContractState<InMemoryDB> {
     ContractState::new(
         (*state.data.get()).clone(),

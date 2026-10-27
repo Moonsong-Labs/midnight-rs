@@ -93,8 +93,8 @@ pub(crate) struct Constructed {
     pub(crate) private_state: Vec<u8>,
 }
 
-/// Run `constructor` on `args`, and refuse a run whose effects a deploy cannot
-/// carry.
+/// Run `constructor` on `args`, and refuse a run whose effects the deploy does
+/// not carry.
 ///
 /// The witnesses start from `private_state`. `ownPublicKey()` returns
 /// `coin_public_key`, and the clock checks read `block_time`. The constructor
@@ -105,8 +105,8 @@ pub(crate) struct Constructed {
 ///
 /// - [`ContractError::Interpreter`] when the constructor or a witness fails,
 ///   for example on a failed `assert`.
-/// - [`ContractError::ConstructorEffect`] when the run has an effect that a
-///   deploy cannot carry.
+/// - [`ContractError::ConstructorEffect`] when the run has an effect that the
+///   deploy does not carry.
 pub(crate) fn run(
     constructor: &Constructor,
     args: &[(String, Value)],
@@ -146,7 +146,7 @@ fn zero_address() -> ContractAddress {
     ContractAddress(midnight_helpers::HashOutput([0; 32]))
 }
 
-/// Refuse a constructor run whose effects a deploy cannot carry.
+/// Refuse a constructor run whose effects the deploy does not carry.
 ///
 /// The interpreter drops the effects of each ledger query, so this replays
 /// the public transcript of the run on `state_before` to collect them. A
