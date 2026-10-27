@@ -76,13 +76,13 @@ impl fmt::Display for ReadError {
 
 impl std::error::Error for ReadError {}
 
-pub struct Reader<'a> {
+struct Reader<'a> {
     src: &'a str,
     pos: usize,
 }
 
 impl<'a> Reader<'a> {
-    pub fn new(src: &'a str) -> Self {
+    fn new(src: &'a str) -> Self {
         Reader { src, pos: 0 }
     }
 
@@ -123,7 +123,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Read one datum. `[` and `]` are accepted as parenthesis synonyms.
-    pub fn read(&mut self) -> Result<Sexp, ReadError> {
+    fn read(&mut self) -> Result<Sexp, ReadError> {
         self.skip_ws();
         match self.peek() {
             None => Err(self.err("unexpected end of input")),
