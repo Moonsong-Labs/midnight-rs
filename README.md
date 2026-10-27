@@ -8,7 +8,7 @@
 ## Features
 
 - **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token).
-- **Swaps and sponsored fees**: two-party shielded swaps, and one party paying the Dust fees of another party's transactions.
+- **Swaps and sponsored fees**: two-party shielded swaps, one party paying the Dust fees of another party's transactions, and a payer that completes a one-sided offer from its own tokens.
 - **Node and indexer clients**: node RPC over subxt for contract state and submission, and a GraphQL client for the indexer that the wallet sync reads.
 - **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
 - **Deploy and call Compact smart contracts**: typed Rust bindings generated from the compiled contract. A circuit call takes typed arguments and returns a typed value.
@@ -90,6 +90,14 @@ let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
 let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
 let funded = sponsor.balance_transaction(&merged).await?;
 sponsor.submit_reserved(funded).await?;
+```
+
+A one-sided offer needs no mirror half. One party builds a half that gives one token and asks for another. A payer completes it with `balance_transaction_with_tokens`: the payer supplies the token the half asks for, receives the token it gives, and pays the Dust fee. `balance_transaction` pays only the fee and refuses a token deficit, so use the second call only on a transaction whose deficit you agreed to cover:
+
+```rust,ignore
+let offer = alice.shielded_swap(token_x, dx, token_y, dy).await?;
+let complete = bob.balance_transaction_with_tokens(offer.as_bytes()).await?;
+bob.submit_reserved(complete).await?;
 ```
 
 A party with no Dust builds a transfer or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A contract call built this way, or with `.build()`, records no private state. So it fails with `ContractError::UnrecordedPrivateState` when its witnesses change the private state, before it reserves Dust or makes a proof. A sponsor pays its Dust fee with `balance_transaction` and submits it with `submit_reserved`, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.

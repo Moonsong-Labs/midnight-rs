@@ -26,7 +26,7 @@ The wallet returns `WalletError::UnknownLedger` for data of a generation this bu
 
 Most of the API is the same on both generations:
 
-- the provider's transfers (`transfer_shielded`, `transfer_unshielded`, `shielded_swap`, `register_dust`), `balance`, `submit`, `merge_transactions` and `balance_transaction`
+- the provider's transfers (`transfer_shielded`, `transfer_unshielded`, `shielded_swap`, `register_dust`), `balance`, `submit`, `merge_transactions`, `balance_transaction` and `balance_transaction_with_tokens`
 - the wallet sync (the `WalletBuilder` that `Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase` and `WalletBuilder::new` start) and `LocalWallet`
 - the generated contract bindings (`Contract::deploy`, `circuits()`, `ledger()`), `Contract::call_with`, a deploy's `ShieldedOffer`, and contract maintenance
 
@@ -86,7 +86,7 @@ match provider.builds().await? {
 }
 ```
 
-Each `Builds` has `build_context`, `execution_context`, `add_funding`, `build_funded`, `prepare_shielded_inputs`, `balance_transaction` and `proof_provider`. Their types come from `midnight_helpers::ledger_8` or `midnight_helpers::ledger_9`. The contract crate builds its calls, deploys and maintenance updates on them.
+Each `Builds` has `build_context`, `execution_context`, `add_funding`, `build_funded`, `prepare_shielded_inputs`, `balance_transaction`, `balance_transaction_with_tokens` and `proof_provider`. Their types come from `midnight_helpers::ledger_8` or `midnight_helpers::ledger_9`. The contract crate builds its calls, deploys and maintenance updates on them.
 
 ### A custom wallet
 

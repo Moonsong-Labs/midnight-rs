@@ -170,6 +170,10 @@ fn provider_entry_points_return_small_futures() {
         p.balance_transaction(&[]),
     );
     assert_small(
+        "MidnightProvider::balance_transaction_with_tokens",
+        p.balance_transaction_with_tokens(&[]),
+    );
+    assert_small(
         "ShieldedTransfer::build",
         p.transfer_shielded(ShieldedTokenType(HashOutput([0u8; 32])), 1, "recipient")
             .build(),

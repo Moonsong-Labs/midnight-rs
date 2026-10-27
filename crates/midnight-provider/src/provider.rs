@@ -536,7 +536,9 @@ impl MidnightProvider {
     ///
     /// The two halves must carry exactly mirrored `(token, amount)` pairs or the
     /// merge won't balance; the builder can't enforce the counterparty's side.
-    /// See [`Self::transfer_shielded`] for reservation semantics.
+    /// With no mirror half, a payer completes one half alone with
+    /// [`Self::balance_transaction_with_tokens`]. See
+    /// [`Self::transfer_shielded`] for reservation semantics.
     pub fn shielded_swap<'a>(
         &'a self,
         give_token: ShieldedTokenType,
@@ -725,8 +727,11 @@ impl MidnightProvider {
     /// proven Dust-paying transaction is combined in via `Transaction::merge`.
     ///
     /// Covers **fees only**: the transaction must already be balanced on every
-    /// non-fee token. A token deficit (e.g. an unfunded swap side) is rejected;
-    /// covering it from the funding wallet is a planned follow-up.
+    /// non-fee token, and a token deficit (e.g. an unfunded swap side) is
+    /// rejected with [`ProviderError::Transaction`]. So a service that pays
+    /// the fees of bytes it does not trust pays nothing else. To cover a token
+    /// deficit from this wallet too, use
+    /// [`Self::balance_transaction_with_tokens`].
     ///
     /// The wallet draws the Dust and reserves it as one transition, so two
     /// calls on one provider cannot draw the same Dust. Proving, the merge
@@ -743,20 +748,91 @@ impl MidnightProvider {
         tx_bytes: &[u8],
     ) -> Result<TransferResult, ProviderError> {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.balance_transaction_inner(tx_bytes)).await
+        Box::pin(self.balance_external(tx_bytes, Balance::Fees)).await
     }
 
-    async fn balance_transaction_inner(
+    /// Balance the tokens of an external party's proven transaction from
+    /// this provider's wallet, pay its fees, and return the completed
+    /// transaction ready to submit.
+    ///
+    /// This is midnight-js `balanceTransaction` with every token kind. It
+    /// completes a one-sided offer: party 1 gives `X` and asks for `Y` in an
+    /// unbalanced transaction (see [`Self::shielded_swap`]), and the payer
+    /// that calls this supplies `Y`, receives `X` and pays the fees:
+    ///
+    /// ```rust,no_run
+    /// # use midnight_provider::{MidnightProvider, ShieldedTokenType};
+    /// # async fn f(
+    /// #     maker: MidnightProvider,
+    /// #     payer: MidnightProvider,
+    /// #     token_x: ShieldedTokenType,
+    /// #     dx: u128,
+    /// #     token_y: ShieldedTokenType,
+    /// #     dy: u128,
+    /// # ) -> anyhow::Result<()> {
+    /// let offer = maker.shielded_swap(token_x, dx, token_y, dy).await?;
+    /// let complete = payer.balance_transaction_with_tokens(offer.as_bytes()).await?;
+    /// payer.submit_reserved(complete).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// For each token that a segment of the transaction lacks, the wallet
+    /// spends its own coins into that segment and takes the change. For each
+    /// token that a segment holds in surplus, the wallet takes the surplus as
+    /// an output to itself. Shielded tokens balance at any segment: segment 0
+    /// in a guaranteed offer, any other segment in a fallible offer at that
+    /// segment. Unshielded tokens balance at segment 0, in the fee intent. An
+    /// unshielded surplus at a fallible segment stays in the transaction.
+    /// Then the wallet pays the fees as [`Self::balance_transaction`] does.
+    /// The external transaction's proofs stay as they are.
+    ///
+    /// This pays **every** deficit that the transaction carries. Call it only
+    /// on a transaction whose deficit you agreed to cover, and use
+    /// [`Self::balance_transaction`] for bytes you do not trust.
+    ///
+    /// The wallet selects the coins, UTXOs and Dust and reserves them as one
+    /// transition, so two calls on one provider cannot draw the same inputs.
+    /// Proving, the merge and the price run afterwards, with the wallet free,
+    /// and a failure in any of them hands the inputs back. The result holds
+    /// the merged transaction, everything it reserved in `spent`, and the fee
+    /// of the merged transaction in `fee_speck`. Submit it with
+    /// [`Self::submit_reserved`]. A transaction that balances every token and
+    /// already pays its own fee comes back unchanged, with nothing reserved.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Wallet`] with
+    /// [`WalletError::FallibleUnshieldedDeficit`](crate::WalletError::FallibleUnshieldedDeficit)
+    /// when a fallible segment lacks an unshielded token, before the wallet
+    /// selects anything. A merge refuses a second intent at a segment, so the
+    /// party that built the transaction must balance that token itself.
+    /// [`ProviderError::Wallet`] with
+    /// [`WalletError::InsufficientShielded`](crate::WalletError::InsufficientShielded),
+    /// [`WalletError::InsufficientUnshielded`](crate::WalletError::InsufficientUnshielded)
+    /// or [`WalletError::InsufficientDust`](crate::WalletError::InsufficientDust)
+    /// when the wallet holds too little.
+    /// [`ProviderError::Transaction`] when the bytes do not deserialize, and
+    /// [`ProviderError::NoWallet`] when no wallet is attached.
+    pub async fn balance_transaction_with_tokens(
         &self,
         tx_bytes: &[u8],
+    ) -> Result<TransferResult, ProviderError> {
+        Box::pin(self.balance_external(tx_bytes, Balance::FeesAndTokens)).await
+    }
+
+    async fn balance_external(
+        &self,
+        tx_bytes: &[u8],
+        balance: Balance,
     ) -> Result<TransferResult, ProviderError> {
         let ledger = transaction_ledger_version(tx_bytes)?;
         match self.builds().await? {
             Builds::Ledger8(builds) if ledger == LedgerVersion::V8 => {
-                builds.balance_transaction(tx_bytes).await
+                builds.balance_external(tx_bytes, balance).await
             }
             Builds::Ledger9(builds) if ledger == LedgerVersion::V9 => {
-                builds.balance_transaction(tx_bytes).await
+                builds.balance_external(tx_bytes, balance).await
             }
             builds => Err(midnight_types::WalletError::LedgerMismatch {
                 expected: builds.ledger_version(),
@@ -1277,6 +1353,15 @@ pub enum Builds<'a> {
     Ledger8(ledger_8::Builds<'a>),
     /// The builds of a wallet whose state is on ledger 9.
     Ledger9(ledger_9::Builds<'a>),
+}
+
+/// What a balance of an external party's transaction covers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Balance {
+    /// The Dust fee only.
+    Fees,
+    /// The Dust fee, and every token deficit and surplus.
+    FeesAndTokens,
 }
 
 impl Builds<'_> {

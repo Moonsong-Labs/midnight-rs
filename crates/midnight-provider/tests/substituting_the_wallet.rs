@@ -159,6 +159,19 @@ macro_rules! stub_builds {
             ) -> Result<Option<midnight_wallet_facade::$ledger::ReservedBuild>, WalletError> {
                 Err(WalletError::Transfer("stub wallet funds nothing".into()))
             }
+
+            async fn prepare_balance(
+                &self,
+                _tx_info: midnight_helpers::$ledger::StandardTransactionInfo<
+                    midnight_helpers::DefaultDB,
+                    midnight_helpers::$ledger::BuildContext,
+                >,
+                _external: &midnight_helpers::$ledger::FinalizedTransaction<
+                    midnight_helpers::DefaultDB,
+                >,
+            ) -> Result<Option<midnight_wallet_facade::$ledger::ReservedBuild>, WalletError> {
+                Err(WalletError::Transfer("stub wallet funds nothing".into()))
+            }
         }
     };
 }

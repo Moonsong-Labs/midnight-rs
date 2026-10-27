@@ -159,6 +159,26 @@ pub enum WalletError {
         available: u128,
     },
 
+    /// The transaction lacks an unshielded token at a fallible segment, which
+    /// a payer cannot cover.
+    ///
+    /// A payer's unshielded inputs ride an intent of the payer's own, and a
+    /// merge refuses a second intent at a segment the transaction already
+    /// uses. So a payer covers an unshielded deficit only at segment 0. The
+    /// party that built the transaction must balance this token itself.
+    #[error(
+        "the transaction lacks {deficit} of unshielded token {token_type} at fallible \
+         segment {segment}; a payer covers an unshielded deficit only at segment 0"
+    )]
+    FallibleUnshieldedDeficit {
+        /// The token the transaction lacks.
+        token_type: UnshieldedTokenType,
+        /// The fallible segment that lacks it.
+        segment: u16,
+        /// The amount the segment lacks.
+        deficit: u128,
+    },
+
     /// A build named an input that another build already holds.
     #[error("{held} is reserved by a build that has not confirmed yet")]
     InputsReserved {

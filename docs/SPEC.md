@@ -142,6 +142,7 @@ provider
   .submit_reserved(result).await   → PendingTx that carries the reservation of the build
   .merge_transactions(&[..])       → one transaction from several proven ones
   .balance_transaction(bytes).await → TransferResult: someone else's fee-less transaction, funded
+  .balance_transaction_with_tokens(bytes).await → TransferResult: its tokens balanced too
   .balance() / .dust_synced() / .parameters() / .unshielded_utxos() / .sync_cursors()
   .release(&spent)                 // hand back a build's reserved inputs
   .health().await                  → node reachability
@@ -156,7 +157,7 @@ Arc<LocalWallet>                                    // a handle on the attached 
 
 Each node read of the provider, its connect included, ends within 10 s (60 s for a contract state read), and a read with no answer returns `ProviderError::Rpc`.
 
-`transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits with `submit_reserved`. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md). A contract call's `.build()` and `.without_dust()` record no private state, so they fail with `ContractError::UnrecordedPrivateState` when the call's witnesses change it. The refusal comes after the local run and before the build reserves an input or makes a proof.
+`transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits with `submit_reserved`. `balance_transaction` pays only the fee and refuses a token deficit. `balance_transaction_with_tokens` also covers each token deficit from the payer's coins and takes each surplus, so a payer can complete a one-sided offer with no mirror half. It pays any deficit the bytes carry, so use it only on a transaction whose deficit the payer agreed to cover. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md). A contract call's `.build()` and `.without_dust()` record no private state, so they fail with `ContractError::UnrecordedPrivateState` when the call's witnesses change it. The refusal comes after the local run and before the build reserves an input or makes a proof.
 
 `with_network` takes a `Network` (via `impl Into<Network>`). Parse a name with `.parse::<Network>()?`, which refuses a name that is not safe in an address or in the storage path. See [`docs/wallet.md`](wallet.md#address-derivation) for the rule.
 
@@ -164,7 +165,7 @@ Each node read of the provider, its connect included, ends within 10 s (60 s for
 
 `PendingReservations` records the spends of builds that the chain has not yet confirmed. Every build reserves its dust spends, unshielded UTXOs and shielded nullifiers before it proves, under the same hold of the wallet that selected them. Thus a second build in this process cannot pick the same input.
 
-A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy with no shielded offer and a maintenance update reserve theirs through `prepare_funded`. A sponsor's build reserves the Dust for the fee it pays through `prepare_fees`. A call, or a deploy with a shielded offer, reserves its pinned coins through `spend_shielded`. It then reserves the Dust for its own fee through `prepare_fees`.
+A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy with no shielded offer and a maintenance update reserve theirs through `prepare_funded`. A sponsor's build reserves the Dust for the fee it pays through `prepare_fees`, and `balance_transaction_with_tokens` reserves that Dust and the coins and UTXOs it covers a token deficit with through `prepare_balance`. A call, or a deploy with a shielded offer, reserves its pinned coins through `spend_shielded`. It then reserves the Dust for its own fee through `prepare_fees`.
 
 Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm.
 
