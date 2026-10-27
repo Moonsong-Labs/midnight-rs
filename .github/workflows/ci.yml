@@ -106,19 +106,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: make doc
 
-  # ---------- Check + Test ----------
+  # ---------- MSRV + Test ----------
 
-  check:
-    name: Check
+  # Clippy's incompatible_msrv lint checks only the use of std items. This job
+  # also checks the language features and the dependencies at the declared
+  # rust-version.
+  msrv:
+    name: MSRV
     runs-on: ubuntu-latest
     needs: [compact]
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/compact-outputs
-      - uses: ./.github/actions/free-disk-space
-      - uses: dtolnay/rust-toolchain@stable
+      - id: msrv
+        name: Read the rust-version of the workspace
+        run: |
+          version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - id: toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
       - uses: Swatinem/rust-cache@v2
-      - run: make check
+      # The `+` form overrides rust-toolchain.toml.
+      - run: make check CARGO="cargo +${{ steps.toolchain.outputs.name }}"
 
   # `make test` covers the conformance replay: the corpus is a workspace member,
   # so `cargo test --workspace` diffs the Rust IR interpreter against the
@@ -136,7 +148,7 @@ jobs:
       - run: make test
 
   macos:
-    name: macOS check + unit tests
+    name: macOS unit tests
     # Contributors develop on macOS; this catches platform-specific breakage
     # (home_dir resolution, TLS backends, libsecp256k1 build flags) that the
     # Linux-only devnet e2e job never exercises. No devnet here: the node +
@@ -148,7 +160,6 @@ jobs:
       - uses: ./.github/actions/compact-outputs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: make check
       - run: make test
 
   audit:
@@ -166,7 +177,7 @@ jobs:
   e2e:
     name: E2E tests (devnet, ledger ${{ matrix.ledger }})
     runs-on: ubuntu-latest
-    needs: [check, compact]
+    needs: [compact]
     strategy:
       fail-fast: false
       matrix:
