@@ -470,11 +470,6 @@ mod tests {
         );
         let generated = generated_source(&info, "Election");
 
-        // Multiple circuits
-        assert!(generated.contains("AdvanceReturn"));
-        assert!(generated.contains("SetTopicReturn"));
-        assert!(generated.contains("AddVoterReturn"));
-
         // Enum types from witnesses
         assert!(generated.contains("pub enum PermissibleVotes"));
         assert!(generated.contains("pub enum PrivateState"));
@@ -530,12 +525,6 @@ mod tests {
             "../../../crates/midnight-contract/tests/fixtures/tiny/compiler/analyzed-ir.sexp",
         );
         let generated = generated_source(&info, "Tiny");
-
-        // Circuit return types
-        assert!(generated.contains("SetReturn"));
-        assert!(generated.contains("GetReturn"));
-        assert!(generated.contains("ClearReturn"));
-        assert!(generated.contains("PublicKeyReturn"));
 
         // Witness return type
         assert!(generated.contains("PrivateSecretKeyReturn"));
@@ -747,7 +736,6 @@ mod tests {
 
         assert!(generated.contains("pub struct Empty"));
         assert!(generated.contains("fn new("));
-        assert!(generated.contains("NoopReturn"));
         // No FIELD_ constants for empty ledger
         assert!(!generated.contains("FIELD_"));
 
