@@ -178,12 +178,16 @@ fn refuse_undeployable(
 mod tests {
     use std::path::Path;
 
+    use midnight_transient_crypto::curve::Fr;
+    use midnight_typed_state::{AlignedValue, StateValue};
+
     use super::*;
-    use crate::runtime::NoWitnesses;
+    use crate::runtime::{NoWitnesses, WitnessContext, WitnessOutcome};
 
     /// A constructor loaded through `compact_codegen` from the compiled
     /// fixture `analyzed_ir` (relative to the workspace root), with `circuit`
-    /// in place of the fixture's own constructor when it is given.
+    /// in place of the fixture's own constructor when it is given. Its state
+    /// holds each ledger cell at its default.
     fn constructor(analyzed_ir: &str, circuit: Option<&str>) -> Constructor {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -203,13 +207,23 @@ mod tests {
                 other => panic!("expected a runnable constructor, got {other:?}"),
             },
         };
+        let cells: Vec<StateValue<InMemoryDB>> = info
+            .ledger
+            .iter()
+            .map(|field| match (field.storage, &field.element_type) {
+                (compact_codegen::types::StorageKind::Cell, Some(ty)) => {
+                    StateValue::from(crate::runtime::default_aligned(ty))
+                }
+                _ => panic!("the fixture field `{}` is not a typed cell", field.name),
+            })
+            .collect();
         Constructor {
             circuit,
             circuits: info.helpers,
             witnesses: info.witnesses,
             natives: info.natives,
             state: ContractState::new(
-                midnight_typed_state::StateValue::Array(vec![].into()),
+                StateValue::Array(cells.into()),
                 midnight_typed_state::StorageHashMap::new(),
                 midnight_typed_state::ContractMaintenanceAuthority::default(),
             ),
@@ -218,6 +232,27 @@ mod tests {
 
     const TINY: &str = "crates/midnight-contract/tests/fixtures/tiny/compiler/analyzed-ir.sexp";
     const KERNEL: &str = "tests/conformance/fixtures/kernel/compiler/analyzed-ir.sexp";
+    const PLAIN: &str = "tests/fixtures/compiled/plain-constructor/compiler/analyzed-ir.sexp";
+
+    /// Run `constructor` as a deploy does, with no private state.
+    fn deploy_run(
+        constructor: &Constructor,
+        args: Vec<(&str, Value)>,
+        witnesses: &dyn WitnessProvider,
+    ) -> Result<Constructed, ContractError> {
+        let args: Vec<(String, Value)> = args
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .collect();
+        run(
+            constructor,
+            &args,
+            witnesses,
+            Vec::new(),
+            CoinPublicKey(midnight_helpers::HashOutput([2; 32])),
+            Timestamp::from_secs(1_000),
+        )
+    }
 
     /// A deploy that runs the constructor over a given state deploys the wrong
     /// state. A deploy with no arguments either deploys the default state, or
@@ -240,31 +275,57 @@ mod tests {
         }
     }
 
+    /// Answers tiny's `private$secret_key`.
+    struct SecretKey;
+
+    impl WitnessProvider for SecretKey {
+        fn call_witness(
+            &self,
+            _ctx: &mut WitnessContext<'_>,
+            name: &str,
+            _args: &[Value],
+        ) -> Result<WitnessOutcome, InterpreterError> {
+            Ok(match name {
+                "private$secret_key" => {
+                    WitnessOutcome::Value(Value::AlignedValue(AlignedValue::from([7u8; 32])))
+                }
+                _ => WitnessOutcome::Unknown,
+            })
+        }
+    }
+
+    /// The deploy replays the constructor's public transcript to find its
+    /// effects. A replay that refuses the writes of a constructor fails each
+    /// deploy that runs one, and only a deploy on a devnet shows it. tiny's
+    /// constructor writes each of its cells, from an argument and a witness.
+    #[test]
+    fn a_constructor_that_writes_the_ledger_deploys_its_state() {
+        let forty_two = AlignedValue::from(Fr::from(42u64));
+        let constructed = deploy_run(
+            &constructor(TINY, None),
+            vec![("v", Value::AlignedValue(forty_two.clone()))],
+            &SecretKey,
+        )
+        .unwrap_or_else(|e| panic!("tiny's constructor must deploy: {e:?}"));
+
+        let StateValue::Array(cells) = &*constructed.state.data.get() else {
+            panic!("tiny's state is an array of cells");
+        };
+        assert_eq!(cells.get(1), Some(&StateValue::from(forty_two)));
+    }
+
     /// The interpreter keeps no effect, so a check that reads the run alone
     /// passes a mint. A check that refuses every kernel operation refuses a
     /// read of the block time.
     #[test]
-    fn only_a_ledger_effect_is_refused() {
-        let run_kernel = |circuit: &str, args: Vec<(String, Value)>| {
-            run(
-                &constructor(KERNEL, Some(circuit)),
-                &args,
-                &NoWitnesses,
-                Vec::new(),
-                CoinPublicKey(midnight_helpers::HashOutput([2; 32])),
-                Timestamp::from_secs(1_000),
-            )
-        };
-
-        let minted = run_kernel(
-            "mint",
+    fn a_mint_is_a_ledger_effect_and_a_clock_read_is_none() {
+        let minted = deploy_run(
+            &constructor(KERNEL, Some("mint")),
             vec![
-                (
-                    "domain_sep".to_owned(),
-                    Value::AlignedValue([1u8; 32].into()),
-                ),
-                ("amount".to_owned(), Value::Integer(5)),
+                ("domain_sep", Value::AlignedValue([1u8; 32].into())),
+                ("amount", Value::Integer(5)),
             ],
+            &NoWitnesses,
         );
         assert!(
             matches!(
@@ -276,10 +337,44 @@ mod tests {
             "a mint must be refused as a ledger effect"
         );
 
-        run_kernel(
-            "block_time_lt",
-            vec![("time".to_owned(), Value::Integer(2_000))],
+        deploy_run(
+            &constructor(KERNEL, Some("block_time_lt")),
+            vec![("time", Value::Integer(2_000))],
+            &NoWitnesses,
         )
         .unwrap_or_else(|e| panic!("a read of the block time makes no effect: {e:?}"));
+    }
+
+    /// A Zswap input or output with no claim makes no ledger effect, so the
+    /// replay alone passes it. The deploy then drops the coin with no error.
+    #[test]
+    fn a_shielded_coin_with_no_ledger_effect_is_refused() {
+        let spent = deploy_run(&constructor(PLAIN, Some("take")), vec![], &NoWitnesses);
+        assert!(
+            matches!(
+                spent,
+                Err(ContractError::ConstructorEffect(
+                    ConstructorEffect::ShieldedInput
+                ))
+            ),
+            "a spent coin must be refused, got {:?}",
+            spent.err()
+        );
+
+        let created = deploy_run(
+            &constructor(PLAIN, Some("give")),
+            vec![("amount", Value::Integer(5))],
+            &NoWitnesses,
+        );
+        assert!(
+            matches!(
+                created,
+                Err(ContractError::ConstructorEffect(
+                    ConstructorEffect::ShieldedOutput
+                ))
+            ),
+            "a created coin must be refused, got {:?}",
+            created.err()
+        );
     }
 }

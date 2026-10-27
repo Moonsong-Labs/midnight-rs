@@ -31,6 +31,16 @@ compact_bindgen::contract!(
     Bboard,
     "../../crates/midnight-contract/tests/fixtures/bboard/compiler/analyzed-ir.sexp"
 );
+// A constructor that takes an argument and calls no witness, and one that the
+// interpreter cannot run, so each shape of the generated deploy compiles.
+compact_bindgen::contract!(
+    PlainConstructor,
+    "../fixtures/compiled/plain-constructor/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    CoinVault,
+    "../fixtures/compiled/coin-vault/compiler/analyzed-ir.sexp"
+);
 compact_bindgen::contract!(
     Containers,
     "../conformance/fixtures/containers/compiler/analyzed-ir.sexp"
@@ -763,6 +773,54 @@ mod initial_state_defaults {
                 "{fixture}: the constructor state is not the canonical runtime's"
             );
         }
+    }
+}
+
+/// The generated deploy and simulator of a constructor that calls no witness,
+/// and of a constructor that the interpreter cannot run.
+#[cfg(test)]
+mod constructor_shapes {
+    use std::time::UNIX_EPOCH;
+
+    use compact_bindgen::TransientFr;
+    use compact_bindgen::midnight_contract::{AsMidnightProvider, ContractError, Provider};
+
+    use crate::{coin_vault, plain_constructor};
+
+    /// A simulator with no witnesses runs the constructor on its typed
+    /// argument. A run that drops the argument or the body leaves the default.
+    #[test]
+    fn a_constructor_with_no_witness_runs_on_its_argument() {
+        let mut simulator = plain_constructor::Simulator::new(
+            plain_constructor::PlainConstructorInitialState::default(),
+            UNIX_EPOCH,
+        );
+        simulator
+            .run_constructor(TransientFr::from(42u64))
+            .expect("the constructor runs");
+        assert_eq!(
+            simulator.ledger().value().expect("value"),
+            TransientFr::from(42u64)
+        );
+    }
+
+    /// The deploy takes the typed arguments of a constructor that calls no
+    /// witness, and a state for a constructor that the SDK cannot run.
+    #[expect(
+        dead_code,
+        reason = "the build checks the generated types, and a deploy needs a devnet"
+    )]
+    async fn deploys<P>(plain: P, vault: P) -> Result<(), ContractError>
+    where
+        P: AsMidnightProvider + Provider + Send,
+    {
+        plain_constructor::Contract::deploy(plain)
+            .with_constructor_args(TransientFr::from(42u64))
+            .await?;
+        coin_vault::Contract::deploy(vault)
+            .with_initial_state(coin_vault::CoinVaultInitialState::default())
+            .await?;
+        Ok(())
     }
 }
 

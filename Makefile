@@ -79,7 +79,8 @@ TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 # Codegen test fixtures: tests/fixtures/sources/<name>.compact compiles to
 # tests/fixtures/compiled/<name>/.
-CODEGEN_FIXTURES := gateway many-fields mint-probe pairs results struct-shapes zerocash
+CODEGEN_FIXTURES := coin-vault gateway many-fields mint-probe pairs plain-constructor results struct-shapes \
+                    zerocash
 
 # Conformance corpus: tests/conformance/fixtures/<name>/<name>.compact. The two
 # executors read different compiler outputs of a fixture: the Rust IR
