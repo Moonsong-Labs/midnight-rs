@@ -1779,7 +1779,7 @@ mod tests {
     fn readings_hold_only_the_inputs_of_a_live_reservation() {
         let mut wallet = test_wallet(None);
         let now = Timestamp::from_secs(100_000);
-        wallet.block_context = Some(block_context_at(now));
+        wallet.block_context = Some(helpers::make_block_context(now, Default::default(), now));
         let expired = now - wallet.parameters.global_ttl - helpers::Duration::from_secs(1);
         let expired_coin = insert_shielded_coin(&mut wallet, 1, 100);
         let live_coin = insert_shielded_coin(&mut wallet, 2, 200);
