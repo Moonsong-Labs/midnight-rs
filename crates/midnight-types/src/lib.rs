@@ -58,6 +58,6 @@ pub use parameters::{ChainParameters, DustParameters};
 pub use primitive_types::H256;
 pub use sync::{SyncCursors, TrackedUtxo};
 pub use transfer::{
-    ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest, TransferResult,
-    panic_message,
+    Payment, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
+    TransferResult, panic_message,
 };

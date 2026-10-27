@@ -20,8 +20,8 @@ use crate::{
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
     BlockHash, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion,
-    Network, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
+    Network, Payment, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors,
+    TrackedUtxo, TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
@@ -490,13 +490,68 @@ impl MidnightProvider {
     /// wallet's pending list as one transition, so a second build in this
     /// process cannot draw the same input. Proving runs after that, with the
     /// wallet free.
+    ///
+    /// To pay several recipients in one transaction, use
+    /// [`Self::transfer_shielded_many`].
     pub fn transfer_shielded<'a>(
         &'a self,
         token_type: ShieldedTokenType,
         amount: u128,
         recipient: &str,
     ) -> ShieldedTransfer<'a> {
-        ShieldedTransfer::new(self, token_type, amount, recipient)
+        ShieldedTransfer::new(self, vec![Payment::new(token_type, amount, recipient)])
+    }
+
+    /// Build one shielded (Zswap) transaction that makes each of `payments`.
+    ///
+    /// Each payment becomes one output of the same guaranteed offer, so the
+    /// chain applies all of them or none. The transaction carries one proof
+    /// per input and output, and pays one Dust fee. The build selects the
+    /// inputs of each token for the sum of that token's payments, and returns
+    /// one change output per token to this wallet.
+    ///
+    /// ```rust,no_run
+    /// # use midnight_provider::{MidnightProvider, Payment, ShieldedTokenType};
+    /// # async fn f(
+    /// #     provider: MidnightProvider,
+    /// #     token: ShieldedTokenType,
+    /// #     alice: String,
+    /// #     bob: String,
+    /// # ) -> anyhow::Result<()> {
+    /// let pending = provider
+    ///     .transfer_shielded_many([Payment::new(token, 3, &alice), Payment::new(token, 5, &bob)])
+    ///     .await?;
+    /// pending.wait_finalized().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The returned builder is the one [`Self::transfer_shielded`] returns,
+    /// with the same `.await`, `.build()` and `.without_dust()` endpoints and
+    /// the same reservation semantics.
+    ///
+    /// # Errors
+    ///
+    /// The build fails, with no input reserved, on any of these conditions:
+    ///
+    /// - [`WalletError::Transfer`] when `payments` is empty, when a payment
+    ///   sends 0, or when the payments of one token add up to more than
+    ///   `u128::MAX`.
+    /// - [`WalletError::InvalidAddress`] or
+    ///   [`WalletError::AddressNetworkMismatch`] for a recipient that is not a
+    ///   shielded address of the wallet's network.
+    /// - [`WalletError::InsufficientShielded`] when the wallet holds less of a
+    ///   token than its payments add up to.
+    ///
+    /// [`WalletError::Transfer`]: crate::WalletError::Transfer
+    /// [`WalletError::InvalidAddress`]: crate::WalletError::InvalidAddress
+    /// [`WalletError::AddressNetworkMismatch`]: crate::WalletError::AddressNetworkMismatch
+    /// [`WalletError::InsufficientShielded`]: crate::WalletError::InsufficientShielded
+    pub fn transfer_shielded_many(
+        &self,
+        payments: impl IntoIterator<Item = Payment<ShieldedTokenType>>,
+    ) -> ShieldedTransfer<'_> {
+        ShieldedTransfer::new(self, payments.into_iter().collect())
     }
 
     /// Build one half of a native two-party shielded token swap.
@@ -550,13 +605,67 @@ impl MidnightProvider {
     /// Build an unshielded (UTXO) transfer transaction. See
     /// [`Self::transfer_shielded`] for reservation semantics and the
     /// `.await` vs `.build()` distinction.
+    ///
+    /// To pay several recipients in one transaction, use
+    /// [`Self::transfer_unshielded_many`].
     pub fn transfer_unshielded<'a>(
         &'a self,
         token_type: UnshieldedTokenType,
         amount: u128,
         recipient: &str,
     ) -> UnshieldedTransfer<'a> {
-        UnshieldedTransfer::new(self, token_type, amount, recipient)
+        UnshieldedTransfer::new(self, vec![Payment::new(token_type, amount, recipient)])
+    }
+
+    /// Build one unshielded (UTXO) transaction that makes each of `payments`.
+    ///
+    /// Each payment becomes one output of the same guaranteed offer, so the
+    /// chain applies all of them or none, and the transaction pays one Dust
+    /// fee. The build selects the UTXOs of each token for the sum of that
+    /// token's payments, and returns one change output per token to this
+    /// wallet.
+    ///
+    /// Two unshielded transfers cannot merge into one transaction, because
+    /// each carries its intent at segment 1 (see [`Self::merge_transactions`]).
+    /// So this is the way to pay several recipients in one transaction.
+    ///
+    /// ```rust,no_run
+    /// # use midnight_provider::{MidnightProvider, NIGHT, Payment};
+    /// # async fn f(provider: MidnightProvider, alice: String, bob: String) -> anyhow::Result<()> {
+    /// let pending = provider
+    ///     .transfer_unshielded_many([Payment::new(NIGHT, 3, &alice), Payment::new(NIGHT, 5, &bob)])
+    ///     .await?;
+    /// pending.wait_finalized().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The returned builder is the one [`Self::transfer_unshielded`] returns,
+    /// with the same `.await`, `.build()` and `.without_dust()` endpoints and
+    /// the same reservation semantics.
+    ///
+    /// # Errors
+    ///
+    /// The build fails, with no input reserved, on any of these conditions:
+    ///
+    /// - [`WalletError::Transfer`] when `payments` is empty, when a payment
+    ///   sends 0, or when the payments of one token add up to more than
+    ///   `u128::MAX`.
+    /// - [`WalletError::InvalidAddress`] or
+    ///   [`WalletError::AddressNetworkMismatch`] for a recipient that is not an
+    ///   unshielded address of the wallet's network.
+    /// - [`WalletError::InsufficientUnshielded`] when the wallet holds less of
+    ///   a token than its payments add up to.
+    ///
+    /// [`WalletError::Transfer`]: crate::WalletError::Transfer
+    /// [`WalletError::InvalidAddress`]: crate::WalletError::InvalidAddress
+    /// [`WalletError::AddressNetworkMismatch`]: crate::WalletError::AddressNetworkMismatch
+    /// [`WalletError::InsufficientUnshielded`]: crate::WalletError::InsufficientUnshielded
+    pub fn transfer_unshielded_many(
+        &self,
+        payments: impl IntoIterator<Item = Payment<UnshieldedTokenType>>,
+    ) -> UnshieldedTransfer<'_> {
+        UnshieldedTransfer::new(self, payments.into_iter().collect())
     }
 
     /// Build a dust-address registration transaction. See

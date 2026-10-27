@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{
-    LedgerVersion, MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, SpentInputs,
+    LedgerVersion, MidnightProvider, NIGHT, Payment, ProviderError, ShieldedTokenType, SpentInputs,
     TransferKind, TransferRequest, WalletError, WalletFacade,
 };
 use midnight_wallet::LocalWallet;
@@ -47,9 +47,7 @@ async fn prepare_night_self_transfer(
     recipient: String,
 ) -> Result<SpentInputs, WalletError> {
     let request = TransferRequest::new(TransferKind::Unshielded {
-        token_type: NIGHT,
-        amount: 1,
-        recipient,
+        payments: vec![Payment::new(NIGHT, 1, recipient)],
         pay_fees: true,
     });
     macro_rules! prepare {

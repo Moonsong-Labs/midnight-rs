@@ -226,6 +226,12 @@ midnight-rs: the `midnight-private-state` crate has a `PrivateStateProvider` tra
 
 Private state is also **threaded** through witness execution, matching midnight-js. `WitnessProvider::call_witness(ctx, name, args)` takes a `&mut WitnessContext` carrying the mutable private state (the analogue of midnight-js's `(ctx, ...args) => [newPS, result]`). When a `PrivateStateProvider` is attached, a circuit call loads the contract's state before execution and threads it through the witnesses. It records the state after the call as a `Pending` snapshot before the submit. It then settles the snapshot by the chain's verdict (see [`private-state.md`](./private-state.md)). So stateful-witness contracts work across calls without the caller managing storage. Private state is keyed by contract address: a Compact contract has exactly one private-state type shared by all its witnesses, so there is one blob per contract (the caller packs every private variable into it), rather than midnight-js's separate per-app `privateStateId`.
 
+### Shielded and unshielded payments in one transfer
+
+midnight-js's `transferTransaction(outputs, { ttl, payFees })` takes shielded and unshielded outputs together, of any tokens, and builds one transaction that pays one Dust fee.
+
+midnight-rs builds one kind per transfer. [`transfer_shielded_many` and `transfer_unshielded_many`](../crates/midnight-provider/src/provider.rs) each take a list of `Payment`s of one kind, of any tokens, and build one transaction that pays one Dust fee. To pay shielded and unshielded recipients in one transaction, build each list with `.without_dust()`, merge the two with `merge_transactions`, and pay the fee with `balance_transaction`. A Dustless shielded transfer carries no intent, so the merge has no segment collision. That takes three builds where midnight-js takes one.
+
 ### Wallet observability
 
 midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams (`watchForContractState`, `watchForTxData`, etc.) backed by indexer subscriptions. midnight-rs has the subscription client (`midnight-indexer-client`) but does not surface streams to user code beyond the `SyncProgress` channel during initial sync.

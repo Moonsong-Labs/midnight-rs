@@ -136,6 +136,7 @@ provider
       b.execution_context().await  → the half a circuit runs against, with no funding view
       b.add_funding(&ctx) / b.build_funded(tx_info) / b.prepare_shielded_inputs(..)
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
+  .transfer_shielded_many / transfer_unshielded_many   // one transaction to several recipients
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
   .prepare_reserved(result).await  → PreparedTx that holds the reservation of the build
   .submit(tx_bytes).await          → PendingTx
@@ -338,11 +339,13 @@ settle the result of the wait:
 
 ### Transfer (shielded / unshielded / swap / register dust)
 
-Each of the four provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`). The builder defers all work until awaited or `.build()` is called:
+Each of the six provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`). The builder defers all work until awaited or `.build()` is called. A list form returns the same builder as its one-recipient method. That builder holds a list of `Payment`s, and the one-recipient method gives it a list of one:
 
 ```
 provider.transfer_shielded(token_type, amount, recipient)       // bech32 address; no work yet
         .transfer_unshielded(token_type, amount, recipient)
+        .transfer_shielded_many(payments)                       // [Payment { token_type, amount, recipient }]
+        .transfer_unshielded_many(payments)
         .shielded_swap(give_token, give_amount, receive_token, receive_amount)
         .register_dust(utxo_ctime)
 

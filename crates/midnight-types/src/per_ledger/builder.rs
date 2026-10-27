@@ -24,8 +24,9 @@ use helpers::{
 
 use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
+use crate::transfer::totals_per_token;
 use crate::{
-    Network, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
+    Network, Payment, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
     TransferResult, WalletError, panic_message,
 };
 
@@ -370,25 +371,11 @@ impl<'a> TransferBuilder<'a> {
         } = request;
         let builder = self.with_coin_selection(coin_selection);
         match kind {
-            TransferKind::Shielded {
-                token_type,
-                amount,
-                recipient,
-                pay_fees,
-            } => {
-                builder
-                    .prepare_shielded(token_type.into_ledger(), amount, &recipient, pay_fees)
-                    .await
+            TransferKind::Shielded { payments, pay_fees } => {
+                builder.prepare_shielded(&payments, pay_fees).await
             }
-            TransferKind::Unshielded {
-                token_type,
-                amount,
-                recipient,
-                pay_fees,
-            } => {
-                builder
-                    .prepare_unshielded(token_type.into_ledger(), amount, &recipient, pay_fees)
-                    .await
+            TransferKind::Unshielded { payments, pay_fees } => {
+                builder.prepare_unshielded(&payments, pay_fees).await
             }
             TransferKind::ShieldedSwap {
                 give_token,
@@ -411,13 +398,18 @@ impl<'a> TransferBuilder<'a> {
         }
     }
 
-    /// Build a shielded (ZSwap) transfer transaction.
+    /// Build a shielded (ZSwap) transfer transaction that pays each of
+    /// `payments`.
     ///
-    /// `recipient` is a bech32 shielded address (e.g.
+    /// Each recipient is a bech32 shielded address (e.g.
     /// `mn_shield-addr_undeployed1...`). Only the public material is needed:
     /// the address carries the recipient's `coin_public_key` and
     /// `enc_public_key`, which is all the chain needs to construct the output
     /// coin commitment and encrypt the coin info for them.
+    ///
+    /// Every payment becomes one output of the same guaranteed offer, so the
+    /// chain applies all of them or none, and a self-funded build pays one fee
+    /// for all of them.
     ///
     /// When `pay_fees` is false the build skips Dust entirely, yielding a
     /// fee-unbalanced transaction for a multi-party flow where another
@@ -426,28 +418,43 @@ impl<'a> TransferBuilder<'a> {
     /// `MidnightProvider::balance_transaction` (in `midnight-provider`) and
     /// submits.
     ///
-    /// `amount` may span several coins: inputs are selected up front with
-    /// [`InputInfo::coins_to_cover_value`] and the remainder returns to this
-    /// wallet as a change output, so a payment is bounded by the wallet's total
-    /// balance in `token_type` rather than by its largest single coin. Sending
-    /// the full balance to this wallet's own address therefore consolidates it
-    /// into one coin, and sending part of a coin splits it. The spent coins'
-    /// nullifiers are in [`PreparedTransfer::spent_shielded_inputs`].
+    /// The inputs of each token are selected up front with
+    /// [`InputInfo::coins_to_cover_value`], for the sum of that token's
+    /// payments, and the remainder returns to this wallet as one change output
+    /// per token. So a payment is bounded by the wallet's total balance in its
+    /// token rather than by its largest single coin. Sending the full balance
+    /// to this wallet's own address therefore consolidates it into one coin,
+    /// and sending part of a coin splits it. The spent coins' nullifiers are in
+    /// [`PreparedTransfer::spent_shielded_inputs`].
+    ///
+    /// # Errors
+    ///
+    /// [`WalletError::Transfer`] when `payments` is empty, when a payment sends
+    /// 0, or when the payments of one token add up to more than `u128::MAX`.
+    /// [`WalletError::InvalidAddress`] or [`WalletError::AddressNetworkMismatch`]
+    /// for a recipient that is not a shielded address of this wallet's
+    /// network. [`WalletError::InsufficientShielded`] when the wallet holds
+    /// less of a token than its payments add up to.
     pub async fn prepare_shielded(
         self,
-        token_type: ShieldedTokenType,
-        amount: u128,
-        recipient: &str,
+        payments: &[Payment<crate::ShieldedTokenType>],
         pay_fees: bool,
     ) -> Result<PreparedTransfer, WalletError> {
-        let recipient_wallet = shielded_destination(recipient, self.state.network())?;
-        let payment = OutputInfo {
-            destination: recipient_wallet,
-            token_type,
-            value: amount,
-        };
-        self.prepare_shielded_offer(token_type, amount, Box::new(payment), pay_fees)
-            .await
+        let totals = totals_per_token(payments)?;
+        let mut outputs: Vec<Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>> =
+            Vec::with_capacity(payments.len());
+        for payment in payments {
+            outputs.push(Box::new(OutputInfo {
+                destination: shielded_destination(&payment.recipient, self.state.network())?,
+                token_type: payment.token_type.into_ledger(),
+                value: payment.amount,
+            }));
+        }
+        let spends = totals
+            .into_iter()
+            .map(|(token_type, total)| (token_type.into_ledger(), total))
+            .collect();
+        self.prepare_shielded_offer(spends, outputs, pay_fees).await
     }
 
     /// Build one half of a native two-party shielded token swap: a fee-less
@@ -485,60 +492,64 @@ impl<'a> TransferBuilder<'a> {
             value: receive_amount,
         };
         // No funding seed: an unbalanced half can't self-fund its Dust.
-        self.prepare_shielded_offer(give_token, give_amount, Box::new(payment), false)
-            .await
+        self.prepare_shielded_offer(
+            vec![(give_token, give_amount)],
+            vec![Box::new(payment)],
+            false,
+        )
+        .await
     }
 
-    /// Spend this wallet's coins to cover `spend_amount` of `spend_token`, and
-    /// put `payment` first in the offer, followed by the change (if any) back
-    /// to this wallet.
+    /// Spend this wallet's coins to cover each `(token, amount)` of `spends`,
+    /// and put `payments` first in the offer, followed by the change (if any)
+    /// of each token back to this wallet.
     async fn prepare_shielded_offer(
         self,
-        spend_token: ShieldedTokenType,
-        spend_amount: u128,
-        payment: Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>,
+        spends: Vec<(ShieldedTokenType, u128)>,
+        payments: Vec<Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>>,
         pay_fees: bool,
     ) -> Result<PreparedTransfer, WalletError> {
         let seed = self.state.seed();
         let from_seed = seed.into_ledger();
 
-        // Select the coins here rather than leaving `nullifier: None` for the
-        // build to resolve: that path binds the single smallest coin covering
-        // `spend_amount` and then substitutes the coin's own value for the
-        // requested one, which caps a payment at the largest single coin and
-        // drops whatever that coin holds beyond `spend_amount` with no output
-        // to claim it.
-        let (inputs, change) = InputInfo::coins_to_cover_value(
-            self.context.clone(),
-            from_seed.clone(),
-            spend_amount,
-            spend_token,
-            self.coin_selection,
-        )
-        .map_err(|e| shielded_selection_error(&self.context, e))?;
+        let mut outputs = payments;
+        let mut spent_shielded_inputs: Vec<Nullifier> = Vec::new();
+        for (spend_token, spend_amount) in spends {
+            // Select the coins here rather than leaving `nullifier: None` for
+            // the build to resolve: that path binds the single smallest coin
+            // covering `spend_amount` and then substitutes the coin's own value
+            // for the requested one, which caps a payment at the largest single
+            // coin and drops whatever that coin holds beyond `spend_amount`
+            // with no output to claim it.
+            let (inputs, change) = InputInfo::coins_to_cover_value(
+                self.context.clone(),
+                from_seed.clone(),
+                spend_amount,
+                spend_token,
+                self.coin_selection,
+            )
+            .map_err(|e| shielded_selection_error(&self.context, e))?;
 
-        // Every input from `coins_to_cover_value` carries a pinned nullifier;
-        // error rather than drop one silently, since a missing nullifier would
-        // leave the coin unreserved and defeat the double-spend protection.
-        let spent_shielded_inputs: Vec<Nullifier> = inputs
-            .iter()
-            .map(|i| {
-                i.nullifier.ok_or_else(|| {
+            // Every input from `coins_to_cover_value` carries a pinned
+            // nullifier; error rather than drop one silently, since a missing
+            // nullifier would leave the coin unreserved and defeat the
+            // double-spend protection.
+            for input in &inputs {
+                spent_shielded_inputs.push(input.nullifier.ok_or_else(|| {
                     WalletError::Transfer(
                         "selected shielded coin has no nullifier to reserve".into(),
                     )
-                })
-            })
-            .collect::<Result<_, _>>()?;
+                })?);
+            }
 
-        let mut outputs = vec![payment];
-        // Change back to this wallet, only if any.
-        if change > 0 {
-            outputs.push(Box::new(OutputInfo {
-                destination: from_seed.clone(),
-                token_type: spend_token,
-                value: change,
-            }));
+            // Change back to this wallet, only if any.
+            if change > 0 {
+                outputs.push(Box::new(OutputInfo {
+                    destination: from_seed.clone(),
+                    token_type: spend_token,
+                    value: change,
+                }));
+            }
         }
 
         // The wallet performs the spends, so the offer holds finished inputs
@@ -573,39 +584,75 @@ impl<'a> TransferBuilder<'a> {
         Ok(prepared)
     }
 
-    /// Build an unshielded (UTXO) transfer transaction.
+    /// Build an unshielded (UTXO) transfer transaction that pays each of
+    /// `payments`.
     ///
-    /// `recipient` is a bech32 unshielded address (e.g.
+    /// Each recipient is a bech32 unshielded address (e.g.
     /// `mn_addr_undeployed1...`). Only the recipient's `user_address` (the
     /// public part) is needed; the chain derives the output's owner field
-    /// directly from it. The change output, if any, goes back to the
-    /// sender's own seed-derived address.
+    /// directly from it.
+    ///
+    /// The UTXOs of each token are selected with
+    /// [`UtxoSpendInfo::utxos_to_cover_value`], for the sum of that token's
+    /// payments. The change of each token, if any, goes back to the sender's
+    /// own seed-derived address as one output. Every payment becomes one
+    /// output of the same guaranteed offer, so the chain applies all of them
+    /// or none, and a self-funded build pays one fee for all of them.
     ///
     /// When `pay_fees` is false the build skips Dust entirely, yielding a
     /// fee-unbalanced transaction for another wallet to sponsor (the
     /// `.without_dust()` path); see [`Self::prepare_shielded`] for the multi-party flow.
+    ///
+    /// # Errors
+    ///
+    /// [`WalletError::Transfer`] when `payments` is empty, when a payment sends
+    /// 0, or when the payments of one token add up to more than `u128::MAX`.
+    /// [`WalletError::InvalidAddress`] or [`WalletError::AddressNetworkMismatch`]
+    /// for a recipient that is not an unshielded address of this wallet's
+    /// network. [`WalletError::InsufficientUnshielded`] when the wallet holds
+    /// less of a token than its payments add up to.
     pub async fn prepare_unshielded(
         self,
-        token_type: UnshieldedTokenType,
-        amount: u128,
-        recipient: &str,
+        payments: &[Payment<crate::UnshieldedTokenType>],
         pay_fees: bool,
     ) -> Result<PreparedTransfer, WalletError> {
         let from_seed = self.state.seed().into_ledger();
-        let recipient_wallet = parse_unshielded_recipient(recipient, self.state.network())?;
+        let totals = totals_per_token(payments)?;
 
-        let selected = UtxoSpendInfo::utxos_to_cover_value(
-            self.context.clone(),
-            from_seed.clone(),
-            amount,
-            token_type,
-            self.coin_selection,
-        )
-        .await;
-        let (spend_infos, change) = match selected {
-            Ok(selected) => selected,
-            Err(e) => return Err(utxo_selection_error(&self.context, e).await),
-        };
+        let mut outputs: Vec<Box<dyn helpers::BuildUtxoOutput<DefaultDB, BuildContext>>> =
+            Vec::with_capacity(payments.len());
+        for payment in payments {
+            outputs.push(Box::new(UtxoOutputInfo {
+                value: payment.amount,
+                owner: parse_unshielded_recipient(&payment.recipient, self.state.network())?,
+                token_type: payment.token_type.into_ledger(),
+            }));
+        }
+
+        let mut spend_infos = Vec::new();
+        for (token_type, total) in totals {
+            let token_type: UnshieldedTokenType = token_type.into_ledger();
+            let selected = UtxoSpendInfo::utxos_to_cover_value(
+                self.context.clone(),
+                from_seed.clone(),
+                total,
+                token_type,
+                self.coin_selection,
+            )
+            .await;
+            let (selected, change) = match selected {
+                Ok(selected) => selected,
+                Err(e) => return Err(utxo_selection_error(&self.context, e).await),
+            };
+            spend_infos.extend(selected);
+            if change > 0 {
+                outputs.push(Box::new(UtxoOutputInfo {
+                    value: change,
+                    owner: from_seed.clone(),
+                    token_type,
+                }));
+            }
+        }
 
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = spend_infos
             .iter()
@@ -618,21 +665,6 @@ impl<'a> TransferBuilder<'a> {
                 })
             })
             .collect();
-
-        let mut outputs: Vec<Box<dyn helpers::BuildUtxoOutput<DefaultDB, BuildContext>>> =
-            vec![Box::new(UtxoOutputInfo {
-                value: amount,
-                owner: recipient_wallet,
-                token_type,
-            })];
-
-        if change > 0 {
-            outputs.push(Box::new(UtxoOutputInfo {
-                value: change,
-                owner: from_seed.clone(),
-                token_type,
-            }));
-        }
 
         let unshielded_offer = UnshieldedOfferInfo {
             inputs: spend_infos

@@ -358,7 +358,28 @@ let pending = provider
     .await?;
 ```
 
-`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
+`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model.
+
+To pay several recipients in one transaction, give the list form of the method a list of `Payment`s:
+
+```rust
+use midnight_core::provider::Payment;
+
+let pending = provider
+    .transfer_unshielded_many([
+        Payment::new(NIGHT, 3, &alice_address),
+        Payment::new(NIGHT, 5, &bob_address),
+    ])
+    .await?;
+```
+
+`transfer_shielded_many` does the same for shielded payments, and a list can hold payments of several tokens. Each payment becomes one output of the same guaranteed offer, so the chain applies all of the payments or none of them, and the transaction pays one Dust fee. The build selects inputs for the sum of the payments of each token, and returns one change output per token to the wallet. The list form returns the same builder as the one-recipient method, so `.build()`, `.without_dust()` and `.with_coin_selection()` work the same way. The one-recipient method is the list form with one payment.
+
+Two unshielded transfers cannot merge into one transaction, because each carries its intent at segment 1. So use `transfer_unshielded_many` to pay several unshielded recipients in one transaction. A list holds payments of one kind. To pay shielded and unshielded recipients in one transaction, build each list with `.without_dust()`, merge the two with `merge_transactions`, and pay the fee with `balance_transaction`. A Dustless shielded transfer carries no intent, so the merge has no segment collision.
+
+A build refuses an empty list, a payment of 0, and payments of one token that add up to more than `u128::MAX`, with `WalletError::Transfer`, before it reserves an input.
+
+Each builder:
 
 1. Resyncs, then takes a write lock on the wallet and builds the context of the wallet's ledger generation.
 2. Selects inputs from the wallet's local UTXO set.
@@ -476,6 +497,7 @@ provider.with_wallet(wallet)
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx
+  provider.transfer_*_many(payments).await   pays several recipients in one transaction → PendingTx
        │     .build().await → TransferResult (escape hatch, no submit)
        │
        └─ PendingTx

@@ -7,7 +7,7 @@
 
 ## Features
 
-- **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token).
+- **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token). One transfer can pay several recipients.
 - **Swaps and sponsored fees**: two-party shielded swaps, and one party paying the Dust fees of another party's transactions.
 - **Node and indexer clients**: node RPC over subxt for contract state and submission, and a GraphQL client for the indexer that the wallet sync reads.
 - **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).

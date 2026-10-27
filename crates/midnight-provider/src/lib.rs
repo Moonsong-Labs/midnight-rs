@@ -40,7 +40,7 @@ pub use midnight_types::{
 // separate dep on midnight-wallet-facade.
 pub use midnight_types::hd::{Seed, SeedError};
 pub use midnight_types::{
-    InvalidNetworkName, Network, NetworkName, ReservedInput, ShieldedCoinBalance,
+    InvalidNetworkName, Network, NetworkName, Payment, ReservedInput, ShieldedCoinBalance,
     SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind,
     TransferRequest, TransferResult, WalletBalance, WalletError,
 };
