@@ -7,10 +7,9 @@
 //! transaction with `EffectsCheckFailure`.
 //!
 //! The recipient is a second wallet, and the assertion is that its balance
-//! grew. Paying the caller's own address would pass even if every payout were
-//! wrongly owned by the caller, which is the distinction `PayoutOutput` exists
-//! for; asserting only that the call returned would pass on a transaction that
-//! paid nobody.
+//! grew. Paying the caller's own address would pass even if every payout went
+//! to the caller and not to the address that the transcript names. Asserting
+//! only that the call returned would pass on a transaction that paid nobody.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 

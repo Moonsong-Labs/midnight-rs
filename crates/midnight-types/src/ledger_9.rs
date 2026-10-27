@@ -12,8 +12,8 @@ pub mod convert;
 mod inputs;
 
 pub use builder::{
-    BuildInputs, BuiltTransaction, DustSpendBatch, PreparedTransfer, TransferBuilder,
-    balance_external, build_no_validate, fee_speck, prepare_no_validate, prove_tx_no_validate,
+    BuildInputs, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external, fee_speck,
+    prepare_no_validate,
 };
 pub(crate) use builder::{parse_unshielded_recipient, shielded_destination};
 pub use inputs::{PreparedInput, prepare_shielded_inputs};

@@ -7,7 +7,9 @@ use crate::ir::{Type, Witness};
 use crate::types::{Circuit, LedgerField, StorageKind};
 
 use super::helpers::{make_ident, to_pascal_case};
-use super::types::{alignment_expr, encode_to_aligned_value, library_struct, type_to_tokens};
+use super::types::{
+    MAX_TUPLE_LEN, alignment_expr, encode_to_aligned_value, library_struct, type_to_tokens,
+};
 
 pub(crate) fn emit_data_types(
     fields: &[LedgerField],
@@ -222,18 +224,36 @@ fn emit_struct_aligned(ident: &Ident, elements: &[(String, Type)]) -> TokenStrea
 
 fn emit_struct_try_from_value_slice(ident: &Ident, elements: &[(String, Type)]) -> TokenStream {
     let field_names: Vec<_> = elements.iter().map(|(n, _)| make_ident(n)).collect();
-    let field_types: Vec<_> = elements.iter().map(|(_, t)| type_to_tokens(t)).collect();
+    let fields: Vec<_> = field_names
+        .iter()
+        .zip(elements)
+        .map(|(name, (_, ty))| (quote! { #name }, type_to_tokens(ty)))
+        .collect();
+    let (pattern, tuple_type) = nested_tuple(&fields);
 
     quote! {
         impl<'a> TryFrom<&'a ValueSlice> for #ident {
             type Error = InvalidBuiltinDecode;
 
             fn try_from(vs: &'a ValueSlice) -> Result<Self, Self::Error> {
-                let (#(#field_names),*): (#(#field_types),*) = vs.try_into()?;
+                let #pattern: #tuple_type = vs.try_into()?;
                 Ok(Self { #(#field_names),* })
             }
         }
     }
+}
+
+/// The tuple pattern and the tuple type that decode `items`, a list of
+/// patterns with their types. More than [`MAX_TUPLE_LEN`] items nest in
+/// chunks, so that each tuple has a `TryFrom<&ValueSlice>` impl.
+fn nested_tuple(items: &[(TokenStream, TokenStream)]) -> (TokenStream, TokenStream) {
+    if items.len() <= MAX_TUPLE_LEN {
+        let patterns = items.iter().map(|(pattern, _)| pattern);
+        let types = items.iter().map(|(_, ty)| ty);
+        return (quote! { (#(#patterns,)*) }, quote! { (#(#types,)*) });
+    }
+    let chunks: Vec<_> = items.chunks(MAX_TUPLE_LEN).map(nested_tuple).collect();
+    nested_tuple(&chunks)
 }
 
 /// The variant idents of an enum and their `u8` discriminants. The
