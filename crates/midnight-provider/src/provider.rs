@@ -1490,9 +1490,8 @@ fn archive_rpc(conn: &NodeConnection) -> ChainHeadRpcMethods<RpcConfigFor<subxt:
     ChainHeadRpcMethods::new(conn.rpc.clone())
 }
 
-/// Typed view over a connection's raw client for the legacy `chain_*` and
-/// `system_*` RPCs, with hash and header types derived from the chain's
-/// Substrate config.
+/// Typed view over a connection's raw client for the legacy RPCs, with hash
+/// and header types derived from the chain's Substrate config.
 fn legacy_rpc(conn: &NodeConnection) -> LegacyRpcMethods<RpcConfigFor<subxt::SubstrateConfig>> {
     LegacyRpcMethods::new(conn.rpc.clone())
 }
