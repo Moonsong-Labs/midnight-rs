@@ -216,10 +216,14 @@ A registration with no Dust address is a deregistration. `MidnightProvider::dere
 
 The removal alone does not stop a NIGHT UTXO that already generates. Its generation entry keeps a `dtime` of "never" until a transaction spends the UTXO, and the spend sets `dtime` to the block time. So the deregistration that the SDK builds also spends every tNIGHT UTXO of the wallet, and creates each one again with the same value:
 
-- The first UTXO goes in the guaranteed offer. The ledger creates no Dust for a guaranteed NIGHT output of the address that the intent registers or deregisters.
+- The first UTXO goes in the guaranteed offer. `apply_offer` creates no Dust for a guaranteed NIGHT output of an address that the intent registers or deregisters. A deregistration names no Dust address, so `apply_registration` creates none either.
 - The other UTXOs go in the fallible offer. The ledger applies that offer after the deregistration, when the address has no delegation, so their outputs generate no Dust.
 
-Only one input goes in the guaranteed offer, because the ledger compares the cost of the guaranteed part, plus the validation of the whole transaction, with the time to dismiss. A fallible input adds only one signature check to that cost. So one deregistration covers every tNIGHT UTXO, where one registration covers one UTXO.
+Only one input goes in the guaranteed offer, because the ledger compares the cost of the guaranteed part, plus the validation of the whole transaction, with the time to dismiss. A fallible input adds only one signature check to that cost. So one deregistration can cover many tNIGHT UTXOs, where one registration covers one UTXO.
+
+Each input and output pair adds to the bytes that the transaction writes, and `block_limits.bytes_written` limits these bytes. So the build fails for a wallet that holds too many tNIGHT UTXOs, with a `WalletError::Transfer` that names `BlockLimitExceeded`. Nothing reaches the chain. Lower the number of tNIGHT UTXOs first, then deregister. A transfer of tNIGHT to the wallet's own address merges the UTXOs that it spends into one output, plus change.
+
+Some tNIGHT UTXOs generate Dust after the deregistration: a UTXO that a pending build reserved, and the UTXOs of a fallible offer that failed. Any transaction that spends such a UTXO stops it, for example a transfer of tNIGHT to the wallet's own address. The outputs of that transfer generate no Dust, because the address has no delegation. A second deregistration fails on chain with `DustDeregistrationNotRegistered`.
 
 A deregistration declares `allow_fee_payment` of 0, so it claims no generationless availability. The wallet's Dust pays its fee through `set_funding_seeds()`.
 

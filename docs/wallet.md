@@ -346,7 +346,9 @@ let pending = provider.deregister_dust().await?;
 pending.wait_finalized().await?;
 ```
 
-A deregistration claims no generationless Dust, so the wallet's Dust pays its fee. A wallet with no Dust gets `WalletError::InsufficientDust`. The Dust that the wallet holds stays spendable, and it decays to zero at the rate it grew. When the transaction spent every tNIGHT UTXO, a resync after it reads `DustBalance::night_generates_dust` as false, and `DustBalance::unregistered_night_utxos` counts every tNIGHT UTXO. To generate Dust again, call `register_dust`.
+A deregistration claims no generationless Dust, so the wallet's Dust pays its fee. A wallet with no Dust gets `WalletError::InsufficientDust`. A wallet that holds too many tNIGHT UTXOs exceeds a block limit and gets a `WalletError::Transfer` that names `BlockLimitExceeded`. Lower the number of tNIGHT UTXOs first: a transfer of tNIGHT to the wallet's own address merges the UTXOs that it spends into one output, plus change.
+
+The Dust that the wallet holds stays spendable, and it decays to zero at the rate it grew. When the transaction spent every tNIGHT UTXO, a resync after it reads `DustBalance::night_generates_dust` as false, and `DustBalance::unregistered_night_utxos` counts every tNIGHT UTXO. When `night_generates_dust` stays true, a UTXO still generates, for example the change of a pending transfer that landed before the deregistration. Any transaction that spends that UTXO stops it, for example a transfer of tNIGHT to the wallet's own address. Its outputs generate no Dust, because the address has no registration. Do not call `deregister_dust` again: the chain refuses it with `DustDeregistrationNotRegistered`. To generate Dust again, call `register_dust`.
 
 See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation rate, and how fees are balanced.
 
@@ -485,7 +487,7 @@ provider.with_wallet(wallet)
   provider.rescan_shielded()             replay the shielded stream (a resync first, to cross a fork)
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
-  provider.deregister_dust().await           stops every tNIGHT UTXO from generating, Dust-funded
+  provider.deregister_dust().await           stops tNIGHT from generating Dust, Dust-funded
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx
        │     .build().await → TransferResult (escape hatch, no submit)

@@ -826,26 +826,40 @@ impl<'a> TransferBuilder<'a> {
     /// Dust. The ledger stops the generation of a tNIGHT UTXO that the wallet
     /// holds only when a transaction spends it. So the transaction also spends
     /// every tNIGHT UTXO in the funding view of the build context, and creates
-    /// each one again with the same value. A UTXO that a pending build
-    /// reserves is not in that view, and it generates Dust until a transaction
-    /// spends it. The Dust that the UTXOs generated stays spendable, and it
-    /// decays to zero at the rate it grew.
+    /// each one again with the same value. The Dust that the UTXOs generated
+    /// stays spendable, and it decays to zero at the rate it grew.
     ///
     /// The first UTXO goes in the guaranteed offer and the others in the
     /// fallible offer. A fallible input adds only a signature check to the
     /// cost that the ledger compares with the time to dismiss, so one call
-    /// covers every UTXO, where a registration covers one. When the fallible
+    /// can cover many UTXOs, where a registration covers one. But each UTXO
+    /// adds to the bytes that the transaction writes, and a block limits these
+    /// bytes. So the build fails for a wallet that holds too many tNIGHT
+    /// UTXOs.
+    ///
+    /// Some UTXOs still generate Dust after the deregistration. A UTXO that a
+    /// pending build reserves is not in the funding view. When the fallible
     /// segment fails on chain, the deregistration stays, and the UTXOs of that
-    /// segment generate Dust until a transaction spends them.
+    /// segment stay unspent. Any transaction that spends such a UTXO stops it,
+    /// for example a transfer of tNIGHT to the wallet's own address. The
+    /// outputs of that transfer generate no Dust, because the address has no
+    /// delegation. A second deregistration cannot stop the UTXO, because the
+    /// chain refuses a deregistration for an address that is not registered,
+    /// with `DustDeregistrationNotRegistered`. The build cannot see whether
+    /// the address is registered.
     ///
     /// A deregistration claims no generationless Dust, so the wallet's Dust
-    /// pays the fee. The chain does not apply a deregistration for an address
-    /// that is not registered, and the build cannot see that state.
+    /// pays the fee.
     ///
     /// # Errors
     ///
     /// - [`WalletError::Transfer`] when the funding view holds no tNIGHT UTXO:
     ///   the wallet holds none, or pending builds reserve all of them.
+    /// - [`WalletError::Transfer`] that names `BlockLimitExceeded` when the
+    ///   transaction exceeds a block limit, because the wallet holds too many
+    ///   tNIGHT UTXOs. Lower their number first: a transfer of tNIGHT to the
+    ///   wallet's own address merges the UTXOs that it spends into one output,
+    ///   plus change.
     /// - [`WalletError::InsufficientDust`] when the wallet's Dust cannot pay
     ///   the fee.
     pub async fn prepare_deregister_dust(self) -> Result<PreparedTransfer, WalletError> {
