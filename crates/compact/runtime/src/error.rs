@@ -18,12 +18,10 @@ pub enum InterpreterError {
     #[error("unsupported IR node: {0}")]
     Unsupported(String),
 
-    /// A genuine witness-level failure: the provider knew the name but could
-    /// not produce a value (key store unreachable, corrupt private state,
-    /// argument conversion failure, ...), or nothing — provider, builtin, or
-    /// helper — could handle a witness call at all. Always aborts execution;
-    /// "the provider doesn't implement this name" is NOT an error, it's
-    /// [`crate::WitnessOutcome::Unknown`].
+    /// A witness call failed: the provider knew the name but could not
+    /// produce a value (key store unreachable, corrupt private state, argument
+    /// conversion failure, ...), or the provider has no witness with the name
+    /// ([`crate::WitnessOutcome::Unknown`]). Always aborts execution.
     #[error("witness error: {0}")]
     Witness(String),
 }

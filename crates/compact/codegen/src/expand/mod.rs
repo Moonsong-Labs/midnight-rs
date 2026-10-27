@@ -329,8 +329,8 @@ mod tests {
 
     /// A contract-typed argument takes the generated `ContractAddress`, the
     /// struct that the compiler encodes a contract value as, and the call
-    /// sends it. The untyped `runtime::Value` parameter, or a unit encoding of
-    /// a typed one, both compile.
+    /// sends it. A unit encoding of the argument compiles too, so a build
+    /// alone does not catch it.
     #[test]
     fn contract_arguments_are_typed_and_encoded() {
         let info =
