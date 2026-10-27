@@ -149,12 +149,11 @@ pub trait WalletFacade: Send + Sync {
     /// [`Self::watched_coins`] lists them.
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError>;
 
-    /// The registered coins ([`Self::watch_for_coins`]) that no replay has
-    /// claimed yet, ordered by nonce, then token type, then value.
+    /// The registrations ([`Self::watch_for_coins`]) that no replay has
+    /// claimed yet.
     ///
-    /// A replay that meets a coin's output claims the coin, and the coin
-    /// leaves this list. A coin still listed after a replay is not on chain
-    /// yet, or its `CoinInfo` is not the coin the on-chain output commits to.
+    /// They are ordered by nonce, then token type, then value. See
+    /// `Wallet::watched_coins` on the implementing wallet.
     async fn watched_coins(&self) -> Vec<CoinInfo>;
 }
 

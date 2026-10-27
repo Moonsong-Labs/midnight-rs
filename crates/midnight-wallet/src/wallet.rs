@@ -369,12 +369,14 @@ impl Wallet {
     }
 
     /// Coins registered with [`Self::watch_for_coin`] that no replay has
-    /// claimed yet, ordered by nonce, then token type, then value.
+    /// claimed yet.
     ///
-    /// A coin leaves this set when a replay meets its output. One still here
-    /// after a rescan is either not on chain yet, or its rebuilt `CoinInfo`
-    /// is not the coin the on-chain output commits to.
-    /// Drop such a coin with [`Self::forget_coin`].
+    /// They are ordered by nonce, then token type, then value. A coin that
+    /// leaves this set after a replay was claimed. One still here after a
+    /// rescan is not on chain yet, or its rebuilt `CoinInfo` is not the coin
+    /// the on-chain output commits to. It can also be a coin that the replay
+    /// claimed and then saw spent, for example by another wallet with the
+    /// same seed. Drop a wrong or spent coin with [`Self::forget_coin`].
     pub fn watched_coins(&self) -> Vec<CoinInfo> {
         each!(&self.state, w => w.watched_coins())
     }
