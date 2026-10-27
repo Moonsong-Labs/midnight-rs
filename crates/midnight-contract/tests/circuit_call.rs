@@ -167,7 +167,7 @@ fn unknown_witness_falls_through_to_builtin() {
     let expected = common::persistent_hash(AlignedValue::from(7u16));
 
     match result.result {
-        Some(Value::AlignedValue(av)) => assert_eq!(av, expected, "builtin hash mismatch"),
+        Value::AlignedValue(av) => assert_eq!(av, expected, "builtin hash mismatch"),
         other => panic!("expected the builtin's AlignedValue hash, got {other:?}"),
     }
 }
@@ -239,7 +239,7 @@ fn witness_context_threads_private_state() {
         },
     )
     .unwrap();
-    assert!(matches!(r1.result, Some(Value::Integer(0))));
+    assert!(matches!(r1.result, Value::Integer(0)));
     // The witness's private value must be recorded as a private transcript
     // output, or proving a witness-using circuit fails with "ran out of private
     // transcript outputs". One witness call -> one output.
@@ -258,7 +258,7 @@ fn witness_context_threads_private_state() {
         },
     )
     .unwrap();
-    assert!(matches!(r2.result, Some(Value::Integer(1))));
+    assert!(matches!(r2.result, Value::Integer(1)));
     assert_eq!(r2.private_transcript_outputs.len(), 1);
 
     // Two increments → 2.
@@ -562,7 +562,7 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
     .expect("kernel.self() circuit executes");
 
     match result.result {
-        Some(Value::AlignedValue(av)) => assert_eq!(
+        Value::AlignedValue(av) => assert_eq!(
             ContractAddress::try_from(&*av.value).expect("one address atom"),
             address,
             "kernel.self() must return the supplied address"

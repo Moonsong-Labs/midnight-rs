@@ -295,7 +295,7 @@ pub fn execute(
         state: ctx.state,
         reads: ctx.reads,
         gather_ops: ctx.gather_ops,
-        result: Some(result),
+        result,
         communication_outputs,
         private_transcript_outputs: ctx.private_transcript_outputs,
         zswap_outputs: ctx.zswap_outputs,
@@ -2378,7 +2378,7 @@ mod tests {
     /// Execute a circuit that calls nothing, and take its value.
     fn run(circuit: &ir::Circuit, args: &[(&str, Value)]) -> Result<Value, InterpreterError> {
         let program = Program::new(&[], &[], &[]);
-        execute_in(circuit, &program, args).map(|r| r.result.expect("a result value"))
+        execute_in(circuit, &program, args).map(|r| r.result)
     }
 
     /// Evaluate one expression as a whole circuit body.
@@ -2532,11 +2532,7 @@ mod tests {
         let program = Program::new(&[], &[], &[]);
         let result = execute(&circ, &program, state, &[], epoch()).expect("execute the sequence");
         assert_eq!(counter_cell(&result.state), 2, "both items ran");
-        assert!(equal_at(
-            &uint("255"),
-            &result.result.expect("a result value"),
-            &Value::Integer(3)
-        ));
+        assert!(equal_at(&uint("255"), &result.result, &Value::Integer(3)));
     }
 
     // -----------------------------------------------------------------------
@@ -3969,11 +3965,7 @@ mod tests {
             },
         )
         .expect("the witness runs");
-        assert!(equal_at(
-            &uint("255"),
-            &result.result.expect("a result value"),
-            &Value::Integer(9)
-        ));
+        assert!(equal_at(&uint("255"), &result.result, &Value::Integer(9)));
     }
 
     /// An alias is transparent to every value-level operation, so a field read

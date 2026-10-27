@@ -1053,7 +1053,7 @@ impl<P: Provider> Contract<P> {
         circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
-    ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
+    ) -> Result<CallOutcome<crate::runtime::Value>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1105,7 +1105,7 @@ impl<P: Provider> Contract<P> {
         program: &compact_interpreter::Program<'_>,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-    ) -> Result<Simulated<Option<crate::runtime::Value>, ContractState<InMemoryDB>>, ContractError>
+    ) -> Result<Simulated<crate::runtime::Value, ContractState<InMemoryDB>>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1119,7 +1119,7 @@ impl<P: Provider> Contract<P> {
         program: &compact_interpreter::Program<'_>,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-    ) -> Result<Simulated<Option<crate::runtime::Value>, ContractState<InMemoryDB>>, ContractError>
+    ) -> Result<Simulated<crate::runtime::Value, ContractState<InMemoryDB>>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1358,7 +1358,7 @@ impl<P: Provider> Contract<P> {
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
         pay_fees: bool,
-    ) -> Result<(BuiltCall, Option<crate::runtime::Value>), ContractError>
+    ) -> Result<(BuiltCall, crate::runtime::Value), ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1420,7 +1420,7 @@ impl<P: Provider> Contract<P> {
         // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)
         // from the caller's wallet. Pass `ShieldedInputs::default()` for none.
         shielded: crate::call::ShieldedInputs,
-    ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
+    ) -> Result<CallOutcome<crate::runtime::Value>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1501,7 +1501,7 @@ impl<P: Provider> Contract<P> {
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
-        decode: impl FnOnce(Option<crate::runtime::Value>) -> Result<T, ContractError>,
+        decode: impl FnOnce(crate::runtime::Value) -> Result<T, ContractError>,
     ) -> Result<PendingCall<T>, ContractError>
     where
         P: AsMidnightProvider,
