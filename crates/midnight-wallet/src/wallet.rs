@@ -16,7 +16,8 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::replay::{
-    latest_block, ledger_of, progress_cancelled, replay_unshielded_events, send_progress,
+    UnshieldedReplay, latest_block, ledger_of, progress_cancelled, replay_unshielded_events,
+    send_progress,
 };
 use crate::storage::wallet_storage_id;
 use crate::sync::SyncPlan;
@@ -396,7 +397,6 @@ impl Wallet {
                     network: w.network().clone(),
                     storage_dir: w.storage_dir().map(Path::to_path_buf),
                     chain_pin: w.chain_pin().cloned(),
-                    last_block_height: w.last_block_height(),
                 },
             },
             State::Ledger9(w) => ResyncPlanKind::Ledger9(w.resync_plan()),
@@ -549,7 +549,6 @@ struct WalletIdentity {
     network: Network,
     storage_dir: Option<PathBuf>,
     chain_pin: Option<ChainPin>,
-    last_block_height: i64,
 }
 
 impl ResyncPlan {
@@ -619,6 +618,7 @@ async fn cross(
         zswap_event_id,
         unshielded_utxos,
         last_tx_id,
+        last_block_height,
         ..
     } = plan;
     let from = Resume {
@@ -628,7 +628,7 @@ async fn cross(
         dust_event_id,
         unshielded_utxos,
         last_tx_id,
-        last_block_height: identity.last_block_height,
+        last_block_height,
     };
     let state = sync_on_chain(
         ChainSync {
@@ -1047,7 +1047,7 @@ async fn sync_on_chain(
                 r.last_block_height,
             ),
             None => (
-                ZswapState::Ledger8(ledger_8::state::empty_zswap_state(sync.seed)),
+                ZswapState::Ledger8(midnight_helpers::ledger_8::WalletState::new()),
                 0,
                 None,
                 0,
@@ -1086,16 +1086,18 @@ async fn sync_on_chain(
             sync.address,
             utxos,
             start_tx_id,
+            height,
             resuming,
             progress.clone(),
         ),
     );
     let zswap = zswap?;
-    let (unshielded_utxos, last_tx_id, replay_block_height, spent_unshielded) = unshielded?;
-    // The unshielded subscription only updates `last_block_height` when a
-    // transaction touches our address. On a resume with no new unshielded
-    // txs, replay returns 0, so we keep the persisted value as a floor.
-    let last_block_height = replay_block_height.max(height);
+    let UnshieldedReplay {
+        utxos: unshielded_utxos,
+        last_tx_id,
+        last_block_height,
+        spent: spent_unshielded,
+    } = unshielded?;
 
     match zswap.state.into_ledger(chain)? {
         ZswapState::Ledger8(zswap_state) => {

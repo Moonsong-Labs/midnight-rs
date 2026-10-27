@@ -7,17 +7,17 @@ compact_bindgen::contract!(
     "../../../../crates/midnight-contract/tests/fixtures/counter/compiler/analyzed-ir.sexp"
 );
 
-use compact_bindgen::midnight_contract::{AsMidnightProvider, Provider};
+use compact_bindgen::midnight_contract::AsMidnightProvider;
 
-fn drop_deploy<P: AsMidnightProvider + Provider>(provider: P) {
+fn drop_deploy<P: AsMidnightProvider>(provider: P) {
     Contract::deploy(provider);
 }
 
-fn drop_connect<P: AsMidnightProvider + Provider>(provider: P) {
+fn drop_connect<P: AsMidnightProvider>(provider: P) {
     Contract::at(provider, "00");
 }
 
-fn drop_call<P: AsMidnightProvider + Provider>(contract: &Contract<P>) {
+fn drop_call<P: AsMidnightProvider>(contract: &Contract<P>) {
     contract.circuits().increment();
 }
 
