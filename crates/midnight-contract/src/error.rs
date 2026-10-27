@@ -104,23 +104,24 @@ pub enum ContractError {
     #[error("invalid address: {0}")]
     InvalidAddress(String),
 
-    /// The SDK submitted a circuit-call transaction, or tried to, and got no verdict.
+    /// The SDK submitted a circuit-call or deploy transaction, or tried to, and got no verdict.
     ///
     /// A failed submit or wait does **not** retract the transaction, so it can
-    /// still land. A wait that reads a verdict other than `Success` gives
+    /// still land. A deploy gives this error only from its submit, in
+    /// [`DeployBuilder::send`](crate::DeployBuilder::send). A wait that reads a verdict other than `Success` gives
     /// [`TransactionFailed`](ContractError::TransactionFailed) instead. Match
     /// the [`SubmitError`] kind in `source` to choose the recovery:
     ///
     /// - `Invalid`: the node rejected the transaction, and the rejection is
     ///   final. Mark any pending private-state snapshot failed, then build
-    ///   again. The wallet has the inputs that the call reserved back before
-    ///   the error returns.
+    ///   again. The wallet has the inputs that the call or the deploy reserved
+    ///   back before the error returns.
     /// - `SubmitRpc`, `Dropped`, `NodeError` or `WatchStream`: the fate of the
     ///   transaction is unknown, and it can still land until its TTL passes. A
     ///   `SubmitRpc` comes from the submit call, before any wait. It does not
     ///   say whether the node holds the transaction (see
-    ///   [`SubmitRpc`](SubmitError::SubmitRpc)). The inputs that the call
-    ///   reserved stay reserved.
+    ///   [`SubmitRpc`](SubmitError::SubmitRpc)). The inputs that the call or
+    ///   the deploy reserved stay reserved.
     /// - [`VerdictFetch`]: the transaction is in a block, and only its verdict
     ///   is unknown. Do not resubmit. Find the verdict with the check below.
     ///
@@ -134,7 +135,9 @@ pub enum ContractError {
     /// is true, call `confirm` when it applied, or `mark_failed` when it did
     /// not, with `extrinsic_hash`. Until you reconcile the snapshot, the next
     /// call on this contract builds on it. A `mark_failed` of it then also
-    /// drops the snapshots of the later calls.
+    /// drops the snapshots of the later calls. A deploy's snapshot is at the
+    /// address of the new contract, which this error does not carry.
+    /// `export_private_states` shows it.
     ///
     /// ```rust
     /// # use midnight_contract::{ContractError, SubmitError};

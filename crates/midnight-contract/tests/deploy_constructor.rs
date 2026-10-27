@@ -80,15 +80,22 @@ async fn a_deploy_runs_the_constructor_and_records_its_private_state() {
             .with_private_state(Arc::clone(&store)),
     );
 
-    // The `.await` of a deploy waits for the best block, and that wait
-    // confirms the snapshot.
-    let contract = owned_counter::Contract::deploy(&*provider)
+    // Only a finality wait confirms the snapshot of the deploy.
+    let (_, pending) = owned_counter::Contract::deploy(&*provider)
         .with_witnesses(&OwnerKey)
         .with_initial_private_state((SECRET, 0))
         .with_constructor_args(5)
         .with_zk_config(owned_counter::ZK_CONFIG_DIR)
+        .send()
         .await
-        .expect("deploy");
+        .expect("deploy")
+        .wait_finalized()
+        .await
+        .expect("the deploy finalizes");
+    let contract = pending
+        .into_contract()
+        .await
+        .expect("the deployed contract");
 
     let ledger = contract.ledger().await.expect("ledger");
     assert_eq!(

@@ -97,7 +97,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
 | `PendingCall<T>` | contract | A submitted circuit call and its decoded result. `wait_finalized()` waits with no SDK deadline and settles the private-state snapshot by the verdict. A drop leaves the snapshot `Pending`. |
 | `Constructor` | contract | A contract's constructor as an `ir::Circuit`, the declarations it calls and the state it starts from. The generated `Contract::deploy` sets it, and the deploy runs it before any proof. |
-| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. The first wait that sees the deploy applied confirms its private-state snapshot. |
+| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. Only a final verdict settles the deploy's private-state snapshot: `wait_finalized` confirms or drops it, and a best-block wait leaves it `Pending`. |
 | `ProofProvider` | helpers | Proof backend trait, one per ledger generation. |
 | `ProofProviders` | provider | One `ProofProvider` per generation. Set on the provider with `with_proof_provider`. `ProofProviders::local()` (in-process) is the default. |
 | `RemoteProofServer` | provider | `ProofProvider` of both generations that delegates to an HTTP proof server (`/check` + `/prove`). |
@@ -260,11 +260,12 @@ append_pending(address, extrinsic_hash, None, private_state)   // only for a pri
   (fails → release the reservation, PendingSnapshotFailed)
   ↓
 prepared.submit().await                       → PendingTx (carries the reservation)
+  (fails → SubmissionWait; the snapshot stays Pending)
   ↓
-wait_best / wait_finalized                    // each settles the deploy's snapshot once:
-  ├─ applied → confirm in the block of the wait
+wait_best / wait_finalized                    // only a final verdict settles the deploy's snapshot:
+  ├─ applied in a finalized block → confirm in that block
   ├─ not applied in a finalized block, or Invalid → mark_failed
-  └─ anything else, or a store failure (a warning) → the snapshot stays Pending
+  └─ a best-block verdict, anything else, or a store failure (a warning) → the snapshot stays Pending
   ↓
 into_contract
   ├─ one deadline: deploy_timeout from the start of into_contract

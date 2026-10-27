@@ -182,7 +182,9 @@ pub(crate) fn emit_ledger_wrapper(
             ///
             /// Consumes `self` and returns it back so callers can chain. Fails
             /// with `ContractError::TransactionFailed` when the chain did not
-            /// apply the deploy.
+            /// apply the deploy. The deploy's private-state snapshot stays
+            /// `Pending`, unless the wait reads `SubmitError::Invalid`, which
+            /// drops it.
             pub async fn wait_best(
                 self,
             ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
@@ -196,7 +198,8 @@ pub(crate) fn emit_ledger_wrapper(
             /// Consumes `self` and returns it back. May be called without a
             /// prior `wait_best`; the best-block status is then skipped. Fails
             /// with `ContractError::TransactionFailed` when the chain did not
-            /// apply the deploy.
+            /// apply the deploy. The wait confirms or drops the deploy's
+            /// private-state snapshot by the verdict.
             pub async fn wait_finalized(
                 self,
             ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {

@@ -1,5 +1,4 @@
 use std::future::{Future, IntoFuture};
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -227,17 +226,18 @@ async fn settle_call(
 }
 
 /// Record the `Pending` snapshot of a call or a deploy when its private state
-/// changed, before the submit.
+/// changed, then submit the transaction.
 ///
-/// Returns `prepared`, and `store` when it holds the snapshot. A failed record
-/// hands the inputs of `prepared` back before it returns.
-async fn append_or_release(
+/// Returns the submitted transaction, and `store` when it holds the snapshot.
+/// A failed record hands the inputs of `prepared` back before it returns.
+async fn record_and_submit(
     address: &str,
     prepared: PreparedTx,
     private_state: PrivateStateChange,
     store: Option<Arc<dyn PrivateStateProvider>>,
-) -> Result<(PreparedTx, Option<Arc<dyn PrivateStateProvider>>), ContractError> {
+) -> Result<(PendingTx, Option<Arc<dyn PrivateStateProvider>>), ContractError> {
     let extrinsic_hash = prepared.extrinsic_hash();
+    let transaction_hash = prepared.transaction_hash();
     let persist = private_state_persist(&private_state.baseline, &private_state.after);
     // Without a snapshot (no store, or the witnesses left the state
     // unchanged), the call has nothing to settle, and no error tells the
@@ -274,23 +274,6 @@ async fn append_or_release(
             }
         }
     }
-    Ok((prepared, store.filter(|_| pending_snapshot_written)))
-}
-
-/// Record a call's `Pending` snapshot when its witnesses changed the private
-/// state, then submit the call.
-///
-/// Returns the submitted transaction, and `store` when it holds the snapshot.
-/// A failed record hands the inputs of `prepared` back before it returns.
-async fn record_and_submit(
-    address: &str,
-    prepared: PreparedTx,
-    private_state: PrivateStateChange,
-    store: Option<Arc<dyn PrivateStateProvider>>,
-) -> Result<(PendingTx, Option<Arc<dyn PrivateStateProvider>>), ContractError> {
-    let extrinsic_hash = prepared.extrinsic_hash();
-    let transaction_hash = prepared.transaction_hash();
-    let (prepared, store) = append_or_release(address, prepared, private_state, store).await?;
 
     // Keep the snapshot on a failed submit: a `SubmitRpc` does not say
     // whether the node holds the tx.
@@ -301,24 +284,25 @@ async fn record_and_submit(
                 transaction_hash,
                 extrinsic_hash,
                 source,
-                snapshot_written: store.is_some(),
+                snapshot_written: pending_snapshot_written,
             });
         }
         Err(other) => return Err(other.into()),
     };
-    Ok((pending, store))
+    Ok((pending, store.filter(|_| pending_snapshot_written)))
 }
 
 /// Settle a deploy's `Pending` snapshot from the result of a wait. `store`
 /// holds the snapshot, and the settle takes it once the store confirms or
 /// drops the snapshot.
 ///
-/// An applied deploy confirms the snapshot in the block of the wait, which
-/// can be the best block. A deploy drops its snapshot only on a final
-/// verdict: a `NotApplied` from a finality wait, or the node's
-/// [`SubmitError::Invalid`]. A best-block `NotApplied` is provisional, so the
-/// snapshot stays `Pending`. Nothing reads it unless a reorg applies the
-/// deploy, and then it holds the right private state.
+/// The settle acts only on a final verdict, as [`settle_call`] does. A
+/// finality wait that sees the deploy applied confirms the snapshot. A
+/// `NotApplied` from a finality wait, or the node's [`SubmitError::Invalid`],
+/// drops it. A best-block verdict is provisional, so the snapshot stays
+/// `Pending` and `store` keeps it for a later finality wait. After a
+/// best-block `NotApplied`, nothing reads the snapshot unless a reorg applies
+/// the deploy, and then it holds the right private state.
 ///
 /// A store that fails logs a warning and keeps the snapshot `Pending`: the
 /// caller still gets the result of the wait, and so the contract's address.
@@ -334,7 +318,7 @@ async fn settle_deploy_snapshot(
     };
     let settled = match waited {
         // No height: subxt reports only the block hash.
-        Ok(applied) => {
+        Ok(applied) if finalized => {
             snapshot_store
                 .confirm(address, extrinsic_hash.0, None, applied.block_hash.0)
                 .await
@@ -345,7 +329,7 @@ async fn settle_deploy_snapshot(
         Err(ProviderError::Submission(SubmitError::Invalid { .. })) => {
             snapshot_store.mark_failed(address, extrinsic_hash.0).await
         }
-        Err(_) => return,
+        Ok(_) | Err(_) => return,
     };
     match settled {
         Ok(()) => *store = None,
@@ -562,10 +546,6 @@ pub struct DeployBuilder<'a, P> {
     maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
     declared_circuits: Option<Vec<String>>,
     declares_witnesses: bool,
-    // Ties the awaited deploy to the provider's borrow. `IntoFuture` boxes the
-    // deploy as `dyn Future`, and without a lifetime on the builder that box
-    // defaults to `'static`, which rules out `Contract::deploy(&provider).await`.
-    borrow: PhantomData<&'a ()>,
 }
 
 impl<'a, P> DeployBuilder<'a, P> {
@@ -583,7 +563,6 @@ impl<'a, P> DeployBuilder<'a, P> {
             maintenance_authority: None,
             declared_circuits: None,
             declares_witnesses: false,
-            borrow: PhantomData,
         }
     }
 
@@ -665,10 +644,12 @@ impl<'a, P> DeployBuilder<'a, P> {
     /// The deploy records the private state after the constructor as the first
     /// snapshot of the new contract. With
     /// [`with_initial_state`](Self::with_initial_state), it records this state.
-    /// The record is `Pending` before the submit, and a wait that sees the
-    /// deploy applied confirms it. The first call on the contract then starts
-    /// from it. The default is the empty private state, which the generated
-    /// witnesses read as `Default`, and the deploy records no empty state.
+    /// The record is `Pending` before the submit.
+    /// [`PendingDeploy::wait_finalized`] confirms it when the chain applied the
+    /// deploy. The first call on the contract starts from it, `Pending` or
+    /// `Confirmed`. The default is the empty private state, which the
+    /// generated witnesses read as `Default`, and the deploy records no empty
+    /// state.
     ///
     /// A private state to record needs a private-state store on the provider
     /// (`MidnightProvider::with_private_state`). Without one, the deploy fails
@@ -785,17 +766,21 @@ where
     ///   fails, for example on a failed `assert`, or on a witness call with no
     ///   witnesses.
     /// - [`ContractError::ConstructorEffect`] when the constructor has an
-    ///   effect that a deploy cannot carry.
+    ///   effect that the deploy does not carry.
     /// - [`ContractError::ShieldedOfferShortfall`] when the shielded offer pays
     ///   more of a token than its coins hold.
+    /// - [`ContractError::Provider`] when the deploy runs a constructor and the
+    ///   query for the wallet's coin public key fails.
     ///
-    /// These come after it:
+    /// These come from the build, the proof or the submit:
     ///
+    /// - [`ContractError::Provider`] when the build fails, for example on the
+    ///   wallet sync or the fee balancing, or when the proof fails.
     /// - [`ContractError::PendingSnapshotFailed`] when the store cannot record
     ///   the snapshot. The deploy submits nothing.
-    /// - [`ContractError::Provider`] when the wallet query, the build, the
-    ///   proof or the submit fails. A failed submit keeps the snapshot
-    ///   `Pending`, because the node can still hold the deploy.
+    /// - [`ContractError::SubmissionWait`] when the submit fails. A snapshot
+    ///   that the deploy recorded stays `Pending`, because the node can still
+    ///   hold the deploy.
     pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
         Box::pin(self.send_inner()).await
@@ -844,9 +829,8 @@ where
             after: private_state,
             depends_on: None,
         };
-        let (prepared, snapshot_store) =
-            append_or_release(&address, prepared, private_state, store).await?;
-        let pending = prepared.submit().await?;
+        let (pending, snapshot_store) =
+            record_and_submit(&address, prepared, private_state, store).await?;
 
         Ok(PendingDeploy {
             pending,
@@ -886,10 +870,12 @@ where
 /// promoting it to a [`Contract`] via [`PendingDeploy::into_contract`] (which
 /// reads the deployed contract from the node).
 ///
-/// The first wait that sees the deploy applied confirms the deploy's
-/// private-state snapshot, when it recorded one. A deploy drops its snapshot
-/// only on a final verdict: a `wait_finalized` that sees it not applied, or a
-/// wait that reads [`SubmitError::Invalid`]. A store that fails to settle the
+/// Only a final verdict settles the deploy's private-state snapshot, when it
+/// recorded one. A `wait_finalized` that sees the deploy applied confirms the
+/// snapshot. A `wait_finalized` that sees it not applied, or a wait that reads
+/// [`SubmitError::Invalid`], drops it. A best-block wait, and so the `.await`
+/// of the builder, leaves the snapshot `Pending`. To confirm it, call
+/// `wait_finalized` before `into_contract`. A store that fails to settle the
 /// snapshot logs a warning, and the snapshot stays `Pending`.
 pub struct PendingDeploy<P> {
     pending: PendingTx,
@@ -939,6 +925,9 @@ impl<P> PendingDeploy<P> {
     /// verdict matters, call [`wait_finalized`](Self::wait_finalized) in place
     /// of `wait_best`.
     ///
+    /// The deploy's private-state snapshot stays `Pending`, unless the wait
+    /// reads [`SubmitError::Invalid`], which drops it.
+    ///
     /// # Errors
     ///
     /// [`ContractError::TransactionFailed`] when the chain did not apply the
@@ -966,6 +955,9 @@ impl<P> PendingDeploy<P> {
     ///
     /// Consumes `self` and returns it back. May be called without a prior
     /// `wait_best`; the best-block status is then skipped.
+    ///
+    /// The wait settles the deploy's private-state snapshot. A deploy that the
+    /// chain applied confirms it, and a deploy that it did not apply drops it.
     ///
     /// # Errors
     ///
@@ -2051,46 +2043,82 @@ mod tests {
         );
     }
 
-    /// A best-block verdict is provisional, so a reorg can still apply the
-    /// deploy. Its snapshot is the only copy of the private state that the
-    /// constructor left, such as an owner key. A settle that drops the
-    /// snapshot on every `NotApplied` loses that key for a contract that
-    /// exists. A final verdict drops it.
+    /// A best-block verdict is provisional, so a reorg can still apply or
+    /// drop the deploy. Its snapshot is the only copy of the private state that
+    /// the constructor left, such as an owner key. A settle that drops the
+    /// snapshot on a best-block `NotApplied` loses that key for a contract that
+    /// exists. A settle that confirms at the best block records a block that
+    /// can leave the chain, and gives up the store before the final verdict.
     #[tokio::test]
-    async fn a_deploy_drops_its_snapshot_only_on_a_final_verdict() {
+    async fn a_deploy_settles_its_snapshot_only_on_a_final_verdict() {
         const DEPLOY_ADDRESS: &str = "0200bb";
         let dir = tempfile::TempDir::new().unwrap();
         let journal = Arc::new(midnight_provider::FsPrivateStateProvider::new(dir.path()));
         let extrinsic_hash = ExtrinsicHash::repeat_byte(2);
+        let applied = TxInBlock {
+            block_hash: BlockHash::repeat_byte(1),
+            extrinsic_hash,
+            transaction_hash: [3; 32].into(),
+            verdict: midnight_provider::Verdict::Success,
+        };
+        let not_applied = ProviderError::from(midnight_provider::NotApplied(TxInBlock {
+            verdict: midnight_provider::Verdict::Failure,
+            ..applied
+        }));
+        let only_snapshot = || async {
+            let snapshots = journal.snapshots(DEPLOY_ADDRESS).await.unwrap();
+            let [snapshot] = snapshots.as_slice() else {
+                panic!("expected the deploy's snapshot, got {snapshots:?}");
+            };
+            snapshot.clone()
+        };
+
         journal
             .append_pending(DEPLOY_ADDRESS, extrinsic_hash.0, None, b"owner key")
             .await
             .unwrap();
-        let not_applied = ProviderError::from(midnight_provider::NotApplied(TxInBlock {
-            block_hash: BlockHash::repeat_byte(1),
-            extrinsic_hash,
-            transaction_hash: [3; 32].into(),
-            verdict: midnight_provider::Verdict::Failure,
-        }));
         let mut store: Option<Arc<dyn PrivateStateProvider>> = Some(journal.clone());
+        for best_block in [Ok(&applied), Err(&not_applied)] {
+            settle_deploy_snapshot(
+                &mut store,
+                DEPLOY_ADDRESS,
+                extrinsic_hash,
+                best_block,
+                false,
+            )
+            .await;
+            assert!(
+                store.is_some(),
+                "a best-block verdict leaves the snapshot to settle"
+            );
+            assert_eq!(
+                only_snapshot().await.status,
+                midnight_provider::SnapshotStatus::Pending
+            );
+        }
 
         settle_deploy_snapshot(
             &mut store,
             DEPLOY_ADDRESS,
             extrinsic_hash,
-            Err(&not_applied),
-            false,
+            Ok(&applied),
+            true,
         )
         .await;
-        assert!(
-            store.is_some(),
-            "a provisional verdict leaves the snapshot to settle"
-        );
+        assert!(store.is_none(), "a final verdict settles the snapshot");
+        let confirmed = only_snapshot().await;
         assert_eq!(
-            journal.head(DEPLOY_ADDRESS).await.unwrap().as_deref(),
-            Some(&b"owner key"[..])
+            confirmed.status,
+            midnight_provider::SnapshotStatus::Confirmed
         );
+        assert_eq!(confirmed.block_hash, Some(hex::encode(applied.block_hash)));
 
+        journal.forget(DEPLOY_ADDRESS).await.unwrap();
+        journal
+            .append_pending(DEPLOY_ADDRESS, extrinsic_hash.0, None, b"owner key")
+            .await
+            .unwrap();
+        let mut store: Option<Arc<dyn PrivateStateProvider>> = Some(journal.clone());
         settle_deploy_snapshot(
             &mut store,
             DEPLOY_ADDRESS,
