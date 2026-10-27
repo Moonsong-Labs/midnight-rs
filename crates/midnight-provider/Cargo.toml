@@ -20,7 +20,6 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
-serde_json = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 reqwest = { workspace = true }
@@ -32,4 +31,5 @@ anyhow = { workspace = true }
 midnight-wallet = { workspace = true }
 # `test-util`: the shared mock indexer server (`testutil`).
 midnight-indexer-client = { workspace = true, features = ["test-util"] }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "sync"] }

@@ -188,6 +188,19 @@ mod tests {
         );
     }
 
+    /// A tuple wider than the runtime decodes must fail the build with a named
+    /// error, not leave a flat Rust tuple that has no decoder.
+    #[test]
+    fn a_tuple_wider_than_the_runtime_decodes_is_a_compile_error() {
+        use crate::ir::Type;
+
+        let tuple = |len: usize| type_to_tokens(&Type::Tuple(vec![Type::Boolean; len])).to_string();
+        let widest = tuple(11);
+        assert!(widest.starts_with('('), "{widest}");
+        let wider = tuple(12);
+        assert!(wider.starts_with("compile_error !"), "{wider}");
+    }
+
     #[test]
     fn pascal_case() {
         assert_eq!(to_pascal_case("pending"), "Pending");
@@ -330,8 +343,8 @@ mod tests {
 
     /// A contract-typed argument takes the generated `ContractAddress`, the
     /// struct that the compiler encodes a contract value as, and the call
-    /// sends it. The untyped `runtime::Value` parameter, or a unit encoding of
-    /// a typed one, both compile.
+    /// sends it. A unit encoding of the argument compiles too, so a build
+    /// alone does not catch it.
     #[test]
     fn contract_arguments_are_typed_and_encoded() {
         let info =
@@ -374,14 +387,9 @@ mod tests {
         assert!(generated.contains("TryFrom<&'a ValueSlice> for EgressJob"));
         assert!(generated.contains("from_hex"));
 
-        // Circuit call types
-        assert!(generated.contains("pub struct ClaimDepositCall"));
-        assert!(generated.contains("pub struct WithdrawCall"));
+        // Circuit return types
         assert!(generated.contains("ClaimDepositReturn"));
         assert!(generated.contains("WithdrawReturn"));
-        assert!(generated.contains("pub enum Calls"));
-        assert!(generated.contains("ClaimDeposit"));
-        assert!(generated.contains("Withdraw"));
 
         // Struct types referenced only in circuits (not in ledger)
         assert!(generated.contains("pub struct ValidatorSignature"));
@@ -442,13 +450,8 @@ mod tests {
         assert!(generated.contains("FIELD_ROUND"));
         assert!(generated.contains("fn round("));
 
-        // Circuit types
-        assert!(generated.contains("pub struct IncrementCall"));
+        // Circuit return type
         assert!(generated.contains("IncrementReturn"));
-
-        // Calls enum with the single circuit
-        assert!(generated.contains("pub enum Calls"));
-        assert!(generated.contains("Increment"));
 
         // Ledger wrapper struct
         assert!(generated.contains("pub struct Counter"));
@@ -480,12 +483,6 @@ mod tests {
             "../../../crates/midnight-contract/tests/fixtures/election/compiler/analyzed-ir.sexp",
         );
         let generated = generated_source(&info, "Election");
-
-        // Multiple circuits
-        assert!(generated.contains("pub enum Calls"));
-        assert!(generated.contains("AdvanceCall"));
-        assert!(generated.contains("SetTopicCall"));
-        assert!(generated.contains("AddVoterCall"));
 
         // Enum types from witnesses
         assert!(generated.contains("pub enum PermissibleVotes"));
@@ -543,15 +540,8 @@ mod tests {
         );
         let generated = generated_source(&info, "Tiny");
 
-        // Circuit types
-        assert!(generated.contains("pub struct SetCall"));
-        assert!(generated.contains("pub struct GetCall"));
-        assert!(generated.contains("pub struct ClearCall"));
-        assert!(generated.contains("pub struct PublicKeyCall"));
-        assert!(generated.contains("pub enum Calls"));
-
-        // Witness call type
-        assert!(generated.contains("pub struct PrivateSecretKeyCall"));
+        // Witness return type
+        assert!(generated.contains("PrivateSecretKeyReturn"));
 
         // Ledger wrapper
         assert!(generated.contains("pub struct Tiny"));
@@ -563,10 +553,8 @@ mod tests {
             load_fixture("../../../tests/fixtures/compiled/zerocash/compiler/analyzed-ir.sexp");
         let generated = generated_source(&info, "Zerocash");
 
-        // Circuit types
-        assert!(generated.contains("pub struct SpendCall"));
+        // Circuit return type
         assert!(generated.contains("SpendReturn"));
-        assert!(generated.contains("pub enum Calls"));
 
         // Custom struct types from witnesses
         assert!(generated.contains("pub struct Nonce"));
@@ -724,7 +712,6 @@ mod tests {
 
         assert!(generated.contains("pub struct Empty"));
         assert!(generated.contains("fn new("));
-        assert!(generated.contains("NoopCall"));
         // No FIELD_ constants for empty ledger
         assert!(!generated.contains("FIELD_"));
 

@@ -560,9 +560,8 @@ mod golden_encodings {
         let returned = golden_value("peers", "swap-peer", "/steps/1/output");
         let address = crate::peers::SwapPeerReturn::try_from(&*returned.value)
             .expect("the returned address decodes");
-        let call = crate::peers::SwapPeerCall { p: address };
 
-        assert_eq!(AlignedValue::from(call.p), sent);
+        assert_eq!(AlignedValue::from(address), sent);
     }
 }
 

@@ -7,10 +7,10 @@ use crate::value::Value;
 
 /// The Compact "witness" native primitives: the `declare-native-entry witness`
 /// entries in the compiler's `midnight-natives.ss`. Unlike the pure circuit
-/// natives (handled by `try_builtin`), these are effectful, they read the
-/// caller's key or capture a coin into the transaction, so the interpreter
-/// handles them inline in `eval_witness_call` rather than dispatching to the
-/// witness provider / builtin / helper (which has no entry for them and would
+/// natives (handled by `try_builtin_typed`), these are effectful, they read
+/// the caller's key or capture a coin into the transaction, so the
+/// interpreter handles them inline in `eval_witness_call` rather than
+/// dispatching to the witness provider (which has no entry for them and would
 /// error). See `docs/compact-natives.md` for the full native table and our
 /// coverage; the match in `eval_witness_call` is exhaustive, so a new variant
 /// added here forces a decision at the call site.

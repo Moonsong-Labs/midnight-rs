@@ -14,7 +14,6 @@ mod common;
 use common::{epoch, with_witnesses};
 use compact_bindgen::{AlignedValue, ContractState, InMemoryDB, StateValue, StorageHashMap};
 use midnight_contract::ContractMaintenanceVerifyingKey;
-use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
 
@@ -166,39 +165,6 @@ fn counter_increment_with_typed_state() {
         assert_eq!(ledger.round().unwrap(), i, "counter should be {i}");
     }
     eprintln!("counter: 0 → 1 → 2 → 3 ✓ (typed)");
-}
-
-#[test]
-fn counter_build_tx_with_typed_state() {
-    let info = load_info(COUNTER_INFO);
-    let ir = &common::exported_circuit(&info, "increment").def;
-    let program = common::program(&info);
-
-    let state = counter_state(0);
-
-    let address = midnight_coin_structure::contract::ContractAddress(
-        midnight_base_crypto::hash::HashOutput([0xAA; 32]),
-    );
-    let tx = call::build_unproven_call_tx(
-        ir,
-        &program,
-        &state,
-        midnight_base_crypto::time::Timestamp::from_secs(0),
-        "increment",
-        midnight_contract::ContractAddress(address.0),
-        "test",
-        &[],
-        &midnight_contract::runtime::NoWitnesses,
-        None,
-    )
-    .unwrap();
-
-    assert!(!tx.tx_bytes.is_empty());
-
-    // Verify the new state through typed accessor
-    let ledger = counter::Ledger::new(tx.new_state);
-    assert_eq!(ledger.round().unwrap(), 1);
-    eprintln!("counter TX: {} bytes, round=1 ✓", tx.tx_bytes.len());
 }
 
 // ---------------------------------------------------------------------------
@@ -718,10 +684,9 @@ async fn governance_deploy_then_apply_both_updates() {
         .await
         .expect("batch included in best block");
 
-    let rotated =
-        midnight_contract::state::fetch_state_from_node(contract.provider(), &address, None)
-            .await
-            .unwrap();
+    let rotated = midnight_contract::state::fetch_state(contract.provider(), &address, None)
+        .await
+        .unwrap();
     let increment: EntryPointBuf = b"increment"[..].into();
     assert!(
         rotated.operations.contains_key(&increment),

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use midnight_base_crypto::signatures::VerifyingKey;
-use midnight_provider::{MidnightProvider, Provider};
+use midnight_provider::MidnightProvider;
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{BlockHash, ExtrinsicHash, TransferResult};
 
@@ -731,7 +731,7 @@ impl<'a, P> DeployBuilder<'a, P> {
 
 impl<P> DeployBuilder<'_, P>
 where
-    P: AsMidnightProvider + Provider + Send,
+    P: AsMidnightProvider + Send,
 {
     /// Build, prove, and submit the deploy transaction without waiting for inclusion.
     ///
@@ -847,7 +847,7 @@ where
 
 impl<'a, P> IntoFuture for DeployBuilder<'a, P>
 where
-    P: AsMidnightProvider + Provider + Send + 'a,
+    P: AsMidnightProvider + Send + 'a,
 {
     type Output = Result<Contract<P>, ContractError>;
     // `Pin<Box<dyn Future>>` rather than `impl Future` because the latter is
@@ -984,7 +984,7 @@ impl<P> PendingDeploy<P> {
 
 impl<P> PendingDeploy<P>
 where
-    P: AsMidnightProvider + Provider + Send,
+    P: AsMidnightProvider + Send,
 {
     /// Read the deployed contract from the node, at the block that applied the
     /// deploy, and return the [`Contract`].
@@ -1202,7 +1202,7 @@ impl Contract<()> {
     /// must have a synced wallet attached via `MidnightProvider::with_wallet`.
     pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
     where
-        P: AsMidnightProvider + Provider,
+        P: AsMidnightProvider,
     {
         DeployBuilder::new(provider)
     }
@@ -1217,13 +1217,13 @@ impl Contract<()> {
     /// `provider` can be an owned or borrowed `MidnightProvider`.
     pub fn at<P>(provider: P, address: impl IntoAddress) -> ConnectBuilder<P>
     where
-        P: AsMidnightProvider + Provider,
+        P: AsMidnightProvider,
     {
         ConnectBuilder::new(provider, address)
     }
 }
 
-impl<P: Provider> Contract<P> {
+impl<P> Contract<P> {
     /// The contract's on-chain address (hex string).
     pub fn address(&self) -> &str {
         &self.address
@@ -1287,7 +1287,7 @@ impl<P: Provider> Contract<P> {
         P: AsMidnightProvider,
     {
         let provider = self.provider.as_midnight_provider();
-        crate::state::fetch_state_from_node(provider, &self.address, self.at_block).await
+        crate::state::fetch_state(provider, &self.address, self.at_block).await
     }
 
     /// Execute a circuit call on-chain.
@@ -1816,7 +1816,6 @@ impl<P: Provider> Contract<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
 
     struct MockProvider {
         inner: MidnightProvider,
@@ -1833,17 +1832,6 @@ mod tests {
     impl AsMidnightProvider for MockProvider {
         fn as_midnight_provider(&self) -> &MidnightProvider {
             &self.inner
-        }
-    }
-
-    #[async_trait]
-    impl midnight_provider::Provider for MockProvider {
-        async fn get_contract_state(
-            &self,
-            _address: &str,
-            _at: Option<BlockHash>,
-        ) -> Result<Option<String>, ProviderError> {
-            Ok(None)
         }
     }
 

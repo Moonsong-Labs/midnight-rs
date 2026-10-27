@@ -179,46 +179,14 @@ fn mismatch_arm(context: &str, expected: &str) -> TokenStream {
     }
 }
 
-/// Returns true if this type has a direct conversion into `AlignedValue`
-/// (and therefore into `runtime::Value::AlignedValue`) via the
-/// bindgen-emitted encoders. Keep in sync with `type_to_value_conversion`.
-pub(crate) fn has_typed_conversion(ty: &Type) -> bool {
-    match ty {
-        Type::Boolean
-        | Type::Unsigned(_)
-        | Type::Field(_)
-        | Type::Bytes(_)
-        | Type::Struct { .. }
-        | Type::Enum { .. }
-        | Type::Vector { .. }
-        | Type::Tuple(_)
-        | Type::Contract { .. } => true,
-        Type::Alias { ty: inner, .. } => has_typed_conversion(inner),
-        // Every opaque type has a typed Rust counterpart: `JubjubPoint` (which
-        // the runtime also spells as a curve point) and `Scalar<BLS12-381>`
-        // map to their own types, and the rest to `Vec<u8>`, which encodes as
-        // the single `Compress` atom the Compact runtime uses for opaque
-        // values. Without this the parameter falls back to the untyped
-        // `runtime::Value` escape hatch and its value is dropped.
-        Type::Opaque(_) | Type::Point(_) => true,
-        // Rejected at load by `artifact::check_type`; unreachable here.
-        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => false,
-    }
-}
-
-/// The parameter list for `arguments`, one `name: Type` per argument. An
-/// argument with no typed conversion takes a `runtime::Value`.
+/// The parameter list for `arguments`, one `name: Type` per argument.
 pub(super) fn typed_params(arguments: &[Argument]) -> Vec<TokenStream> {
     arguments
         .iter()
         .map(|arg| {
             let name = make_ident(arg.name.name());
-            if has_typed_conversion(&arg.ty) {
-                let ty = type_to_tokens(&arg.ty);
-                quote! { #name: #ty }
-            } else {
-                quote! { #name: midnight_contract::runtime::Value }
-            }
+            let ty = type_to_tokens(&arg.ty);
+            quote! { #name: #ty }
         })
         .collect()
 }

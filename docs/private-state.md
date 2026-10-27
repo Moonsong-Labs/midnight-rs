@@ -133,8 +133,6 @@ The build-only calls of a call builder, `.build()` and `.without_dust()`, go thr
 
 The generated witness adapter writes the buffer only when the `serde_json` encoding of the state changes, and an empty buffer counts as the encoding of `Default`. So a call whose witnesses only read the state records no snapshot. A `PrivateState` with a `HashMap` can encode in another key order with no change of value, which reads as a change. Prefer an ordered map, such as a `BTreeMap`.
 
-The low-level build-only path (`build_unproven_call_tx`) takes `private_state: Option<&mut Vec<u8>>` and passes it to `interpreter::execute` in `Env.private_state`. So a cold-signing or custodian flow that builds a transaction without a submit can still capture the post-call private-state buffer. With `None`, the witnesses run on a scratch buffer. It builds a ledger 9 transaction whatever the chain runs, so a chain on ledger 8 cannot take the result.
-
 ### Threading through a deploy
 
 A deploy records the private state of the new contract as its first snapshot. The generated `with_initial_private_state` sets the private state that the constructor's witnesses start from, and the deploy records the private state that they leave. With `with_initial_state`, which skips the constructor, the deploy records the initial private state as it is. `DeployBuilder::send`, which the `.await` of the builder also runs, does steps 1 to 4:

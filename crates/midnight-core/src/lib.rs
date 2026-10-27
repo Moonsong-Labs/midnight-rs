@@ -84,7 +84,7 @@ pub use midnight_wallet::{
 
 // Re-export contract types (gated behind "contract" feature).
 #[cfg(feature = "contract")]
-pub use midnight_contract::{Contract, ContractError, FromHex};
+pub use midnight_contract::{Contract, ContractError};
 
 // Re-export compact-bindgen for the contract! macro (gated behind "contract" feature).
 #[cfg(feature = "contract")]

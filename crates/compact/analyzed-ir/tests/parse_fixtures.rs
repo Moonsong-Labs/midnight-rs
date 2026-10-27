@@ -1,37 +1,40 @@
-//! The fixtures are real compiler output. The crate README says which compactc
-//! wrote them, and what a regeneration must change.
+//! The fixtures are the analyzed IR that `make fixtures` writes.
 
 use compact_analyzed_ir::*;
 
-fn fixture(name: &str) -> AnalyzedIr {
-    let path = format!("{}/tests/fixtures/{name}.sexp", env!("CARGO_MANIFEST_DIR"));
-    let src = std::fs::read_to_string(&path).expect("fixture readable");
-    parse_str(&src).unwrap_or_else(|e| panic!("{name}: {e}"))
+fn fixture(dir: &str) -> AnalyzedIr {
+    let path = format!(
+        "{}/../../../{dir}/compiler/analyzed-ir.sexp",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let src = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("missing {path} ({e}); run `make fixtures`"));
+    parse_str(&src).unwrap_or_else(|e| panic!("{dir}: {e}"))
 }
 
 #[test]
 fn every_fixture_parses() {
-    for name in [
-        "counter",
-        "bboard",
-        "events",
-        "ser",
-        "ccc",
-        "loops",
-        "slices",
-        "mint-probe",
-        "zerocash",
-        "adt-defaults",
+    for dir in [
+        "tests/conformance/fixtures/counter",
+        "tests/conformance/fixtures/bboard",
+        "tests/conformance/fixtures/events",
+        "tests/conformance/fixtures/loops",
+        "tests/conformance/fixtures/slices",
+        "tests/conformance/fixtures/peers",
+        "tests/conformance/fixtures/ops",
+        "tests/fixtures/compiled/cross-contract",
+        "tests/fixtures/compiled/mint-probe",
+        "tests/fixtures/compiled/zerocash",
+        "crates/compact/analyzed-ir/tests/fixtures/adt-defaults",
     ] {
-        let ir = fixture(name);
-        assert!(!ir.elements.is_empty(), "{name}: no elements");
-        assert_eq!(ir.compiler_version, "0.33.122");
+        let ir = fixture(dir);
+        assert!(!ir.elements.is_empty(), "{dir}: no elements");
     }
 }
 
 #[test]
 fn counter_shape() {
-    let ir = fixture("counter");
+    let ir = fixture("tests/conformance/fixtures/counter");
     assert_eq!(
         ir.exports
             .iter()
@@ -73,7 +76,7 @@ fn counter_shape() {
 
 #[test]
 fn mint_probe_carries_dup_arities() {
-    let ir = fixture("mint-probe");
+    let ir = fixture("tests/fixtures/compiled/mint-probe");
     let mut arities = Vec::new();
     each_ledger_instruction(&ir, &mut |i| {
         if i.op == OpName::Dup
@@ -91,8 +94,8 @@ fn mint_probe_carries_dup_arities() {
 
 #[test]
 fn events_emit() {
-    let ir = fixture("events");
-    let c = ir.circuit("mint_event").expect("mint_event");
+    let ir = fixture("tests/conformance/fixtures/events");
+    let c = ir.circuit("record").expect("record");
     let mut found = false;
     walk_deep(&c.body, &mut |e| {
         if let Expr::Emit {
@@ -103,7 +106,7 @@ fn events_emit() {
             ..
         } = e
         {
-            assert_eq!((*event_version, *event_tag, *len), (1, 6, 80));
+            assert_eq!((*event_version, *event_tag, *len), (1, 10, 288));
             assert_eq!(instructions.last().map(|i| i.op.as_str()), Some("log"));
             found = true;
         }
@@ -113,7 +116,7 @@ fn events_emit() {
 
 #[test]
 fn bboard_types() {
-    let ir = fixture("bboard");
+    let ir = fixture("tests/conformance/fixtures/bboard");
     let ledger = ir.ledger().expect("ledger");
     let message = ledger
         .fields
@@ -263,7 +266,7 @@ fn walk(e: &Expr, f: &mut impl FnMut(&Expr)) {
 /// carries a type where a value usually sits, and an addition.
 #[test]
 fn adt_default_operands_carry_types() {
-    let ir = fixture("adt-defaults");
+    let ir = fixture("crates/compact/analyzed-ir/tests/fixtures/adt-defaults");
     let mut saw_add = false;
     let mut saw_null = false;
     let mut saw_max_sizeof = false;

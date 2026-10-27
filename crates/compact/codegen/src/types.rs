@@ -47,10 +47,8 @@ fn version_family(version: &str) -> Option<String> {
 #[cfg_attr(test, derive(Default))]
 pub struct ContractInfo {
     pub compiler_version: String,
-    pub runtime_version: String,
     pub circuits: Vec<Circuit>,
     pub witnesses: Vec<crate::ir::Witness>,
-    pub contracts: Vec<String>,
     pub ledger: Vec<LedgerField>,
     /// The contract's constructor, lowered to a circuit with a unit result.
     ///
@@ -125,15 +123,6 @@ impl std::fmt::Display for StorageKind {
 pub enum FieldIndex {
     Single(usize),
     Path(Vec<usize>),
-}
-
-impl LedgerField {
-    pub fn index_usize(&self) -> Option<usize> {
-        match &self.index {
-            FieldIndex::Single(i) => Some(*i),
-            FieldIndex::Path(_) => None,
-        }
-    }
 }
 
 #[derive(Debug)]

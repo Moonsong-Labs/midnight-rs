@@ -29,7 +29,7 @@
 //! - **Data types** -- Structs and enums mirroring Compact type definitions
 //! - **Ledger struct** -- Typed synchronous accessors for each ledger field (eager, full state in memory)
 //! - **Lazy query struct** -- `{Name}Query<P>` with async accessors that fetch individual fields via RPC
-//! - **Circuit call types** -- `*Call` structs and `*Return` type aliases
+//! - **Return types** -- `*Return` type aliases for the result type of each circuit and witness
 //! - **Pure circuits** -- a `pure_circuits` module, with one function per exported pure circuit that runs it in process with no chain, proof or wallet
 //! - **Deploy and call** -- `Contract::deploy`, which runs the contract's constructor and deploys the state that it leaves, `Contract::at`, and `Circuits`, with one call builder per impure circuit
 //! - **Simulator** -- `Simulator`, which runs the impure circuits, and the constructor with `run_constructor`, in process with no chain, proof or wallet. The caller sets the block time, the address and the coin public key, and the ledger and the private state carry from call to call.
