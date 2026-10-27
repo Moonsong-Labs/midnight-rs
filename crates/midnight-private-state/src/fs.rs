@@ -27,9 +27,10 @@
 //! filenames with new timestamps. `mark_failed` / `rollback_from` likewise
 //! walk the graph to cascade through dependents.
 //!
-//! A write syncs a `.tmp` sibling to disk and then `rename`s it into place,
-//! so a crash or a power loss never leaves a half-written file. The wallet
-//! uses the same discipline.
+//! A write syncs a `.tmp` sibling to disk and then `rename`s it into place
+//! (see `midnight_owner_only`), so a crash, or a power loss on a file system
+//! that can sync, never leaves a half-written file. The wallet uses the same
+//! discipline.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -337,7 +338,18 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             data: state.to_vec(),
         };
         let path = self.new_snapshot_path(address, &ext_hex);
-        self.write_json_atomic(&path, &snapshot)?;
+        // An error tells the caller that no snapshot exists, but a failed
+        // directory sync comes after the rename. The path is new, so remove it.
+        if let Err(err) = self.write_json_atomic(&path, &snapshot) {
+            if let Err(remove) = remove_file_opt(&path) {
+                warn!(
+                    path = %path.display(),
+                    error = %remove,
+                    "a failed append left its snapshot; remove the file before the next call"
+                );
+            }
+            return Err(err);
+        }
         debug!(
             address,
             extrinsic_hash = %ext_hex,

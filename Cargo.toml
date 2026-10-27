@@ -61,6 +61,7 @@ num-bigint = "0.4"
 sha2 = "0.10"
 sha3 = "0.11"
 hex = "0.4"
+libc = "0.2"
 # H256: the block-hash type, the same crate subxt re-exports it from.
 primitive-types = "0.13"
 thiserror = "2"

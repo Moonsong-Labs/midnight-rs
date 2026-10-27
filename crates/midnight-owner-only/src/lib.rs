@@ -7,6 +7,10 @@
 //! To replace a file durably, write a temporary file with [`write()`], rename it
 //! into place, and then call [`sync_dir`] on its directory. After a crash or a
 //! power loss, the path holds the old contents or the new contents.
+//!
+//! A file system that cannot sync a file or a directory refuses the sync. The
+//! calls then skip that sync, and the file system alone decides what persists
+//! after a power loss.
 
 use std::fs;
 use std::io;
@@ -40,7 +44,8 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
 ///
 /// On Unix, the file gets mode 0600, also when it exists. The call replaces
 /// the contents of an existing file. When the call returns, the contents are
-/// on disk, so a rename of `path` cannot persist before them.
+/// on disk, so a rename of `path` cannot persist before them. On a file system
+/// that refuses the sync, the call skips it (see the module docs).
 ///
 /// # Errors
 ///
@@ -65,24 +70,52 @@ pub fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
     #[cfg(not(unix))]
     let mut file = fs::File::create(path)?;
     file.write_all(contents)?;
-    file.sync_all()
+    sync(&file)
 }
 
 /// Syncs the entries of `dir` to disk, so a rename or a create in `dir`
 /// persists.
 ///
-/// On platforms other than Unix, the call does nothing, because
-/// [`fs::File::open`] fails on a directory on Windows.
+/// On a file system that refuses the sync of a directory, the call skips it
+/// (see the module docs). On platforms other than Unix, the call does nothing,
+/// because [`fs::File::open`] fails on a directory on Windows.
 ///
 /// # Errors
 ///
 /// Returns the error of the open or of the sync.
 pub fn sync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
-    fs::File::open(dir)?.sync_all()?;
+    sync(&fs::File::open(dir)?)?;
     #[cfg(not(unix))]
     let _ = dir;
     Ok(())
+}
+
+/// [`fs::File::sync_all`], or `Ok` when the file system refuses the sync.
+fn sync(file: &fs::File) -> io::Result<()> {
+    match file.sync_all() {
+        Err(err) if sync_refused(&err) => Ok(()),
+        result => result,
+    }
+}
+
+/// Whether `err` says that the file system cannot sync the file, rather than
+/// that a sync it supports failed.
+///
+/// Some file systems refuse the sync of a directory with `EINVAL`, or with
+/// `EBADF` for a descriptor that is open only for reading. On Apple targets,
+/// `F_FULLFSYNC` fails with `ENOTSUP` on a file system without it, such as an
+/// SMB share, and `std` leaves that code uncategorized.
+fn sync_refused(err: &io::Error) -> bool {
+    #[cfg(unix)]
+    let refused_code = matches!(err.raw_os_error(), Some(libc::EBADF | libc::ENOTSUP));
+    #[cfg(not(unix))]
+    let refused_code = false;
+    refused_code
+        || matches!(
+            err.kind(),
+            io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+        )
 }
 
 #[cfg(all(test, unix))]

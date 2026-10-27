@@ -6,5 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 description = "Owner-only directories and durable files for the on-disk stores of midnight-rs. Internal use only."
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
