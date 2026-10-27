@@ -1733,16 +1733,21 @@ mod tests {
     /// where the allowance grows past the floor.
     const PAIRS_OUTSIDE: u32 = 8;
 
+    /// A registration of `owner` whose allowance pays any fee, so a build
+    /// that carries it needs no Dust.
+    fn registration_paying_any_fee(owner: &helpers::WalletSeed) -> DustRegistrationBuilder {
+        DustRegistrationBuilder {
+            wallet: UnshieldedWallet::default(owner.clone()),
+            dust_address: Some(DustWallet::<DefaultDB>::default(owner.clone(), None).public_key),
+            allow_fee_payment: u64::MAX.into(),
+        }
+    }
+
     #[tokio::test]
     async fn a_build_that_pays_its_own_fee_refuses_before_the_proof() {
         let (context, owner) = offline_context();
         let mut tx_info = night_round_trip(&context, &owner, PAIRS_OUTSIDE);
-        // A registration's allowance pays the fee, so the build needs no Dust.
-        tx_info.add_dust_registration(DustRegistrationBuilder {
-            wallet: UnshieldedWallet::default(owner.clone()),
-            dust_address: Some(DustWallet::<DefaultDB>::default(owner.clone(), None).public_key),
-            allow_fee_payment: u64::MAX.into(),
-        });
+        tx_info.add_dust_registration(registration_paying_any_fee(&owner));
         tx_info.use_mock_proofs_for_fees(true);
 
         let result = prepare_no_validate(tx_info).await;
@@ -1783,9 +1788,31 @@ mod tests {
         );
     }
 
-    /// A Dustless half is not what its build submits. The sponsor's merge adds
-    /// Dust spends, which change the time and the size, and the sponsor's
-    /// build checks the merge.
+    /// `balance_external` returns `None` for a transaction that pays its own
+    /// fee, and nothing proves or checks that transaction later. A check that
+    /// runs only on a merge lets it through to the node.
+    #[tokio::test]
+    async fn balancing_a_transaction_that_pays_its_own_fee_refuses_it() {
+        let (context, owner) = offline_context();
+        let mut tx_info = night_round_trip(&context, &owner, PAIRS_OUTSIDE);
+        tx_info.add_dust_registration(registration_paying_any_fee(&owner));
+        let (unpaid, now, ttl) = assemble_unproven(&mut tx_info).await.expect("assemble");
+        let (paid, _) = dust_candidate(&tx_info, &unpaid, 0, now, ttl).expect("registration");
+        let external = paid.mock_prove().expect("mock prove");
+        let sponsor =
+            StandardTransactionInfo::new_from_context(context.clone(), Arc::new(LocalProof), None);
+
+        let result = balance_external(sponsor, &external);
+
+        assert!(
+            matches!(result, Err(WalletError::OutsideTimeToDismiss { .. })),
+            "{:?}",
+            result.err()
+        );
+    }
+
+    /// Catches a gate that checks every proof. The node never sees a Dustless
+    /// half on its own, only the merge that pays its fee.
     #[tokio::test]
     async fn a_dustless_build_proves_unchecked() {
         let (context, owner) = offline_context();
