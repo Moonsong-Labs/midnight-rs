@@ -782,7 +782,7 @@ mod constructor_shapes {
     use std::time::UNIX_EPOCH;
 
     use compact_bindgen::TransientFr;
-    use compact_bindgen::midnight_contract::{AsMidnightProvider, ContractError, Provider};
+    use compact_bindgen::midnight_contract::{AsMidnightProvider, ContractError};
 
     use crate::{coin_vault, plain_constructor};
 
@@ -811,7 +811,7 @@ mod constructor_shapes {
     )]
     async fn deploys<P>(plain: P, vault: P) -> Result<(), ContractError>
     where
-        P: AsMidnightProvider + Provider + Send,
+        P: AsMidnightProvider + Send,
     {
         plain_constructor::Contract::deploy(plain)
             .with_constructor_args(TransientFr::from(42u64))
