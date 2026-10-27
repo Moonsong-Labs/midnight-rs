@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 
+use midnight_helpers::base_crypto::cost_model::CostDuration;
+
 use crate::{LedgerVersion, Network, ShieldedTokenType, UnknownLedger, UnshieldedTokenType};
 
 /// Errors that can occur with wallet operations.
@@ -125,6 +127,38 @@ pub enum WalletError {
         ///
         /// A Dust registration has no funding wallets, so it reads 0.
         available: u128,
+    },
+
+    /// The node would refuse the transaction, because it takes more time to
+    /// dismiss than its size allows.
+    ///
+    /// The ledger rule, `FeeCalculation(OutsideTimeToDismiss)`: the time to
+    /// validate the whole transaction and apply its guaranteed part must not
+    /// be more than `time_to_dismiss_per_byte` for each byte of the
+    /// transaction, or `min_time_to_dismiss` when that is more. A build that
+    /// pays a fee applies the ledger's own check before it returns, so nothing
+    /// reaches the node.
+    ///
+    /// Most of the time comes from the unshielded inputs and outputs in the
+    /// guaranteed offer, and a NIGHT input or output costs the most. Input and
+    /// Dust selection do not account for this rule. To recover, send a smaller
+    /// amount, so that the default `LargestFirst` ordering selects fewer
+    /// inputs, or create fewer NIGHT outputs in one transaction.
+    /// `SmallestFirst` selects the most inputs, so it makes the time longer.
+    #[error(
+        "the node would refuse this transaction: it takes {time_to_dismiss:?} to dismiss, \
+         and its size of {size} bytes allows at most {allowed_time_to_dismiss:?}"
+    )]
+    OutsideTimeToDismiss {
+        /// The time to validate the transaction and apply its guaranteed part.
+        time_to_dismiss: CostDuration,
+        /// The most time that the size of the transaction allows.
+        allowed_time_to_dismiss: CostDuration,
+        /// The size of the transaction in bytes, which sets the allowance.
+        ///
+        /// A refusal before the real proof reads it from a copy with
+        /// placeholder proofs, which is the same size or a few bytes larger.
+        size: u64,
     },
 
     /// The wallet holds too little of a shielded token for the transfer.

@@ -738,6 +738,12 @@ impl MidnightProvider {
     /// it with [`Self::submit_reserved`], which hands the Dust back when the
     /// node never gets the transaction or rejects it. A transaction that
     /// already pays its own fee comes back unchanged, with nothing reserved.
+    ///
+    /// The result, the unchanged one too, passes the ledger's time-to-dismiss
+    /// check, which runs before the real proof of the fee and again after it.
+    /// When the node would refuse the result, the call fails with
+    /// [`WalletError::OutsideTimeToDismiss`](midnight_types::WalletError::OutsideTimeToDismiss)
+    /// and leaves no Dust reserved.
     pub async fn balance_transaction(
         &self,
         tx_bytes: &[u8],

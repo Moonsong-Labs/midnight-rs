@@ -14,12 +14,12 @@ use super::helpers;
 use helpers::{
     BuildContext, BuildUtxoOutput, BuildUtxoSpend, BuilderContext, CoinSelectionStrategy,
     DefaultDB, DustActions, DustLocalState, DustRegistration, DustRegistrationBuilder, DustSpend,
-    DustWallet, FromContext, HashMapStorage, InputInfo, Intent, IntentInfo, LedgerParameters,
-    NIGHT, Nullifier, OfferInfo, OutputInfo, ProofPreimageMarker, ProofProvider, Segment,
-    ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng,
-    StandardTransactionInfo, StdRng, Timestamp, TokenType, Transaction, TransactionSigningKey,
-    UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo,
-    UtxoSelectionError, UtxoSpendInfo, WalletAddress,
+    DustWallet, FeeCalculationError, FromContext, HashMapStorage, InputInfo, Intent, IntentInfo,
+    LedgerParameters, NIGHT, Nullifier, OfferInfo, OutputInfo, ProofPreimageMarker, ProofProvider,
+    Segment, ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet, Signature, Sp,
+    SplittableRng, StandardTransactionInfo, StdRng, Timestamp, TokenType, Transaction,
+    TransactionSigningKey, UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType,
+    UnshieldedWallet, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo, WalletAddress,
 };
 
 use crate::hd::Seed;
@@ -73,6 +73,11 @@ impl PreparedTransfer {
     ///
     /// For the build paths that produce one; the spends they report are added
     /// with the two setters below.
+    ///
+    /// [`Self::prove`] applies the time-to-dismiss check only to a build that
+    /// pays a fee: `dust_batches` is not empty, `tx_info` registers a Dust
+    /// address, or the build pays the fee of an external transaction. A build
+    /// that attaches Dust in any other way is not checked.
     pub fn new(
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         tx: UnprovenTx,
@@ -148,14 +153,29 @@ impl PreparedTransfer {
     /// into the transaction whose fee it pays. The result then holds the
     /// merged transaction and its fee, and its `spent` names only the Dust of
     /// this build.
+    ///
+    /// # Errors
+    ///
+    /// [`WalletError::OutsideTimeToDismiss`] when the build pays a fee (see
+    /// [`Self::new`]) and the node would refuse the proven transaction, the
+    /// merged one for a build from [`balance_external`]. The caller owns the
+    /// release of what the build reserved. [`WalletError::Proving`] when the
+    /// prover fails, and [`WalletError::Transfer`] when the merge or the
+    /// serialization fails.
     pub async fn prove(self) -> Result<TransferResult, WalletError> {
         let spent = self.spent_inputs();
         let PreparedTransfer {
             mut tx_info,
             tx,
+            dust_batches,
             external,
             ..
         } = self;
+        // A Dustless build is a half that a sponsor's merge completes, and the
+        // merge adds Dust spends and their proofs, so only the merge is checked.
+        let pays_fee = external.is_some()
+            || !dust_batches.is_empty()
+            || !tx_info.dust_registrations.is_empty();
 
         // Keep a handle to the ledger context so we can read `parameters`
         // after proving to compute the fee. `Arc::clone` is cheap and the lock
@@ -168,6 +188,9 @@ impl PreparedTransfer {
                 .map_err(transfer_err("merge fee intent"))?,
             None => proven,
         };
+        if pays_fee {
+            refuse_outside_time_to_dismiss(&context, &finalized)?;
+        }
 
         let mut bytes = Vec::new();
         helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
@@ -192,12 +215,44 @@ impl PreparedTransfer {
 pub fn fee_speck(context: &BuildContext, tx: &FinalizedTx) -> Result<u128, WalletError> {
     // Mirrors the node's own estimation RPC: `enforce_time_to_dismiss =
     // false`, i.e. report the deterministic SPECK cost without the
-    // chain-side mempool-eviction check. The chain charges the same number
-    // at inclusion; if the tx exceeds the eviction-time bound, that
-    // surfaces at submit, not here.
+    // time-to-dismiss check. The chain charges the same number at inclusion.
+    // A build that pays a fee applies that check in
+    // `refuse_outside_time_to_dismiss`.
     context
         .with_ledger_state(|s| tx.fees(&s.parameters, false))
         .map_err(transfer_err("fees"))
+}
+
+/// Refuse `tx` when the node would refuse it as outside its time to dismiss,
+/// with the ledger's own check against the parameters in `context`.
+///
+/// The cost reads no proof bytes, so a copy with mock proofs costs what the
+/// proven transaction costs. `mock_prove` gives each intent the largest
+/// binding, so the copy is the same size or a few bytes larger, and gets the
+/// same allowance or a larger one. A refusal of the copy is then a refusal of
+/// the proven transaction.
+///
+/// On ledger 9 the node prices each called verifier key at its real size, and
+/// `cost` at a fixed size. A cell read costs whole 4 KiB blocks, so the two
+/// agree for a key up to 4 KiB, and a larger key only raises the node's cost.
+/// The check then never refuses a transaction that the node accepts.
+fn refuse_outside_time_to_dismiss(
+    context: &BuildContext,
+    tx: &FinalizedTx,
+) -> Result<(), WalletError> {
+    match context.with_ledger_state(|s| tx.cost(&s.parameters, true)) {
+        Ok(_) => Ok(()),
+        Err(FeeCalculationError::OutsideTimeToDismiss {
+            time_to_dismiss,
+            allowed_time_to_dismiss,
+            size,
+        }) => Err(WalletError::OutsideTimeToDismiss {
+            time_to_dismiss,
+            allowed_time_to_dismiss,
+            size,
+        }),
+        Err(e) => Err(transfer_err("cost")(e)),
+    }
 }
 
 /// The nullifier of every Dust spend in `batches`, which is how a release
@@ -679,7 +734,7 @@ impl<'a> TransferBuilder<'a> {
     /// One UTXO per call, because a second unshielded input in the same
     /// transaction costs more verification than its bytes buy in dismissal
     /// allowance, and the ledger refuses it with
-    /// `FeeCalculation(OutsideTimeToDismiss)`, custom error 168.
+    /// `FeeCalculation(OutsideTimeToDismiss)`.
     ///
     /// A registration covers the UTXO it spends, and it registers the address,
     /// so tNIGHT arriving afterwards generates dust with no further call. It
@@ -741,8 +796,7 @@ impl<'a> TransferBuilder<'a> {
         // One input, the one carrying the most generationless dust. A second
         // unshielded input costs more verification than its bytes buy in
         // dismissal allowance, and the ledger refuses the transaction with
-        // `FeeCalculation(OutsideTimeToDismiss)`, which reaches a client as
-        // custom error 168.
+        // `FeeCalculation(OutsideTimeToDismiss)`.
         //
         // A UTXO whose creation time the indexer left out is ranked below
         // every UTXO that has one. Its age is a guess, and a guess that runs
@@ -923,6 +977,10 @@ fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> b
 /// does. The chain validates the transaction against its own `root_history`.
 /// A local check can match that only with the global `DustState`, which is
 /// 55MB or more.
+///
+/// A build that pays its own fee applies one part of that check, the
+/// ledger's time-to-dismiss rule, to the candidate whose fee converges. It
+/// fails with [`WalletError::OutsideTimeToDismiss`] before any real proof.
 pub async fn prepare_no_validate(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
 ) -> Result<PreparedTransfer, WalletError> {
@@ -975,6 +1033,10 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 ///
 /// `None` when `external` already balances its Dust. There is nothing to
 /// draw then, and an intent with no spends is one the ledger rejects.
+///
+/// Fails with [`WalletError::OutsideTimeToDismiss`] when the node would refuse
+/// the merge whose fee converges, before any real proof. A `None` result is
+/// checked too, on `external` as it is.
 pub fn balance_external(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     external: &FinalizedTx,
@@ -1002,20 +1064,22 @@ pub fn balance_external(
             let intents = HashMapStorage::new().insert(segment, intent);
             Transaction::from_intents(network_id.as_str(), intents)
         });
-        let (fee, shortfall) = match &fee_tx {
-            Some(fee_tx) => {
+        let merged = fee_tx
+            .as_ref()
+            .map(|fee_tx| {
                 let mock = fee_tx.mock_prove().map_err(transfer_err("mock_prove"))?;
-                let merged = external
+                external
                     .merge(&mock)
-                    .map_err(transfer_err("merge fee intent"))?;
-                compute_missing_dust(&tx_info, &merged)?
-            }
-            None => compute_missing_dust(&tx_info, external)?,
-        };
+                    .map_err(transfer_err("merge fee intent"))
+            })
+            .transpose()?;
+        let candidate = merged.as_ref().unwrap_or(external);
+        let (fee, shortfall) = compute_missing_dust(&tx_info, candidate)?;
         if let Some(dust) = shortfall {
             tracker.record_shortfall(fee, dust);
             continue;
         }
+        refuse_outside_time_to_dismiss(&tx_info.context, candidate)?;
         let Some(fee_tx) = fee_tx else {
             return Ok(None);
         };
@@ -1088,6 +1152,10 @@ impl FeeBalanceTracker {
 /// Rounds are side-effect-free apart from `confirm_dust_spends` on the one
 /// that converges: each round rebuilds the candidate from `tx`, so a later
 /// round cannot double-spend what an earlier one selected.
+///
+/// Only the round that converges is checked against the time to dismiss,
+/// because it is the transaction that the build proves. An earlier round has
+/// other Dust spends, which change both the time and the size.
 fn balance_fees_with_mocks(
     tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
     tx: UnprovenTx,
@@ -1104,6 +1172,7 @@ fn balance_fees_with_mocks(
             tracker.record_shortfall(fee, dust);
             continue;
         }
+        refuse_outside_time_to_dismiss(&tx_info.context, &mock)?;
         confirm_dust_spends(tx_info, &batches);
         return Ok((paid_tx, batches));
     }
@@ -1571,5 +1640,159 @@ mod tests {
             "missing accumulated dust need: {msg}"
         );
         assert!(msg.contains("1009"), "missing last fee: {msg}");
+    }
+
+    /// Proves in this process. The transactions here carry no proof
+    /// preimage, so nothing fetches a key.
+    struct LocalProof;
+
+    #[async_trait::async_trait]
+    impl ProofProvider<DefaultDB> for LocalProof {
+        async fn prove(
+            &self,
+            tx: UnprovenTx,
+            rng: StdRng,
+            resolver: &'static helpers::Resolver,
+            cost_model: helpers::CostModel,
+        ) -> helpers::ProvenTransaction<DefaultDB> {
+            // A ledger 9 proof is not `Send`.
+            tokio::task::spawn_blocking(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .expect("a current-thread runtime")
+                    .block_on(async move {
+                        let provider = helpers::LocalProvingProvider {
+                            rng,
+                            resolver,
+                            params: &*helpers::PUBLIC_PARAMS,
+                        };
+                        tx.prove(provider, &cost_model).await.expect("prove")
+                    })
+            })
+            .await
+            .expect("the proving task")
+        }
+    }
+
+    /// A context under the initial ledger parameters, with one wallet.
+    fn offline_context() -> (Arc<BuildContext>, helpers::WalletSeed) {
+        let owner = (&Seed::from_bytes(&[7; 32]).expect("seed")).into_ledger();
+        let context = helpers::LedgerContext::new_from_wallet_seeds(
+            "undeployed",
+            std::slice::from_ref(&owner),
+        );
+        (Arc::new(context), owner)
+    }
+
+    /// A Dustless build that spends `pairs` NIGHT UTXOs of `owner` and pays
+    /// them back to it, in the guaranteed offer of segment 1, as
+    /// `prepare_unshielded` places them.
+    fn night_round_trip(
+        context: &Arc<BuildContext>,
+        owner: &helpers::WalletSeed,
+        pairs: u32,
+    ) -> StandardTransactionInfo<DefaultDB, BuildContext> {
+        let inputs = (0..pairs)
+            .map(|n| {
+                Box::new(UtxoSpendInfo {
+                    value: 1,
+                    owner: owner.clone(),
+                    token_type: NIGHT,
+                    intent_hash: Some(helpers::IntentHash(helpers::HashOutput([n as u8; 32]))),
+                    output_number: Some(n),
+                }) as Box<dyn BuildUtxoSpend<DefaultDB, BuildContext>>
+            })
+            .collect();
+        let outputs = (0..pairs)
+            .map(|_| {
+                Box::new(UtxoOutputInfo {
+                    value: 1,
+                    owner: owner.clone(),
+                    token_type: NIGHT,
+                }) as Box<dyn BuildUtxoOutput<DefaultDB, BuildContext>>
+            })
+            .collect();
+        let mut tx_info =
+            StandardTransactionInfo::new_from_context(context.clone(), Arc::new(LocalProof), None);
+        tx_info.add_intent(
+            Segment::Fallible.into(),
+            Box::new(IntentInfo {
+                guaranteed_unshielded_offer: Some(UnshieldedOfferInfo { inputs, outputs }),
+                fallible_unshielded_offer: None,
+                actions: vec![],
+            }),
+        );
+        tx_info
+    }
+
+    /// NIGHT inputs and outputs that put a transaction outside its time to
+    /// dismiss under the initial parameters of both generations. One input
+    /// and one output in the guaranteed offer take about 4.3 ms to dismiss.
+    /// Three pairs stay under the 15 ms floor and four are past it, so eight
+    /// leave a margin. Eight pairs make about 1.8 KB, far below the 7.5 KB
+    /// where the allowance grows past the floor.
+    const PAIRS_OUTSIDE: u32 = 8;
+
+    #[tokio::test]
+    async fn a_build_that_pays_its_own_fee_refuses_before_the_proof() {
+        let (context, owner) = offline_context();
+        let mut tx_info = night_round_trip(&context, &owner, PAIRS_OUTSIDE);
+        // A registration's allowance pays the fee, so the build needs no Dust.
+        tx_info.add_dust_registration(DustRegistrationBuilder {
+            wallet: UnshieldedWallet::default(owner.clone()),
+            dust_address: Some(DustWallet::<DefaultDB>::default(owner.clone(), None).public_key),
+            allow_fee_payment: u64::MAX.into(),
+        });
+        tx_info.use_mock_proofs_for_fees(true);
+
+        let result = prepare_no_validate(tx_info).await;
+
+        assert!(
+            matches!(result, Err(WalletError::OutsideTimeToDismiss { .. })),
+            "{:?}",
+            result.err()
+        );
+    }
+
+    /// The fee intent alone is inside the rule, so a check of it and not of
+    /// the merge passes.
+    #[tokio::test]
+    async fn a_sponsored_build_refuses_the_merge_it_would_return() {
+        let (context, owner) = offline_context();
+        let (unpaid, _, ttl) =
+            assemble_unproven(&mut night_round_trip(&context, &owner, PAIRS_OUTSIDE))
+                .await
+                .expect("assemble");
+        let external = unpaid.mock_prove().expect("mock prove");
+        let mut fee_info =
+            StandardTransactionInfo::new_from_context(context.clone(), Arc::new(LocalProof), None);
+        let fee_intent: helpers::UnprovenIntent<DefaultDB> = Intent::empty(&mut fee_info.rng, ttl);
+        let fee_tx = Transaction::from_intents(
+            "undeployed",
+            HashMapStorage::new().insert(DUST_FEE_SEGMENT, fee_intent),
+        );
+        let mut prepared = PreparedTransfer::new(fee_info, fee_tx, Vec::new());
+        prepared.external = Some(external);
+
+        let result = prepared.prove().await;
+
+        assert!(
+            matches!(result, Err(WalletError::OutsideTimeToDismiss { .. })),
+            "{:?}",
+            result.err()
+        );
+    }
+
+    /// A Dustless half is not what its build submits. The sponsor's merge adds
+    /// Dust spends, which change the time and the size, and the sponsor's
+    /// build checks the merge.
+    #[tokio::test]
+    async fn a_dustless_build_proves_unchecked() {
+        let (context, owner) = offline_context();
+        let prepared = prepare_no_validate(night_round_trip(&context, &owner, PAIRS_OUTSIDE))
+            .await
+            .expect("prepare");
+
+        prepared.prove().await.expect("prove");
     }
 }

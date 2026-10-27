@@ -79,7 +79,7 @@ Normal transactions pay fees by calling `set_funding_seeds()` on the
 which calls `DustWallet::speculative_spend()` to produce ZK proofs with valid
 Merkle paths from both trees.
 
-A build reports the fee it quotes as [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs). The rustdoc of that field names the check that the node applies at submit and the quote skips.
+A build reports the fee it quotes as [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs). The quote skips the time-to-dismiss check, which the node applies at submit. A build that pays a fee applies that check itself, before it returns: see [Transactions Outside Their Time to Dismiss](#transactions-outside-their-time-to-dismiss).
 
 #### What this requires
 
@@ -237,6 +237,24 @@ Read the wallet's `DustBalance` (`provider.balance().await?.dust`) to find the n
 - When `unregistered_night_utxos` is above 0 and `night_generates_dust` is false, no tNIGHT generates Dust. Register one tNIGHT UTXO with `register_dust` (see [Dust Registration](#dust-registration)). A registration has no funding wallets, so its shortfall reads an `available` of 0. It pays only from the generationless Dust of the tNIGHT it spends, and that Dust grows with the age of the UTXO. So when the registration itself falls short, wait, then register again.
 - When the wallet holds no tNIGHT, no Dust accrues. The wallet must receive tNIGHT first.
 - Otherwise, Dust accrues with time, so build again later.
+
+## Transactions Outside Their Time to Dismiss
+
+The node refuses a transaction when validating the whole transaction and applying its guaranteed part take more time than its size allows. The allowance is `time_to_dismiss_per_byte` for each byte, and never less than `min_time_to_dismiss`. The ledger names this refusal `FeeCalculation(OutsideTimeToDismiss)`.
+
+A build that pays a fee applies the ledger's own check before it returns, and fails with [`WalletError::OutsideTimeToDismiss`](../crates/midnight-types/src/error.rs). Nothing reaches the node, and the build leaves nothing reserved. The error gives three numbers:
+
+- `time_to_dismiss`: the time that the transaction takes.
+- `allowed_time_to_dismiss`: the most time that its size allows.
+- `size`: its size in bytes.
+
+The build checks the candidate whose fee converges, before the real proof, and checks the proven transaction again. `balance_transaction` checks the merged transaction, and it also checks a transaction that already pays its own fee and comes back unchanged. A Dustless build (`.without_dust()`) is not checked, because the sponsor's merge adds Dust spends that change its time and its size.
+
+Most of the time comes from the unshielded inputs and outputs in the guaranteed offer, and a NIGHT input or output costs the most. Under the initial parameters, one NIGHT input and one NIGHT output take about 4.3 ms, and their bytes allow less than 0.4 ms. Input selection and Dust selection do not account for this rule. To recover:
+
+- Send a smaller amount, so that the default `CoinSelectionStrategy::LargestFirst` selects fewer inputs. Send the rest in another transfer.
+- Create fewer NIGHT outputs in one transaction.
+- Keep the `LargestFirst` ordering. `SmallestFirst` selects the most inputs, so it makes the time longer.
 
 ## Wallet Sync Phases
 

@@ -28,7 +28,10 @@ pub enum ContractError {
     /// holds, the error is
     /// `ProviderError::Wallet(WalletError::InputsReserved { .. })`. When it
     /// names a shielded coin twice, the error is
-    /// `ProviderError::Wallet(WalletError::DuplicateInput { .. })`. See
+    /// `ProviderError::Wallet(WalletError::DuplicateInput { .. })`. When the
+    /// node would refuse the transaction as outside its time to dismiss, the
+    /// error is `ProviderError::Wallet(WalletError::OutsideTimeToDismiss { .. })`.
+    /// See
     /// [`WalletError`](midnight_provider::WalletError) for the other wallet
     /// failures.
     #[error(transparent)]

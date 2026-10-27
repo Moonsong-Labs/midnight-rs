@@ -36,7 +36,14 @@ pub struct TransferResult {
     /// transaction and applying its guaranteed part take more time than its
     /// size allows. The allowance is `time_to_dismiss_per_byte` per byte, and
     /// never less than `min_time_to_dismiss`. The check never changes the
-    /// fee, but a quote does not mean that the node accepts the transaction.
+    /// fee.
+    ///
+    /// A build that pays a fee applies the same check before it returns, and
+    /// fails with
+    /// [`WalletError::OutsideTimeToDismiss`](crate::WalletError::OutsideTimeToDismiss).
+    /// A Dustless result is not checked, because the sponsor's merge adds Dust
+    /// spends that change its time and its size. The sponsor's build checks
+    /// the merged transaction.
     pub fee_speck: u128,
 }
 
