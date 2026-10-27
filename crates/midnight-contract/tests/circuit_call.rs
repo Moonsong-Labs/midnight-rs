@@ -1,17 +1,14 @@
 //! Circuit call integration tests.
 //!
 //! These tests run circuits through the interpreter that `midnight_contract`
-//! re-exports, and through the low-level `call::build_unproven_call_tx`
-//! builder. They cover witness dispatch, private-state threading, captured
+//! re-exports. They cover witness dispatch, private-state threading, captured
 //! Zswap outputs, `kernel.self()`, and struct arguments.
 
 mod common;
 
 use common::{epoch, with_witnesses};
 use compact_bindgen::AlignedValue;
-use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::contract::ContractAddress;
-use midnight_contract::call;
 use midnight_contract::interpreter;
 
 use compact_codegen::ir::{
@@ -604,56 +601,4 @@ fn interpreter_runs_mint_shielded_token_circuit() {
         "coin color = tokenType(domain_sep, address): different addresses must give \
          different colors, proving kernel.self() resolves to the real contract address"
     );
-}
-
-/// The mint circuit's call, through the low-level `build_unproven_call_tx`.
-fn build_unproven_mint_call() -> Result<call::UnprovenCallTx, midnight_contract::ContractError> {
-    let info = mint_probe_info();
-    let mint = common::exported_circuit(&info, "mint");
-    let program = common::program(&info);
-    let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xCD; 32]));
-    let state = common::contract_state(vec![]);
-    let args = mint_args([1u8; 32]);
-
-    call::build_unproven_call_tx(
-        &mint.def,
-        &program,
-        &state,
-        Timestamp::from_secs(0),
-        "mint",
-        midnight_contract::ContractAddress(address.0),
-        "undeployed1",
-        &args,
-        &midnight_contract::runtime::NoWitnesses,
-        None,
-    )
-}
-
-/// Regression: the low-level `build_unproven_call_tx` builder must thread the
-/// circuit's declared argument types and struct layouts to the interpreter. The
-/// mint circuit destructures an `Either` recipient (`recipient.is_left`);
-/// without the argument's declared type and struct layout the field access
-/// fails with "unknown receiver type".
-#[test]
-fn build_unproven_call_tx_handles_struct_arguments() {
-    let ok = build_unproven_mint_call();
-    assert!(
-        ok.is_ok(),
-        "build_unproven_call_tx must handle struct arguments: {:?}",
-        ok.err()
-    );
-}
-
-/// The ledger refuses an intent at the guaranteed segment (0), so the call's
-/// intent must sit at another one.
-#[test]
-fn build_unproven_call_tx_keeps_its_intent_out_of_the_guaranteed_segment() {
-    let built = build_unproven_mint_call().expect("the mint call builds");
-    let segments: Vec<u16> = built
-        .transaction
-        .intents()
-        .map(|(segment, _)| segment)
-        .collect();
-    assert_eq!(segments.len(), 1, "the call adds one intent");
-    assert_ne!(segments[0], 0, "the intent is at the guaranteed segment");
 }

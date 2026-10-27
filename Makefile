@@ -60,9 +60,9 @@ INDEXER_GQL    := $(INDEXER_URL)/api/v3/graphql
 PROOF_SERVER_URL := http://127.0.0.1:6300
 DEV_SEED       := 0000000000000000000000000000000000000000000000000000000000000001
 
-# Examples that run against the devnet with no extra env (deploy + call).
-# shielded-transfer / wallet-sync get their devnet env from dedicated targets.
-EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shielded-swap
+# Examples that run against the devnet with no extra env.
+# wallet-sync gets its devnet env from a dedicated target.
+EXAMPLES  := counter private-state contract-maintenance shielded-transfer combine-and-sponsor shielded-swap
 CONTRACTS := call-context counter counter-zkir-v3 events receive-shielded secret-counter shielded-mint unshielded-payout
 # The contracts that compile for ZKIR v3. Only a ledger 9 chain verifies their keys.
 ZKIR_V3_CONTRACTS := counter-zkir-v3
@@ -125,7 +125,7 @@ GOLDENS_CKSUM = { echo $(COMPACT_REV) $(CONFORMANCE_ZKIR_V3_FIXTURES); \
 
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
         dev-up dev-wait proof-server-wait dev-settle dev-down dev-status dev-logs \
-        test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
+        test-e2e test-e2e-node-restart examples e2e run-wallet-sync \
         fork-up fork-upgrade fork-test fork-down \
         contracts compile-contracts fixtures goldens conformance \
         vendor-compact-runtime check-natives
@@ -363,12 +363,8 @@ test-e2e-node-restart:
 	$(E2E_ENV) MIDNIGHT_NODE_CONTAINER=$(NODE_CONTAINER) \
 		$(CARGO) test -p midnight-provider --test devnet -- --ignored --show-output
 
-# shielded-transfer and wallet-sync need devnet env; these explicit targets set
-# it (and override the run-% pattern below).
-run-shielded-transfer:
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_NETWORK=undeployed \
-		$(CARGO) run -p example-shielded-transfer
-
+# wallet-sync needs devnet env; this explicit target sets it (and overrides the
+# run-% pattern below).
 run-wallet-sync:
 	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_NETWORK=undeployed \
 		MIDNIGHT_WALLET_SEED=$(DEV_SEED) $(CARGO) run -p example-wallet-sync
