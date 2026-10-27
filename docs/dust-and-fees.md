@@ -210,6 +210,21 @@ After registration, the on-chain `apply_registration` function:
 - Stores NIGHT UTXO nonces in `night_indices` (preventing future generationless
   availability for these UTXOs).
 
+## Dust Deregistration
+
+A registration with no Dust address is a deregistration. `MidnightProvider::deregister_dust` builds one. On chain, `apply_registration` removes the address delegation of the NIGHT address, and it fails with `DustDeregistrationNotRegistered` when the address has no delegation. NIGHT that reaches the address after that generates no Dust.
+
+The removal alone does not stop a NIGHT UTXO that already generates. Its generation entry keeps a `dtime` of "never" until a transaction spends the UTXO, and the spend sets `dtime` to the block time. So the deregistration that the SDK builds also spends every tNIGHT UTXO of the wallet, and creates each one again with the same value:
+
+- The first UTXO goes in the guaranteed offer. The ledger creates no Dust for a guaranteed NIGHT output of the address that the intent registers or deregisters.
+- The other UTXOs go in the fallible offer. The ledger applies that offer after the deregistration, when the address has no delegation, so their outputs generate no Dust.
+
+Only one input goes in the guaranteed offer, because the ledger compares the cost of the guaranteed part, plus the validation of the whole transaction, with the time to dismiss. A fallible input adds only one signature check to that cost. So one deregistration covers every tNIGHT UTXO, where one registration covers one UTXO.
+
+A deregistration declares `allow_fee_payment` of 0, so it claims no generationless availability. The wallet's Dust pays its fee through `set_funding_seeds()`.
+
+After its `dtime`, a Dust UTXO decays at the rate it grew, until its value is zero. So the Dust that a deregistered wallet holds stays spendable, and it shrinks. A deregistered wallet can register again with `register_dust`. The UTXOs that the deregistration created are not in `night_indices`, so each one funds its own registration with generationless availability.
+
 ## Dust Across the Ledger 8 to 9 Fork
 
 The hard fork from ledger 8 to ledger 9 resets the chain's whole Dust state: every Dust UTXO, every address delegation and every entry in `night_indices`. The node's migration restores Dust generation for cNIGHT only.
@@ -233,7 +248,7 @@ A build whose funding wallets cannot pay its fee fails with [`WalletError::Insuf
 Read the wallet's `DustBalance` (`provider.balance().await?.dust`) to find the next step:
 
 - When `spendable_speck` is less than `balance_speck`, a pending build reserves Dust. Wait for its transaction to finalize. Then wait until `spendable_speck` equals `balance_speck`, with `BackgroundSync::wait_until` (see [Background sync](wallet.md#background-sync)). Then build again.
-  - A build that never reaches the chain keeps its Dust reserved until a release hands it back, or until its TTL ends. A transfer, a Dust registration, a deploy and a maintenance update submit with `MidnightProvider::submit_reserved`, which releases when the node never gets the transaction or rejects it as `Invalid`. Submit a sponsored transaction from `balance_transaction` the same way. A contract call prepares with `MidnightProvider::prepare_reserved`, so an error before its submit, or an `Invalid` at its wait, releases its Dust. The bytes of a contract call's `.build()` or `.without_dust()` do not name their Dust, so it waits for the TTL when they never land. A caller that holds a `TransferResult` it never submits can release `result.spent` with `MidnightProvider::release` (see [Pending reservations](wallet.md#pending-reservations)).
+  - A build that never reaches the chain keeps its Dust reserved until a release hands it back, or until its TTL ends. A transfer, a Dust registration, a Dust deregistration, a deploy and a maintenance update submit with `MidnightProvider::submit_reserved`, which releases when the node never gets the transaction or rejects it as `Invalid`. Submit a sponsored transaction from `balance_transaction` the same way. A contract call prepares with `MidnightProvider::prepare_reserved`, so an error before its submit, or an `Invalid` at its wait, releases its Dust. The bytes of a contract call's `.build()` or `.without_dust()` do not name their Dust, so it waits for the TTL when they never land. A caller that holds a `TransferResult` it never submits can release `result.spent` with `MidnightProvider::release` (see [Pending reservations](wallet.md#pending-reservations)).
 - When `unregistered_night_utxos` is above 0 and `night_generates_dust` is false, no tNIGHT generates Dust. Register one tNIGHT UTXO with `register_dust` (see [Dust Registration](#dust-registration)). A registration has no funding wallets, so its shortfall reads an `available` of 0. It pays only from the generationless Dust of the tNIGHT it spends, and that Dust grows with the age of the UTXO. So when the registration itself falls short, wait, then register again.
 - When the wallet holds no tNIGHT, no Dust accrues. The wallet must receive tNIGHT first.
 - Otherwise, Dust accrues with time, so build again later.
@@ -257,6 +272,7 @@ A brand-new wallet can submit its dust registrations, one per tNIGHT UTXO that i
 The official Midnight toolkit (used by Lace wallet) follows this exact pattern:
 
 - `register_dust_address.rs`: uses `add_dust_registration()` with generationless fees for each registration.
+- `deregister_dust_address.rs`: uses `add_dust_registration()` with no Dust address and no fee allowance, spends every NIGHT UTXO (the first in the guaranteed offer, the others in the fallible offer), and pays the fee with `set_funding_seeds()`.
 - `contract_call.rs`, `single_tx.rs`, and all other transaction builders: use
   `set_funding_seeds()`, which requires real dust UTXOs with valid Merkle proofs.
 

@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-[`docs/wallet.md`](docs/wallet.md) covers sync, balances, transfers, Dust registration and persistence.
+[`docs/wallet.md`](docs/wallet.md) covers sync, balances, transfers, Dust registration and deregistration, and persistence.
 
 The crates in [`examples/`](examples) run against the same devnet. Run one from the root of the clone with `make run-<name>`, for example `make run-shielded-transfer`.
 

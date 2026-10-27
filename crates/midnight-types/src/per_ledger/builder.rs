@@ -11,6 +11,7 @@ use futures_util::FutureExt;
 
 use super::convert::{IntoLedger, IntoSdk, sdk_seed};
 use super::helpers;
+use helpers::mn_ledger::structure::Utxo;
 use helpers::{
     BuildContext, BuildUtxoOutput, BuildUtxoSpend, BuilderContext, CoinSelectionStrategy,
     DefaultDB, DustActions, DustLocalState, DustRegistration, DustRegistrationBuilder, DustSpend,
@@ -19,7 +20,7 @@ use helpers::{
     ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng,
     StandardTransactionInfo, StdRng, Timestamp, TokenType, Transaction, TransactionSigningKey,
     UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo,
-    UtxoSelectionError, UtxoSpendInfo, WalletAddress,
+    UtxoSelectionError, UtxoSpendInfo, WalletAddress, WalletSeed,
 };
 
 use crate::hd::Seed;
@@ -408,6 +409,7 @@ impl<'a> TransferBuilder<'a> {
             TransferKind::DustRegistration { utxo_ctime } => {
                 builder.prepare_register_dust(utxo_ctime).await
             }
+            TransferKind::DustDeregistration => builder.prepare_deregister_dust().await,
         }
     }
 
@@ -815,6 +817,116 @@ impl<'a> TransferBuilder<'a> {
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
         Ok(prepared)
     }
+
+    /// Build a Dust deregistration transaction, which stops the wallet's
+    /// tNIGHT from generating Dust.
+    ///
+    /// The deregistration removes the link from the wallet's unshielded
+    /// address to its Dust address, so tNIGHT that arrives later generates no
+    /// Dust. The ledger stops the generation of a tNIGHT UTXO that the wallet
+    /// holds only when a transaction spends it. So the transaction also spends
+    /// every tNIGHT UTXO in the funding view of the build context, and creates
+    /// each one again with the same value. A UTXO that a pending build
+    /// reserves is not in that view, and it generates Dust until a transaction
+    /// spends it. The Dust that the UTXOs generated stays spendable, and it
+    /// decays to zero at the rate it grew.
+    ///
+    /// The first UTXO goes in the guaranteed offer and the others in the
+    /// fallible offer. A fallible input adds only a signature check to the
+    /// cost that the ledger compares with the time to dismiss, so one call
+    /// covers every UTXO, where a registration covers one. When the fallible
+    /// segment fails on chain, the deregistration stays, and the UTXOs of that
+    /// segment generate Dust until a transaction spends them.
+    ///
+    /// A deregistration claims no generationless Dust, so the wallet's Dust
+    /// pays the fee. The chain does not apply a deregistration for an address
+    /// that is not registered, and the build cannot see that state.
+    ///
+    /// # Errors
+    ///
+    /// - [`WalletError::Transfer`] when the funding view holds no tNIGHT UTXO:
+    ///   the wallet holds none, or pending builds reserve all of them.
+    /// - [`WalletError::InsufficientDust`] when the wallet's Dust cannot pay
+    ///   the fee.
+    pub async fn prepare_deregister_dust(self) -> Result<PreparedTransfer, WalletError> {
+        let seed = self.state.seed().into_ledger();
+
+        let night: Vec<Utxo> = self
+            .context
+            .unshielded_utxos(seed.clone())
+            .await
+            .into_iter()
+            .map(|(utxo, _ctime)| utxo)
+            .filter(|utxo| utxo.type_ == NIGHT)
+            .collect();
+        let Some((first, rest)) = night.split_first() else {
+            return Err(WalletError::Transfer(
+                "no tNIGHT UTXOs to deregister: the wallet holds none, or pending builds \
+                 reserve all of them"
+                    .into(),
+            ));
+        };
+
+        let intent = IntentInfo {
+            guaranteed_unshielded_offer: Some(respend(std::slice::from_ref(first), &seed)),
+            fallible_unshielded_offer: (!rest.is_empty()).then(|| respend(rest, &seed)),
+            actions: vec![],
+        };
+
+        let mut tx_info = StandardTransactionInfo::new_from_context(
+            self.context.clone(),
+            self.proof_provider.clone(),
+            None,
+        );
+        tx_info.add_intent(Segment::Fallible.into(), Box::new(intent));
+        tx_info.add_dust_registration(DustRegistrationBuilder {
+            wallet: UnshieldedWallet::default(seed.clone()),
+            dust_address: None,
+            allow_fee_payment: 0,
+        });
+        tx_info.set_funding_seeds(vec![seed]);
+        tx_info.use_mock_proofs_for_fees(true);
+
+        let spent_unshielded_inputs: Vec<SpentUtxoKey> = night
+            .iter()
+            .map(|utxo| SpentUtxoKey {
+                intent_hash: utxo.intent_hash.0,
+                output_index: utxo.output_no,
+            })
+            .collect();
+
+        let mut prepared = prepare_no_validate(tx_info).await?;
+        prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
+        Ok(prepared)
+    }
+}
+
+/// An unshielded offer that spends `utxos` and pays each one back to `owner`
+/// with the same value and token.
+fn respend(utxos: &[Utxo], owner: &WalletSeed) -> UnshieldedOfferInfo<DefaultDB, BuildContext> {
+    let inputs = utxos
+        .iter()
+        .map(|utxo| {
+            Box::new(UtxoSpendInfo {
+                value: utxo.value,
+                owner: owner.clone(),
+                token_type: utxo.type_,
+                intent_hash: Some(utxo.intent_hash),
+                output_number: Some(utxo.output_no),
+            }) as Box<dyn BuildUtxoSpend<DefaultDB, BuildContext>>
+        })
+        .collect();
+    let outputs = utxos
+        .iter()
+        .map(|utxo| {
+            Box::new(UtxoOutputInfo {
+                value: utxo.value,
+                owner: owner.clone(),
+                token_type: utxo.type_,
+            }) as Box<dyn BuildUtxoOutput<DefaultDB, BuildContext>>
+        })
+        .collect();
+    UnshieldedOfferInfo { inputs, outputs }
 }
 
 /// Pick the tNIGHT UTXO a registration should spend, or `None` when every one

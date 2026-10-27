@@ -12,7 +12,9 @@ use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
+use crate::transfer::{
+    DustDeregistration, DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer,
+};
 use crate::{
     Health, PendingTx, ProofProviders, Provider, ProviderError, StateQuery, StateQueryResult,
     ledger_8, ledger_9, submit,
@@ -121,7 +123,8 @@ impl MidnightProvider {
     }
 
     /// Override the proof backend used by [`Self::transfer_shielded`],
-    /// [`Self::transfer_unshielded`], and [`Self::register_dust`].
+    /// [`Self::transfer_unshielded`], [`Self::register_dust`], and
+    /// [`Self::deregister_dust`].
     ///
     /// Defaults to [`ProofProviders::local`] if unset. Pass a
     /// [`RemoteProofServer`](crate::RemoteProofServer) to offload proving to an
@@ -572,6 +575,21 @@ impl MidnightProvider {
     /// [`TransferBuilder::prepare_register_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_register_dust
     pub fn register_dust(&self, utxo_ctime: Option<u64>) -> DustRegistration<'_> {
         DustRegistration::new(self, utxo_ctime)
+    }
+
+    /// Build a Dust deregistration transaction, which stops this wallet's
+    /// tNIGHT from generating Dust. See [`Self::transfer_shielded`] for
+    /// reservation semantics and the `.await` vs `.build()` distinction.
+    ///
+    /// One call spends and re-creates every tNIGHT UTXO that no pending build
+    /// reserves, and pays its fee from the wallet's Dust. The Dust that the
+    /// wallet holds stays spendable while it decays.
+    /// [`TransferBuilder::prepare_deregister_dust`] gives the full rule. To
+    /// generate Dust again, call [`Self::register_dust`].
+    ///
+    /// [`TransferBuilder::prepare_deregister_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_deregister_dust
+    pub fn deregister_dust(&self) -> DustDeregistration<'_> {
+        DustDeregistration::new(self)
     }
 
     // -- Internal build paths driven by the transfer/register builders. --

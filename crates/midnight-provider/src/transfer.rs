@@ -1,4 +1,4 @@
-//! Pending transfer / dust-registration builders.
+//! Pending transfer and Dust registration and deregistration builders.
 //!
 //! Each builder represents a wallet operation that has been *requested* but not
 //! yet executed. Call sites have two endpoints:
@@ -18,9 +18,9 @@
 //!   `result.spent`, or until their TTL passes.
 //!
 //! Constructors are sync methods on [`MidnightProvider`]: `transfer_unshielded`,
-//! `transfer_shielded`, `register_dust`. They borrow the provider and capture
-//! the operation's inputs; no work happens until the caller awaits or calls
-//! `.build()`.
+//! `transfer_shielded`, `register_dust`, `deregister_dust`. They borrow the
+//! provider and capture the operation's inputs; no work happens until the
+//! caller awaits or calls `.build()`.
 //!
 //! ```rust,no_run
 //! # use midnight_provider::{MidnightProvider, NIGHT, ShieldedTokenType};
@@ -360,6 +360,39 @@ impl<'a> IntoFuture for DustRegistration<'a> {
     fn into_future(self) -> Self::IntoFuture {
         let provider = self.provider;
         Box::pin(build_and_submit(provider, self.into_request()))
+    }
+}
+
+/// Pending Dust deregistration. See [module docs](crate::transfer) for the
+/// `.await` vs `.build()` distinction.
+#[must_use = "does nothing until awaited or built"]
+pub struct DustDeregistration<'a> {
+    provider: &'a MidnightProvider,
+}
+
+impl<'a> DustDeregistration<'a> {
+    pub(crate) fn new(provider: &'a MidnightProvider) -> Self {
+        Self { provider }
+    }
+
+    /// Build the deregistration transaction without submitting. Spends and
+    /// re-creates every tNIGHT UTXO that no pending build reserves.
+    pub async fn build(self) -> Result<TransferResult, ProviderError> {
+        self.provider
+            .build_then_prove(TransferKind::DustDeregistration.into())
+            .await
+    }
+}
+
+impl<'a> IntoFuture for DustDeregistration<'a> {
+    type Output = Result<PendingTx, ProviderError>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(build_and_submit(
+            self.provider,
+            TransferKind::DustDeregistration.into(),
+        ))
     }
 }
 

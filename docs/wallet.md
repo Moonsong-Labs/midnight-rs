@@ -337,6 +337,17 @@ pending.wait_best().await?;
 
 tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not: call `register_dust` again until `DustBalance::unregistered_night_utxos` is 0. [`ledger-generations.md`](ledger-generations.md#register-dust-again) shows that loop.
 
+### Dust deregistration
+
+`deregister_dust` stops the wallet's tNIGHT from generating Dust. One call removes the registration of the wallet's address, so tNIGHT that arrives later generates no Dust. The ledger stops the generation of a UTXO only when a transaction spends it. So the same transaction spends every tNIGHT UTXO that no pending build reserves, and creates each one again with the same value. The rustdoc of [`deregister_dust`](../crates/midnight-provider/src/provider.rs) gives the full rule.
+
+```rust
+let pending = provider.deregister_dust().await?;
+pending.wait_finalized().await?;
+```
+
+A deregistration claims no generationless Dust, so the wallet's Dust pays its fee. A wallet with no Dust gets `WalletError::InsufficientDust`. The Dust that the wallet holds stays spendable, and it decays to zero at the rate it grew. When the transaction spent every tNIGHT UTXO, a resync after it reads `DustBalance::night_generates_dust` as false, and `DustBalance::unregistered_night_utxos` counts every tNIGHT UTXO. To generate Dust again, call `register_dust`.
+
 See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation rate, and how fees are balanced.
 
 ## Transfers
@@ -358,7 +369,7 @@ let pending = provider
     .await?;
 ```
 
-`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
+`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` and `deregister_dust` are intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
 
 1. Resyncs, then takes a write lock on the wallet and builds the context of the wallet's ledger generation.
 2. Selects inputs from the wallet's local UTXO set.
@@ -442,7 +453,7 @@ The wallet also drops a reservation of another ledger generation when it loads `
 
 A release also drops a reservation, for a transaction that can never land. It matches each entry by its input and by the stamp of its reservation, so a late release cannot drop an entry that a later build made over the same input. These paths release:
 
-- `MidnightProvider::submit_reserved`, when its prepare fails (the connect included), and its `PendingTx` when a wait reads `Invalid`. The transfers, `register_dust`, a deploy and a maintenance update submit this way. Submit the result of a `.build()` or of `balance_transaction` with it too.
+- `MidnightProvider::submit_reserved`, when its prepare fails (the connect included), and its `PendingTx` when a wait reads `Invalid`. The transfers, `register_dust`, `deregister_dust`, a deploy and a maintenance update submit this way. Submit the result of a `.build()` or of `balance_transaction` with it too.
 - `MidnightProvider::prepare_reserved`, when the prepare fails, and its `PreparedTx` when it drops before its submit or when you call `PreparedTx::release`. Its submit moves the reservation to the `PendingTx`, which releases when a wait reads `Invalid`. A contract call prepares this way, so a call that stops before its submit releases, for example on a failed `append_pending`.
 - A build whose proof fails, and a deploy whose shielded offer fails before its fee is paid.
 - `MidnightProvider::release(&spent)`, for a `TransferResult` that you build and never submit.
@@ -474,6 +485,7 @@ provider.with_wallet(wallet)
   provider.rescan_shielded()             replay the shielded stream (a resync first, to cross a fork)
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
+  provider.deregister_dust().await           stops every tNIGHT UTXO from generating, Dust-funded
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx
        │     .build().await → TransferResult (escape hatch, no submit)

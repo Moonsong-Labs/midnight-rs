@@ -162,6 +162,9 @@ pub enum TransferKind {
         /// indexer did not report.
         utxo_ctime: Option<u64>,
     },
+    /// A Dust deregistration, which stops the wallet's tNIGHT from
+    /// generating Dust. See `TransferBuilder::prepare_deregister_dust`.
+    DustDeregistration,
 }
 
 /// One build, as data: what to make, and how to choose the inputs that make
