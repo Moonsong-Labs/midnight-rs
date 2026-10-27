@@ -241,11 +241,11 @@ impl Seed {
             .to_bech32()
     }
 
-    /// The user address of this seed: the owner of its unshielded UTXOs, and
-    /// the bytes that [`Self::unshielded_address`] carries.
+    /// The user address of this seed, the owner of its unshielded UTXOs.
     ///
-    /// It takes no network, because the bytes are the same on every network.
-    /// Give it to a Compact circuit that takes a `UserAddress`. To recover a
+    /// These are the bytes that [`Self::unshielded_address`] carries. They are
+    /// the same on every network, so this function takes no network. Give the
+    /// result to a Compact circuit that takes a `UserAddress`. To recover a
     /// user address from someone else's shared address string, use
     /// [`crate::address::parse_unshielded_address`] instead.
     pub fn user_address(&self) -> UserAddress {
