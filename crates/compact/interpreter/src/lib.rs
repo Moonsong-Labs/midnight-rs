@@ -113,16 +113,14 @@ impl<'a> Program<'a> {
         }
     }
 
-    /// The declared parameter types of the native or witness a call names, in
-    /// argument order, which a builtin encodes its arguments at. An undeclared
-    /// callee has none.
+    /// The declared parameter types of the native a call names, in argument
+    /// order, which a builtin encodes its arguments at. Any other callee has
+    /// none.
     fn argument_types(&self, id: &ir::Ident) -> Vec<Type> {
-        let arguments = match self.declaration(id) {
-            Some(Decl::Native(n)) => &n.arguments,
-            Some(Decl::Witness(w)) => &w.arguments,
-            Some(Decl::Circuit(_)) | None => return Vec::new(),
-        };
-        arguments.iter().map(|a| a.ty.clone()).collect()
+        match self.declaration(id) {
+            Some(Decl::Native(n)) => n.arguments.iter().map(|a| a.ty.clone()).collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// The callee's declared result type, which the call site's static type is.

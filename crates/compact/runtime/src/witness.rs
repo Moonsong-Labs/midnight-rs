@@ -66,9 +66,9 @@ pub trait WitnessProvider: Send + Sync {
     ///
     /// Return [`WitnessOutcome::Value`] when the call was handled, and
     /// [`WitnessOutcome::Unknown`] when this provider has no witness named
-    /// `name`. Return `Err` only for genuine failures — a signer that is
-    /// unreachable, undecodable private state, bad arguments — which abort the
-    /// circuit; errors are never treated as "unknown name".
+    /// `name`. Return `Err` only for genuine failures (a signer that is
+    /// unreachable, undecodable private state, bad arguments), which abort the
+    /// circuit.
     fn call_witness(
         &self,
         ctx: &mut WitnessContext<'_>,

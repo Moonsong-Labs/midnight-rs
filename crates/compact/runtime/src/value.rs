@@ -45,8 +45,8 @@ impl Value {
     /// declared width, so inventing a width is a wrong digest. Encode it
     /// through [`crate::compact_types::encode_typed`], which takes the type.
     ///
-    /// This returns a `Result` precisely so a struct cannot collapse to the
-    /// empty value, which is what made a commitment silently bind to nothing.
+    /// This returns a `Result` so that a struct cannot collapse to the empty
+    /// value and make a commitment bind to nothing.
     pub fn try_to_aligned_value(&self) -> Result<AlignedValue, InterpreterError> {
         match self {
             Value::AlignedValue(av) => Ok(av.clone()),
