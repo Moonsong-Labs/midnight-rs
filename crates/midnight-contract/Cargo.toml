@@ -22,8 +22,6 @@ midnight-types = { workspace = true }
 midnight-onchain-runtime = { workspace = true }
 midnight-serialize = { workspace = true }
 midnight-base-crypto = { workspace = true }
-midnight-transient-crypto = { workspace = true }
-midnight-storage = { workspace = true }
 midnight-helpers = { workspace = true }
 compact-codegen = { workspace = true }
 compact-interpreter = { workspace = true }
@@ -39,6 +37,7 @@ rand = { workspace = true }
 
 [dev-dependencies]
 midnight-coin-structure = { workspace = true }
+midnight-transient-crypto = { workspace = true }
 # The devnet tests sync a real wallet with `midnight-wallet`; the library
 # itself depends only on midnight-types.
 midnight-wallet = { workspace = true }

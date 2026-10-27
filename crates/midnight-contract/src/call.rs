@@ -8,21 +8,15 @@
 //! every generation.
 //!
 //! State reading, address parsing, and the deploy path live in
-//! [`crate::state`], `address`, and [`crate::deploy`] respectively. The TTL
-//! helpers (`current_ttl`, `DEFAULT_TTL`) are exposed as `pub(crate)` from
-//! here so `deploy` doesn't have to duplicate them.
+//! [`crate::state`], `address`, and [`crate::deploy`] respectively.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
-use midnight_base_crypto::time::{Duration, Timestamp};
-use midnight_helpers::ledger_9::mn_ledger;
+use midnight_base_crypto::time::Timestamp;
 use midnight_onchain_runtime::ops::Op;
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
-use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 use midnight_provider::Builds;
 use midnight_serialize::tagged_serialize;
-use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 use midnight_types::ledger_9::convert::IntoLedger;
 
@@ -30,44 +24,6 @@ use crate::error::ContractError;
 use crate::interpreter;
 use crate::runtime;
 use crate::state::StateAtBlock;
-
-/// The signature type used in Midnight transactions.
-pub type Sig = midnight_helpers::ledger_9::Signature;
-
-/// Type alias for the unproven transaction object [`build_unproven_call_tx`]
-/// builds: a ledger 9 transaction over the Compact side's own types.
-pub type UnprovenTransaction = midnight_helpers::ledger_9::UnprovenTransaction<InMemoryDB>;
-
-/// Result of building an unproven circuit call transaction.
-pub struct UnprovenCallTx {
-    /// Serialized transaction bytes (tagged-serialized).
-    pub tx_bytes: Vec<u8>,
-    /// The transaction object (for proving).
-    pub transaction: UnprovenTransaction,
-    /// The updated contract state after circuit execution.
-    pub new_state: ContractState<InMemoryDB>,
-}
-
-/// Default transaction TTL: 1 hour.
-///
-/// Used by the low-level [`build_unproven_call_tx`] path. The high-level path
-/// ([`crate::deploy::deploy_funded`], [`call_transaction`], and the
-/// [`crate::DeployBuilder`] / [`crate::Contract::call_with`] APIs that wrap
-/// them) reads `global_ttl` from chain parameters via the upstream
-/// `StandardTransactionInfo::build`, so this constant doesn't apply there.
-pub(crate) const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
-
-/// Compute a TTL (time-to-live) for transaction intents.
-///
-/// Returns a timestamp `ttl_duration` in the future from now. The node rejects
-/// transactions whose TTL has already passed.
-pub(crate) fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before epoch")
-        .as_secs();
-    Timestamp::from_secs(now_secs) + Duration::from_secs(ttl_duration.as_secs().into())
-}
 
 /// Shielded (Zswap) coins to attach to a contract call, funding a circuit's
 /// shielded-token deficit (e.g. a `receiveShielded` on the caller's own coin)
@@ -257,117 +213,4 @@ where
     let bytes = tagged_bytes(value, what)?;
     midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
         .map_err(|e| ContractError::Serialization(format!("deserialize {what}: {e}")))
-}
-
-/// Build an unproven ledger 9 transaction from a circuit IR body and contract
-/// state.
-///
-/// It builds for ledger 9 whatever the chain runs, so a chain on ledger 8
-/// cannot take the result. Low-level builder; the high-level path goes through
-/// [`Contract::call_with`](crate::Contract::call_with) (and the generated
-/// `call_<name>` methods that wrap it).
-#[doc(hidden)]
-/// Build an unproven contract-call transaction. The `private_state` buffer
-/// threads the contract's loaded private state through any stateful witnesses
-/// the circuit invokes. Pass `Some(&mut buffer)` for cold-signing / custodian
-/// flows where the caller wants to capture the post-call private state but
-/// not submit. Passing `None` runs the witnesses on a scratch buffer.
-///
-/// `block_time` is the time that the circuit's clock checks read. The chain
-/// replays them at the time of the block that includes the transaction.
-///
-/// The builder has no wallet, so a circuit that calls `ownPublicKey()` fails
-/// with [`ContractError::Interpreter`].
-///
-/// The circuit's own `arguments` declare the type of each argument, struct
-/// fields included. The interpreter uses that type to slice a struct argument
-/// (such as `recipient.is_left` on an `Either`), and the builder uses it to
-/// encode the call input.
-#[allow(clippy::too_many_arguments)]
-pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
-    circuit: &compact_codegen::ir::Circuit,
-    program: &interpreter::Program<'_>,
-    state: &ContractState<InMemoryDB>,
-    block_time: Timestamp,
-    circuit_name: &str,
-    contract_address: midnight_types::ContractAddress,
-    network_id: &str,
-    args: &[(&str, runtime::Value)],
-    witnesses: &W,
-    private_state: Option<&mut Vec<u8>>,
-) -> Result<UnprovenCallTx, ContractError> {
-    use midnight_storage::storage::HashMap as StorageHashMap;
-    use mn_ledger::structure::{Intent, Transaction};
-    use rand::Rng;
-
-    let mut rng = rand::thread_rng();
-
-    let exec_result = run_call(
-        circuit,
-        program,
-        state,
-        block_time,
-        contract_address,
-        args,
-        witnesses,
-        private_state,
-        None,
-    )?;
-
-    let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
-
-    let address_for_ctx = contract_address.into_ledger();
-    let (guaranteed, fallible) = crate::ledger_9::call::partition(
-        state,
-        address_for_ctx,
-        block_time,
-        verify_ops(&exec_result),
-        &mn_ledger::structure::INITIAL_PARAMETERS,
-    )?;
-
-    let input = call_input(circuit, args)?;
-    let output = exec_result.output();
-
-    let op = state
-        .operations
-        .get(&entry_point)
-        .map(|sp| (*sp).clone())
-        .unwrap_or_else(|| ContractOperation::new(None, None));
-
-    let call = mn_ledger::construct::ContractCallPrototype {
-        address: address_for_ctx,
-        entry_point,
-        op,
-        input,
-        output,
-        guaranteed_public_transcript: guaranteed,
-        fallible_public_transcript: fallible,
-        private_transcript_outputs: exec_result.private_transcript_outputs,
-        communication_commitment_rand: rng.r#gen(),
-        key_location: KeyLocation(Cow::Owned(circuit_name.to_string())),
-    };
-
-    let ttl = current_ttl(DEFAULT_TTL);
-
-    let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
-        &mut rng,
-        None,
-        None,
-        vec![call],
-        Vec::new(),
-        Vec::new(),
-        None,
-        ttl,
-    );
-
-    let mut intents = StorageHashMap::new();
-    intents = intents.insert(crate::ledger_9::call::call_segment(&mut rng), intent);
-
-    let tx: UnprovenTransaction = Transaction::from_intents(network_id, intents);
-
-    Ok(UnprovenCallTx {
-        tx_bytes: tagged_bytes(&tx, "transaction")?,
-        transaction: tx,
-        new_state: exec_result.state,
-    })
 }
