@@ -5,7 +5,7 @@ use midnight_base_crypto::hash::HashOutput;
 use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
 use midnight_typed_state::AlignedValue;
 
-use crate::compact_types::{encode_typed, merkle_leaf_hash};
+use crate::compact_types::encode_typed;
 use crate::conversions::{value_to_embedded_group, value_to_fr, value_to_hash_output};
 use crate::error::InterpreterError;
 use crate::value::Value;
@@ -86,15 +86,11 @@ fn arity(args: &[Value], n: usize, native: &str) -> Result<(), InterpreterError>
     Ok(())
 }
 
-/// Try to execute a Compact runtime builtin function.
-/// Returns `Some(Ok(value))` if the function is a known builtin,
-/// `Some(Err(..))` if it fails, or `None` if it's not a builtin.
-pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterError>> {
-    try_builtin_typed(name, args, &[])
-}
-
-/// [`try_builtin`] with the declared parameter types of the callee, in
-/// argument order.
+/// Run the Compact runtime builtin `name` on `args`.
+///
+/// `arg_types` holds the declared parameter types of the callee, in argument
+/// order. Returns `Some(Ok(value))` when `name` is a builtin, `Some(Err(..))`
+/// when the builtin fails, and `None` when `name` is not a builtin.
 ///
 /// A hash or commitment encodes each argument at its type, as the chain does:
 /// a `Uint<64>` argument is an 8-byte atom, and a struct is the concatenation
@@ -165,12 +161,8 @@ fn builtin(
             let hash: [u8; 64] = Sha512::digest(hash_preimage(args, arg_types)?).into();
             AlignedValue::from(hash)
         }
-        "leafHash" => merkle_leaf_hash(encode_typed(
-            arg(args, 0, name)?,
-            &Type::Field(FieldType::Native),
-        )?),
         // EC scalar multiplication: G * scalar
-        "ecMulGenerator" | "__builtin_ec_mul_generator" => {
+        "ecMulGenerator" => {
             AlignedValue::from(EmbeddedGroupAffine::generator() * field_arg(args, 0, name)?)
         }
         // EC scalar multiplication: point * scalar
@@ -249,11 +241,6 @@ fn builtin(
             // `upgrade_from_transient`.
             use midnight_transient_crypto::hash::upgrade_from_transient;
             AlignedValue::from(upgrade_from_transient(field_arg(args, 0, name)?).0)
-        }
-        "pad" => {
-            // pad(len, string) — pad a string to `len` bytes
-            // Return as-is for now
-            return Ok(Some(args.get(1).cloned().unwrap_or(Value::Void)));
         }
         _ => match crate::foreign::native(name, args) {
             Some(result) => result?,
@@ -398,7 +385,7 @@ mod tests {
         ] {
             let args = [a_point_struct(), Value::Integer(0)];
             assert!(
-                matches!(try_builtin(name, &args), Some(Err(_))),
+                matches!(try_builtin_typed(name, &args, &[]), Some(Err(_))),
                 "{name} must reject an untyped struct"
             );
         }
@@ -483,40 +470,21 @@ mod tests {
         ));
     }
 
-    /// `StateValue::Cell` wraps exactly one `AlignedValue`, so unwrapping it is
-    /// the encoding. The container variants have none.
-    #[test]
-    fn state_values_encode_only_as_cells() {
-        use midnight_typed_state::StateValue;
-
-        let inner = AlignedValue::from(7u64);
-        let cell = Value::StateValue(StateValue::from(inner.clone()));
-        assert_eq!(
-            cell.try_to_aligned_value().unwrap(),
-            inner,
-            "no longer discarded"
-        );
-
-        let null = Value::StateValue(StateValue::Null);
-        assert!(null.try_to_aligned_value().is_err());
-        assert!(
-            encode_typed(&null, &Type::Field(compact_codegen::ir::FieldType::Native),).is_err(),
-            "a container state value has no aligned encoding at any type"
-        );
-    }
-
     #[test]
     fn each_point_native_reads_its_own_coordinate() {
         use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
         let p = EmbeddedGroupAffine::generator() * Fr::from(11u64);
-        let coordinate =
-            |name: &str| match try_builtin(name, &[Value::AlignedValue(AlignedValue::from(p))])
-                .expect("builtin known")
-                .expect("ok")
-            {
-                Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-                other => panic!("{name} returned {other:?}"),
-            };
+        let coordinate = |name: &str| match try_builtin_typed(
+            name,
+            &[Value::AlignedValue(AlignedValue::from(p))],
+            &[],
+        )
+        .expect("builtin known")
+        .expect("ok")
+        {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("{name} returned {other:?}"),
+        };
         assert_eq!(coordinate("jubjubPointX"), p.x().unwrap());
         assert_eq!(coordinate("jubjubPointY"), p.y().unwrap());
     }
