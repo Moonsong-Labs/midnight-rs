@@ -12,9 +12,8 @@ pub mod convert;
 mod inputs;
 
 pub use builder::{
-    BuildInputs, BuiltTransaction, DustSpendBatch, PreparedTransfer, TransferBuilder,
-    balance_external, build_no_validate, chain_time, fee_speck, intent_ttl, prepare_no_validate,
-    prove_tx_no_validate,
+    BuildInputs, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external, chain_time,
+    fee_speck, intent_ttl, prepare_no_validate,
 };
 pub use inputs::{PreparedInput, prepare_shielded_inputs};
 

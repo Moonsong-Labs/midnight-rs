@@ -10,22 +10,21 @@ use super::provider::Builds;
 use super::types::convert::{IntoLedger, IntoSdk};
 use helpers::coin_structure::coin::{
     Info as ZswapCoinInfo, PublicAddress, PublicKey, QualifiedInfo, ShieldedTokenType, TokenType,
-    UnshieldedTokenType, UserAddress,
 };
 use helpers::coin_structure::transfer::Recipient;
 use helpers::{
     AlignedValue, BuildContext, BuildContractAction, BuildUtxoOutput, BuilderContext,
     ContractAddress, ContractCallPrototype, DefaultDB, EntryPointBuf, FromContext, IntentInfo,
-    KeyLocation, OfferInfo, ProofPreimage, SplittableRng, StandardTransactionInfo, TokenInfo,
-    Transcript, UnshieldedOfferInfo, UtxoOutput,
+    KeyLocation, OfferInfo, OutputInfo, ProofPreimage, ShieldedWallet, SplittableRng,
+    StandardTransactionInfo, TokenInfo, Transcript, UnshieldedOfferInfo, UnshieldedWallet,
+    UtxoOutputInfo,
 };
 use midnight_base_crypto::fab::{InvalidBuiltinDecode, ValueSlice};
 use midnight_base_crypto::time::Timestamp;
 use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::{SpentInputs, TransferResult};
+use midnight_types::TransferResult;
 
-use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
 use crate::address::format_address;
 use crate::call::ShieldedInputs;
@@ -38,18 +37,13 @@ use crate::runtime;
 pub(crate) const INTENT_SEGMENT: helpers::SegmentId =
     helpers::Segment::Fallible as helpers::SegmentId;
 
-/// An unshielded payout to an address the call's transcript names.
-///
-/// The upstream `UtxoOutputInfo` builders derive the owner from a seed, which
-/// a contract's payout recipient is not: the transcript carries the address
-/// itself.
 /// The outputs that pay what a transcript claims to send.
 ///
 /// Verification refuses a claimed unshielded spend with no real one behind it,
 /// so every claim a call makes needs its output here. A contract recipient
 /// accounts for its own balance, and Dust never rides an unshielded offer, so
 /// neither is collected.
-fn payouts_of(transcript: Option<&Transcript<DefaultDB>>) -> Vec<PayoutOutput> {
+fn payouts_of(transcript: Option<&Transcript<DefaultDB>>) -> Vec<UtxoOutputInfo<UnshieldedWallet>> {
     let Some(transcript) = transcript else {
         return Vec::new();
     };
@@ -62,29 +56,13 @@ fn payouts_of(transcript: Option<&Transcript<DefaultDB>>) -> Vec<PayoutOutput> {
             else {
                 return None;
             };
-            Some(PayoutOutput {
+            Some(UtxoOutputInfo {
                 value: *kv.1,
-                owner,
+                owner: UnshieldedWallet::from(owner),
                 token_type,
             })
         })
         .collect()
-}
-
-struct PayoutOutput {
-    value: u128,
-    owner: UserAddress,
-    token_type: UnshieldedTokenType,
-}
-
-impl<D: helpers::DB + Clone, C: helpers::BuilderContext<D>> BuildUtxoOutput<D, C> for PayoutOutput {
-    fn build(&self, _context: Arc<C>) -> UtxoOutput {
-        UtxoOutput {
-            value: self.value,
-            owner: self.owner,
-            type_: self.token_type,
-        }
-    }
 }
 
 /// Partition a call's ops, `program`, into its guaranteed and fallible
@@ -226,19 +204,6 @@ pub(crate) async fn call_transaction(
             .map_err(|e| ContractError::Construction(format!("empty operation: {e}")))?,
     };
 
-    // 3b. Insert the contract into the context's ledger state so client-side
-    //     well_formed() validation can find it. The indexed wallet state doesn't
-    //     include deployed contracts.
-    {
-        let mut guard = context
-            .ledger_state
-            .lock()
-            .map_err(|_| ContractError::Construction("ledger_state lock poisoned".into()))?;
-        let mut ls = (**guard).clone();
-        ls.contract = ls.contract.insert(helper_addr, state_db.clone());
-        *guard = helpers::Sp::new(ls);
-    }
-
     // 4. The circuit's input and output. Witness private values become the
     //    prototype's private transcript outputs (the ZKIR's private inputs).
     //    Without these, proving a witness-using circuit fails with "ran out of
@@ -301,7 +266,7 @@ pub(crate) async fn call_transaction(
 
     // Outputs only: the contract's own balance funds the payout, so this
     // transaction has nothing to spend.
-    let offer = |payouts: Vec<PayoutOutput>| {
+    let offer = |payouts: Vec<UtxoOutputInfo<UnshieldedWallet>>| {
         (!payouts.is_empty()).then(|| UnshieldedOfferInfo {
             inputs: Vec::new(),
             outputs: payouts
@@ -526,9 +491,8 @@ async fn attach_and_prove(
     for ((token_type, is_fallible), change) in
         change_due(&attached_value, &circuit_output_value, &minted_value)
     {
-        offers.at(is_fallible).outputs.push(Box::new(KeyedOutput {
-            coin_public_key: change_cpk,
-            enc_public_key: change_epk,
+        offers.at(is_fallible).outputs.push(Box::new(OutputInfo {
+            destination: ShieldedWallet::<DefaultDB>::from_pub_keys(change_cpk, change_epk),
             token_type,
             value: change,
         }));
@@ -547,14 +511,11 @@ async fn attach_and_prove(
     }
     // Build fee-less, even when this call pays for itself.
     //
-    // Handing the funding seed to the wallet's fee-balancing fixpoint makes it
-    // rebuild the candidate from the unpaid transaction and re-prove the whole
-    // thing on every iteration, circuit included, and the first iteration always
-    // requests zero Dust so it always reports a shortfall and loops. Proving is
-    // the most expensive operation in the SDK, so the circuit's proof is paid
-    // for once per iteration rather than once per call. Dust is attached below,
-    // after proving, in its own intent segment, which leaves the circuit proof
-    // untouched. A transaction with no user circuit can take
+    // A fee balanced in the same transaction prices each round with a proof.
+    // `mock_prove` refuses a user circuit, and a real proof would prove the
+    // circuit again on every round. Dust is attached below, after proving, in
+    // its own intent segment, which leaves the circuit proof untouched. A
+    // transaction with no user circuit can take
     // `super::deploy::build_with_mock_fee_proofs` instead.
     let unpaid = prove_without_fee(tx_info, ttl).await?;
     if !pay_fees {
@@ -574,23 +535,14 @@ async fn attach_and_prove(
 /// `tx_info` must carry no funding seed. The build then draws no Dust, so it
 /// leaves nothing to reserve, and the result names no input.
 /// `Builds::balance_transaction` reserves the Dust that it draws for the fee.
-/// The built transaction is large, and it lives only after this function's
-/// last await, so it never sits in a caller's future.
 pub(super) async fn prove_without_fee(
     tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     ttl: Option<std::time::Duration>,
 ) -> Result<TransferResult, ContractError> {
-    let context = tx_info.context.clone();
-    let built = super::types::build_no_validate(tx_info, ttl)
+    let prepared = super::types::prepare_no_validate(tx_info, ttl)
         .await
         .map_err(ProviderError::Wallet)?;
-    Ok(TransferResult {
-        tx_bytes: crate::call::tagged_bytes(&built.finalized, "transaction")?,
-        ledger_version: super::LEDGER,
-        spent: SpentInputs::default(),
-        fee_speck: super::types::fee_speck(&context, &built.finalized)
-            .map_err(ProviderError::Wallet)?,
-    })
+    Ok(prepared.prove().await.map_err(ProviderError::Wallet)?)
 }
 
 /// Pick the segment a caller-provided shielded input should ride in: the same
@@ -870,7 +822,7 @@ mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
     use helpers::HashOutput;
-    use helpers::coin_structure::coin::Nonce;
+    use helpers::coin_structure::coin::{Nonce, UnshieldedTokenType};
 
     /// A transcript claiming one spend of `token` by `recipient`.
     fn transcript_claiming(
@@ -911,7 +863,7 @@ mod tests {
 
         assert_eq!(payouts.len(), 1, "the claim needs an output to cover it");
         assert_eq!(payouts[0].value, 42);
-        assert_eq!(payouts[0].owner, a_user());
+        assert_eq!(payouts[0].owner.user_address, a_user());
         assert_eq!(payouts[0].token_type, a_token());
     }
 

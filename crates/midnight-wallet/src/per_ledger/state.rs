@@ -21,7 +21,9 @@ use super::pending::{PendingReservations, within_ttl};
 use super::types::chain_time;
 use super::types::convert::{IntoLedger, IntoSdk};
 use crate::chain_pin::ChainPin;
-use crate::replay::{LedgerStream, replay_ledger_events, replay_unshielded_events};
+use crate::replay::{
+    LedgerStream, UnshieldedReplay, replay_ledger_events, replay_unshielded_events,
+};
 use crate::storage::wallet_storage_id;
 use crate::wallet::ChainSync;
 use crate::{Network, ReservedInput, Seed, SpentUtxoKey, SyncProgress, WalletError};
@@ -159,41 +161,12 @@ fn make_dust_checkpoint(
     })
 }
 
-/// A `BlockContext` whose block time is the Dust `anchor`, and whose last
-/// block time is `chain_now`, the time of the chain's latest block.
-fn block_context_at(anchor: Timestamp, chain_now: Timestamp) -> BlockContext {
-    BlockContext {
-        tblock: anchor,
-        tblock_err: 30,
-        parent_block_hash: Default::default(),
-        last_block_time: chain_now,
-    }
-}
-
-/// How far a dust-event-anchored `tblock` candidate may trail the chain's
-/// current time: the tighter of `global_ttl` and the dust `dust_grace_period`.
-///
-/// The chain bounds the anchor only by `dust_grace_period`: it refuses an
-/// older `ctime` with `OutOfDustValidityWindow`. The cap at `global_ttl` keeps
-/// a margin under a longer grace period, for the time that a build takes to
-/// prove and to reach a block.
-fn anchor_window(
-    global_ttl: helpers::Duration,
-    dust_grace_period: helpers::Duration,
-) -> helpers::Duration {
-    if global_ttl.as_seconds() <= dust_grace_period.as_seconds() {
-        global_ttl
-    } else {
-        dust_grace_period
-    }
-}
-
 /// The `tblock` that a wallet anchors its block context at, after a replay
 /// whose last Dust event carried `last_dust_block_time`.
 ///
 /// `tblock` sets the proof's `DustActions.ctime`. A build counts the TTL of
-/// its intents from `chain_now`, which [`block_context_at`] keeps beside the
-/// anchor. The chain checks two things of `ctime`:
+/// its intents from `chain_now`, which the block context keeps beside the
+/// anchor as its `last_block_time`. The chain checks two things of `ctime`:
 ///
 /// 1. `root_history.get(ctime)` matches the wallet's Dust root.
 /// 2. `ctime + dust_grace_period >= chain.current_tblock` when it applies the
@@ -206,12 +179,12 @@ fn anchor_window(
 /// genesis is hardcoded months before wall clock while the chain runs in real
 /// time, so a Dust time from a genesis event is too old for it.
 ///
-/// So the anchor is the newest race-safe candidate while [`anchor_window`]
-/// still covers it: `last_dust_block_time + 1s`, or `previous` when the replay
-/// saw no Dust event. Otherwise it is `chain_now`. That fallback accepts a
-/// small race (a Dust event indexed between the replay's tip and the latest
-/// block query), but a chain whose time moved past the candidate's window
-/// needs it.
+/// So the anchor is the newest race-safe candidate while the smaller of
+/// `global_ttl` and `dust_grace_period` still covers it:
+/// `last_dust_block_time + 1s`, or `previous` when the replay saw no Dust
+/// event. Otherwise it is `chain_now`. That fallback accepts a small race (a
+/// Dust event indexed between the replay's tip and the latest block query),
+/// but a chain whose time moved past the candidate's window needs it.
 ///
 /// `previous` is race-safe only when no Dust event changed the wallet's state
 /// after it was taken.
@@ -221,7 +194,11 @@ fn dust_anchor(
     chain_now: Timestamp,
     parameters: &LedgerParameters,
 ) -> Timestamp {
-    let window = anchor_window(parameters.global_ttl, parameters.dust.dust_grace_period);
+    // The chain bounds the anchor only by `dust_grace_period`: it refuses an
+    // older `ctime` with `OutOfDustValidityWindow`. The cap at `global_ttl`
+    // keeps a margin under a longer grace period, for the time that a build
+    // takes to prove and to reach a block.
+    let window = parameters.global_ttl.min(parameters.dust.dust_grace_period);
     match last_dust_block_time
         .map(|t| t + helpers::Duration::from_secs(1))
         .or(previous)
@@ -327,6 +304,7 @@ pub struct ResyncPlan {
     pub(crate) zswap_event_id: i64,
     pub(crate) unshielded_utxos: Vec<TrackedUtxo>,
     pub(crate) last_tx_id: Option<i64>,
+    pub(crate) last_block_height: i64,
 }
 
 impl ResyncPlan {
@@ -343,6 +321,7 @@ impl ResyncPlan {
             zswap_event_id,
             unshielded_utxos,
             last_tx_id,
+            last_block_height,
         } = self;
 
         let sub_client = SubscriptionClient::new(indexer_url);
@@ -371,6 +350,7 @@ impl ResyncPlan {
                 &unshielded_address,
                 unshielded_utxos,
                 start_tx_id,
+                last_block_height,
                 // A resume, like the two replays above: the wallet already
                 // holds a cursor, so a stream with nothing to deliver means
                 // this address is at the tip. An address with no new
@@ -386,7 +366,12 @@ impl ResyncPlan {
         // is produced and the source wallet stays as it was.
         let dust = dust_res?;
         let zswap = zswap_res?;
-        let (unshielded_utxos, last_tx_id, last_block_height, spent_unshielded) = unshielded_res?;
+        let UnshieldedReplay {
+            utxos: unshielded_utxos,
+            last_tx_id,
+            last_block_height,
+            spent: spent_unshielded,
+        } = unshielded_res?;
         let block = block_res?;
         // A chain that moved to a later generation since the plan was taken
         // needs the wallet to cross, which is not this generation's to do.
@@ -457,7 +442,7 @@ impl ShieldedRescanPlan {
     pub(crate) fn new(seed: &Seed, coins: &[crate::CoinInfo]) -> Self {
         let secret_keys = zswap_keys(seed);
         let coin_public_key = secret_keys.coin_public_key();
-        let initial_state = coins.iter().fold(empty_zswap_state(seed), |state, coin| {
+        let initial_state = coins.iter().fold(ZswapLocalState::new(), |state, coin| {
             state.watch_for(&coin_public_key, &coin.into_ledger())
         });
         Self {
@@ -526,11 +511,6 @@ pub(crate) fn zswap_keys(seed: &Seed) -> SecretKeys {
     ShieldedWallet::<DefaultDB>::default(seed.into_ledger())
         .secret_keys()
         .clone()
-}
-
-/// The shielded state of a wallet that has applied no event.
-pub(crate) fn empty_zswap_state(seed: &Seed) -> ZswapLocalState<DefaultDB> {
-    ShieldedWallet::<DefaultDB>::default(seed.into_ledger()).state
 }
 
 impl Wallet {
@@ -641,8 +621,10 @@ impl Wallet {
             ..
         } = dust;
 
-        let block_context = Some(block_context_at(
-            dust_anchor(last_dust_block_time, None, block_timestamp, &parameters),
+        let tblock = dust_anchor(last_dust_block_time, None, block_timestamp, &parameters);
+        let block_context = Some(helpers::make_block_context(
+            tblock,
+            Default::default(),
             block_timestamp,
         ));
 
@@ -1144,6 +1126,7 @@ impl Wallet {
             zswap_event_id: self.zswap_event_id,
             unshielded_utxos: self.unshielded_utxos.clone(),
             last_tx_id: self.last_tx_id,
+            last_block_height: self.last_block_height,
         }
     }
 
@@ -1191,13 +1174,7 @@ impl Wallet {
         self.carry_registrations(registrations);
         self.unshielded_utxos = unshielded_utxos;
         self.last_tx_id = Some(last_tx_id);
-        // Only advance last_block_height if the unshielded sync actually saw a
-        // newer block. Without this guard, a resume with no new unshielded txs
-        // would clobber the persisted height with 0 (the default returned by
-        // `replay_unshielded_events` when no events arrive).
-        if last_block_height > self.last_block_height {
-            self.last_block_height = last_block_height;
-        }
+        self.last_block_height = last_block_height;
         // Refresh parameters from the latest block so governance changes to
         // fees/TTL/dust rates take effect. Assigned before `global_ttl` is
         // read below so the anchor math uses the fresh value.
@@ -1210,7 +1187,11 @@ impl Wallet {
             chain_tblock,
             &self.parameters,
         );
-        self.block_context = Some(block_context_at(tblock, chain_tblock));
+        self.block_context = Some(helpers::make_block_context(
+            tblock,
+            Default::default(),
+            chain_tblock,
+        ));
 
         // Reservations whose spends this replay just observed confirmed are
         // no longer in flight; drop them so the underlying UTXOs become
@@ -1617,23 +1598,6 @@ mod tests {
     use super::*;
     use crate::wallet::test_support::{test_seed, unreachable_coin};
 
-    #[test]
-    fn anchor_window_clamps_to_the_tighter_dust_grace_period() {
-        let global_ttl = helpers::Duration::from_secs(14 * 24 * 60 * 60); // 14 days
-        let dust_grace = helpers::Duration::from_secs(3 * 60 * 60); // 3 hours
-        // The dust grace window (the bound the node actually enforces against
-        // `ctime`) is far shorter than the intent `global_ttl`, so it must win.
-        assert_eq!(
-            anchor_window(global_ttl, dust_grace).as_seconds(),
-            3 * 60 * 60
-        );
-        // Symmetric: when `global_ttl` is the shorter of the two, it wins.
-        assert_eq!(
-            anchor_window(dust_grace, global_ttl).as_seconds(),
-            3 * 60 * 60
-        );
-    }
-
     /// The anchor sets the `ctime` that the node checks, so a wrong one fails
     /// no sync. Only the node rejects the transaction later.
     #[test]
@@ -1800,7 +1764,11 @@ mod tests {
         let mut wallet = test_wallet(None);
         let anchor = Timestamp::from_secs(100_000);
         let chain_now = anchor + helpers::Duration::from_secs(600);
-        wallet.block_context = Some(block_context_at(anchor, chain_now));
+        wallet.block_context = Some(helpers::make_block_context(
+            anchor,
+            Default::default(),
+            chain_now,
+        ));
         let between = anchor + helpers::Duration::from_secs(300);
         wallet.reserve_pending(
             vec![dust_batch(&[1])],
@@ -1969,8 +1937,9 @@ mod tests {
         // A resync between the two halves moves the wallet's chain view. The
         // funding pass must carry it over, or the build witnesses a Dust root
         // the context's `ctime` does not resolve to.
-        wallet.block_context = Some(block_context_at(
+        wallet.block_context = Some(helpers::make_block_context(
             Timestamp::from_secs(1_234),
+            Default::default(),
             Timestamp::from_secs(1_300),
         ));
         wallet.add_funding(&ctx).expect("add funding");
@@ -2215,7 +2184,7 @@ mod tests {
             zswap_event_id: wallet.zswap_event_id,
             unshielded_utxos: wallet.unshielded_utxos.clone(),
             last_tx_id: wallet.last_tx_id.unwrap_or(0),
-            last_block_height: 0,
+            last_block_height: wallet.last_block_height,
             spent_unshielded: Vec::new(),
             chain_tblock: Timestamp::from_secs(1_000),
             parameters: wallet.parameters.clone(),
@@ -2240,7 +2209,11 @@ mod tests {
     fn a_resync_keeps_the_chain_time_beside_the_dust_anchor() {
         let mut wallet = test_wallet(None);
         let anchor = Timestamp::from_secs(1_000);
-        wallet.block_context = Some(block_context_at(anchor, anchor));
+        wallet.block_context = Some(helpers::make_block_context(
+            anchor,
+            Default::default(),
+            anchor,
+        ));
         let mut commit = noop_commit(&wallet);
         commit.chain_tblock = anchor + helpers::Duration::from_secs(600);
         wallet.commit_resync(commit).unwrap();
