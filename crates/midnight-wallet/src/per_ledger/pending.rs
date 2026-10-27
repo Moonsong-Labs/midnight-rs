@@ -7,7 +7,7 @@
 //! same inputs before the chain confirms (or expires) the previous tx.
 //!
 //! Entries are cleared three ways:
-//! - **Confirmation** — event replay (initial sync and every resync)
+//! - **Confirmation**: event replay (initial sync and every resync)
 //!   collects the dust nullifiers of `DustSpendProcessed` events and the
 //!   `(intent_hash, output_index)` keys of spent unshielded UTXOs, then
 //!   calls [`PendingReservations::clear_confirmed`] at its commit point:
@@ -15,9 +15,9 @@
 //!   dust batch when any of its spend nullifiers was observed. Shielded
 //!   coins are deliberately absent: a confirmed spend drops the coin from
 //!   `zswap_state`, so its reservation is already inert.
-//! - **Release** — [`PendingReservations::release`], for a build known to be
+//! - **Release**: [`PendingReservations::release`], for a build known to be
 //!   dead.
-//! - **TTL eviction** — once the chain time passes an entry's `expires_at`,
+//! - **TTL eviction**: once the chain time passes an entry's `expires_at`,
 //!   the TTL of the transaction it was made for, that transaction can no
 //!   longer land, and the entry is dropped. This is the backstop for
 //!   transactions that neither confirm nor get released.

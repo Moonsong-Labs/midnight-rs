@@ -131,7 +131,7 @@ Every intent carries a `ttl: Timestamp`. At validation the ledger enforces (spec
 assert!(intent.ttl >= tblock && intent.ttl <= tblock + global_ttl);
 ```
 
-— the TTL must be no earlier than the current block time and no further in the future than `global_ttl`. The SDK computes `intent.ttl = chain_tblock + ttl` from the wallet's view of the chain: `chain_tblock` is the time of the latest block that the wallet's last sync read. It does **not** use the client's system clock, and it does not count from the Dust anchor (`block_context.tblock`), which can trail the chain by up to `min(global_ttl, dust_grace_period)`.
+So the TTL must be no earlier than the current block time and no further in the future than `global_ttl`. The SDK computes `intent.ttl = chain_tblock + ttl` from the wallet's view of the chain: `chain_tblock` is the time of the latest block that the wallet's last sync read. It does **not** use the client's system clock, and it does not count from the Dust anchor (`block_context.tblock`), which can trail the chain by up to `min(global_ttl, dust_grace_period)`.
 
 `global_ttl` is a chain ledger parameter (read from `LedgerParameters` during sync). By default `ttl` is `global_ttl`, the longest TTL the chain accepts. A build can ask for a shorter one with `.with_ttl(duration)` on the transfer, deploy and call builders. The build refuses a TTL under one second or longer than `global_ttl` with `WalletError::TtlOutOfRange`. A fee intent that a sponsor adds with `balance_transaction` takes the earliest TTL of the transaction it pays for.
 

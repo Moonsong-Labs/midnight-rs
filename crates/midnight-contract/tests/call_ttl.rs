@@ -19,7 +19,7 @@ use midnight_provider::{LedgerVersion, MidnightProvider};
 
 /// Long enough for a build, its proof and its inclusion, and well short of
 /// the devnet's `global_ttl`.
-const TTL: Duration = Duration::from_secs(300);
+const TTL: Duration = Duration::from_secs(15 * 60);
 
 /// The TTL of each intent of the proven transaction `bytes`, in seconds.
 fn intent_ttls(bytes: &[u8], ledger: LedgerVersion) -> Vec<u64> {
