@@ -16,11 +16,19 @@ pub(crate) fn emit_circuit_types(circuits: &[Circuit], witnesses: &[Witness]) ->
     let mut items = Vec::new();
 
     for circuit in circuits {
-        items.push(emit_return_type(&circuit.name, circuit.result_type()));
+        items.push(emit_return_type(
+            "circuit",
+            &circuit.name,
+            circuit.result_type(),
+        ));
     }
 
     for witness in witnesses {
-        items.push(emit_return_type(witness.name.name(), &witness.result_type));
+        items.push(emit_return_type(
+            "witness",
+            witness.name.name(),
+            &witness.result_type,
+        ));
     }
 
     if !witnesses.is_empty() {
@@ -291,10 +299,10 @@ pub(super) fn return_type_ident(name: &str) -> Ident {
     format_ident!("{}Return", to_pascal_case(name))
 }
 
-fn emit_return_type(name: &str, result_type: &Type) -> TokenStream {
+fn emit_return_type(kind: &str, name: &str, result_type: &Type) -> TokenStream {
     let type_name = return_type_ident(name);
     let rust_type = type_to_tokens(result_type);
-    let doc = format!("Return type of the `{name}` circuit.");
+    let doc = format!("Return type of the `{name}` {kind}.");
 
     quote! {
         #[doc = #doc]
