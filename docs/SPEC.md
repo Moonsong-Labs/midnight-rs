@@ -10,6 +10,7 @@ All crates live under `crates/`.
 midnight-core                    meta-crate; re-exports the public API
   ├── midnight-contract          contract lifecycle (deploy / call / prove / submit)
   │     ├── contract.rs          Contract<P>, DeployBuilder, ConnectBuilder, PendingDeploy
+  │     ├── constructor.rs       Constructor: the constructor run of a deploy and its effect check
   │     ├── call.rs              circuit-call tx builder, shielded inputs, caller change
   │     ├── deploy.rs            deploy tx builder
   │     ├── maintenance.rs       verifier-key rotation, authority replacement
@@ -95,7 +96,8 @@ midnight-core                    meta-crate; re-exports the public API
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
 | `PendingCall<T>` | contract | A submitted circuit call and its decoded result. `wait_finalized()` waits with no SDK deadline and settles the private-state snapshot by the verdict. A drop leaves the snapshot `Pending`. |
-| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. |
+| `Constructor` | contract | A contract's constructor as an `ir::Circuit`, the declarations it calls and the state it starts from. The generated `Contract::deploy` sets it, and the deploy runs it before any proof. |
+| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. The first wait that sees the deploy applied confirms its private-state snapshot. |
 | `ProofProvider` | helpers | Proof backend trait, one per ledger generation. |
 | `ProofProviders` | provider | One `ProofProvider` per generation. Set on the provider with `with_proof_provider`. `ProofProviders::local()` (in-process) is the default. |
 | `RemoteProofServer` | provider | `ProofProvider` of both generations that delegates to an HTTP proof server (`/check` + `/prove`). |
@@ -197,8 +199,12 @@ Generated bindings expose this as `contract.ledger().await?`, which calls `midni
 ### Deploy
 
 ```
-Contract::deploy(&provider)                              // DeployBuilder<'_, P>
-  .with_initial_state(LedgerInitialState::default())
+Contract::deploy(&provider)                              // DeployBuilder<'_, P, Wp>; sets the constructor,
+                                                         // or the default state for a contract with none
+  [.with_constructor_args(...)]                          // typed; only for a constructor with parameters
+  [.with_witnesses(&w)]                                  // only for a contract with witnesses
+  [.with_initial_private_state(...)]                     // W::PrivateState; after with_witnesses
+  [.with_initial_state(state)]                           // deploy `state` as it is, skip the constructor
   .with_zk_config("compiled")
   [.with_deploy_timeout(...)]
 
@@ -213,9 +219,24 @@ Contract::deploy(&provider)                              // DeployBuilder<'_, P>
 Internally:
 
 ```
-with_zk_config(initial_state, zk_config)      // load *.verifier files into state.operations
+deploy_source(initial_state, constructor, args)   // no node query
+  ├─ an initial state: deploy it as it is, with the initial private state
+  ├─ a constructor: refuse a missing argument (MissingConstructorArgs)
+  └─ neither: Construction("missing initial_state")
+  ↓
+constructor::run (a constructor only)
+  ├─ provider.shielded_public_keys()          // ownPublicKey() returns the wallet's coin key
+  ├─ run_call on the constructor's state, at the zero address and the wall-clock time,
+  │  with the witnesses and the initial private state (Interpreter on a failure)
+  └─ replay the public transcript in a QueryContext; refuse any Effects, then any
+     Zswap input or output (ConstructorEffect)
+  ↓
+refuse a private state that is not empty when no store is attached (Construction)
+  ↓
+populate_verifier_keys(state, zk_config)      // load *.verifier files into state.operations
   ↓
 deploy_funded(state, provider, shielded_offer)
+  ├─ ContractState::new(data, ..)             // charged keys of the data, which ledger 9 rechecks
   ├─ provider.builds().await                  // resync wallet, pick its generation's Builds
   ├─ builds.execution_context().await         // build that generation's context
   ├─ builds.proof_provider()                  // that generation's prover (ProofProviders)
@@ -233,11 +254,21 @@ deploy_funded(state, provider, shielded_offer)
       ├─ builds.balance_transaction: the Dust fee in its own intent
       └─ the result's spent: the fee Dust, merged with the offer's coins
   ↓
-provider.submit_reserved(transaction).await   → PendingTx (carries the reservation)
+provider.prepare_reserved(transaction).await  → PreparedTx (holds the reservation, knows the extrinsic hash)
+  ↓
+append_pending(address, extrinsic_hash, None, private_state)   // only for a private state that is not empty
+  (fails → release the reservation, PendingSnapshotFailed)
+  ↓
+prepared.submit().await                       → PendingTx (carries the reservation)
+  ↓
+wait_best / wait_finalized                    // each settles the deploy's snapshot once:
+  ├─ applied → confirm in the block of the wait
+  ├─ not applied in a finalized block, or Invalid → mark_failed
+  └─ anything else, or a store failure (a warning) → the snapshot stays Pending
   ↓
 into_contract
   ├─ one deadline: deploy_timeout from the start of into_contract
-  ├─ the inclusion of the last wait, or wait_best under the deadline
+  ├─ the inclusion of the last wait, or wait_best under the deadline, which settles as above
   │    (not applied → TransactionFailed; deadline passes → DeployTimeout { in_block: None })
   └─ deployed_state(provider, address, in_block, remaining, timeout)
        └─ read midnight_contractState at in_block's block, for the time left of the deadline
