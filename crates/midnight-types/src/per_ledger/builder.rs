@@ -918,6 +918,11 @@ fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> b
 ///
 /// Requires mock fee proofs when the build funds itself. Balancing without
 /// them has to prove each round, which is the cost preparing exists to avoid.
+///
+/// The build skips the helpers' final `well_formed()` check, as midnight-js
+/// does. The chain validates the transaction against its own `root_history`.
+/// A local check can match that only with the global `DustState`, which is
+/// 55MB or more.
 pub async fn prepare_no_validate(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
 ) -> Result<PreparedTransfer, WalletError> {
