@@ -92,7 +92,7 @@ pub(crate) fn emit_ledger_wrapper(
                 provider: &P,
                 address: &str,
             ) -> Result<Self, midnight_contract::ContractError> {
-                let state = midnight_contract::state::fetch_state(provider, address).await?;
+                let state = midnight_contract::state::fetch_state(provider, address, None).await?;
                 Ok(Self::new(state))
             }
 
@@ -101,12 +101,6 @@ pub(crate) fn emit_ledger_wrapper(
             #(#accessors)*
 
             #ir_constants
-        }
-
-        impl midnight_contract::FromHex for #struct_name {
-            fn from_hex(hex_state: &str) -> Result<Self, StateError> {
-                #struct_name::from_hex(hex_state)
-            }
         }
 
         #initial_state
@@ -134,7 +128,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// `MidnightProvider::with_wallet(...)`.
             pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
             where
-                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
+                P: midnight_contract::AsMidnightProvider,
             {
                 // Typed so a contract with no impure circuits still infers.
                 const DECLARED_CIRCUITS: &[&str] = &[#(#declared_circuits),*];
@@ -155,7 +149,7 @@ pub(crate) fn emit_ledger_wrapper(
                 address: impl midnight_contract::IntoAddress,
             ) -> ConnectBuilder<P>
             where
-                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
+                P: midnight_contract::AsMidnightProvider,
             {
                 ConnectBuilder(
                     midnight_contract::Contract::at(provider, address)
@@ -222,7 +216,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// no wait ran, and then reads the deployed contract from the node.
             pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
             where
-                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
+                P: midnight_contract::AsMidnightProvider + Send,
             {
                 // Boxed for the same reason the `IntoFuture` impl below is.
                 Box::pin(async move { Ok(PendingDeploy(self.0.send().await?)) }).await
@@ -240,7 +234,7 @@ pub(crate) fn emit_ledger_wrapper(
                 self,
             ) -> Result<midnight_contract::DustlessDeploy, midnight_contract::ContractError>
             where
-                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
+                P: midnight_contract::AsMidnightProvider + Send,
             {
                 self.0.without_dust().await
             }
@@ -248,7 +242,7 @@ pub(crate) fn emit_ledger_wrapper(
 
         impl<'a, P> std::future::IntoFuture for DeployBuilder<'a, P>
         where
-            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'a,
+            P: midnight_contract::AsMidnightProvider + Send + 'a,
         {
             type Output = Result<Contract<P>, midnight_contract::ContractError>;
             type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
@@ -314,7 +308,7 @@ pub(crate) fn emit_ledger_wrapper(
 
         impl<P> PendingDeploy<P>
         where
-            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
+            P: midnight_contract::AsMidnightProvider + Send,
         {
             /// Read the deployed contract from the node, at the block that applied the
             /// deploy, and return the typed `Contract<P>`.
@@ -355,7 +349,7 @@ pub(crate) fn emit_ledger_wrapper(
             }
         }
 
-        impl<P: midnight_contract::Provider> Contract<P> {
+        impl<P> Contract<P> {
             /// The contract's on-chain address (hex string).
             pub fn address(&self) -> &str {
                 self.0.address()
@@ -377,7 +371,7 @@ pub(crate) fn emit_ledger_wrapper(
 
         impl<P> Contract<P>
         where
-            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
+            P: midnight_contract::AsMidnightProvider,
         {
             /// Fetch the current ledger state from the node.
             ///
@@ -386,7 +380,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// on all standard devnet nodes.
             pub async fn ledger(&self) -> Result<#struct_name, midnight_contract::ContractError> {
                 let provider = self.0.provider().as_midnight_provider();
-                let state = midnight_contract::state::fetch_state_from_node(
+                let state = midnight_contract::state::fetch_state(
                     provider,
                     self.0.address(),
                     self.0.at_block(),
@@ -415,7 +409,6 @@ pub(crate) fn emit_ledger_wrapper(
 
         impl<P> Contract<P>
         where
-            P: midnight_contract::Provider,
             for<'p> &'p P: lazy::StateQueryProvider,
         {
             /// Get a lazy query handle for per-field state access.
@@ -1032,7 +1025,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     let mut call_items = Vec::new();
     let send_bounds = quote! {
         P: midnight_contract::AsMidnightProvider
-            + midnight_contract::Provider
             + ::core::marker::Send
             + ::core::marker::Sync,
         Wp: midnight_contract::runtime::WitnessProvider
@@ -1133,7 +1125,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
             impl<'c, 'a, P, Wp> #call_ty<'c, 'a, P, Wp>
             where
-                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
+                P: midnight_contract::AsMidnightProvider,
                 Wp: midnight_contract::runtime::WitnessProvider,
             {
                 /// Build and prove the call transaction and return its bytes,
@@ -1373,7 +1365,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         impl<'a, P, Wp> Circuits<'a, P, Wp>
         where
             P: midnight_contract::AsMidnightProvider,
-            P: midnight_contract::Provider,
             Wp: midnight_contract::runtime::WitnessProvider,
         {
             #(#constructors)*

@@ -74,13 +74,10 @@ async fn a_wallet_with_no_dust_deploys_and_a_sponsor_pays_the_fee() {
         .expect("the chain must apply the sponsored deploy");
 
     let address = midnight_contract::format_address(&dustless.address);
-    let state = midnight_contract::state::fetch_state_from_node(
-        &deployer,
-        &address,
-        Some(in_block.block_hash),
-    )
-    .await
-    .expect("a contract at the address that the deploy returned");
+    let state =
+        midnight_contract::state::fetch_state(&deployer, &address, Some(in_block.block_hash))
+            .await
+            .expect("a contract at the address that the deploy returned");
     let increment: EntryPointBuf = b"increment"[..].into();
     assert!(
         state.operations.contains_key(&increment),

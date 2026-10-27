@@ -19,15 +19,13 @@ mod value;
 mod witness;
 mod zswap;
 
-pub use built_ins::{try_builtin, try_builtin_typed};
+pub use built_ins::try_builtin_typed;
 pub use compact_types::{
-    StructLayout, atom_count_for_type, bytes_aligned_value, check_uint_range, default_aligned,
-    default_value, element_atom_range, element_count, element_type_at, encode_typed, ir_length,
-    layout_from_fields, merkle_leaf_hash, slice_atoms,
+    StructLayout, bytes_aligned_value, default_aligned, default_value, element_atom_range,
+    element_count, element_type_at, encode_typed, ir_length, layout_from_fields, merkle_leaf_hash,
+    slice_atoms,
 };
-pub use conversions::{
-    aligned_atom_to_u128, value_to_embedded_group, value_to_fr, value_to_hash_output, value_to_u128,
-};
+pub use conversions::{value_to_fr, value_to_hash_output, value_to_u128};
 pub use error::InterpreterError;
 pub use foreign::{
     ArithOp, Curve25519Base, Curve25519Point, Curve25519Scalar, ForeignField, Secp256k1Base,

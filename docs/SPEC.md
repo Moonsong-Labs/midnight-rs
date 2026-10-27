@@ -231,7 +231,7 @@ deploy_funded(state, provider, shielded_offer)
       │  the wallet spends and reserves the offer's coins
       ├─ refuse a token the coins do not cover (ShieldedOfferShortfall)
       ├─ guaranteed offer: the coins, the payments, one change output per token
-      ├─ build_no_validate: prove with no fee
+      ├─ prepare_no_validate, then PreparedTransfer::prove: prove with no fee
       ├─ builds.balance_transaction: the Dust fee in its own intent
       └─ the result's spent: the fee Dust, merged with the offer's coins
   ↓
@@ -248,7 +248,7 @@ into_contract
 Contract<P>   // stateless handle, no cached state
 ```
 
-`.without_dust()` runs the same build with no fee. With no offer it proves the deploy with no fee (`build_no_validate`) and reserves nothing. With an offer it stops before `builds.balance_transaction`. It submits nothing, and returns the address and the transaction bytes, which do not name the offer's coins.
+`.without_dust()` runs the same build with no fee. With no offer it proves the deploy with no fee (`prepare_no_validate`, then `PreparedTransfer::prove`) and reserves nothing. With an offer it stops before `builds.balance_transaction`. It submits nothing, and returns the address and the transaction bytes, which do not name the offer's coins.
 
 ### Connect to an existing contract
 
@@ -309,7 +309,8 @@ builds.add_funding(&context)                                   // the payer join
 builds.prepare_shielded_inputs(..)                             // only if the call pins coins
   └─ spends them into this context and reserves them, as one transition
   ↓
-  → StandardTransactionInfo → build_no_validate                // fee-less, even when self-funded
+  → StandardTransactionInfo → prepare_no_validate              // fee-less, even when the call pays a fee
+  → PreparedTransfer::prove
   ↓
 if pay_fees: builds.balance_transaction(bytes)
   └─ the wallet draws the Dust and reserves it as one transition (prepare_fees),

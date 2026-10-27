@@ -9,12 +9,12 @@ use midnight_types::{CoinPublicKey, EncryptionPublicKey, TransferResult};
 use super::call::{INTENT_SEGMENT, prove_without_fee};
 use super::helpers;
 use super::provider::Builds;
-use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
 use super::types::convert::{IntoLedger, IntoSdk};
 use helpers::{
     BuildContext, BuildContractAction, BuildInput, BuildOutput, ContractDeploy, DefaultDB,
-    FromContext, IntentInfo, OfferInfo, SplittableRng, StandardTransactionInfo, TokenInfo,
+    FromContext, IntentInfo, OfferInfo, OutputInfo, ShieldedWallet, SplittableRng,
+    StandardTransactionInfo, TokenInfo,
 };
 
 use crate::ShieldedOffer;
@@ -177,17 +177,21 @@ async fn pay_offer(
     )?;
     refuse_shortfall(&held_value, &paid_value)?;
 
-    let payments = offer.outputs.iter().map(|payment| KeyedOutput {
-        coin_public_key: payment.recipient.coin_public_key.into_ledger(),
-        enc_public_key: payment.recipient.enc_public_key.into_ledger(),
+    let payments = offer.outputs.iter().map(|payment| OutputInfo {
+        destination: ShieldedWallet::<DefaultDB>::from_pub_keys(
+            payment.recipient.coin_public_key.into_ledger(),
+            payment.recipient.enc_public_key.into_ledger(),
+        ),
         token_type: payment.token_type.into_ledger(),
         value: payment.value,
     });
     let change = change_due(&held_value, &paid_value, &BTreeMap::new())
         .into_iter()
-        .map(|(token_type, value)| KeyedOutput {
-            coin_public_key: change_cpk.into_ledger(),
-            enc_public_key: change_epk.into_ledger(),
+        .map(|(token_type, value)| OutputInfo {
+            destination: ShieldedWallet::<DefaultDB>::from_pub_keys(
+                change_cpk.into_ledger(),
+                change_epk.into_ledger(),
+            ),
             token_type: token_type.into_ledger(),
             value,
         });
