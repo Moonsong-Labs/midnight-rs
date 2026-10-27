@@ -1,8 +1,8 @@
 //! Two fee-less contract calls, merged into one transaction that one sponsor
 //! pays for.
 //!
-//! The calls go to two contracts. Two calls to one contract can fail, because
-//! each ran on the state from before the merge.
+//! The calls go to two contracts, as `MidnightProvider::merge_transactions`
+//! advises.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 

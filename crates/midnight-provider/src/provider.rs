@@ -691,10 +691,12 @@ impl MidnightProvider {
     /// fees with [`Self::balance_transaction`]. A Dustless *shielded* transfer
     /// carries no intent at all (pure Zswap), so it always merges cleanly.
     ///
-    /// Merge calls to different contracts. Each call ran on the contract state
-    /// from before the merge, and the ledger applies the calls in the order of
-    /// their random segments. So a second call to the same contract can fail,
-    /// for example when it reads state that the other call writes.
+    /// Merge calls to different contracts. Their guaranteed parts apply
+    /// together or not at all, and each call's fallible part can fail alone,
+    /// which the chain records as [`crate::Verdict::PartialSuccess`]. For two
+    /// calls to the same contract, the node can refuse the whole merged
+    /// transaction. When it accepts the transaction, a call can still fail,
+    /// because each call ran on the state from before the merge.
     ///
     /// Errors ([`ProviderError::Transaction`]) when given no transactions, when
     /// a byte string fails to deserialize, when the transactions are of
