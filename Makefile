@@ -63,7 +63,7 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 # Examples that run against the devnet with no extra env (deploy + call).
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
 EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shielded-swap
-CONTRACTS := call-context counter counter-zkir-v3 events receive-shielded secret-counter shielded-mint unshielded-payout
+CONTRACTS := call-context counter counter-zkir-v3 events owned-counter receive-shielded secret-counter shielded-mint unshielded-payout
 # The contracts that compile for ZKIR v3. Only a ledger 9 chain verifies their keys.
 ZKIR_V3_CONTRACTS := counter-zkir-v3
 # The compiler flag of contract $$c, which only a ZKIR v3 contract has. The
@@ -346,6 +346,7 @@ test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test call_context -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test simulate_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test build_only_private_state -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test deploy_constructor -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test emit_event -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test zkir_v3_local_proving -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test remote_proving -- --show-output

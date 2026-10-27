@@ -653,7 +653,9 @@ mod queue_grows {
 /// field, and the generated `Default` must build that same state.
 #[cfg(test)]
 mod initial_state_defaults {
-    use compact_bindgen::{ContractState, InMemoryDB};
+    use std::time::UNIX_EPOCH;
+
+    use compact_bindgen::{Bytes, ContractState, InMemoryDB, TransientFr};
     use conformance::report::state_report_json;
 
     use conformance::corpus::{corpus_dir, read_json};
@@ -719,6 +721,46 @@ mod initial_state_defaults {
                 state_report_json(&state.data.get()),
                 golden_constructor_state(fixture),
                 "{fixture}: the generated default is not the compiler's initial state"
+            );
+        }
+    }
+
+    /// Answers tiny's witness with the key of the conformance case `tiny/get`.
+    struct CaseKey;
+
+    impl crate::tiny::Witnesses for CaseKey {
+        type PrivateState = ();
+
+        fn private_secret_key(&self, _: &mut ()) -> Result<Bytes<32>, crate::tiny::WitnessError> {
+            Ok(Bytes([7; 32]))
+        }
+    }
+
+    /// The generated default state, then the constructor, gives the state that
+    /// the canonical runtime's constructor gives. A run that starts from
+    /// another state, binds no argument or drops the body fails it. tiny's
+    /// constructor takes an argument, calls a witness and a circuit, and
+    /// bboard's increments a counter. The arguments and the key are those of
+    /// the cases of the goldens.
+    #[test]
+    fn the_constructor_state_is_the_compilers() {
+        let mut tiny =
+            crate::tiny::Simulator::new(crate::tiny::TinyInitialState::default(), UNIX_EPOCH)
+                .with_witnesses(&CaseKey);
+        tiny.run_constructor(TransientFr::from(42u64))
+            .expect("tiny's constructor runs");
+        let mut bboard =
+            crate::bboard::Simulator::new(crate::bboard::BboardInitialState::default(), UNIX_EPOCH);
+        bboard.run_constructor().expect("bboard's constructor runs");
+
+        for (fixture, state) in [
+            ("tiny", tiny.ledger().into_contract_state()),
+            ("bboard", bboard.ledger().into_contract_state()),
+        ] {
+            assert_eq!(
+                state_report_json(&state.data.get()),
+                golden_constructor_state(fixture),
+                "{fixture}: the constructor state is not the canonical runtime's"
             );
         }
     }

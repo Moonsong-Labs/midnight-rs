@@ -393,13 +393,12 @@ fn bboard_post_executes() {
     let ir = &common::exported_circuit(&info, "post").def;
     let program = common::program(&info);
 
-    // The state bboard's constructor leaves: it writes `vacant` and `none`,
-    // which are the defaults, and increments `instance` to 1.
-    let state = bboard::LedgerInitialState {
-        instance: 1,
-        ..Default::default()
-    }
-    .build();
+    let mut constructed =
+        bboard::Simulator::new(bboard::LedgerInitialState::default(), std::time::UNIX_EPOCH);
+    constructed
+        .run_constructor()
+        .expect("bboard's constructor runs");
+    let state = constructed.ledger().into_contract_state();
 
     let new_message = [7u8; 32];
     let r = interpreter::execute(
