@@ -74,10 +74,12 @@ pub use midnight_provider::{
 // offer `.without_dust()` producing a sponsorable transaction.
 pub use midnight_provider::{DustlessBuilder, DustlessTransaction};
 
-// Shielded recipients, their keys, and the shielded offer of a deploy.
-pub use midnight_types::address::parse_shielded_recipient;
+// Shielded recipients and their keys, the user address of an unshielded
+// payout, and the shielded offer of a deploy. The generated bindings name
+// `CoinPublicKey` and `UserAddress`.
+pub use midnight_types::address::{parse_shielded_recipient, parse_unshielded_address};
 pub use midnight_types::{
-    CoinPublicKey, EncryptionPublicKey, ShieldedRecipient, ShieldedTokenType,
+    CoinPublicKey, EncryptionPublicKey, ShieldedRecipient, ShieldedTokenType, UserAddress,
 };
 pub use offer::{ShieldedOffer, ShieldedPayment};
 // The shielded coin a caller spends, from `MidnightProvider::spendable_shielded_coins`.

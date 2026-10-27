@@ -137,6 +137,17 @@ let unshielded = wallet.unshielded_address();
 let shielded   = wallet.shielded_address();
 ```
 
+A Compact circuit that pays a user takes a `UserAddress`, the 32 bytes that an unshielded address carries. `Seed::user_address` and `Wallet::user_address` give it for your own seed, with no network, because the bytes are the same on every network. `parse_unshielded_address` decodes it from an address that another wallet shared, and refuses an address of another network with `WalletError::AddressNetworkMismatch`:
+
+```rust
+use midnight_core::wallet::parse_unshielded_address;
+
+let own = wallet.user_address();
+let theirs = parse_unshielded_address(&shared_address, wallet.network())?;
+```
+
+The `contract!` bindings convert the SDK's `UserAddress` into the standard library's `UserAddress` struct, so `theirs.into()` is a circuit argument.
+
 ## Sync
 
 ```rust

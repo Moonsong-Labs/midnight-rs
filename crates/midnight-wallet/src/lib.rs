@@ -80,14 +80,14 @@ mod wallet;
 
 // The vocabulary this crate's own signatures name, so a consumer of the
 // implementation needs no second dependency for it.
-pub use midnight_types::address::parse_shielded_recipient;
+pub use midnight_types::address::{parse_shielded_recipient, parse_unshielded_address};
 pub use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustParameters,
     EncryptionPublicKey, HashOutput, InvalidNetworkName, LedgerVersion, NIGHT, Network,
     NetworkName, Nonce, Nullifier, ReservedInput, ShieldedBalance, ShieldedCoinBalance,
     ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SpentUtxoKey,
     SyncCursors, TrackedUtxo, TransferKind, TransferRequest, TransferResult, UnshieldedTokenType,
-    UnshieldedUtxoInfo, WalletBalance, WalletError, chain_pin, panic_message,
+    UnshieldedUtxoInfo, UserAddress, WalletBalance, WalletError, chain_pin, panic_message,
 };
 // The API this crate implements, so attaching a wallet needs no dependency on
 // midnight-wallet-facade either.

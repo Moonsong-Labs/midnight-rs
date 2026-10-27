@@ -10,7 +10,7 @@ use midnight_types::hd::Seed;
 use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, DustBalance, EncryptionPublicKey, LedgerVersion,
     Network, ShieldedBalance, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    UnshieldedUtxoInfo, WalletBalance, WalletError,
+    UnshieldedUtxoInfo, UserAddress, WalletBalance, WalletError,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -259,6 +259,13 @@ impl Wallet {
     /// The wallet's unshielded receiving address.
     pub fn unshielded_address(&self) -> String {
         each!(&self.state, w => w.unshielded_address())
+    }
+
+    /// The wallet's user address, the bytes that its unshielded address
+    /// carries. Give it to a Compact circuit that pays this wallet through a
+    /// `UserAddress` argument. See [`Seed::user_address`].
+    pub fn user_address(&self) -> UserAddress {
+        self.seed.user_address()
     }
 
     /// The wallet's shielded receiving address, e.g. `mn_shield-addr_undeployed1...`.

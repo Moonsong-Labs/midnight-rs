@@ -67,6 +67,13 @@ pub struct CoinInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CoinPublicKey(pub HashOutput);
 
+/// The address of a user that owns unshielded UTXOs.
+///
+/// These are the 32 bytes that an unshielded address (`mn_addr_*`) carries,
+/// and the value of a Compact `UserAddress` argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct UserAddress(pub HashOutput);
+
 /// The key a shielded output is encrypted to, so that its recipient can
 /// discover the coin.
 ///

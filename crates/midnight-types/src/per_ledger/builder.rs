@@ -1423,7 +1423,10 @@ fn check_address_network(addr: &WalletAddress, expected: &Network) -> Result<(),
     Ok(())
 }
 
-fn parse_unshielded_recipient(s: &str, network: &Network) -> Result<UnshieldedWallet, WalletError> {
+pub(crate) fn parse_unshielded_recipient(
+    s: &str,
+    network: &Network,
+) -> Result<UnshieldedWallet, WalletError> {
     let addr = parse_wallet_address(s, network)?;
     UnshieldedWallet::try_from(&addr)
         .map_err(|e| WalletError::InvalidAddress(format!("not an unshielded address: {e:?}")))

@@ -16,14 +16,18 @@
 
 mod common;
 
-use compact_bindgen::AlignedValue;
-use midnight_contract::Contract;
-use midnight_contract::runtime::Value;
+mod unshielded_payout {
+    compact_bindgen::contract!(
+        "../../devnet/contracts/unshielded-payout/compiled/compiler/analyzed-ir.sexp"
+    );
+}
+
+use compact_bindgen::Bytes;
 use midnight_provider::MidnightProvider;
 use midnight_provider::UnshieldedTokenType;
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];
-const MINTED: u128 = 1_000;
+const MINTED: u64 = 1_000;
 const PAID: u128 = 10;
 
 #[tokio::test]
@@ -31,17 +35,14 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
-    let keyed = common::compiled_dir("unshielded-payout");
-    let info = common::load_compiled(&keyed);
-    let program = common::program(&info);
 
     let provider = MidnightProvider::new(&node_url);
     let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
-    let contract = Contract::deploy(provider)
-        .with_initial_state(common::contract_state(vec![]))
-        .with_zk_config(&keyed)
+    let contract = unshielded_payout::Contract::deploy(provider)
+        .with_initial_state(unshielded_payout::LedgerInitialState)
+        .with_zk_config(unshielded_payout::ZK_CONFIG_DIR)
         .await
         .expect("deploy");
     eprintln!("deployed at {}", contract.address());
@@ -54,21 +55,8 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
 
     // Mint to the contract itself, so it has a balance to pay out of.
     contract
-        .call_with(
-            &common::exported_circuit(&info, "mintToSelf").def,
-            &program,
-            "mintToSelf",
-            &[
-                (
-                    "domainSep",
-                    Value::AlignedValue(AlignedValue::from(DOMAIN_SEP)),
-                ),
-                ("amount", Value::Integer(MINTED)),
-            ],
-            &midnight_contract::runtime::NoWitnesses,
-            &[],
-            midnight_contract::ShieldedInputs::default(),
-        )
+        .circuits()
+        .mintToSelf(Bytes(DOMAIN_SEP), MINTED)
         .await
         .expect("the contract must be able to mint to itself");
 
@@ -77,32 +65,15 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     let recipient_provider = MidnightProvider::new(&node_url);
     let wallet =
         common::synced_wallet(&recipient_provider, &indexer_url, common::RECIPIENT_SEED).await;
-    let recipient = midnight_helpers::ledger_9::UnshieldedWallet::default(
-        midnight_types::ledger_9::convert::IntoLedger::into_ledger(wallet.seed()),
-    )
-    .user_address;
+    let recipient = wallet.user_address();
     let recipient_provider = recipient_provider.with_wallet(wallet);
 
     let before = held(&recipient_provider, colour).await;
     eprintln!("recipient holds {before} before the payout");
 
     contract
-        .call_with(
-            &common::exported_circuit(&info, "payUser").def,
-            &program,
-            "payUser",
-            &[
-                ("color", Value::AlignedValue(AlignedValue::from(colour.0.0))),
-                ("amount", Value::Integer(PAID)),
-                (
-                    "address",
-                    Value::AlignedValue(AlignedValue::from(recipient.0.0)),
-                ),
-            ],
-            &midnight_contract::runtime::NoWitnesses,
-            &[],
-            midnight_contract::ShieldedInputs::default(),
-        )
+        .circuits()
+        .payUser(Bytes(colour.0.0), PAID, recipient.into())
         .await
         .expect("paying a user an unshielded token must be accepted");
 

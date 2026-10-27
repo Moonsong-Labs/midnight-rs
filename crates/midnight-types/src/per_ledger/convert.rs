@@ -10,7 +10,7 @@ use helpers::{Deserializable, Serializable};
 use crate::hd::{Seed, SeedBytes};
 use crate::{
     ChainParameters, CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustParameters,
-    EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, UnshieldedTokenType,
+    EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, UnshieldedTokenType, UserAddress,
 };
 
 /// An SDK value that has a counterpart in this generation.
@@ -56,6 +56,7 @@ hash_newtype! {
     Nullifier => Nullifier,
     Nonce => Nonce,
     CoinPublicKey => CoinPublicKey,
+    UserAddress => UserAddress,
     ContractAddress => ContractAddress,
 }
 

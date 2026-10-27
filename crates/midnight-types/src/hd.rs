@@ -38,8 +38,8 @@ use midnight_helpers::ledger_9::{DefaultDB, IntoWalletAddress, ShieldedWallet, U
 use rand::RngCore;
 use zeroize::Zeroize;
 
-use crate::ledger_9::convert::IntoLedger;
-use crate::{Network, ShieldedRecipient};
+use crate::ledger_9::convert::{IntoLedger, IntoSdk};
+use crate::{Network, ShieldedRecipient, UserAddress};
 
 /// The `role` level of an HD path: the asset family a key belongs to.
 ///
@@ -239,6 +239,19 @@ impl Seed {
         UnshieldedWallet::default(self.into_ledger())
             .address(network.into().as_str())
             .to_bech32()
+    }
+
+    /// The user address of this seed: the owner of its unshielded UTXOs, and
+    /// the bytes that [`Self::unshielded_address`] carries.
+    ///
+    /// It takes no network, because the bytes are the same on every network.
+    /// Give it to a Compact circuit that takes a `UserAddress`. To recover a
+    /// user address from someone else's shared address string, use
+    /// [`crate::address::parse_unshielded_address`] instead.
+    pub fn user_address(&self) -> UserAddress {
+        UnshieldedWallet::default(self.into_ledger())
+            .user_address
+            .into_sdk()
     }
 
     /// The shielded receiving address of this seed on `network`, e.g.
