@@ -248,13 +248,15 @@ A build that pays a fee applies the ledger's own check before it returns, and fa
 - `allowed_time_to_dismiss`: the most time that its size allows.
 - `size`: its size in bytes.
 
-The build checks the candidate whose fee converges, before the real proof, and checks the proven transaction again. `balance_transaction` checks the merged transaction, and it also checks a transaction that already pays its own fee and comes back unchanged. A Dustless build (`.without_dust()`) is not checked, because the sponsor's merge adds Dust spends that change its time and its size.
+The build checks the candidate whose fee converges, before the real proof, and checks the proven transaction again. `balance_transaction` checks the merged transaction. With a `LocalWallet`, it also checks a transaction that already pays its own fee and comes back unchanged. The build skips the check for a Dustless build (`.without_dust()`), because the sponsor's merge adds Dust spends that change its time and its size.
 
-Most of the time comes from the unshielded inputs and outputs in the guaranteed offer, and a NIGHT input or output costs the most. Under the initial parameters, one NIGHT input and one NIGHT output take about 4.3 ms. A transaction under 7.5 KB gets the 15 ms floor whatever its size, so four of each are past it. Input selection and Dust selection do not account for this rule. To recover:
+Most of the time comes from the unshielded inputs and outputs in the guaranteed offer, and a NIGHT input or output costs the most. Under the initial parameters, one NIGHT input and one NIGHT output take about 4.3 ms. A transaction under 7.5 KB gets the 15 ms floor whatever its size, so four of each are past it. Input selection and Dust selection do not account for this rule. To recover from a refused transfer:
 
 - Send a smaller amount, so that the default `CoinSelectionStrategy::LargestFirst` selects fewer inputs. Send the rest in another transfer.
 - Create fewer NIGHT outputs in one transaction.
 - Keep the `LargestFirst` ordering. `SmallestFirst` selects the most inputs, so it makes the time longer.
+
+When `balance_transaction` refuses, the party that built the transaction it balances must build a smaller one.
 
 ## Wallet Sync Phases
 

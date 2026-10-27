@@ -739,8 +739,9 @@ impl MidnightProvider {
     /// node never gets the transaction or rejects it. A transaction that
     /// already pays its own fee comes back unchanged, with nothing reserved.
     ///
-    /// The result, the unchanged one too, passes the ledger's time-to-dismiss
-    /// check, which runs before the real proof of the fee and again after it.
+    /// The provider applies the ledger's time-to-dismiss check to the merged
+    /// result after the proof. A `LocalWallet` applies it in `prepare_fees`
+    /// too: before the proof, and to a transaction that comes back unchanged.
     /// When the node would refuse the result, the call fails with
     /// [`WalletError::OutsideTimeToDismiss`](midnight_types::WalletError::OutsideTimeToDismiss)
     /// and leaves no Dust reserved.

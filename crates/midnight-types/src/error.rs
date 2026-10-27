@@ -132,19 +132,21 @@ pub enum WalletError {
     /// The node would refuse the transaction, because it takes more time to
     /// dismiss than its size allows.
     ///
-    /// The ledger rule, `FeeCalculation(OutsideTimeToDismiss)`: the time to
-    /// validate the whole transaction and apply its guaranteed part must not
-    /// be more than `time_to_dismiss_per_byte` for each byte of the
-    /// transaction, or `min_time_to_dismiss` when that is more. A build that
-    /// pays a fee applies the ledger's own check before it returns, so nothing
-    /// reaches the node.
+    /// The ledger names this rule `FeeCalculation(OutsideTimeToDismiss)`. The
+    /// time to validate the whole transaction and apply its guaranteed part
+    /// must not be more than the allowance. The allowance is
+    /// `time_to_dismiss_per_byte` for each byte of the transaction, and never
+    /// less than `min_time_to_dismiss`. A build that pays a fee applies the
+    /// ledger's own check before it returns, so nothing reaches the node.
     ///
     /// Most of the time comes from the unshielded inputs and outputs in the
     /// guaranteed offer, and a NIGHT input or output costs the most. Input and
-    /// Dust selection do not account for this rule. To recover, send a smaller
-    /// amount, so that the default `LargestFirst` ordering selects fewer
-    /// inputs, or create fewer NIGHT outputs in one transaction.
+    /// Dust selection do not account for this rule. For a transfer, send a
+    /// smaller amount, so that the default `LargestFirst` ordering selects
+    /// fewer inputs, or create fewer NIGHT outputs in one transaction.
     /// `SmallestFirst` selects the most inputs, so it makes the time longer.
+    /// When `balance_transaction` refuses, the party that built the
+    /// transaction it balances must build a smaller one.
     #[error(
         "the node would refuse this transaction: it takes {time_to_dismiss:?} to dismiss, \
          and its size of {size} bytes allows at most {allowed_time_to_dismiss:?}"

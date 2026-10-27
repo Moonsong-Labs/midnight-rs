@@ -75,9 +75,14 @@ impl PreparedTransfer {
     /// with the two setters below.
     ///
     /// [`Self::prove`] applies the time-to-dismiss check only to a build that
-    /// pays a fee: `dust_batches` is not empty, `tx_info` registers a Dust
-    /// address, or the build pays the fee of an external transaction. A build
-    /// that attaches Dust in any other way is not checked.
+    /// pays a fee. Such a build has spends in `dust_batches`, registers a Dust
+    /// address in `tx_info`, or pays the fee of an external transaction.
+    /// [`Self::prove`] does not check a build that attaches Dust in any other
+    /// way.
+    ///
+    /// A Dustless build is one half of a transaction that a sponsor's merge
+    /// completes. The merge adds Dust spends, which change the time and the
+    /// size, so the sponsor's build checks the merge.
     pub fn new(
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         tx: UnprovenTx,
@@ -171,8 +176,6 @@ impl PreparedTransfer {
             external,
             ..
         } = self;
-        // A Dustless build is a half that a sponsor's merge completes, and the
-        // merge adds Dust spends and their proofs, so only the merge is checked.
         let pays_fee = external.is_some()
             || !dust_batches.is_empty()
             || !tx_info.dust_registrations.is_empty();
@@ -1035,8 +1038,8 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 /// draw then, and an intent with no spends is one the ledger rejects.
 ///
 /// Fails with [`WalletError::OutsideTimeToDismiss`] when the node would refuse
-/// the merge whose fee converges, before any real proof. A `None` result is
-/// checked too, on `external` as it is.
+/// the merge whose fee converges, before any real proof. Before it returns
+/// `None`, it applies the same check to `external` as it is.
 pub fn balance_external(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     external: &FinalizedTx,
@@ -1153,9 +1156,9 @@ impl FeeBalanceTracker {
 /// that converges: each round rebuilds the candidate from `tx`, so a later
 /// round cannot double-spend what an earlier one selected.
 ///
-/// Only the round that converges is checked against the time to dismiss,
-/// because it is the transaction that the build proves. An earlier round has
-/// other Dust spends, which change both the time and the size.
+/// The loop checks the time to dismiss only on the round that converges,
+/// because the build proves that candidate. An earlier round has other Dust
+/// spends, which change both the time and the size.
 fn balance_fees_with_mocks(
     tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
     tx: UnprovenTx,
