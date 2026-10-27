@@ -242,7 +242,7 @@ Read the wallet's `DustBalance` (`provider.balance().await?.dust`) to find the n
 
 The node refuses a transaction when validating the whole transaction and applying its guaranteed part take more time than its size allows. The allowance is `time_to_dismiss_per_byte` for each byte, and never less than `min_time_to_dismiss`. The ledger names this refusal `FeeCalculation(OutsideTimeToDismiss)`.
 
-A build that pays a fee applies the ledger's own check before it returns, and fails with [`WalletError::OutsideTimeToDismiss`](../crates/midnight-types/src/error.rs). Nothing reaches the node, and the build leaves nothing reserved. The error gives three numbers:
+A build that pays a fee applies the ledger's own check before it returns, and fails with [`WalletError::OutsideTimeToDismiss`](../crates/midnight-types/src/error.rs). Nothing reaches the node, and a build through `MidnightProvider` leaves nothing reserved. The error gives three numbers:
 
 - `time_to_dismiss`: the time that the transaction takes.
 - `allowed_time_to_dismiss`: the most time that its size allows.
@@ -250,7 +250,7 @@ A build that pays a fee applies the ledger's own check before it returns, and fa
 
 The build checks the candidate whose fee converges, before the real proof, and checks the proven transaction again. `balance_transaction` checks the merged transaction, and it also checks a transaction that already pays its own fee and comes back unchanged. A Dustless build (`.without_dust()`) is not checked, because the sponsor's merge adds Dust spends that change its time and its size.
 
-Most of the time comes from the unshielded inputs and outputs in the guaranteed offer, and a NIGHT input or output costs the most. Under the initial parameters, one NIGHT input and one NIGHT output take about 4.3 ms, and their bytes allow less than 0.4 ms. Input selection and Dust selection do not account for this rule. To recover:
+Most of the time comes from the unshielded inputs and outputs in the guaranteed offer, and a NIGHT input or output costs the most. Under the initial parameters, one NIGHT input and one NIGHT output take about 4.3 ms. A transaction under 7.5 KB gets the 15 ms floor whatever its size, so four of each are past it. Input selection and Dust selection do not account for this rule. To recover:
 
 - Send a smaller amount, so that the default `CoinSelectionStrategy::LargestFirst` selects fewer inputs. Send the rest in another transfer.
 - Create fewer NIGHT outputs in one transaction.
