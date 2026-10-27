@@ -90,7 +90,9 @@ let merged = provider.merge_transactions(&[mine, counterparty_bytes])?;
 provider.submit(&merged).await?;
 ```
 
-**Segment constraint.** `Transaction::merge` rejects two inputs that both carry an intent at the same segment. A self-funded build attaches its Dust-fee intent at the fallible segment (1), and a contract call and an unshielded (UTXO) transfer put their action there too, so you cannot merge two self-funded transactions: they collide at segment 1. A Dustless *shielded* transfer carries no intent (pure Zswap) and merges freely. So the practical multi-party shape is "one party pays": the contributors build fee-less (`.without_dust()`), one party sponsors via `balance_transaction` (next section), and its fee intent rides a distinct segment. The `.build()`-then-`merge` example above works only when at most one side carries a segment-1 intent.
+**Segment constraint.** `Transaction::merge` rejects two inputs that both carry an intent at the same segment. Each contract call puts its intent at a random segment from 2 up, as midnight-js `Transaction.fromPartsRandomized` does, so two calls merge. Segment 1 holds the intent of a deploy, of a maintenance update and of an unshielded (UTXO) transfer, and the Dust-fee intent of a self-funded transfer. A self-funded contract call and `balance_transaction` put their Dust-fee intent at the first free segment from 0xFEED up. So at most one merged input can carry an intent at segment 1, and two self-funded calls collide at 0xFEED. A Dustless *shielded* transfer carries no intent (pure Zswap) and merges freely. So the practical multi-party shape is "one party pays": the contributors build fee-less (`.without_dust()`), and one party sponsors them all with `balance_transaction` (next section). The `.build()`-then-`merge` example above works when the counterparty's transaction carries no fee intent at 0xFEED.
+
+Two `.without_dust()` calls to different contracts merge into one transaction, and one `balance_transaction` pays for both, so the calls apply together or not at all. midnight-js `withContractScopedTransaction` batches several calls to one contract instead, and runs each call on the state that the call before it left in memory. midnight-rs has no such scope. It runs each call on the state from before the merge, and the ledger applies the calls in the order of their random segments, so a second call to the same contract can fail.
 
 One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only a whole transaction carries the binding randomness the merge needs, and proving discards the per-input randomness a loose offer would require. So the artifacts exchanged are always full transactions, not offers.
 
@@ -133,7 +135,7 @@ let funded = sponsor.balance_transaction(&merged).await?;
 sponsor.submit_reserved(funded).await?;
 ```
 
-Because each half carries only a guaranteed Zswap offer and no intent, two halves merge without the segment-1 collision above, and `balance_transaction`'s fee intent rides its own segment. The two halves must carry exactly mirrored `(token, amount)` pairs or the merge won't balance; the builder can't enforce the counterparty's side. See [`examples/shielded-swap`](../examples/shielded-swap) for the end-to-end flow.
+Because each half carries only a guaranteed Zswap offer and no intent, two halves merge without a segment collision, and `balance_transaction`'s fee intent rides its own segment. The two halves must carry exactly mirrored `(token, amount)` pairs or the merge won't balance; the builder can't enforce the counterparty's side. See [`examples/shielded-swap`](../examples/shielded-swap) for the end-to-end flow.
 
 ### Spending your own coin in a call, and coin discovery
 

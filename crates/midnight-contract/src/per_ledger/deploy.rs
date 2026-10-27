@@ -6,7 +6,7 @@ use std::sync::Arc;
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{CoinPublicKey, EncryptionPublicKey, TransferResult};
 
-use super::call::{INTENT_SEGMENT, prove_without_fee};
+use super::call::prove_without_fee;
 use super::helpers;
 use super::provider::Builds;
 use super::shielded::KeyedOutput;
@@ -63,6 +63,13 @@ pub(crate) async fn deploy_funded(
         transaction,
     })
 }
+
+/// The segment of the intent that a deploy or a maintenance update adds.
+///
+/// The segment is fixed, as it is for a deploy and a maintenance update in
+/// midnight-js. A call draws its segment with
+/// [`call_segment`](super::call::call_segment) instead.
+const INTENT_SEGMENT: helpers::SegmentId = helpers::Segment::Fallible as helpers::SegmentId;
 
 /// The transaction info for one intent, at [`INTENT_SEGMENT`], that holds
 /// `action` alone.
