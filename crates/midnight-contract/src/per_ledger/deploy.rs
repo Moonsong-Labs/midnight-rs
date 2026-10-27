@@ -120,8 +120,8 @@ pub(super) async fn build_with_mock_fee_proofs(
 /// funding of one context.
 ///
 /// The coins go back to the wallet when a step fails. Once the deploy is
-/// proven, they stay reserved, and the result names them beside the fee
-/// Dust, if any, so its submit can hand both back.
+/// proven, they stay reserved. The result names them beside the fee Dust, if
+/// any, because `submit_reserved` hands back only what a result names.
 async fn offer_transaction(
     builds: &Builds<'_>,
     context: &Arc<BuildContext>,
