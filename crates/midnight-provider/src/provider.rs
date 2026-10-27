@@ -536,7 +536,11 @@ impl MidnightProvider {
     ///
     /// The two halves must carry exactly mirrored `(token, amount)` pairs or the
     /// merge won't balance; the builder can't enforce the counterparty's side.
-    /// See [`Self::transfer_shielded`] for reservation semantics.
+    /// See [`Self::transfer_shielded`] for reservation semantics. The half
+    /// names the give-side coins it reserved in
+    /// [`DustlessTransaction::spent`](crate::DustlessTransaction::spent).
+    /// When the swap will not land, for example because the counterparty
+    /// never builds the mirror, pass them to [`Self::release`].
     pub fn shielded_swap<'a>(
         &'a self,
         give_token: ShieldedTokenType,
@@ -773,6 +777,10 @@ impl MidnightProvider {
     /// a transaction that is rejected at submit, or built and then abandoned,
     /// keeps its coins out of circulation until the TTL window elapses.
     /// Releasing frees them at once.
+    ///
+    /// Take `spent` from [`TransferResult::spent`], or from
+    /// [`DustlessTransaction::spent`](crate::DustlessTransaction::spent) for
+    /// a fee-less build that its fee payer never submits.
     ///
     /// Only for a transaction that cannot land. Releasing one still in flight
     /// lets a later build re-select the same inputs, and the loser is rejected

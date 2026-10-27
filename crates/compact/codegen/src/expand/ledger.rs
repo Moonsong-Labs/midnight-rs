@@ -1214,7 +1214,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// when the witnesses change the private state, before the build reserves
                 /// an input or makes a proof. Submit such a call with `.await` or `.send()`.
                 /// As with `build`, the inputs that the build reserves stay reserved until
-                /// a sync sees the chain spend them, or until their TTL passes.
+                /// a sync sees the chain spend them, or until their TTL passes. The
+                /// `DustlessTransaction` does not name them, so its `spent()` is empty.
                 fn without_dust(
                     self,
                 ) -> impl ::core::future::Future<
