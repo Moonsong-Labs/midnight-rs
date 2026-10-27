@@ -490,10 +490,10 @@ pub(crate) struct UnshieldedReplay {
     pub utxos: Vec<TrackedUtxo>,
     /// The transaction id that the next replay resumes after.
     pub last_tx_id: i64,
-    /// The height of the newest block among the consumed transactions. It is
-    /// never below the replay's start height.
+    /// The larger of the start height and the height of the newest block
+    /// among the applied transactions.
     pub last_block_height: i64,
-    /// The key of each UTXO that a consumed transaction spent.
+    /// The key of each UTXO that an applied transaction spent.
     pub spent: Vec<SpentUtxoKey>,
 }
 
