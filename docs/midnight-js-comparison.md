@@ -228,7 +228,7 @@ These are real Midnight chain features that midnight-js exposes and this SDK doe
 
 ### Wallet observability
 
-midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams backed by indexer subscriptions, such as `contractStateObservable` and `unshieldedBalancesObservable`. It also has promises that wait for one record, such as `watchForContractState` and `watchForTxData`. midnight-rs has no contract-state stream. `WalletBuilder::sync_with_progress` reports the progress of the sync that builds a wallet as `SyncProgress` events. After that sync, `LocalWallet::sync_in_background` returns a `BackgroundSync`: its `wait_until` waits until a condition on the balance holds, and its `last_error` gives the error of the last pass. For a transaction that this SDK submits, `PendingTx::wait_best` / `wait_finalized` take the place of `watchForTxData`.
+midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams backed by indexer subscriptions, such as `contractStateObservable` and `unshieldedBalancesObservable`. It also has promises that wait for one record, such as `watchForContractState` and `watchForTxData`. midnight-rs has no contract-state or contract-balance stream. `WalletBuilder::sync_with_progress` reports the progress of the sync that builds a wallet as `SyncProgress` events. After that sync, `LocalWallet::sync_in_background` returns a `BackgroundSync`. Its `wait_until` waits until a condition on the balance holds. Its `last_error` gives the error of the last pass. For a transaction that this SDK submits, `PendingTx::wait_best` / `wait_finalized` take the place of `watchForTxData`.
 
 ### Cross-contract calls
 

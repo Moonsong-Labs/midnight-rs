@@ -102,11 +102,10 @@ const opToJson = (op) => {
 };
 
 // The `ContractState` format version tag that `serialize()` writes ahead of
-// the payload. Stripped from the report because the two executors link
-// separate builds of the ledger 9 on-chain runtime (the npm
-// onchain-runtime-v4 here, the SDK's fork in Rust), and each build can change
-// the tag on its own. The payload after the tag is what both sides must agree
-// on byte for byte.
+// the payload. The report strips this tag. The two executors link separate
+// builds of the ledger 9 on-chain runtime (the npm onchain-runtime-v4 here,
+// the SDK's fork in Rust). Each build can change the tag on its own. The
+// payload after the tag is what both sides must agree on byte for byte.
 const CONTRACT_STATE_TAG = /^midnight:contract-state\[v\d+\]:/;
 
 const untaggedStateHex = (contractState) => {
