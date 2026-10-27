@@ -64,7 +64,7 @@ async fn deploy_funded_with_shielded_offer() {
         outputs: vec![payment],
     };
 
-    let result = midnight_contract::deploy::deploy_funded(&state, &provider, Some(offer))
+    let result = midnight_contract::deploy::deploy_funded(&state, &provider, Some(offer), None)
         .await
         .unwrap();
 

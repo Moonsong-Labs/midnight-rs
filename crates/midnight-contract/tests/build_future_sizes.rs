@@ -122,6 +122,7 @@ fn the_base_contract_call_methods_return_small_futures() {
             &NoWitnesses,
             &[],
             ShieldedInputs::default(),
+            None,
         ),
     );
     assert_small(
@@ -134,6 +135,7 @@ fn the_base_contract_call_methods_return_small_futures() {
             &NoWitnesses,
             &[],
             ShieldedInputs::default(),
+            None,
             Ok,
         ),
     );
@@ -147,6 +149,7 @@ fn the_base_contract_call_methods_return_small_futures() {
             &NoWitnesses,
             &[],
             ShieldedInputs::default(),
+            None,
             true,
         ),
     );

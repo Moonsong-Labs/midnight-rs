@@ -48,13 +48,13 @@ pub struct UnprovenCallTx {
     pub new_state: ContractState<InMemoryDB>,
 }
 
-/// Default transaction TTL: 1 hour.
+/// The transaction TTL of the low-level [`build_unproven_call_tx`] path: 1
+/// hour after the system clock.
 ///
-/// Used by the low-level [`build_unproven_call_tx`] path. The high-level path
-/// ([`crate::deploy::deploy_funded`], [`call_transaction`], and the
-/// [`crate::DeployBuilder`] / [`crate::Contract::call_with`] APIs that wrap
-/// them) reads `global_ttl` from chain parameters via the upstream
-/// `StandardTransactionInfo::build`, so this constant doesn't apply there.
+/// The high-level path ([`crate::deploy::deploy_funded`], [`call_transaction`],
+/// and the [`crate::DeployBuilder`] / [`crate::Contract::call_with`] APIs that
+/// wrap them) counts its TTL from the chain time of the wallet's build
+/// context, so this constant does not apply there.
 pub(crate) const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Compute a TTL (time-to-live) for transaction intents.
@@ -143,7 +143,8 @@ pub(crate) fn run_call(
 ///
 /// `exec_result` is the run of `circuit` on `state`. The build resyncs the
 /// wallet and reserves the inputs that the transaction spends, and the result
-/// names them.
+/// names them. The transaction expires `ttl` after the chain time of the
+/// build, or after the chain's `global_ttl` for `None`.
 #[expect(
     clippy::too_many_arguments,
     reason = "the inputs of the generation's own `call_transaction`, before the dispatch"
@@ -159,6 +160,7 @@ pub(crate) async fn call_transaction(
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
+    ttl: Option<std::time::Duration>,
     // When false, skip Dust funding: the call is built proven but fee-less, for
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
     pay_fees: bool,
@@ -180,6 +182,7 @@ pub(crate) async fn call_transaction(
                 zk_config,
                 coin_encryption_keys,
                 shielded,
+                ttl,
                 pay_fees,
             ))
             .await
@@ -198,6 +201,7 @@ pub(crate) async fn call_transaction(
                 zk_config,
                 coin_encryption_keys,
                 shielded,
+                ttl,
                 pay_fees,
             ))
             .await

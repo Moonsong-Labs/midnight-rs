@@ -164,22 +164,28 @@ pub enum TransferKind {
     },
 }
 
-/// One build, as data: what to make, and how to choose the inputs that make
-/// it.
+/// One build, as data: what to make, how to choose the inputs that make it,
+/// and how long the transaction stays valid.
 #[derive(Debug)]
 pub struct TransferRequest {
     /// The transfer to build.
     pub kind: TransferKind,
     /// How to order the coins and UTXOs the build draws on.
     pub coin_selection: CoinSelectionStrategy,
+    /// How long the transaction stays valid after the chain time of the
+    /// build. `None` gives the chain's `global_ttl`. See
+    /// `TransferBuilder::with_ttl`.
+    pub ttl: Option<std::time::Duration>,
 }
 
 impl TransferRequest {
-    /// A request that orders its inputs the default way.
+    /// A request that orders its inputs the default way, and whose
+    /// transaction stays valid for the chain's `global_ttl`.
     pub fn new(kind: TransferKind) -> Self {
         Self {
             kind,
             coin_selection: CoinSelectionStrategy::default(),
+            ttl: None,
         }
     }
 
@@ -187,6 +193,13 @@ impl TransferRequest {
     /// `TransferBuilder::with_coin_selection`.
     pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
         self.coin_selection = strategy;
+        self
+    }
+
+    /// Make the transaction expire `ttl` after the chain time of the build.
+    /// See `TransferBuilder::with_ttl`.
+    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.ttl = Some(ttl);
         self
     }
 }

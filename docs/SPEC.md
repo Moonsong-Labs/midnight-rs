@@ -166,7 +166,7 @@ Each node read of the provider, its connect included, ends within 10 s (60 s for
 
 A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy with no shielded offer and a maintenance update reserve theirs through `prepare_funded`. A sponsor's build reserves the Dust for the fee it pays through `prepare_fees`. A call, or a deploy with a shielded offer, reserves its pinned coins through `spend_shielded`. It then reserves the Dust for its own fee through `prepare_fees`.
 
-Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm.
+Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm. Each reservation expires at the TTL of its transaction, which `.with_ttl(..)` on a builder makes shorter than the chain's `global_ttl`, and the wallet compares it with the time of the chain's latest block.
 
 `watch_for_coin` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The wallet records and replays under one hold of its sync lock. A state in an earlier generation than the chain first crosses the fork with a resync, because it cannot apply the later generation's events. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. A resync carries registrations across for the same reason. `forget_coin` drops a registration whose rebuilt `CoinInfo` matched no output, which would otherwise ride along on every replay. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
 
@@ -201,6 +201,7 @@ Contract::deploy(&provider)                              // DeployBuilder<'_, P>
   .with_initial_state(LedgerInitialState::default())
   .with_zk_config("compiled")
   [.with_deploy_timeout(...)]
+  [.with_ttl(...)]                                       // default: the chain's global_ttl
 
   .await                                                 // IntoFuture: send + into_contract
     │
@@ -215,12 +216,12 @@ Internally:
 ```
 with_zk_config(initial_state, zk_config)      // load *.verifier files into state.operations
   ↓
-deploy_funded(state, provider, shielded_offer)
+deploy_funded(state, provider, shielded_offer, ttl)
   ├─ provider.builds().await                  // resync wallet, pick its generation's Builds
   ├─ builds.execution_context().await         // build that generation's context
   ├─ builds.proof_provider()                  // that generation's prover (ProofProviders)
   ├─ build deploy intent (state re-encoded for the generation)
-  ├─ no offer: builds.build_funded(tx_info).await  → DeployResult { address, transaction }
+  ├─ no offer: builds.build_funded(tx_info, ttl).await  → DeployResult { address, transaction }
   │   ├─ one transition: add the funding view, balance the fee with mock
   │   │  proofs (speculative_spend loop), record what it drew
   │   └─ prove the balanced tx once, for real, with the wallet free
@@ -356,7 +357,7 @@ ledger_N::WalletBuilds::prepare_transfer(request, proof_provider)   // one hold 
     └─ select inputs from wallet's local state
     └─ balance Dust fees (speculative_spend loop, mock proofs only)
     └─ prepare_no_validate
-  reserve_pending(dust_batches, spent_unshielded_inputs, shielded, reserved_at)
+  reserve_pending(dust_batches, spent_unshielded_inputs, shielded, reserved_at, expires_at)
   → ReservedBuild
   ↓
 (wallet released)    PreparedTransfer::prove       // the only real proving

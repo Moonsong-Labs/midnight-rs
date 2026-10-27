@@ -738,6 +738,11 @@ impl MidnightProvider {
     /// it with [`Self::submit_reserved`], which hands the Dust back when the
     /// node never gets the transaction or rejects it. A transaction that
     /// already pays its own fee comes back unchanged, with nothing reserved.
+    ///
+    /// The fee intent expires with the earliest intent of the transaction, or
+    /// after the chain's `global_ttl` when that comes first, and the Dust stays
+    /// reserved until then. So a party that builds its transaction with a
+    /// short TTL (`with_ttl`) bounds the fee intent too.
     pub async fn balance_transaction(
         &self,
         tx_bytes: &[u8],

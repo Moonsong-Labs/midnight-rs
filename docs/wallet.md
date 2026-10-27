@@ -366,6 +366,21 @@ let pending = provider
 4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
 5. Submits the proven bytes to the node and returns a `PendingTx`.
 
+Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` (one hour on the default parameters) after the time of the chain's latest block that the resync read. That is the longest TTL that the chain accepts. To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
+
+```rust
+use std::time::Duration;
+
+let pending = provider
+    .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
+    .with_ttl(Duration::from_secs(300))
+    .await?;
+```
+
+`transfer_shielded`, `transfer_unshielded` and `register_dust` take it, and so do a contract deploy (`DeployBuilder::with_ttl`) and a circuit call (`.with_ttl` on the call builder, or the `ttl` argument of `Contract::call_with`). The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the build with `WalletError::TtlOutOfRange`, before it spends or proves anything. A Dustless shielded transfer (`.without_dust()`) is a Zswap offer with no intent, so it cannot carry a TTL, and its build fails with `WalletError::TtlWithoutIntent`. A shielded swap half has no `with_ttl` for the same reason. When a wallet pays the fee of another party's transaction (`balance_transaction`), its fee intent expires with the earliest intent of that transaction.
+
+A shorter TTL bounds two waits: how long a transaction whose fate is unknown can still land, and how long the wallet holds its inputs (see [Pending reservations](#pending-reservations)).
+
 To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder instead of awaiting it:
 
 ```rust
@@ -397,6 +412,8 @@ let (finalized, _pending) = pending.wait_finalized().await?;
 Both waits return `Ok` only when the chain applied the transaction. When the transaction landed but did not apply (`PartialSuccess` or `Failure`), the wait fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TxInBlock` with the verdict. The verdict of `wait_best` is provisional: a reorg can drop the block, and the transaction can land again with another verdict, which `wait_best` does not follow. `wait_finalized` gives the final verdict. An `Err` consumes the handle, so when the final verdict matters, call `wait_finalized` in place of `wait_best`.
 
 When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch variants come from the submit: after `NotSubmitted` the tx never left the process, and after `SubmitRpc` the node can still hold it.
+
+When the fate is unknown, a transaction can still land until its TTL passes. After that, a rebuild from the same inputs is safe from a double spend, and the wallet frees the inputs at its next build. Build with `.with_ttl(duration)` (see [Transfers](#transfers)) to make that wait shorter than `global_ttl`.
 
 ## Recovering a coin the wallet cannot discover
 
@@ -436,7 +453,9 @@ The registration is recorded and persisted before the replay starts. If the repl
 In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`, persisted as `pending.json` next to the wallet state. They serve two purposes:
 
 - **Prevent double-spending across builds.** Input selection skips reserved coins.
-- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL window elapsed, as a backstop for transactions that never confirm. Transaction TTL defaults to one hour.
+- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL passed, as a backstop for transactions that never confirm.
+
+Each reservation holds the TTL of its transaction, the earliest TTL of the transaction's intents. The wallet drops the reservation once the time of the chain's latest block passes it, because the transaction can no longer land. The TTL is the chain's `global_ttl` after the build by default, and `.with_ttl(duration)` on a builder makes it shorter (see [Transfers](#transfers)). The coins that a contract call or a deploy spends from the wallet get the TTL of that call or deploy. A reservation in a `pending.json` that holds no expiry expires `global_ttl` after its stamp.
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 

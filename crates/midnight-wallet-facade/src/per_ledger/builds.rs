@@ -77,9 +77,15 @@ pub trait WalletBuilds: WalletFacade {
     /// `tx_info` must already ask for mock fee proofs. Balancing without them
     /// proves on every round, which is the cost preparing exists to avoid, and
     /// a transaction carrying a user circuit cannot mock-prove at all.
+    ///
+    /// The intents expire `ttl` after the chain time of the build, or after
+    /// the chain's `global_ttl` for `None`, and the reservation ends then too.
+    /// An implementation refuses a `ttl` that the chain refuses with
+    /// [`WalletError::TtlOutOfRange`], before it spends anything.
     async fn prepare_funded(
         &self,
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+        ttl: Option<std::time::Duration>,
     ) -> Result<ReservedBuild, WalletError>;
 
     /// Spend coins this wallet owns into `context`, and reserve them, as one
@@ -93,16 +99,20 @@ pub trait WalletBuilds: WalletFacade {
     /// hide these very coins from it, because a funding view drops what a
     /// pending build already spent.
     ///
-    /// The reservation stands until the caller releases it. A build that never
-    /// reaches the chain must hand the coins back.
+    /// The reservation stands until the caller releases it, or until `ttl`
+    /// after the chain time of `context` passes (the chain's `global_ttl` for
+    /// `None`). Pass the TTL of the transaction that spends the coins. A build
+    /// that never reaches the chain must hand the coins back.
     ///
     /// An implementation refuses a nullifier that `nullifiers` names twice
-    /// with [`WalletError::DuplicateInput`], before it spends anything. A
+    /// with [`WalletError::DuplicateInput`], and a `ttl` that the chain refuses
+    /// with [`WalletError::TtlOutOfRange`], before it spends anything. A
     /// second spend of one coin succeeds and counts its value twice.
     async fn spend_shielded(
         &self,
         context: &Arc<BuildContext>,
         nullifiers: Vec<Nullifier>,
+        ttl: Option<std::time::Duration>,
         rng: &mut StdRng,
     ) -> Result<(Vec<PreparedInput>, SpentInputs), WalletError>;
 
@@ -145,17 +155,19 @@ impl<T: WalletBuilds + ?Sized> WalletBuilds for Arc<T> {
     async fn prepare_funded(
         &self,
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+        ttl: Option<std::time::Duration>,
     ) -> Result<ReservedBuild, WalletError> {
-        (**self).prepare_funded(tx_info).await
+        (**self).prepare_funded(tx_info, ttl).await
     }
 
     async fn spend_shielded(
         &self,
         context: &Arc<BuildContext>,
         nullifiers: Vec<Nullifier>,
+        ttl: Option<std::time::Duration>,
         rng: &mut StdRng,
     ) -> Result<(Vec<PreparedInput>, SpentInputs), WalletError> {
-        (**self).spend_shielded(context, nullifiers, rng).await
+        (**self).spend_shielded(context, nullifiers, ttl, rng).await
     }
 
     async fn prepare_fees(

@@ -300,6 +300,7 @@ async fn a_build_only_call_with_witnesses_needs_a_store_before_any_node_query() 
             &NoWitnesses,
             &[],
             ShieldedInputs::default(),
+            None,
             true,
         )
         .await

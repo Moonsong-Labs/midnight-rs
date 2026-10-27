@@ -65,7 +65,8 @@ pub enum SubmitError {
     ///
     /// Treat the fate as unknown. Before you build again from the same inputs,
     /// make sure that the chain does not hold the transaction. You can also
-    /// wait until its TTL passes.
+    /// wait until its TTL passes. A build with `with_ttl` (on the transfer
+    /// and contract builders) makes that wait shorter than `global_ttl`.
     #[error("submit RPC: {message}")]
     SubmitRpc { message: String },
 
@@ -88,7 +89,9 @@ pub enum SubmitError {
     /// and can still be included in a later block. Resubmitting a
     /// transaction that spends the same inputs risks a double-spend
     /// conflict — confirm the original is absent from the chain (or let its
-    /// TTL expire) before rebuilding.
+    /// TTL expire) before rebuilding. A build with `with_ttl` (on the
+    /// transfer and contract builders) makes that wait shorter than
+    /// `global_ttl`.
     #[error("dropped: {message}")]
     Dropped { message: String },
 

@@ -12,14 +12,14 @@ use futures_util::FutureExt;
 use super::convert::{IntoLedger, IntoSdk, sdk_seed};
 use super::helpers;
 use helpers::{
-    BuildContext, BuildUtxoOutput, BuildUtxoSpend, BuilderContext, CoinSelectionStrategy,
-    DefaultDB, DustActions, DustLocalState, DustRegistration, DustRegistrationBuilder, DustSpend,
-    DustWallet, FromContext, HashMapStorage, InputInfo, Intent, IntentInfo, LedgerParameters,
-    NIGHT, Nullifier, OfferInfo, OutputInfo, ProofPreimageMarker, ProofProvider, Segment,
-    ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng,
-    StandardTransactionInfo, StdRng, Timestamp, TokenType, Transaction, TransactionSigningKey,
-    UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo,
-    UtxoSelectionError, UtxoSpendInfo, WalletAddress,
+    BlockContext, BuildContext, BuildUtxoOutput, BuildUtxoSpend, BuilderContext,
+    CoinSelectionStrategy, DefaultDB, DustActions, DustLocalState, DustRegistration,
+    DustRegistrationBuilder, DustSpend, DustWallet, FromContext, HashMapStorage, InputInfo, Intent,
+    IntentInfo, LedgerParameters, NIGHT, Nullifier, OfferInfo, OutputInfo, ProofPreimageMarker,
+    ProofProvider, Segment, ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet,
+    Signature, Sp, SplittableRng, StandardTransactionInfo, StdRng, Timestamp, TokenType,
+    Transaction, TransactionSigningKey, UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType,
+    UnshieldedWallet, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo, WalletAddress,
 };
 
 use crate::hd::Seed;
@@ -62,6 +62,8 @@ pub struct PreparedTransfer {
     /// was handed. The reservation carries the same stamp, so a release can
     /// name this build's own entry.
     reserved_at: Timestamp,
+    /// The time after which the transaction can no longer land.
+    expires_at: Timestamp,
     /// The finished transaction whose fee this build pays, which
     /// [`Self::prove`] merges the proven fee into.
     external: Option<FinalizedTx>,
@@ -77,9 +79,14 @@ impl PreparedTransfer {
         tx: UnprovenTx,
         dust_batches: Vec<DustSpendBatch>,
     ) -> Self {
-        // Read the stamp from the context this build selected against rather
-        // than take it as an argument, so the two cannot disagree.
+        // Read both from the context and the transaction this build made
+        // rather than take them as arguments, so they cannot disagree.
         let reserved_at = tx_info.context.latest_block_context().tblock;
+        let expires_at = tx
+            .intents()
+            .map(|(_, intent)| intent.ttl)
+            .min()
+            .unwrap_or_else(|| longest_ttl(&tx_info.context));
         Self {
             tx_info,
             tx,
@@ -87,6 +94,7 @@ impl PreparedTransfer {
             spent_unshielded_inputs: Vec::new(),
             spent_shielded_inputs: Vec::new(),
             reserved_at,
+            expires_at,
             external: None,
         }
     }
@@ -119,6 +127,15 @@ impl PreparedTransfer {
     /// this stamp, which [`Self::spent_inputs`] gives each of them.
     pub fn reserved_at(&self) -> Timestamp {
         self.reserved_at
+    }
+
+    /// The chain time after which this build's transaction can no longer
+    /// land: the earliest TTL of its intents. Reserve its inputs until then.
+    ///
+    /// A transaction with no intent carries no TTL, and it gets the chain's
+    /// `global_ttl` after the chain time of the build.
+    pub fn expires_at(&self) -> Timestamp {
+        self.expires_at
     }
 
     /// Everything this build will spend, in the form a reservation takes.
@@ -326,6 +343,7 @@ pub struct TransferBuilder<'a> {
     context: Arc<BuildContext>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     coin_selection: CoinSelectionStrategy,
+    ttl: Option<std::time::Duration>,
 }
 
 impl<'a> TransferBuilder<'a> {
@@ -339,7 +357,24 @@ impl<'a> TransferBuilder<'a> {
             context,
             proof_provider,
             coin_selection: CoinSelectionStrategy::default(),
+            ttl: None,
         }
+    }
+
+    /// Make the transaction expire `ttl` after the chain time of the build.
+    ///
+    /// The default is the chain's `global_ttl`, the longest TTL the chain
+    /// accepts. A shorter TTL bounds how long a transaction that never
+    /// confirms can still land, and how long the wallet holds its inputs.
+    /// See [`intent_ttl`].
+    ///
+    /// The build fails with [`WalletError::TtlOutOfRange`] when `ttl` is under
+    /// one second or longer than `global_ttl`. It fails with
+    /// [`WalletError::TtlWithoutIntent`] for a Dustless shielded transfer or a
+    /// swap half, which carry no intent to hold a TTL.
+    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
     }
 
     /// Order the coins and UTXOs this build draws on.
@@ -360,15 +395,17 @@ impl<'a> TransferBuilder<'a> {
         self
     }
 
-    /// Prepare the transfer a request names, with the input ordering it asks
-    /// for. Dispatches to the matching `prepare_*` method below, each of which
-    /// documents what it builds.
+    /// Prepare the transfer a request names, with the input ordering and the
+    /// TTL it asks for. Dispatches to the matching `prepare_*` method below,
+    /// each of which documents what it builds.
     pub async fn prepare(self, request: TransferRequest) -> Result<PreparedTransfer, WalletError> {
         let TransferRequest {
             kind,
             coin_selection,
+            ttl,
         } = request;
-        let builder = self.with_coin_selection(coin_selection);
+        let mut builder = self.with_coin_selection(coin_selection);
+        builder.ttl = ttl;
         match kind {
             TransferKind::Shielded {
                 token_type,
@@ -568,7 +605,7 @@ impl<'a> TransferBuilder<'a> {
         }
         tx_info.use_mock_proofs_for_fees(true);
 
-        let mut prepared = prepare_no_validate(tx_info).await?;
+        let mut prepared = prepare_no_validate(tx_info, self.ttl).await?;
         prepared.set_spent_shielded_inputs(spent_shielded_inputs);
         Ok(prepared)
     }
@@ -663,7 +700,7 @@ impl<'a> TransferBuilder<'a> {
         }
         tx_info.use_mock_proofs_for_fees(true);
 
-        let mut prepared = prepare_no_validate(tx_info).await?;
+        let mut prepared = prepare_no_validate(tx_info, self.ttl).await?;
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
         Ok(prepared)
     }
@@ -811,7 +848,7 @@ impl<'a> TransferBuilder<'a> {
         let spent_unshielded_inputs: Vec<SpentUtxoKey> =
             night_utxos.iter().map(|u| u.spent_key()).collect();
 
-        let mut prepared = prepare_no_validate(tx_info).await?;
+        let mut prepared = prepare_no_validate(tx_info, self.ttl).await?;
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
         Ok(prepared)
     }
@@ -861,21 +898,96 @@ pub struct BuiltTransaction {
     pub dust_batches: Vec<DustSpendBatch>,
 }
 
-/// The chain time of `context`, and the TTL derived from it: that time plus the
-/// ledger's `global_ttl`.
-fn now_and_ttl(context: &BuildContext) -> (Timestamp, Timestamp) {
+/// The latest chain time that `block_context` knows: its block time, or the
+/// time of its last block when that is later.
+///
+/// A wallet anchors the block time of its build context at its Dust state,
+/// which can trail the chain, and keeps the time of the chain's latest block
+/// as the last block's time. A context that the helpers make for a block, or
+/// with no block, holds an earlier last block time.
+pub fn chain_time(block_context: &BlockContext) -> Timestamp {
+    block_context.tblock.max(block_context.last_block_time)
+}
+
+/// The TTL a build gives its intents: `ttl` after the chain time of `context`
+/// (see [`chain_time`]), or the chain's `global_ttl` after it when `ttl` is
+/// `None`.
+///
+/// The chain counts a TTL in whole seconds, so this drops a fraction of a
+/// second.
+///
+/// # Errors
+///
+/// [`WalletError::TtlOutOfRange`] when `ttl` is under one second, or longer
+/// than the chain's `global_ttl`.
+pub fn intent_ttl(
+    context: &BuildContext,
+    ttl: Option<std::time::Duration>,
+) -> Result<Timestamp, WalletError> {
+    let global_ttl = context.with_ledger_state(|ls| ls.parameters.global_ttl);
+    ttl_after(chain_time(&context.latest_block_context()), global_ttl, ttl)
+}
+
+/// [`intent_ttl`] with no TTL asked for: the longest TTL the chain accepts.
+fn longest_ttl(context: &BuildContext) -> Timestamp {
+    chain_time(&context.latest_block_context())
+        + context.with_ledger_state(|ls| ls.parameters.global_ttl)
+}
+
+/// `ttl` after `chain_time`, or `global_ttl` after it for `None`. See
+/// [`intent_ttl`].
+fn ttl_after(
+    chain_time: Timestamp,
+    global_ttl: helpers::Duration,
+    ttl: Option<std::time::Duration>,
+) -> Result<Timestamp, WalletError> {
+    let Some(requested) = ttl else {
+        return Ok(chain_time + global_ttl);
+    };
+    let secs = i128::from(requested.as_secs());
+    if secs == 0 || secs > global_ttl.as_seconds() {
+        return Err(WalletError::TtlOutOfRange {
+            requested,
+            global_ttl: std::time::Duration::from_secs(
+                u64::try_from(global_ttl.as_seconds()).unwrap_or_default(),
+            ),
+        });
+    }
+    Ok(chain_time + helpers::Duration::from_secs(secs))
+}
+
+/// The block time of `context`, which Dust spends declare as their `ctime`,
+/// and the TTL of the build's intents. See [`intent_ttl`].
+fn now_and_ttl(
+    context: &BuildContext,
+    ttl: Option<std::time::Duration>,
+) -> Result<(Timestamp, Timestamp), WalletError> {
     let now = context.latest_block_context().tblock;
-    let ttl = now + context.with_ledger_state(|ls| ls.parameters.global_ttl);
-    (now, ttl)
+    Ok((now, intent_ttl(context, ttl)?))
+}
+
+/// Refuse `ttl` when the transaction that `tx_info` describes will have no
+/// intent to carry it: it has none of its own, and it pays no fee, which
+/// would add one.
+fn refuse_ttl_without_intent(
+    tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>,
+    ttl: Option<std::time::Duration>,
+) -> Result<(), WalletError> {
+    if ttl.is_some() && tx_info.intents.is_empty() && !pays_own_fee(tx_info) {
+        return Err(WalletError::TtlWithoutIntent);
+    }
+    Ok(())
 }
 
 /// Assemble the unproven transaction `tx_info` describes, with its offers and
 /// intents built but no Dust attached and nothing proven. Also returns the
-/// chain time it read and the TTL derived from it, which fee balancing needs.
+/// block time it read and the TTL of its intents, which fee balancing needs.
 async fn assemble_unproven(
     tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
+    ttl: Option<std::time::Duration>,
 ) -> Result<(UnprovenTx, Timestamp, Timestamp), WalletError> {
-    let (now, ttl) = now_and_ttl(&tx_info.context);
+    refuse_ttl_without_intent(tx_info, ttl)?;
+    let (now, ttl) = now_and_ttl(&tx_info.context, ttl)?;
 
     let guaranteed_offer = tx_info
         .guaranteed_offer
@@ -913,11 +1025,21 @@ async fn assemble_unproven(
 /// Build and prove a transaction without the helpers' final `well_formed()`
 /// check. The chain validates with its own `root_history`; matching that
 /// locally would require a 55MB+ global `DustState`. Matches midnight-js.
+///
+/// The intents expire `ttl` after the chain time of the build, or after the
+/// chain's `global_ttl` for `None`. See [`intent_ttl`].
+///
+/// # Errors
+///
+/// [`WalletError::TtlOutOfRange`] for a `ttl` that [`intent_ttl`] refuses, and
+/// [`WalletError::TtlWithoutIntent`] for a `ttl` on a transaction with no
+/// intent that pays no fee. Both come before anything is spent or proven.
 pub async fn build_no_validate(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+    ttl: Option<std::time::Duration>,
 ) -> Result<BuiltTransaction, WalletError> {
     if pays_own_fee(&tx_info) && !tx_info.mock_proofs_for_fees {
-        let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
+        let (tx, now, ttl) = assemble_unproven(&mut tx_info, ttl).await?;
         return balance_fees_with_proofs(&mut tx_info, tx, now, ttl).await;
     }
     let PreparedTransfer {
@@ -925,7 +1047,7 @@ pub async fn build_no_validate(
         tx,
         dust_batches,
         ..
-    } = prepare_no_validate(tx_info).await?;
+    } = prepare_no_validate(tx_info, ttl).await?;
     let finalized = prove_tx_no_validate(&mut tx_info, tx).await?;
     Ok(BuiltTransaction {
         finalized,
@@ -949,10 +1071,15 @@ fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> b
 ///
 /// Requires mock fee proofs when the build funds itself. Balancing without
 /// them has to prove each round, which is the cost preparing exists to avoid.
+///
+/// The intents expire `ttl` after the chain time of the build, or after the
+/// chain's `global_ttl` for `None`, and [`PreparedTransfer::expires_at`]
+/// reports when. It refuses a `ttl` as [`build_no_validate`] does.
 pub async fn prepare_no_validate(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+    ttl: Option<std::time::Duration>,
 ) -> Result<PreparedTransfer, WalletError> {
-    let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
+    let (tx, now, ttl) = assemble_unproven(&mut tx_info, ttl).await?;
 
     let (tx, dust_batches) = if !pays_own_fee(&tx_info) {
         (tx, Vec::new())
@@ -990,6 +1117,15 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
         .ok_or_else(|| WalletError::Transfer("no intent segment left for the fee".into()))
 }
 
+/// The TTL of a fee intent for `external`: its earliest intent TTL, or
+/// `longest` when that comes first or `external` has no intent.
+fn fee_ttl(longest: Timestamp, external: &FinalizedTx) -> Timestamp {
+    external
+        .intents()
+        .map(|(_, intent)| intent.ttl)
+        .fold(longest, Timestamp::min)
+}
+
 /// Draw the fee for a finished transaction this wallet did not build, and
 /// stop before proving.
 ///
@@ -999,13 +1135,19 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 /// Each round prices the merge with a mock proof, which is exact here
 /// because the fee intent carries only Dust spends.
 ///
+/// The fee intent expires with the earliest intent of `external`, or after
+/// the chain's `global_ttl` when that comes first. The merged transaction
+/// cannot land once one of its intents expires, so the fee's reservation
+/// ends then too.
+///
 /// `None` when `external` already balances its Dust. There is nothing to
 /// draw then, and an intent with no spends is one the ledger rejects.
 pub fn balance_external(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     external: &FinalizedTx,
 ) -> Result<Option<PreparedTransfer>, WalletError> {
-    let (now, ttl) = now_and_ttl(&tx_info.context);
+    let now = tx_info.context.latest_block_context().tblock;
+    let ttl = fee_ttl(longest_ttl(&tx_info.context), external);
     let network_id = tx_info
         .context
         .with_ledger_state(|ls| ls.network_id.clone());
@@ -1465,6 +1607,159 @@ mod tests {
         let tx: UnprovenTx =
             Transaction::from_intents("undeployed", HashMapStorage::new().insert(segment, intent));
         tx.mock_prove().expect("mock prove")
+    }
+
+    /// An unproven transaction with one empty intent per TTL, in seconds.
+    fn unproven_expiring_at(ttls: &[u64]) -> UnprovenTx {
+        use helpers::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(7);
+        let intents = ttls.iter().zip(1u16..).fold(
+            HashMapStorage::<u16, helpers::UnprovenIntent<DefaultDB>, DefaultDB>::new(),
+            |intents, (&ttl, segment)| {
+                intents.insert(segment, Intent::empty(&mut rng, Timestamp::from_secs(ttl)))
+            },
+        );
+        Transaction::from_intents("undeployed", intents)
+    }
+
+    /// A build context whose block time is `tblock` and whose last block time
+    /// is `last_block_time`, both in seconds.
+    fn context_at(tblock: u64, last_block_time: u64) -> Arc<BuildContext> {
+        let context = BuildContext::new_from_wallet_seeds("undeployed", &[]);
+        *context.latest_block_context.lock().unwrap() = Some(BlockContext {
+            tblock: Timestamp::from_secs(tblock),
+            tblock_err: 30,
+            parent_block_hash: Default::default(),
+            last_block_time: Timestamp::from_secs(last_block_time),
+        });
+        Arc::new(context)
+    }
+
+    fn global_ttl_of(context: &BuildContext) -> helpers::Duration {
+        context.with_ledger_state(|ls| ls.parameters.global_ttl)
+    }
+
+    /// A wallet's block time is its Dust anchor, which can trail the chain
+    /// by up to an hour. A TTL counted from it reaches the chain already
+    /// expired when it is shorter than that lag.
+    #[test]
+    fn a_ttl_counts_from_the_chain_time_not_the_dust_anchor() {
+        let anchor = 1_000_000;
+        let chain_now = anchor + 20 * 60;
+        let context = context_at(anchor, chain_now);
+        assert_eq!(
+            intent_ttl(&context, Some(std::time::Duration::from_secs(300))).unwrap(),
+            Timestamp::from_secs(chain_now + 300)
+        );
+    }
+
+    /// The helpers keep the previous block's time as the last block time, or
+    /// zero with no block. Their own block time is the chain time, and a TTL
+    /// from zero is long expired.
+    #[test]
+    fn a_context_without_a_later_last_block_counts_from_its_block_time() {
+        let context = context_at(1_000_000, 0);
+        assert_eq!(
+            intent_ttl(&context, None).unwrap(),
+            Timestamp::from_secs(1_000_000) + global_ttl_of(&context)
+        );
+    }
+
+    /// The chain applies an intent whose TTL is `global_ttl` after the block
+    /// time, and refuses one later than that, or one that expires before
+    /// the block that applies it.
+    #[test]
+    fn a_ttl_is_a_whole_second_up_to_global_ttl() {
+        use std::time::Duration;
+        let now = Timestamp::from_secs(1_000);
+        let global_ttl = helpers::Duration::from_secs(3_600);
+        let after = |ttl| ttl_after(now, global_ttl, Some(ttl));
+
+        assert_eq!(after(Duration::from_secs(3_600)).unwrap(), now + global_ttl);
+        assert_eq!(
+            after(Duration::from_millis(1_500)).unwrap(),
+            Timestamp::from_secs(1_001),
+            "the chain counts whole seconds"
+        );
+        for refused in [
+            Duration::ZERO,
+            Duration::from_millis(999),
+            Duration::from_secs(3_601),
+        ] {
+            assert!(
+                matches!(
+                    after(refused),
+                    Err(WalletError::TtlOutOfRange { requested, .. }) if requested == refused
+                ),
+                "{refused:?} must be refused"
+            );
+        }
+    }
+
+    /// A Dustless shielded transfer has no intent, so its sponsor's fee intent
+    /// sets when it expires. Accepting a TTL for it would let it land long
+    /// after the caller expects it dead.
+    #[test]
+    fn a_ttl_needs_an_intent_to_carry_it() {
+        let ttl = Some(std::time::Duration::from_secs(60));
+        let mut tx_info = StandardTransactionInfo::new_from_context(
+            context_at(1_000, 1_000),
+            Arc::new(helpers::LocalProofServer::default()),
+            None,
+        );
+        assert!(matches!(
+            refuse_ttl_without_intent(&tx_info, ttl),
+            Err(WalletError::TtlWithoutIntent)
+        ));
+        assert!(refuse_ttl_without_intent(&tx_info, None).is_ok());
+
+        // A build that pays its own fee adds a fee intent, which carries it.
+        tx_info.set_funding_seeds(vec![Seed::from_bytes(&[1; 32]).unwrap().into_ledger()]);
+        assert!(refuse_ttl_without_intent(&tx_info, ttl).is_ok());
+    }
+
+    /// A reservation must end when its transaction can no longer land, which
+    /// is at the earliest TTL of its intents.
+    #[test]
+    fn a_build_expires_with_its_earliest_intent() {
+        let context = context_at(1_000, 1_000);
+        let prepared = |tx| {
+            let tx_info = StandardTransactionInfo::new_from_context(
+                context.clone(),
+                Arc::new(helpers::LocalProofServer::default()),
+                None,
+            );
+            PreparedTransfer::new(tx_info, tx, Vec::new())
+        };
+
+        assert_eq!(
+            prepared(unproven_expiring_at(&[4_000, 3_000])).expires_at(),
+            Timestamp::from_secs(3_000)
+        );
+        assert_eq!(
+            prepared(unproven_expiring_at(&[])).expires_at(),
+            Timestamp::from_secs(1_000) + global_ttl_of(&context)
+        );
+    }
+
+    /// A sponsor's fee intent rides a transaction that cannot land once its
+    /// earliest intent expires, so the fee intent, and the hold on its Dust,
+    /// must not outlast that one.
+    #[test]
+    fn a_fee_intent_expires_with_the_transaction_it_pays_for() {
+        let longest = Timestamp::from_secs(5_000);
+        let external = |ttls: &[u64]| unproven_expiring_at(ttls).mock_prove().expect("mock prove");
+
+        assert_eq!(
+            fee_ttl(longest, &external(&[4_500, 4_000])),
+            Timestamp::from_secs(4_000)
+        );
+        assert_eq!(
+            fee_ttl(longest, &external(&[6_000])),
+            longest,
+            "the chain refuses a TTL past the sponsor's own global_ttl"
+        );
+        assert_eq!(fee_ttl(longest, &external(&[])), longest);
     }
 
     /// A transaction sponsored once already carries a fee intent at the first
