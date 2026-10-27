@@ -17,7 +17,7 @@ use midnight_types::{ContractAddress, TransferResult};
 use crate::ShieldedOffer;
 use crate::address::format_address;
 use crate::error::ContractError;
-use crate::state::fetch_state_from_node;
+use crate::state::fetch_state;
 
 /// A deploy, built and proven, before its submit.
 #[derive(Debug)]
@@ -107,7 +107,7 @@ pub(crate) async fn deployed_state(
     let mut last_error = None;
     let read = async {
         loop {
-            match fetch_state_from_node(provider, address, Some(at)).await {
+            match fetch_state(provider, address, Some(at)).await {
                 Err(ContractError::Provider(error)) => last_error = Some(error),
                 definitive => return definitive,
             }

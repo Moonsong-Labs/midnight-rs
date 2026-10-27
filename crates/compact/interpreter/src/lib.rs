@@ -113,16 +113,14 @@ impl<'a> Program<'a> {
         }
     }
 
-    /// The declared parameter types of the native or witness a call names, in
-    /// argument order, which a builtin encodes its arguments at. An undeclared
-    /// callee has none.
+    /// The declared parameter types of the native a call names, in argument
+    /// order, which a builtin encodes its arguments at. Any other callee has
+    /// none.
     fn argument_types(&self, id: &ir::Ident) -> Vec<Type> {
-        let arguments = match self.declaration(id) {
-            Some(Decl::Native(n)) => &n.arguments,
-            Some(Decl::Witness(w)) => &w.arguments,
-            Some(Decl::Circuit(_)) | None => return Vec::new(),
-        };
-        arguments.iter().map(|a| a.ty.clone()).collect()
+        match self.declaration(id) {
+            Some(Decl::Native(n)) => n.arguments.iter().map(|a| a.ty.clone()).collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// The callee's declared result type, which the call site's static type is.
@@ -550,19 +548,12 @@ fn eval_literal(literal: &ir::Literal) -> Result<Value, InterpreterError> {
             if let Ok(small) = u128::try_from(n) {
                 return Ok(Value::Integer(small));
             }
-            // Wider than u128 (e.g. `JUBJUB_ORDER`, ~2^252): fold the decimal
-            // digits into a full field element with Horner's method, reusing
-            // `Fr`'s field arithmetic.
             use midnight_transient_crypto::curve::Fr;
-            let mut acc = Fr::from(0u64).0;
-            let ten = Fr::from(10u64).0;
-            for ch in n.to_string().chars() {
-                let digit = ch.to_digit(10).ok_or_else(|| {
-                    InterpreterError::TypeError(format!("invalid Field literal {n}"))
-                })?;
-                acc = acc * ten + Fr::from(u64::from(digit)).0;
-            }
-            Ok(Value::AlignedValue(AlignedValue::from(Fr(acc))))
+            let fr = n
+                .to_biguint()
+                .and_then(|n| Fr::from_le_bytes(&n.to_bytes_le()))
+                .ok_or_else(|| InterpreterError::TypeError(format!("invalid Field literal {n}")))?;
+            Ok(Value::AlignedValue(AlignedValue::from(fr)))
         }
         ir::Literal::Bytes(bytes) => Ok(Value::AlignedValue(bytes_aligned_value(
             bytes.clone(),
@@ -727,17 +718,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             // field access is.
             let receiver_ty = infer_type_of_expr(ctx, expr);
             let val = eval_expr(ctx, expr)?;
-            match &val {
-                // Structs can be indexed by position (field declaration order)
-                // This is a fallback — prefer field access by name
-                Value::Struct(fields) => fields.values().nth(index).cloned().ok_or_else(|| {
-                    InterpreterError::TypeError(format!(
-                        "struct index {index} out of bounds (len {})",
-                        fields.len()
-                    ))
-                }),
-                _ => indexed_element(&val, receiver_ty.as_ref(), index, "tuple"),
-            }
+            indexed_element(&val, receiver_ty.as_ref(), index, "tuple")
         }
 
         E::New { ty, elements } => {
@@ -1345,18 +1326,6 @@ fn eval_witness_call(
         }
     }
 
-    // Witness calls are authoritative: ask the off-chain witness provider
-    // first (it owns the canonical value the prover commits to). For some
-    // calls (notably `persistentHash`) the IR-level args are stripped (the
-    // compiler can't yet serialize struct literals into the IR), so
-    // dispatching to the builtin would compute a hash of `Void` instead of
-    // the real preimage. Routing to the witness provider first lets the
-    // off-chain caller supply the canonical value; we only fall back to
-    // builtin dispatch when the provider returns `WitnessOutcome::Unknown`
-    // (i.e. it has no witness with this name). Every `Err` is a genuine
-    // witness failure and propagates. It must never reroute to a builtin. A
-    // failing provider whose name collides with one (e.g. `persistentHash`)
-    // would otherwise "succeed" with the wrong inputs.
     if let Some(w) = ctx.witnesses {
         // Scope the WitnessContext's borrow of `ctx` so we can record the
         // result into `ctx.private_transcript_outputs` afterward.
@@ -1364,24 +1333,16 @@ fn eval_witness_call(
             let mut wctx = WitnessContext::new(&mut *ctx.private_state);
             w.call_witness(&mut wctx, name, &values)
         };
-        match outcome? {
-            WitnessOutcome::Value(v) => {
-                // Capture the witness's private value as a private transcript
-                // output, in call order, for the prover.
-                ctx.private_transcript_outputs
-                    .push(v.try_to_aligned_value()?);
-                return Ok(v);
-            }
-            WitnessOutcome::Unknown => {
-                // Provider doesn't know the name; fall through.
-            }
+        if let WitnessOutcome::Value(v) = outcome? {
+            // Capture the witness's private value as a private transcript
+            // output, in call order, for the prover.
+            ctx.private_transcript_outputs
+                .push(v.try_to_aligned_value()?);
+            return Ok(v);
         }
     }
-    if let Some(result) = try_builtin_typed(name, &values, &program.argument_types(id)) {
-        return result;
-    }
     Err(InterpreterError::Witness(format!(
-        "no witness provider or builtin for: {name}"
+        "no witness provider for: {name}"
     )))
 }
 
@@ -1692,8 +1653,6 @@ fn eval_arith(
     right: &ir::Expr,
     op: ArithOp,
 ) -> Result<Value, InterpreterError> {
-    use midnight_transient_crypto::curve::Fr;
-
     check_type(ty)?;
     let lv = eval_expr(ctx, left)?;
     let rv = eval_expr(ctx, right)?;
@@ -1709,15 +1668,13 @@ fn eval_arith(
                     InterpreterError::TypeError(format!("expected a Field operand, got {v:?}"))
                 })
             };
-            // `Fr` wraps `midnight_curves::Fq` (the field). It has no direct
-            // `std::ops`, so operate on the inner scalar.
-            let (l, r) = (to_fr(&lv)?.0, to_fr(&rv)?.0);
+            let (l, r) = (to_fr(&lv)?, to_fr(&rv)?);
             let f = match op {
                 ArithOp::Add => l + r,
                 ArithOp::Sub => l - r,
                 ArithOp::Mul => l * r,
             };
-            Ok(Value::AlignedValue(AlignedValue::from(Fr(f))))
+            Ok(Value::AlignedValue(AlignedValue::from(f)))
         }
         Type::Unsigned(_) => {
             let to_u128 = |v: &Value| {
@@ -2278,7 +2235,7 @@ fn max_for_bytes(bytes: u64) -> BigUint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compact_runtime::{integer_fallback_aligned, try_builtin};
+    use compact_runtime::integer_fallback_aligned;
     use ir::FieldType;
     use midnight_typed_state::{ContractMaintenanceAuthority, StorageHashMap};
 
@@ -2578,7 +2535,7 @@ mod tests {
         ]);
         let opening = Value::AlignedValue(AlignedValue::from(inner_domain));
 
-        let via_builtin = try_builtin("persistentCommit", &[value, opening])
+        let via_builtin = try_builtin_typed("persistentCommit", &[value, opening], &[])
             .expect("persistentCommit is a known builtin")
             .expect("persistentCommit succeeds");
         let got =
@@ -2595,12 +2552,13 @@ mod tests {
         let g = EmbeddedGroupAffine::generator();
         let x = g.x().unwrap();
         let y = g.y().unwrap();
-        let got = match try_builtin(
+        let got = match try_builtin_typed(
             "constructJubjubPoint",
             &[
                 Value::AlignedValue(AlignedValue::from(x)),
                 Value::AlignedValue(AlignedValue::from(y)),
             ],
+            &[],
         )
         .expect("builtin known")
         .expect("ok")
@@ -2612,10 +2570,10 @@ mod tests {
     }
 
     /// Every Compact native primitive must be dispatched by the interpreter,
-    /// either implemented (`try_builtin` arm or [`WitnessNative`]) or explicitly
-    /// listed as known-unimplemented. A new native that is neither fails here
-    /// instead of surfacing as a runtime miss deep in a circuit. See
-    /// `docs/compact-natives.md`.
+    /// either implemented (`try_builtin_typed` arm or [`WitnessNative`]) or
+    /// explicitly listed as known-unimplemented. A new native that is neither
+    /// fails here instead of surfacing as a runtime miss deep in a circuit.
+    /// See `docs/compact-natives.md`.
     #[test]
     fn every_compact_native_is_handled_or_known_unimplemented() {
         // The runtime symbols of the compiler's native tables at COMPACT_REV,
@@ -2675,12 +2633,12 @@ mod tests {
         const KNOWN_UNIMPLEMENTED: &[&str] = &[];
 
         for &name in COMPACT_NATIVES {
-            let handled =
-                WitnessNative::from_name(name).is_some() || try_builtin(name, &[]).is_some();
+            let handled = WitnessNative::from_name(name).is_some()
+                || try_builtin_typed(name, &[], &[]).is_some();
             let known_unimplemented = KNOWN_UNIMPLEMENTED.contains(&name);
             assert!(
                 handled || known_unimplemented,
-                "Compact native `{name}` is neither implemented (try_builtin/WitnessNative) nor \
+                "Compact native `{name}` is neither implemented (try_builtin_typed/WitnessNative) nor \
                  listed as known-unimplemented. Implement it or add it to KNOWN_UNIMPLEMENTED \
                  (and update docs/compact-natives.md)."
             );
@@ -2826,7 +2784,7 @@ mod tests {
         let expected_fr = fr_two_pow_64() + Fr::from(7u64);
         let direct = transient_hash(&[expected_fr]);
 
-        let via_builtin = try_builtin("transientHash", &[Value::Integer(n)])
+        let via_builtin = try_builtin_typed("transientHash", &[Value::Integer(n)], &[])
             .expect("builtin known")
             .expect("ok");
         assert_eq!(as_fr(via_builtin), direct);
@@ -2848,7 +2806,7 @@ mod tests {
         ValueReprAlignedValue(AlignedValue::from(expected_fr)).binary_repr(&mut hasher);
         let expected = hasher.finalize();
 
-        let via_builtin = try_builtin("persistentHash", &[Value::Integer(n)])
+        let via_builtin = try_builtin_typed("persistentHash", &[Value::Integer(n)], &[])
             .expect("builtin known")
             .expect("ok");
         match via_builtin {
@@ -3105,7 +3063,7 @@ mod tests {
         bytes[0] = 7;
         bytes[31] = 0x1e;
         let av = AlignedValue::from(bytes);
-        let result = try_builtin("degradeToTransient", &[Value::AlignedValue(av)])
+        let result = try_builtin_typed("degradeToTransient", &[Value::AlignedValue(av)], &[])
             .expect("builtin known")
             .expect("ok");
         assert_eq!(as_fr(result), Fr::from(7u64));
