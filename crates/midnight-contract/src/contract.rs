@@ -1185,7 +1185,10 @@ impl<P: Provider> Contract<P> {
     ///   parse.
     /// - [`ContractError::Construction`] when the contract declares witnesses
     ///   and the provider has no private-state store, or when the handle has
-    ///   no zk config. Both checks come before any query to the node.
+    ///   no zk config. Both checks come before any query to the node. It is
+    ///   also the error when the zk config cannot read the circuit's verifier
+    ///   key. That read comes after the state query and before the circuit
+    ///   runs.
     /// - [`ContractError::NotFound`] when the node has no contract at the
     ///   address.
     /// - [`ContractError::StateFetch`] when the node's contract state does not
