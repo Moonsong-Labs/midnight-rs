@@ -274,10 +274,7 @@ impl From<TransferKind> for TransferRequest {
 }
 
 /// Recover a printable message from a caught panic payload.
-///
-/// Shared with the provider's fee-paying path, which proves through the same
-/// backend and needs the same treatment.
-pub fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<String>() {
         return s.clone();
     }

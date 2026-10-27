@@ -59,5 +59,5 @@ pub use primitive_types::H256;
 pub use sync::{SyncCursors, TrackedUtxo};
 pub use transfer::{
     Payment, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
-    TransferResult, panic_message,
+    TransferResult,
 };
