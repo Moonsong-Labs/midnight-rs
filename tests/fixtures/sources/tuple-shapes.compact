@@ -1,0 +1,18 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// Shapes that the bindings decode through Rust tuples, which decode at most 11
+// elements. A struct of 12 fields decodes through nested tuples, and a circuit
+// takes a one-element tuple of that struct.
+
+export struct Record {
+  f01: Field, f02: Boolean, f03: Uint<8>, f04: Bytes<4>,
+  f05: Uint<64>, f06: Field, f07: Boolean, f08: Uint<16>,
+  f09: Bytes<2>, f10: Uint<32>, f11: Field, f12: Boolean
+}
+
+export ledger record: Record;
+
+export circuit store(r: [Record]): [] {
+  record = disclose(r[0]);
+}

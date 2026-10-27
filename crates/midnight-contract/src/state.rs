@@ -1,11 +1,7 @@
 //! Reading and preparing on-chain contract state.
 //!
-//! Two state-retrieval entry points are reachable from bindgen-generated code:
-//!
-//! - [`fetch_state`] reads through any [`Provider`](midnight_provider::Provider),
-//!   at the node's best block.
-//! - [`fetch_state_from_node`] reads the node's `midnight_contractState` RPC
-//!   through a `MidnightProvider`, and takes a block hash to pin the read.
+//! Bindgen-generated code reads a contract's state with [`fetch_state`],
+//! through any [`Provider`](midnight_provider::Provider).
 //!
 //! The other helpers in this module are `pub(crate)` plumbing for the deploy,
 //! call and maintenance paths.
@@ -16,23 +12,12 @@ use midnight_types::BlockHash;
 
 use crate::error::ContractError;
 
-/// Fetch contract state through a provider, at the node's best block, and
-/// deserialize it. Returns [`ContractError::NotFound`] when no contract exists
-/// at `address`.
+/// Fetch a contract's state through a provider and deserialize it.
+///
+/// The read is at `at_block_hash` when given, else at the node's best block.
+/// Returns [`ContractError::NotFound`] when no contract exists at `address`.
 pub async fn fetch_state<P: midnight_provider::Provider>(
     provider: &P,
-    address: &str,
-) -> Result<ContractState<InMemoryDB>, ContractError> {
-    Ok(node_state(provider, address, None).await?.1)
-}
-
-/// Fetch contract state directly from the node RPC (`midnight_contractState`).
-///
-/// This uses the standard node RPC available on all devnet nodes, unlike
-/// `midnight_queryContractState` which requires a custom node build. Pass a
-/// block hash to pin the read to a specific block.
-pub async fn fetch_state_from_node(
-    provider: &midnight_provider::MidnightProvider,
     address: &str,
     at_block_hash: Option<BlockHash>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
