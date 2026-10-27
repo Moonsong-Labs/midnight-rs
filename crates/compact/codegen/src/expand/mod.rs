@@ -187,6 +187,19 @@ mod tests {
         );
     }
 
+    /// A tuple wider than the runtime decodes must fail the build with a named
+    /// error, not leave a flat Rust tuple that has no decoder.
+    #[test]
+    fn a_tuple_wider_than_the_runtime_decodes_is_a_compile_error() {
+        use crate::ir::Type;
+
+        let tuple = |len: usize| type_to_tokens(&Type::Tuple(vec![Type::Boolean; len])).to_string();
+        let widest = tuple(11);
+        assert!(widest.starts_with('('), "{widest}");
+        let wider = tuple(12);
+        assert!(wider.starts_with("compile_error !"), "{wider}");
+    }
+
     #[test]
     fn pascal_case() {
         assert_eq!(to_pascal_case("pending"), "Pending");
