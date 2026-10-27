@@ -20,7 +20,7 @@ ContractProviders = {
 }
 ```
 
-**midnight-rs** bundles all of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider: our `MidnightProvider` owns the node WebSocket connection, the indexer URL that the wallet sync reads, the wallet (with persisted state), an optional proof provider, and the submission path.
+**midnight-rs** bundles all of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider: our `MidnightProvider` owns the node WebSocket connection, the wallet (with persisted state), an optional proof provider, an optional private-state store, and the submission path. The wallet keeps the indexer URL that it synced from.
 
 | midnight-js abstraction       | midnight-rs equivalent                                                                              |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
@@ -96,12 +96,12 @@ One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only
 
 ### Balancing someone else's transaction (one party pays the fees)
 
-**midnight-js:** `walletProvider.balanceTransaction(tx, newCoins)` is a single primitive that takes a transaction carrying only its *effects* and makes it submittable: the calling wallet adds inputs to cover any token deficit **and** pays the Dust fees from its own coins. Whoever calls it is the payer. In a two-party swap, Party 1 builds an unbalanced transaction and Party 2 `balanceTransaction`s it.
+**midnight-js:** `walletProvider.balanceTx(tx, ttl?)` is a single primitive that takes a transaction carrying only its *effects* and makes it submittable: the calling wallet adds inputs to cover any token deficit **and** pays the Dust fees from its own coins. Whoever calls it is the payer. In a two-party swap, Party 1 builds an unbalanced transaction and Party 2 balances it with `balanceTx`.
 
 **midnight-rs:** the same work is split across two calls, matching the two roles:
 
 - [`transfer_shielded(token, amount, recipient).without_dust()`](../crates/midnight-provider/src/transfer.rs), the Party-1 side. Any builder with fees turned off: a proven, token-balanced but **Dustless** transaction (no Dust). Dust is the general fee token, so `.without_dust()` is not shielded-specific: it is one method on the `DustlessBuilder` trait that yields a `DustlessTransaction`. It is implemented on the shielded-transfer builder, the unshielded-transfer builder, and generated contract-call builders (`contract.circuits().foo().without_dust()`). A `DustlessTransaction` has no submit path (it is not valid alone); hand its bytes to the payer. A contract call's `.without_dust()` and `.build()` refuse a call whose witnesses change the private state, with `ContractError::UnrecordedPrivateState`, because they record no snapshot. midnight-js returns the next private state from a build-only call (`createUnprovenCallTx` gives `private.nextPrivateState`), and midnight-rs refuses for now.
-- [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet. It returns a `TransferResult`: the completed transaction, the Dust it reserved, and the fee of the completed transaction. Submit it with `submit_reserved`, which hands the Dust back when the node never gets the transaction or rejects it. It draws dust for the fee estimate, proves a fee-only transaction, merges it in, and iterates until the (growing) fee is covered. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
+- [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet. It returns a `TransferResult`: the completed transaction, the Dust it reserved, and the fee of the completed transaction. Submit it with `submit_reserved`, which hands the Dust back when the node never gets the transaction or rejects it. It draws Dust for the fee estimate and prices each round with a mock proof, until the Dust covers the (growing) fee. It then proves the fee intent once and merges it in. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
 
 ```rust,ignore
 use midnight_provider::DustlessBuilder; // brings `.without_dust()` into scope
@@ -113,7 +113,7 @@ let complete = bob.balance_transaction(partial.as_bytes()).await?;
 bob.submit_reserved(complete).await?;
 ```
 
-**The remaining gap.** midnight-js's `balanceTransaction` also covers a **token deficit** from the balancing wallet: the balancer can supply its *own* tokens, not just fees, in a *single* unbalanced transaction. Our `balance_transaction` is **fee-only**: a leftover shielded-token deficit is rejected with a clear error. This matters only for the asymmetric shape where one wallet both provides the missing tokens and pays the fees for another's transaction; the native two-party swap (next section) no longer needs it, because the two mirrored halves cancel their tokens on merge and only the Dust fee is left to cover. Supplying the balancer's own coins for the asymmetric case is the tracked follow-up.
+**The remaining gap.** midnight-js's `balanceTx` also covers a **token deficit** from the balancing wallet: the balancer can supply its *own* tokens, not just fees, in a *single* unbalanced transaction. Our `balance_transaction` is **fee-only**: a leftover shielded-token deficit is rejected with a clear error. This matters only for the asymmetric shape where one wallet both provides the missing tokens and pays the fees for another's transaction; the native two-party swap (next section) no longer needs it, because the two mirrored halves cancel their tokens on merge and only the Dust fee is left to cover. Supplying the balancer's own coins for the asymmetric case is the tracked follow-up.
 
 ### Native two-party token swaps
 
@@ -140,7 +140,7 @@ Because each half carries only a guaranteed Zswap offer and no intent, two halve
 Two smaller pieces round out the parity:
 
 - **Naming a coin.** midnight-js's balancer auto-selects coins by amount. But a circuit like `receiveShielded(coin)` re-commits a *specific* coin (its exact nonce), so amount-based selection can't express it. [`MidnightProvider::spendable_shielded_coins()`](../crates/midnight-provider/src/provider.rs) enumerates the wallet's coins with their nonces and nullifiers, and `contract.circuits().<circuit>().with_shielded_inputs([coin])` attaches an exact, nullifier-pinned coin to the call. This is more explicit than midnight-js's auto-balance, by necessity.
-- **Coin discovery.** midnight-js's `balanceTransaction` takes a `newCoins` argument so the wallet tracks coins the transaction creates for it. Our analogue is `with_coin_encryption_keys` on a call: it attaches a discovery ciphertext to circuit-created outputs so the recipient finds them through normal sync (no `watchFor`). Different mechanism, same goal.
+- **Coin discovery.** midnight-js returns the coins that a call creates for the caller as `newCoins`, in the private data of the call result. Our analogue is `with_coin_encryption_keys` on a call: it attaches a discovery ciphertext to circuit-created outputs so the recipient finds them through normal sync (no `watchFor`). Different mechanism, same goal.
 
 ## Guaranteed vs Fallible transaction phases
 
@@ -202,11 +202,7 @@ This lets a browser app or a no-filesystem environment ship the same SDK as a se
 
 **midnight-rs** abstracts them behind its own `ZkConfigProvider` trait, which `with_zk_config` takes. A path gives the default `FsZkConfigProvider`, which reads the `keys/` and `zkir/` subdirectories of that path. To serve the artifacts from an embedded bundle, memory or a remote service, implement the trait and pass an `Arc` of it.
 
-## Feature gaps
-
-These are real Midnight chain features that midnight-js exposes and this SDK does not (yet). Listed roughly in order of how often they come up.
-
-### Contract maintenance / governance
+## Contract maintenance / governance
 
 The chain supports three governance operations on a deployed contract:
 
@@ -216,9 +212,9 @@ The chain supports three governance operations on a deployed contract:
 
 midnight-js: see `packages/contracts/src/governance/` (`submit-insert-vk-tx.ts`, `submit-remove-vk-tx.ts`, `submit-replace-authority-tx.ts`).
 
-midnight-rs: now exposed via `Contract::at(addr).maintenance()`, which returns a `ContractMaintenance` builder. Chain `insert_verifier_key`, `remove_verifier_key`, and `replace_authority` (applied in order, atomically, in one signed update), then `prepare()` for a `PreparedMaintenance`. Signing is caller-controlled: read `data_to_sign()`, attach signatures with `sign(committee_index, key)` / `add_signature(...)`, then await (or `build()`) to submit. The initial authority is set at deploy via `DeployBuilder::with_maintenance_authority`, and `Contract::maintenance_authority()` reads the current committee. The SDK never stores a key. See [`contract-maintenance-governance.md`](./contract-maintenance-governance.md).
+midnight-rs: exposed via `Contract::at(addr).maintenance()`, which returns a `ContractMaintenance` builder. Chain `insert_verifier_key`, `remove_verifier_key`, and `replace_authority` (applied in order, atomically, in one signed update), then `prepare()` for a `PreparedMaintenance`. Signing is caller-controlled: read `data_to_sign()`, attach signatures with `sign(committee_index, key)` / `add_signature(...)`, then await (or `build()`) to submit. The initial authority is set at deploy via `DeployBuilder::with_maintenance_authority`, and `Contract::maintenance_authority()` reads the current committee. The SDK never stores a key. See [`contract-maintenance-governance.md`](./contract-maintenance-governance.md).
 
-### Per-contract private state
+## Per-contract private state
 
 Some contracts use witnesses that are themselves stateful (counters, secret balances, etc.). midnight-js gives every contract a `privateStateId` and stores the corresponding private state — plus the contract's signing key — in a local keychain via `PrivateStateProvider`. The `level-private-state-provider` package backs this with LevelDB, encrypts the private state at rest with a password from `privateStoragePasswordProvider`, and supports encrypted export / import.
 
@@ -226,13 +222,21 @@ midnight-rs: the `midnight-private-state` crate has a `PrivateStateProvider` tra
 
 Private state is also **threaded** through witness execution, matching midnight-js. `WitnessProvider::call_witness(ctx, name, args)` takes a `&mut WitnessContext` carrying the mutable private state (the analogue of midnight-js's `(ctx, ...args) => [newPS, result]`). When a `PrivateStateProvider` is attached, a circuit call loads the contract's state before execution and threads it through the witnesses. It records the state after the call as a `Pending` snapshot before the submit. It then settles the snapshot by the chain's verdict (see [`private-state.md`](./private-state.md)). So stateful-witness contracts work across calls without the caller managing storage. Private state is keyed by contract address: a Compact contract has exactly one private-state type shared by all its witnesses, so there is one blob per contract (the caller packs every private variable into it), rather than midnight-js's separate per-app `privateStateId`.
 
+## Feature gaps
+
+These are real Midnight chain features that midnight-js exposes and this SDK does not (yet). Listed roughly in order of how often they come up.
+
 ### Wallet observability
 
-midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams (`watchForContractState`, `watchForTxData`, etc.) backed by indexer subscriptions. midnight-rs has the subscription client (`midnight-indexer-client`) but does not surface streams to user code beyond the `SyncProgress` channel during initial sync.
+midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams backed by indexer subscriptions, such as `contractStateObservable` and `unshieldedBalancesObservable`. It also has promises that wait for one record, such as `watchForContractState` and `watchForTxData`. midnight-rs has no contract-state stream. `WalletBuilder::sync_with_progress` reports the progress of the sync that builds a wallet as `SyncProgress` events. After that sync, `LocalWallet::sync_in_background` returns a `BackgroundSync`: its `wait_until` waits until a condition on the balance holds, and its `last_error` gives the error of the last pass. For a transaction that this SDK submits, `PendingTx::wait_best` / `wait_finalized` take the place of `watchForTxData`.
+
+### Cross-contract calls
+
+midnight-js runs a circuit that calls another contract: `CrossContractConfig` and the `contractModuleProvider` resolve each callee to its compiled module. midnight-rs generates bindings for such a circuit, but the interpreter refuses the call with `InterpreterError::Unsupported`.
 
 ## When to use which SDK
 
 - **midnight-js** — browser dApps, Node.js services, anywhere you want to plug a browser wallet, swap a remote prover, or fetch keys over HTTP. The provider split makes this natural.
 - **midnight-rs** — Rust services and CLIs, embedded / signing-server use cases, anywhere a typed `?`-everywhere experience matters more than runtime swappability.
 
-The two SDKs target the same chain and read outputs of the same compiler run (via our [forked Compact compiler](../README.md#compile-a-contract)), so the same contract can be deployed from one and called from the other.
+The two SDKs target the same chain and read outputs of the same compiler run (via our [forked Compact compiler](../README.md#compile-a-contract)), so the same contract can be deployed from one and called from the other. The exception is a circuit that calls another contract, which midnight-rs refuses (see "Cross-contract calls" above).

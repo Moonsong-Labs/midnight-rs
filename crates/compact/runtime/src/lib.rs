@@ -1,7 +1,7 @@
 //! Execution-runtime primitives for the Compact circuit IR interpreter.
 //!
 //! This crate holds the runtime value domain, witness callbacks, and execution
-//! result types that the interpreter in `midnight-contract` builds on. It is
+//! result types that the interpreter in `compact-interpreter` builds on. It is
 //! the Rust counterpart of Minokawa's `compact/runtime` TypeScript package: a
 //! thin layer of primitives over the on-chain runtime, kept separate from the
 //! IR tree-walk so it can be reused by any circuit-body front-end.

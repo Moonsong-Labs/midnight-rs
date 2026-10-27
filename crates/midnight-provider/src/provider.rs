@@ -718,7 +718,7 @@ impl MidnightProvider {
     /// this provider's wallet, returning the completed transaction ready to
     /// submit.
     ///
-    /// This is the "one party pays fees" flow (midnight-js `balanceTransaction`):
+    /// This is the "one party pays fees" flow (midnight-js `balanceTx`):
     /// the caller (fee payer) covers the Dust fees for a transaction someone
     /// else already built and proved, without holding their keys. Purely
     /// additive, the external transaction's proofs are untouched; a separately

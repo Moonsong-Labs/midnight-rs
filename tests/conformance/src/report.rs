@@ -109,8 +109,9 @@ pub fn state_report_json(sv: &StateValue<InMemoryDB>) -> Json {
 
 /// Hex of the untagged serialization of a `ContractState` holding only `sv`.
 ///
-/// Untagged because the two executors link different ledger releases, and
-/// `tagged_serialize` writes the ledger version into the tag
+/// Untagged because the two executors link separate builds of the ledger 9
+/// on-chain runtime, and each build can change the `ContractState` format
+/// version that `tagged_serialize` writes into the tag
 /// (`midnight:contract-state[vN]:`). Everything after that prefix is what both
 /// sides must agree on byte for byte.
 pub fn normalized_state_hex(sv: &StateValue<InMemoryDB>) -> String {
