@@ -425,11 +425,13 @@ Every coin the wallet already holds is re-registered before that replay, so a re
 
 That full replay costs more than a resync, so register every coin you know about in one `watch_for_coins([...])` call, and treat this as a recovery step rather than a routine one. Registrations are persisted with the rest of the wallet state, so one made for a coin that has not landed yet survives a restart, and every later resync carries it rather than dropping it.
 
-To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. If the coin does not appear there, it is not on chain yet, or its rebuilt `CoinInfo` is wrong. A wrong registration never matches an output, and every later replay carries it. Drop it with `provider.forget_coin(coin)`. Forgetting drops the registration only, and a coin that the wallet already claimed stays spendable.
+To check the outcome, look for the coin in `provider.watched_coins()`, or in `wallet.watched_coins()` on a handle. It lists the registrations that no replay claimed, ordered by nonce, then token type, then value. A coin that left that list was claimed. A coin still in it after the replay is not on chain yet, or its rebuilt `CoinInfo` is wrong. `provider.spendable_shielded_coins()` tells only whether a coin is spendable now. It also leaves out a claimed coin that a build reserved or that the wallet spent.
+
+A wrong registration never matches an output, and every later replay carries it. Drop it with `provider.forget_coin(coin)`. Forgetting drops the registration only, and a coin that the wallet already claimed stays spendable.
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-`provider.rescan_shielded()` runs the replay alone. A handle (`Arc<LocalWallet>`) has the same two methods: `watch_for_coins(coins, &provider)` and `rescan_shielded(&provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them. When the wallet's state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
+`provider.rescan_shielded()` runs the replay alone. A handle (`Arc<LocalWallet>`) has the same two methods: `watch_for_coins(coins, &provider)` and `rescan_shielded(&provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them. When the wallet's state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync.
 
 ## Pending reservations
 
@@ -473,6 +475,7 @@ provider.with_wallet(wallet)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext: register, then replay
   provider.rescan_shielded()             replay the shielded stream (a resync first, to cross a fork)
   provider.forget_coin(coin)             drop a registration that matched nothing
+  provider.watched_coins()               the registrations that no replay claimed
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx

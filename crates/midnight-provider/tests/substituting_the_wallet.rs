@@ -97,6 +97,10 @@ impl WalletFacade for StubWallet {
     async fn forget_coins(&self, _coins: Vec<CoinInfo>) -> Result<(), WalletError> {
         Ok(())
     }
+
+    async fn watched_coins(&self) -> Vec<CoinInfo> {
+        Vec::new()
+    }
 }
 
 /// The stub's builds, the same on each generation: it refuses every one.

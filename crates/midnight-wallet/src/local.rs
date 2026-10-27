@@ -274,4 +274,8 @@ impl WalletFacade for LocalWallet {
         let _sync = self.sync.lock().await;
         self.inner.write().await.forget_coins(coins)
     }
+
+    async fn watched_coins(&self) -> Vec<CoinInfo> {
+        self.inner.read().await.watched_coins()
+    }
 }
