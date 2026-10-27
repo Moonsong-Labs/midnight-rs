@@ -551,9 +551,9 @@ impl<P> DeployBuilder<'_, P> {
     /// TTL passes. Each output pays the keys of a user, so the offer cannot
     /// fund a contract's shielded balance.
     ///
-    /// With an offer, the deploy proves with no fee. When the deploy is
-    /// awaited or sent, the wallet then pays the Dust fee in an intent of its
-    /// own. After [`Self::without_dust`], a sponsor pays it.
+    /// With an offer, the deploy proves with no fee. When you await or send
+    /// the deploy, the wallet then pays the Dust fee in an intent of its own.
+    /// After [`Self::without_dust`], a sponsor pays it.
     ///
     /// The deploy fails with [`ContractError::ShieldedOfferShortfall`] when
     /// the outputs pay more of a token than the coins hold. When another
