@@ -1543,7 +1543,7 @@ pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
     if super::circuit_calls::is_void_type(circuit.result_type()) {
         let decode = quote! {
             fn __decode(
-                _: ::core::option::Option<midnight_contract::runtime::Value>,
+                _: midnight_contract::runtime::Value,
             ) -> ::core::result::Result<(), midnight_contract::ContractError> {
                 ::core::result::Result::Ok(())
             }
@@ -1551,7 +1551,6 @@ pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
         return (quote! { () }, decode);
     }
 
-    let circuit_name_str = &circuit.name;
     let value_ty = type_to_tokens(circuit.result_type());
     let conversion = super::circuit_calls::value_to_type_conversion(
         circuit.result_type(),
@@ -1559,14 +1558,8 @@ pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
     );
     let decode = quote! {
         fn __decode(
-            __value: ::core::option::Option<midnight_contract::runtime::Value>,
+            __val: midnight_contract::runtime::Value,
         ) -> ::core::result::Result<#value_ty, midnight_contract::ContractError> {
-            let __val = __value.ok_or_else(|| {
-                midnight_contract::runtime::InterpreterError::TypeError(::std::format!(
-                    "circuit `{}` returned no value but its signature is non-void",
-                    #circuit_name_str
-                ))
-            })?;
             // The conversion evaluates to Result<_, InterpreterError>,
             // which `From`-converts into ContractError.
             ::core::result::Result::Ok((#conversion)?)
