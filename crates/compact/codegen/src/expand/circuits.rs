@@ -1,12 +1,11 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::ir::{Argument, Type, Witness};
+use crate::ir::{Type, Witness};
 use crate::types::Circuit;
 
 use super::circuit_calls::{
-    has_typed_conversion, is_void_type, type_to_value_conversion, typed_params,
-    value_to_type_conversion,
+    is_void_type, type_to_value_conversion, typed_params, value_to_type_conversion,
 };
 use super::helpers::{make_ident, to_pascal_case};
 use super::ledger::{circuit_decode, circuit_setup};
@@ -16,27 +15,19 @@ pub(crate) fn emit_circuit_types(circuits: &[Circuit], witnesses: &[Witness]) ->
     let mut items = Vec::new();
 
     for circuit in circuits {
-        items.push(emit_call_struct(
+        items.push(emit_return_type(
+            "circuit",
             &circuit.name,
-            circuit.arguments(),
-            circuit.pure(),
-            circuit.proof(),
+            circuit.result_type(),
         ));
-        items.push(emit_return_type(&circuit.name, circuit.result_type()));
     }
 
     for witness in witnesses {
-        items.push(emit_call_struct(
+        items.push(emit_return_type(
+            "witness",
             witness.name.name(),
-            &witness.arguments,
-            false,
-            false,
+            &witness.result_type,
         ));
-        items.push(emit_return_type(witness.name.name(), &witness.result_type));
-    }
-
-    if !circuits.is_empty() || !witnesses.is_empty() {
-        items.push(emit_calls_enum(circuits, witnesses));
     }
 
     if !witnesses.is_empty() {
@@ -120,8 +111,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     });
 
     // The witness names this contract declares; anything else is
-    // `WitnessOutcome::Unknown` (the runtime then falls through to its
-    // builtins/helpers), checked before touching the private state.
+    // `WitnessOutcome::Unknown`, checked before touching the private state.
     // Precondition: `witnesses` is non-empty (gated by the caller's
     // `!witnesses.is_empty()` check); an empty list would expand
     // `#(#known_names)|*` into an unparsable empty pattern.
@@ -143,17 +133,13 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                     )
                 })?
             };
-            if has_typed_conversion(&arg.ty) {
-                // The conversion evaluates to Result<_, InterpreterError>;
-                // `call_witness` returns the same error type, so `?` it.
-                let conv = value_to_type_conversion(
-                    &arg.ty,
-                    &format!("witness `{}` argument `{}`", name, arg.name.name()),
-                );
-                bindings.push(quote! { let #ident = { let __val = #fetch; #conv }?; });
-            } else {
-                bindings.push(quote! { let #ident = #fetch; });
-            }
+            // The conversion evaluates to Result<_, InterpreterError>;
+            // `call_witness` returns the same error type, so `?` it.
+            let conv = value_to_type_conversion(
+                &arg.ty,
+                &format!("witness `{}` argument `{}`", name, arg.name.name()),
+            );
+            bindings.push(quote! { let #ident = { let __val = #fetch; #conv }?; });
             idents.push(ident);
         }
 
@@ -243,9 +229,8 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                 midnight_contract::runtime::WitnessOutcome,
                 midnight_contract::runtime::InterpreterError,
             > {
-                // Unknown names are a non-error outcome (the runtime falls
-                // through to builtins/helpers); decide before decoding the
-                // private state so an undecodable blob can't mask it.
+                // Decide an unknown name before decoding the private state, so
+                // an undecodable blob can't mask it.
                 match __name {
                     #(#known_names)|* => {}
                     _ => {
@@ -302,74 +287,18 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     }
 }
 
-/// The name of the struct that holds the arguments of the circuit or witness
-/// `name`.
-fn call_struct_ident(name: &str) -> Ident {
-    format_ident!("{}Call", to_pascal_case(name))
-}
-
 /// The name of the alias for the result type of the circuit or witness `name`.
 pub(super) fn return_type_ident(name: &str) -> Ident {
     format_ident!("{}Return", to_pascal_case(name))
 }
 
-fn emit_call_struct(name: &str, arguments: &[Argument], pure: bool, proof: bool) -> TokenStream {
-    let type_name = call_struct_ident(name);
-
-    let fields: Vec<_> = arguments
-        .iter()
-        .map(|arg| {
-            let field_name = make_ident(arg.name.name());
-            let field_type = type_to_tokens(&arg.ty);
-            quote! { pub #field_name: #field_type }
-        })
-        .collect();
-
-    let doc = format!("Arguments for the `{name}` circuit.");
-
-    quote! {
-        #[doc = #doc]
-        #[derive(Debug, Clone)]
-        pub struct #type_name {
-            #(#fields),*
-        }
-
-        impl #type_name {
-            pub const NAME: &str = #name;
-            pub const PURE: bool = #pure;
-            pub const PROOF: bool = #proof;
-        }
-    }
-}
-
-fn emit_return_type(name: &str, result_type: &Type) -> TokenStream {
+fn emit_return_type(kind: &str, name: &str, result_type: &Type) -> TokenStream {
     let type_name = return_type_ident(name);
     let rust_type = type_to_tokens(result_type);
-    let doc = format!("Return type of the `{name}` circuit.");
+    let doc = format!("Return type of the `{name}` {kind}.");
 
     quote! {
         #[doc = #doc]
         pub type #type_name = #rust_type;
-    }
-}
-
-fn emit_calls_enum(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
-    let variants: Vec<_> = circuits
-        .iter()
-        .map(|c| c.name.as_str())
-        .chain(witnesses.iter().map(|w| w.name.name()))
-        .map(|name| {
-            let variant = format_ident!("{}", to_pascal_case(name));
-            let call_type = call_struct_ident(name);
-            quote! { #variant(#call_type) }
-        })
-        .collect();
-
-    quote! {
-        /// All circuit/witness calls for this contract.
-        #[derive(Debug, Clone)]
-        pub enum Calls {
-            #(#variants),*
-        }
     }
 }

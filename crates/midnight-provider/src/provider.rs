@@ -7,7 +7,7 @@ use subxt::backend::CombinedBackend;
 use subxt::config::RpcConfigFor;
 use subxt::ext::futures::StreamExt;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
-use subxt::rpcs::client::{RpcClient, RpcParams, rpc_params};
+use subxt::rpcs::client::{RpcClient, rpc_params};
 use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -1098,9 +1098,8 @@ impl MidnightProvider {
         query_within(QUERY_TIMEOUT, async {
             let conn = self.get_or_connect().await?;
 
-            let chain: String = conn
-                .rpc
-                .request("system_chain", RpcParams::new())
+            let chain = legacy_rpc(&conn)
+                .system_chain()
                 .await
                 .map_err(rpc_error("system_chain"))?;
 
@@ -1167,8 +1166,8 @@ impl MidnightProvider {
 
         let (sys_health, header) = tokio::join!(
             query_within(QUERY_TIMEOUT, async {
-                conn.rpc
-                    .request::<serde_json::Value>("system_health", RpcParams::new())
+                legacy_rpc(&conn)
+                    .system_health()
                     .await
                     .map_err(|e| ProviderError::Rpc(e.to_string()))
             }),
@@ -1189,14 +1188,8 @@ impl MidnightProvider {
         debug!(health = ?sys_health, "system_health response");
         debug!(header = ?header, "chain_getHeader response");
 
-        let peers = sys_health
-            .as_ref()
-            .and_then(|v| v.get("peers"))
-            .and_then(|v| v.as_u64());
-        let is_syncing = sys_health
-            .as_ref()
-            .and_then(|v| v.get("isSyncing"))
-            .and_then(|v| v.as_bool());
+        let peers = sys_health.as_ref().map(|health| health.peers as u64);
+        let is_syncing = sys_health.as_ref().map(|health| health.is_syncing);
         let block_height = header
             .as_ref()
             .and_then(Option::as_ref)
@@ -1497,8 +1490,8 @@ fn archive_rpc(conn: &NodeConnection) -> ChainHeadRpcMethods<RpcConfigFor<subxt:
     ChainHeadRpcMethods::new(conn.rpc.clone())
 }
 
-/// Typed view over a connection's raw client for the legacy `chain_*` RPCs,
-/// with hash and header types derived from the chain's Substrate config.
+/// Typed view over a connection's raw client for the legacy RPCs, with hash
+/// and header types derived from the chain's Substrate config.
 fn legacy_rpc(conn: &NodeConnection) -> LegacyRpcMethods<RpcConfigFor<subxt::SubstrateConfig>> {
     LegacyRpcMethods::new(conn.rpc.clone())
 }

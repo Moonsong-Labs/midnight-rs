@@ -1,6 +1,6 @@
 # Tagged serialization in midnight-ledger
 
-> Internal reference for SDK developers. Users of midnight-rs don't need to understand this. `state::fetch_state()` and `state::fetch_state_from_node()` handle it automatically.
+> Internal reference for SDK developers. Users of midnight-rs don't need to understand this. `state::fetch_state()` handles it automatically.
 
 ## Overview
 
@@ -32,7 +32,7 @@ The tag is declared via the `#[tag = "..."]` attribute on the `#[derive(Storable
 
 ## How midnight-rs uses it
 
-`state::fetch_state()` and `state::fetch_state_from_node()`:
+`state::fetch_state()`:
 1. Hex-decode the string from the provider.
 2. Call `midnight_typed_state::decode_contract_state`, which reads the tag through `tagged_deserialize` and converts a ledger 8 state.
 3. Return the `ContractState` for the interpreter.
@@ -84,4 +84,4 @@ Binary format:
 
 The `midnight_queryContractState` response uses `tagged_serialize` for individual field values. The `midnight_contractState` response is a hex-encoded `tagged_serialize`'d full `ContractState`.
 
-`state::fetch_state()` and `state::fetch_state_from_node()` decode the `midnight_contractState` hex string.
+`state::fetch_state()` decodes the `midnight_contractState` hex string.

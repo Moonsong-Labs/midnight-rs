@@ -27,11 +27,8 @@ const SYNC_PAUSE: Duration = Duration::from_secs(1);
 /// How long the wallet waits to see the effect of a finalized transaction.
 const EFFECT_TIMEOUT: Duration = Duration::from_secs(60);
 
-fn required_env(name: &str) -> String {
-    env::var(name).unwrap_or_else(|_| {
-        eprintln!("error: {name} environment variable is required");
-        std::process::exit(1);
-    })
+fn env_or(name: &str, default: &str) -> String {
+    env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
 #[tokio::main]
@@ -45,11 +42,9 @@ async fn main() -> anyhow::Result<()> {
         .with_target(true)
         .init();
 
-    let node_url = required_env("MIDNIGHT_NODE_URL");
-    let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
-    let network: Network = env::var("MIDNIGHT_NETWORK")
-        .unwrap_or_else(|_| "undeployed".into())
-        .parse()?;
+    let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
+    let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
+    let network: Network = env_or("MIDNIGHT_NETWORK", "undeployed").parse()?;
 
     println!("=== Midnight Shielded Transfer ===\n");
     println!("Network:           {network}");
