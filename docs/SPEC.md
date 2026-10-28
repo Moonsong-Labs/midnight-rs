@@ -229,7 +229,7 @@ deploy_funded(state, provider, shielded_offer)
       │  the wallet spends and reserves the offer's coins
       ├─ refuse a token the coins do not cover (ShieldedOfferShortfall)
       ├─ guaranteed offer: the coins, the payments, one change output per token
-      ├─ build_no_validate: prove with no fee
+      ├─ prepare_no_validate, then PreparedTransfer::prove: prove with no fee
       ├─ builds.balance_transaction: the Dust fee in its own intent
       └─ the result's spent: the fee Dust, merged with the offer's coins
   ↓
@@ -305,7 +305,8 @@ builds.add_funding(&context)                                   // the payer join
 builds.prepare_shielded_inputs(..)                             // only if the call pins coins
   └─ spends them into this context and reserves them, as one transition
   ↓
-  → StandardTransactionInfo → build_no_validate                // fee-less, even when self-funded
+  → StandardTransactionInfo → prepare_no_validate              // fee-less, even when the call pays a fee
+  → PreparedTransfer::prove
   ↓
 if pay_fees: builds.balance_transaction(bytes)
   └─ the wallet draws the Dust and reserves it as one transition (prepare_fees),
@@ -404,7 +405,7 @@ A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the
 | `midnight-ledger` 8.1.2 (+ its `midnight-zswap`, `midnight-onchain-*`) | `RomarQ/midnight-ledger`, branch `rq/midnight-rs-ledger-8` | Ledger 8: transaction types, VM, proving |
 | `midnight-ledger-v9` (+ its companion crates, and the `midnight-transient-crypto` 2.2 that ledger 8 also uses) | `RomarQ/midnight-ledger`, branch `rq/midnight-rs-ledger-9` | Ledger 9, the on-chain runtime the Compact side reads on both chains, and the crypto of both |
 | `midnight-serialize`, `midnight-base-crypto`, `midnight-storage` | one instance for both generations, from the ledger 9 branch | The tagged codec, `HashOutput`, `AlignedValue`, `Sp` |
-| `midnight-node-ledger-helpers`, `midnight-ledger-unsafe-helpers` | `RomarQ/midnight-node`, branch `rq/midnight-rs-toolkit-2.1.0-rc.3` | A `ledger_8` and a `ledger_9` module each: the type surface, and the transaction and wallet builders |
+| `midnight-ledger-unsafe-helpers` (+ the `midnight-node-ledger-helpers` it builds on) | `RomarQ/midnight-node`, branch `rq/midnight-rs-toolkit-2.1.0-rc.3` | A `ledger_8` and a `ledger_9` module: the type surface, and the transaction and wallet builders |
 | `subxt` | crates.io | Substrate RPC (including `midnight_contractState` and `midnight_queryContractState`), extrinsic submission, watch streams, reconnecting client |
 | `tokio-tungstenite` | crates.io | Indexer WebSocket subscriptions |
 

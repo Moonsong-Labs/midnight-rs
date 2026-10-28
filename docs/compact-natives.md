@@ -16,14 +16,14 @@ Each entry has one of two kinds:
 
 `NAME` is the source name, and it is not unique: the ZKIR v3 table declares `ecAdd`, `ecMul` and `ecMulGenerator` again for each foreign curve, and `neg` and `inv` for each foreign field. `SYMBOL` is unique. The analyzed IR keeps each entry as a native declaration with its symbol (`entry`), and the interpreter dispatches a call on that symbol (`Program::runtime_name`).
 
-`midnight-ledger`, `onchain-runtime`, and `onchain-vm` have no enum of these names. They operate one level below Compact, at the VM op (`Op`) and effects layer; by the time anything reaches the ledger the compiler has already lowered these calls into VM op sequences plus, for the witness natives, a `call-witness` marker carrying the bare string name. That is why the interpreter dispatches on a string (see `eval_witness_call` and `try_builtin`), and why there is no upstream enum to import.
+`midnight-ledger`, `onchain-runtime`, and `onchain-vm` have no enum of these names. They operate one level below Compact, at the VM op (`Op`) and effects layer; by the time anything reaches the ledger the compiler has already lowered these calls into VM op sequences plus, for the witness natives, a `call-witness` marker carrying the bare string name. That is why the interpreter dispatches on a string (see `eval_witness_call` and `try_builtin_typed`), and why there is no upstream enum to import.
 
 ## The four execution surfaces
 
 A name that shows up in a circuit's lowered IR reaches one of four places. Only the first two come from the native table; the other two are listed so the boundaries are clear.
 
-1. **Native circuits (pure builtins).** The `declare-native-entry circuit` primitives. In our interpreter these are `try_builtin(symbol, args)` arms.
-2. **Native witnesses.** The `declare-native-entry witness` primitives (`ownPublicKey`, `createZswapInput`, `createZswapOutput`). These are effectful: they read the caller's key or capture a coin to add to the transaction. In our interpreter they are modelled by the `WitnessNative` enum and matched exhaustively in `eval_witness_call`, because routing them to the witness provider or `try_builtin` would error.
+1. **Native circuits (pure builtins).** The `declare-native-entry circuit` primitives. In our interpreter these are `try_builtin_typed(symbol, args, arg_types)` arms.
+2. **Native witnesses.** The `declare-native-entry witness` primitives (`ownPublicKey`, `createZswapInput`, `createZswapOutput`). These are effectful: they read the caller's key or capture a coin to add to the transaction. In our interpreter they are modelled by the `WitnessNative` enum and matched exhaustively in `eval_witness_call`, because routing them to the witness provider or `try_builtin_typed` would error.
 3. **Kernel ledger methods.** `kernel.self()`, `kernel.mintShielded(...)`, `kernel.claimZswapCoinSpend(...)`, `kernel.claimZswapCoinReceive(...)`, and friends are methods on the runtime-managed `Kernel` ledger type. They are not natives; the compiler lowers them to `ledger-query` op sequences, which the interpreter runs through `exec_ledger_query` (the same path as any other ledger read/write). `kernel.self()` is the one context read that needs the real contract address injected.
 4. **High-level standard-library circuits.** `mintShieldedToken`, `sendShielded`, `receiveShielded`, `sendImmediateShielded`, `sendUnshielded`, `receiveUnshielded`, etc. (in [`compiler/standard-library.compact`](https://github.com/RomarQ/compact/blob/fa2181fbc6dac2135defdb4f55ce10d8332185d5/compiler/standard-library.compact) of the fork) are ordinary Compact circuits. They are compiled inline and decompose into the primitives above. They need no interpreter support of their own; they work as soon as the natives and kernel methods they call do. For example `mintShieldedToken` lowers to `tokenType` (persistentCommit) plus `kernel.self()`, `kernel.mintShielded`, `createZswapOutput`, `coinCommitment` (persistentHash), `kernel.claimZswapCoinSpend`, and the mint-to-self `kernel.claimZswapCoinReceive` branch.
 
@@ -37,7 +37,7 @@ Our Rust SDK is different in kind: it does not run compiler-generated JS, it int
 
 ## The natives and our interpreter status
 
-Status is against `crates/compact/interpreter` and `crates/compact/runtime`. For pure circuits, "missing" means there is no `try_builtin` arm, so a call fails the builtin lookup. For witness natives, the `WitnessNative` enum models the closed set, and `eval_witness_call` matches it exhaustively. A new variant forces the match to handle it, so the interpreter cannot drop a witness native silently.
+Status is against `crates/compact/interpreter` and `crates/compact/runtime`. For pure circuits, "missing" means there is no `try_builtin_typed` arm, so a call fails the builtin lookup. For witness natives, the `WitnessNative` enum models the closed set, and `eval_witness_call` matches it exhaustively. A new variant forces the match to handle it, so the interpreter cannot drop a witness native silently.
 
 ### Native circuits (pure, `__compactRuntime.*`)
 
@@ -45,7 +45,7 @@ The source name and the symbol of each native in this table are the same. Every 
 
 | Native | Returns | Status |
 | --- | --- | --- |
-| `transientHash` | Field | implemented (`try_builtin`, via `transient_hash`) |
+| `transientHash` | Field | implemented (`try_builtin_typed`, via `transient_hash`) |
 | `transientCommit` | Field | implemented (via `transient_commit`) |
 | `persistentHash` | Bytes 32 | implemented (via `persistent_hash`) |
 | `persistentCommit` | Bytes 32 | implemented (via `persistent_commit`) |
@@ -57,7 +57,7 @@ The source name and the symbol of each native in this table are the same. Every 
 | `ecAdd` | JubjubPoint | implemented |
 | `ecNeg` | JubjubPoint | implemented (via `Neg` on `EmbeddedGroupAffine`) |
 | `ecMul` | JubjubPoint | implemented |
-| `ecMulGenerator` | JubjubPoint | implemented (arm matches both `ecMulGenerator` and `__builtin_ec_mul_generator`) |
+| `ecMulGenerator` | JubjubPoint | implemented |
 | `hashToCurve` | JubjubPoint | implemented (via `hash_to_curve`) |
 | `constructJubjubPoint` | JubjubPoint | implemented (via `EmbeddedGroupAffine::new`) |
 
@@ -78,7 +78,7 @@ The compiler declares these natives only with `--feature-zkir-v3`. A contract co
 | Native | Symbols | Returns | Status |
 | --- | --- | --- | --- |
 | `sha512` | `sha512` | Bytes 64 | implemented (via `sha2::Sha512` over the `persistentHash` bytes, as ZKIR v3 does) |
-| `neg`, `inv` | `{secp256k1,secp256r1,curve25519}{Base,Scalar}{Neg,Inv}` | the same field | implemented (`try_builtin`) |
+| `neg`, `inv` | `{secp256k1,secp256r1,curve25519}{Base,Scalar}{Neg,Inv}` | the same field | implemented (`try_builtin_typed`) |
 | `secp256k1PointX`, `secp256k1PointY` | the same | Secp256k1Base | implemented |
 | `secp256r1PointX`, `secp256r1PointY` | the same | Secp256r1Base | implemented |
 | `curve25519PointX`, `curve25519PointY` | the same | Curve25519Base | implemented |
@@ -92,12 +92,8 @@ A Curve25519 point is a point of the prime-order subgroup in the twisted Edwards
 
 A conditional gives `inv` and the coordinate natives of secp256k1 and secp256r1 no protection at proving time. The interpreter and the TypeScript runtime compute only the branch taken, but ZKIR v3 computes both branches and then selects one. So `b ? inv(x) : y` runs off-chain with `b` false and `x` zero, and the prover then fails on the inverse of zero. The same applies to the coordinates of the identity. A guarded-off witness or ledger read of a `Secp256k1Point` or a `Secp256r1Point` is the identity in ZKIR v3. So a coordinate of it fails at the prover each time the branch is not taken. Give these natives an argument that is valid on both branches.
 
-### Interpreter intrinsics outside the native table
-
-`try_builtin` also implements a few names that are not `declare-native-entry` primitives (for example `leafHash`, `pad`). These come from the compiler's intrinsics and Merkle helpers rather than the native table, so they are intentionally not in the list above. When auditing coverage, audit against the native table plus these known extras, not the table alone.
-
 ## Keeping this in sync
 
 `midnight-natives.ss` and `zkir-v3-natives.ss` are the source of truth and change only when the Compact compiler is bumped. After a compiler bump, diff both files: any new `declare-native-entry` is a new primitive a contract can emit, and therefore a new row here and a potential interpreter gap.
 
-This is guarded by the test `every_compact_native_is_handled_or_known_unimplemented` (in `crates/compact/interpreter/src/lib.rs`). It reads the runtime symbols from `COMPACT_NATIVES`, a list in that test. It asserts that each symbol is either implemented (`try_builtin` arm or `WitnessNative`) or in an explicit `KNOWN_UNIMPLEMENTED` allowlist, so a native can never be silently dropped. `make check-natives` compares that list with both tables at `COMPACT_REV`, and the compile job of the CI workflow runs it. So a compiler bump that adds or removes a native fails there until the list is updated. The unit test then names each new native that has no implementation. Update this doc in the same change.
+This is guarded by the test `every_compact_native_is_handled_or_known_unimplemented` (in `crates/compact/interpreter/src/lib.rs`). It reads the runtime symbols from `COMPACT_NATIVES`, a list in that test. It asserts that each symbol is either implemented (`try_builtin_typed` arm or `WitnessNative`) or in an explicit `KNOWN_UNIMPLEMENTED` allowlist, so a native can never be silently dropped. `make check-natives` compares that list with both tables at `COMPACT_REV`, and the compile job of the CI workflow runs it. So a compiler bump that adds or removes a native fails there until the list is updated. The unit test then names each new native that has no implementation. Update this doc in the same change.

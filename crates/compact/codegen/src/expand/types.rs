@@ -7,6 +7,10 @@ use super::helpers::Lit;
 
 // --- Type mapping ---
 
+/// The most elements of a tuple that base-crypto implements `Aligned` and
+/// `TryFrom<&ValueSlice>` for.
+pub(crate) const MAX_TUPLE_LEN: usize = 11;
+
 pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
     match ty {
         Type::Boolean => quote! { bool },
@@ -46,6 +50,14 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
             let inner_ty = type_to_tokens(inner);
             let length = Lit(*length as usize);
             quote! { Vector<#length, #inner_ty> }
+        }
+        Type::Tuple(types) if types.len() > MAX_TUPLE_LEN => {
+            let msg = format!(
+                "the bindings decode a Compact tuple of at most {MAX_TUPLE_LEN} elements, and a \
+                 tuple in this contract has {}. Declare a struct instead",
+                types.len()
+            );
+            quote! { compile_error!(#msg) }
         }
         Type::Tuple(types) if types.is_empty() => quote! { () },
         Type::Tuple(types) if types.len() == 1 => {
@@ -221,7 +233,7 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &Type) -> TokenStr
                 .collect();
             quote! {
                 {
-                    let (#(#idents),*) = #expr;
+                    let (#(#idents,)*) = #expr;
                     let __parts: ::std::vec::Vec<AlignedValue> = vec![#(#parts),*];
                     AlignedValue::concat(__parts.iter())
                 }

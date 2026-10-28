@@ -8,15 +8,15 @@ use midnight_indexer_client::SubscriptionClient;
 use midnight_types::chain_pin::ChainPin;
 use midnight_types::hd::Seed;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, DustBalance, EncryptionPublicKey, LedgerVersion,
-    Network, ShieldedBalance, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    UnshieldedUtxoInfo, WalletBalance, WalletError,
+    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
+    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::replay::{
-    latest_block, ledger_of, progress_cancelled, replay_unshielded_events, send_progress,
+    UnshieldedReplay, latest_block, ledger_of, progress_cancelled, replay_unshielded_events,
+    send_progress,
 };
 use crate::storage::wallet_storage_id;
 use crate::sync::SyncPlan;
@@ -203,33 +203,10 @@ impl Wallet {
         each!(&mut self.state, w => w.set_chain_pin(pin))
     }
 
-    /// Height of the latest block seen in an unshielded transaction event.
-    ///
-    /// This is NOT a general chain-sync cursor. It only advances when the
-    /// wallet's unshielded address appears in a transaction.
-    pub fn last_block_height(&self) -> i64 {
-        each!(&self.state, w => w.last_block_height())
-    }
-
-    /// Indexer id of the latest transaction the wallet applied.
-    pub fn last_tx_id(&self) -> Option<i64> {
-        each!(&self.state, w => w.last_tx_id())
-    }
-
-    /// Highest zswap event id the wallet applied.
-    pub fn zswap_event_id(&self) -> i64 {
-        each!(&self.state, w => w.zswap_event_id())
-    }
-
-    /// Highest dust event id the wallet applied.
-    pub fn dust_event_id(&self) -> i64 {
-        each!(&self.state, w => w.dust_event_id())
-    }
-
     /// How far the sync has reached, as one snapshot.
     ///
     /// The four cursors advance together during a sync, so reading them one
-    /// at a time can report a mixture of two syncs. Take them here instead.
+    /// at a time can report a mixture of two syncs.
     pub fn sync_cursors(&self) -> SyncCursors {
         each!(&self.state, w => w.sync_cursors())
     }
@@ -278,18 +255,6 @@ impl Wallet {
 
     pub fn balance(&self) -> WalletBalance {
         each!(&self.state, w => w.balance())
-    }
-
-    pub fn dust_balance(&self) -> DustBalance {
-        each!(&self.state, w => w.dust_balance())
-    }
-
-    pub fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
-        each!(&self.state, w => w.unshielded_balance())
-    }
-
-    pub fn shielded_balance(&self) -> ShieldedBalance {
-        each!(&self.state, w => w.shielded_balance())
     }
 
     /// Enumerate the wallet's spendable shielded coins, each with its full
@@ -389,7 +354,6 @@ impl Wallet {
                     network: w.network().clone(),
                     storage_dir: w.storage_dir().map(Path::to_path_buf),
                     chain_pin: w.chain_pin().cloned(),
-                    last_block_height: w.last_block_height(),
                 },
             },
             State::Ledger9(w) => ResyncPlanKind::Ledger9(w.resync_plan()),
@@ -542,7 +506,6 @@ struct WalletIdentity {
     network: Network,
     storage_dir: Option<PathBuf>,
     chain_pin: Option<ChainPin>,
-    last_block_height: i64,
 }
 
 impl ResyncPlan {
@@ -612,6 +575,7 @@ async fn cross(
         zswap_event_id,
         unshielded_utxos,
         last_tx_id,
+        last_block_height,
         ..
     } = plan;
     let from = Resume {
@@ -621,7 +585,7 @@ async fn cross(
         dust_event_id,
         unshielded_utxos,
         last_tx_id,
-        last_block_height: identity.last_block_height,
+        last_block_height,
     };
     let state = sync_on_chain(
         ChainSync {
@@ -1040,7 +1004,7 @@ async fn sync_on_chain(
                 r.last_block_height,
             ),
             None => (
-                ZswapState::Ledger8(ledger_8::state::empty_zswap_state(sync.seed)),
+                ZswapState::Ledger8(midnight_helpers::ledger_8::WalletState::new()),
                 0,
                 None,
                 0,
@@ -1079,16 +1043,18 @@ async fn sync_on_chain(
             sync.address,
             utxos,
             start_tx_id,
+            height,
             resuming,
             progress.clone(),
         ),
     );
     let zswap = zswap?;
-    let (unshielded_utxos, last_tx_id, replay_block_height, spent_unshielded) = unshielded?;
-    // The unshielded subscription only updates `last_block_height` when a
-    // transaction touches our address. On a resume with no new unshielded
-    // txs, replay returns 0, so we keep the persisted value as a floor.
-    let last_block_height = replay_block_height.max(height);
+    let UnshieldedReplay {
+        utxos: unshielded_utxos,
+        last_tx_id,
+        last_block_height,
+        spent: spent_unshielded,
+    } = unshielded?;
 
     match zswap.state.into_ledger(chain)? {
         ZswapState::Ledger8(zswap_state) => {

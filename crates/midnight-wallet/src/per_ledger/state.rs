@@ -20,7 +20,9 @@ use tracing::{error, info, warn};
 use super::pending::{PendingReservations, within_ttl};
 use super::types::convert::{IntoLedger, IntoSdk};
 use crate::chain_pin::ChainPin;
-use crate::replay::{LedgerStream, replay_ledger_events, replay_unshielded_events};
+use crate::replay::{
+    LedgerStream, UnshieldedReplay, replay_ledger_events, replay_unshielded_events,
+};
 use crate::storage::wallet_storage_id;
 use crate::wallet::ChainSync;
 use crate::{Network, ReservedInput, Seed, SpentUtxoKey, SyncProgress, WalletError};
@@ -155,32 +157,6 @@ fn make_dust_checkpoint(
     })
 }
 
-/// Construct a `BlockContext` anchored at the given `tblock`.
-fn block_context_at(tblock: Timestamp) -> BlockContext {
-    BlockContext {
-        tblock,
-        tblock_err: 30,
-        parent_block_hash: Default::default(),
-        last_block_time: tblock,
-    }
-}
-
-/// The window within which a dust-event-anchored `tblock` candidate is still
-/// valid relative to the chain's current time: the tighter of the intent
-/// `global_ttl` and the dust `dust_grace_period`. The chain enforces both, but
-/// the dust grace window (often much shorter than `global_ttl`) is what rejects
-/// a stale `ctime` with `OutOfDustValidityWindow`, so it must bound the anchor.
-fn anchor_window(
-    global_ttl: helpers::Duration,
-    dust_grace_period: helpers::Duration,
-) -> helpers::Duration {
-    if global_ttl.as_seconds() <= dust_grace_period.as_seconds() {
-        global_ttl
-    } else {
-        dust_grace_period
-    }
-}
-
 /// The `tblock` that a wallet anchors its block context at, after a replay
 /// whose last Dust event carried `last_dust_block_time`.
 ///
@@ -197,12 +173,12 @@ fn anchor_window(
 /// genesis is hardcoded months before wall clock while the chain runs in real
 /// time, so a Dust time from a genesis event is too old for it.
 ///
-/// So the anchor is the newest race-safe candidate while [`anchor_window`]
-/// still covers it: `last_dust_block_time + 1s`, or `previous` when the replay
-/// saw no Dust event. Otherwise it is `chain_now`. That fallback accepts a
-/// small race (a Dust event indexed between the replay's tip and the latest
-/// block query), but a chain whose time moved past the candidate's window
-/// needs it.
+/// So the anchor is the newest race-safe candidate while the smaller of
+/// `global_ttl` and `dust_grace_period` still covers it:
+/// `last_dust_block_time + 1s`, or `previous` when the replay saw no Dust
+/// event. Otherwise it is `chain_now`. That fallback accepts a small race (a
+/// Dust event indexed between the replay's tip and the latest block query),
+/// but a chain whose time moved past the candidate's window needs it.
 ///
 /// `previous` is race-safe only when no Dust event changed the wallet's state
 /// after it was taken.
@@ -212,7 +188,9 @@ fn dust_anchor(
     chain_now: Timestamp,
     parameters: &LedgerParameters,
 ) -> Timestamp {
-    let window = anchor_window(parameters.global_ttl, parameters.dust.dust_grace_period);
+    // The chain enforces both bounds. The Dust grace period is often much
+    // shorter, and it rejects a stale `ctime` with `OutOfDustValidityWindow`.
+    let window = parameters.global_ttl.min(parameters.dust.dust_grace_period);
     match last_dust_block_time
         .map(|t| t + helpers::Duration::from_secs(1))
         .or(previous)
@@ -318,6 +296,7 @@ pub struct ResyncPlan {
     pub(crate) zswap_event_id: i64,
     pub(crate) unshielded_utxos: Vec<TrackedUtxo>,
     pub(crate) last_tx_id: Option<i64>,
+    pub(crate) last_block_height: i64,
 }
 
 impl ResyncPlan {
@@ -334,6 +313,7 @@ impl ResyncPlan {
             zswap_event_id,
             unshielded_utxos,
             last_tx_id,
+            last_block_height,
         } = self;
 
         let sub_client = SubscriptionClient::new(indexer_url);
@@ -362,6 +342,7 @@ impl ResyncPlan {
                 &unshielded_address,
                 unshielded_utxos,
                 start_tx_id,
+                last_block_height,
                 // A resume, like the two replays above: the wallet already
                 // holds a cursor, so a stream with nothing to deliver means
                 // this address is at the tip. An address with no new
@@ -377,7 +358,12 @@ impl ResyncPlan {
         // is produced and the source wallet stays as it was.
         let dust = dust_res?;
         let zswap = zswap_res?;
-        let (unshielded_utxos, last_tx_id, last_block_height, spent_unshielded) = unshielded_res?;
+        let UnshieldedReplay {
+            utxos: unshielded_utxos,
+            last_tx_id,
+            last_block_height,
+            spent: spent_unshielded,
+        } = unshielded_res?;
         let block = block_res?;
         // A chain that moved to a later generation since the plan was taken
         // needs the wallet to cross, which is not this generation's to do.
@@ -448,7 +434,7 @@ impl ShieldedRescanPlan {
     pub(crate) fn new(seed: &Seed, coins: &[crate::CoinInfo]) -> Self {
         let secret_keys = zswap_keys(seed);
         let coin_public_key = secret_keys.coin_public_key();
-        let initial_state = coins.iter().fold(empty_zswap_state(seed), |state, coin| {
+        let initial_state = coins.iter().fold(ZswapLocalState::new(), |state, coin| {
             state.watch_for(&coin_public_key, &coin.into_ledger())
         });
         Self {
@@ -517,11 +503,6 @@ pub(crate) fn zswap_keys(seed: &Seed) -> SecretKeys {
     ShieldedWallet::<DefaultDB>::default(seed.into_ledger())
         .secret_keys()
         .clone()
-}
-
-/// The shielded state of a wallet that has applied no event.
-pub(crate) fn empty_zswap_state(seed: &Seed) -> ZswapLocalState<DefaultDB> {
-    ShieldedWallet::<DefaultDB>::default(seed.into_ledger()).state
 }
 
 impl Wallet {
@@ -632,12 +613,12 @@ impl Wallet {
             ..
         } = dust;
 
-        let block_context = Some(block_context_at(dust_anchor(
-            last_dust_block_time,
-            None,
-            block_timestamp,
-            &parameters,
-        )));
+        let tblock = dust_anchor(last_dust_block_time, None, block_timestamp, &parameters);
+        let block_context = Some(helpers::make_block_context(
+            tblock,
+            Default::default(),
+            tblock,
+        ));
 
         info!(
             zswap_event_id,
@@ -787,26 +768,41 @@ impl Wallet {
         }
     }
 
-    /// Nullifiers of shielded coins reserved by recent, still-pending builds,
-    /// so [`Wallet::spendable_shielded_coins`] can exclude them (the build
-    /// context excludes them from Zswap coin selection directly).
-    pub(crate) fn reserved_shielded_nullifiers(&self) -> impl Iterator<Item = &helpers::Nullifier> {
-        self.pending.shielded_nullifiers()
+    /// Whether a reservation made at `reserved_at` still holds its inputs.
+    ///
+    /// A reservation outside [`within_ttl`] at `block_context.tblock` does not,
+    /// because [`Self::add_funding`] evicts it before a build selects. With no
+    /// block context, every reservation holds, as no eviction runs.
+    fn reservation_holds(&self, reserved_at: Timestamp) -> bool {
+        self.block_context
+            .as_ref()
+            .is_none_or(|bc| within_ttl(reserved_at, bc.tblock, self.parameters.global_ttl))
     }
 
-    /// Nullifiers of the Dust UTXOs that recent, still-pending builds reserved.
-    ///
-    /// A reservation outside [`within_ttl`] at `block_context.tblock` does not
-    /// count, because [`Self::add_funding`] evicts it before a build selects.
-    /// With no block context, every reservation counts, as no eviction runs.
+    /// Nullifiers of the shielded coins that a reservation holds; see
+    /// [`Self::reservation_holds`].
+    pub(crate) fn reserved_shielded_nullifiers(&self) -> impl Iterator<Item = &helpers::Nullifier> {
+        self.pending
+            .shielded_spends()
+            .filter(|spend| self.reservation_holds(spend.reserved_at))
+            .map(|spend| &spend.nullifier)
+    }
+
+    /// Keys of the unshielded UTXOs that a reservation holds; see
+    /// [`Self::reservation_holds`].
+    pub(crate) fn reserved_unshielded_keys(&self) -> impl Iterator<Item = &SpentUtxoKey> {
+        self.pending
+            .unshielded_spends()
+            .filter(|spend| self.reservation_holds(spend.reserved_at))
+            .map(|spend| &spend.key)
+    }
+
+    /// Nullifiers of the Dust UTXOs that a reservation holds; see
+    /// [`Self::reservation_holds`].
     pub(crate) fn reserved_dust_nullifiers(&self) -> impl Iterator<Item = &DustNullifier> {
-        let now = self.block_context.as_ref().map(|bc| bc.tblock);
-        let global_ttl = self.parameters.global_ttl;
         self.pending
             .dust_batches()
-            .filter(move |batch| {
-                now.is_none_or(|now| within_ttl(batch.reserved_at, now, global_ttl))
-            })
+            .filter(|batch| self.reservation_holds(batch.reserved_at))
             .flat_map(|batch| batch.spends.iter().map(|spend| &spend.old_nullifier))
     }
 
@@ -943,7 +939,7 @@ impl Wallet {
         // Filter out UTXOs reserved by recent (still-pending) builds so the
         // selector doesn't re-pick them before the indexer confirms the
         // spend.
-        let pending_unshielded: Vec<&SpentUtxoKey> = self.pending.unshielded_keys().collect();
+        let pending_unshielded: Vec<&SpentUtxoKey> = self.reserved_unshielded_keys().collect();
 
         {
             let mut guard = ctx
@@ -975,7 +971,7 @@ impl Wallet {
             // indexer confirms the spend. `remove` on an already-absent
             // nullifier (the spend confirmed and resync dropped the coin) is a
             // harmless no-op.
-            for nullifier in self.pending.shielded_nullifiers() {
+            for nullifier in self.reserved_shielded_nullifiers() {
                 shielded.state.coins = shielded.state.coins.remove(nullifier);
             }
 
@@ -1050,23 +1046,6 @@ impl Wallet {
     // Accessors
     // -------------------------------------------------------------------------
 
-    /// See [`crate::Wallet::last_block_height`].
-    pub fn last_block_height(&self) -> i64 {
-        self.last_block_height
-    }
-
-    pub fn last_tx_id(&self) -> Option<i64> {
-        self.last_tx_id
-    }
-
-    pub fn zswap_event_id(&self) -> i64 {
-        self.zswap_event_id
-    }
-
-    pub fn dust_event_id(&self) -> i64 {
-        self.dust_event_id
-    }
-
     /// See [`crate::Wallet::sync_cursors`].
     pub fn sync_cursors(&self) -> SyncCursors {
         SyncCursors {
@@ -1136,6 +1115,7 @@ impl Wallet {
             zswap_event_id: self.zswap_event_id,
             unshielded_utxos: self.unshielded_utxos.clone(),
             last_tx_id: self.last_tx_id,
+            last_block_height: self.last_block_height,
         }
     }
 
@@ -1183,13 +1163,7 @@ impl Wallet {
         self.carry_registrations(registrations);
         self.unshielded_utxos = unshielded_utxos;
         self.last_tx_id = Some(last_tx_id);
-        // Only advance last_block_height if the unshielded sync actually saw a
-        // newer block. Without this guard, a resume with no new unshielded txs
-        // would clobber the persisted height with 0 (the default returned by
-        // `replay_unshielded_events` when no events arrive).
-        if last_block_height > self.last_block_height {
-            self.last_block_height = last_block_height;
-        }
+        self.last_block_height = last_block_height;
         // Refresh parameters from the latest block so governance changes to
         // fees/TTL/dust rates take effect. Assigned before `global_ttl` is
         // read below so the anchor math uses the fresh value.
@@ -1202,7 +1176,11 @@ impl Wallet {
             chain_tblock,
             &self.parameters,
         );
-        self.block_context = Some(block_context_at(tblock));
+        self.block_context = Some(helpers::make_block_context(
+            tblock,
+            Default::default(),
+            tblock,
+        ));
 
         // Reservations whose spends this replay just observed confirmed are
         // no longer in flight; drop them so the underlying UTXOs become
@@ -1609,23 +1587,6 @@ mod tests {
     use super::*;
     use crate::wallet::test_support::{test_seed, unreachable_coin};
 
-    #[test]
-    fn anchor_window_clamps_to_the_tighter_dust_grace_period() {
-        let global_ttl = helpers::Duration::from_secs(14 * 24 * 60 * 60); // 14 days
-        let dust_grace = helpers::Duration::from_secs(3 * 60 * 60); // 3 hours
-        // The dust grace window (the bound the node actually enforces against
-        // `ctime`) is far shorter than the intent `global_ttl`, so it must win.
-        assert_eq!(
-            anchor_window(global_ttl, dust_grace).as_seconds(),
-            3 * 60 * 60
-        );
-        // Symmetric: when `global_ttl` is the shorter of the two, it wins.
-        assert_eq!(
-            anchor_window(dust_grace, global_ttl).as_seconds(),
-            3 * 60 * 60
-        );
-    }
-
     /// The anchor sets the `ctime` that the node checks, so a wrong one fails
     /// no sync. Only the node rejects the transaction later.
     #[test]
@@ -1786,13 +1747,60 @@ mod tests {
     fn reserved_dust_nullifiers_skip_an_expired_reservation() {
         let mut wallet = test_wallet(None);
         let now = Timestamp::from_secs(100_000);
-        wallet.block_context = Some(block_context_at(now));
+        wallet.block_context = Some(helpers::make_block_context(now, Default::default(), now));
         let expired = now - wallet.parameters.global_ttl - helpers::Duration::from_secs(1);
         wallet.reserve_pending(vec![dust_batch(&[1])], Vec::new(), Vec::new(), expired);
         wallet.reserve_pending(vec![dust_batch(&[2])], Vec::new(), Vec::new(), now);
 
         let reserved: Vec<DustNullifier> = wallet.reserved_dust_nullifiers().copied().collect();
         assert_eq!(reserved, vec![DustNullifier(Fr::from(2u64))]);
+    }
+
+    /// The shielded and unshielded readings hold the inputs of a live
+    /// reservation and free those of an expired one, as a build does.
+    #[test]
+    fn readings_hold_only_the_inputs_of_a_live_reservation() {
+        let mut wallet = test_wallet(None);
+        let now = Timestamp::from_secs(100_000);
+        wallet.block_context = Some(helpers::make_block_context(now, Default::default(), now));
+        let expired = now - wallet.parameters.global_ttl - helpers::Duration::from_secs(1);
+        let expired_coin = insert_shielded_coin(&mut wallet, 1, 100);
+        let live_coin = insert_shielded_coin(&mut wallet, 2, 200);
+        let expired_utxo = tracked_night_utxo();
+        let live_utxo = TrackedUtxo {
+            output_index: 1,
+            value: 58,
+            ..tracked_night_utxo()
+        };
+        wallet.unshielded_utxos = vec![expired_utxo.clone(), live_utxo.clone()];
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![expired_utxo.spent_key()],
+            vec![expired_coin],
+            expired,
+        );
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![live_utxo.spent_key()],
+            vec![live_coin],
+            now,
+        );
+
+        let spendable: Vec<u128> = wallet
+            .spendable_shielded_coins()
+            .iter()
+            .map(|coin| coin.value)
+            .collect();
+        assert_eq!(spendable, vec![100]);
+        let balance = wallet.balance();
+        let token = midnight_types::ShieldedTokenType(midnight_types::HashOutput([0; 32]));
+        assert_eq!(balance.shielded_value(token), 300);
+        assert_eq!(balance.spendable_shielded_value(token), 100);
+        assert_eq!(balance.unshielded_value(midnight_types::NIGHT), 100);
+        assert_eq!(
+            balance.spendable_unshielded_value(midnight_types::NIGHT),
+            42
+        );
     }
 
     /// One shielded coin in the wallet's Zswap state, keyed by `nullifier`. The
@@ -1941,7 +1949,12 @@ mod tests {
         // A resync between the two halves moves the wallet's chain view. The
         // funding pass must carry it over, or the build witnesses a Dust root
         // the context's `ctime` does not resolve to.
-        wallet.block_context = Some(block_context_at(Timestamp::from_secs(1_234)));
+        let tblock = Timestamp::from_secs(1_234);
+        wallet.block_context = Some(helpers::make_block_context(
+            tblock,
+            Default::default(),
+            tblock,
+        ));
         wallet.add_funding(&ctx).expect("add funding");
 
         assert_eq!(
@@ -1969,7 +1982,7 @@ mod tests {
         let loaded = PendingReservations::load(dir.path(), "undeployed", &wallet.storage_id())
             .unwrap()
             .expect("pending.json should exist after reserve_pending");
-        assert_eq!(loaded.unshielded_keys().count(), 1);
+        assert_eq!(loaded.unshielded_spends().count(), 1);
     }
 
     /// The commitment `coin`'s output carries when `wallet` owns it.
@@ -2116,8 +2129,9 @@ mod tests {
             .unwrap();
 
         assert!(wallet.spendable_shielded_coins().is_empty());
-        assert_eq!(wallet.zswap_event_id(), 9);
-        assert_eq!(wallet.dust_event_id(), 11, "a rescan is shielded-only");
+        let cursors = wallet.sync_cursors();
+        assert_eq!(cursors.zswap_event_id, 9);
+        assert_eq!(cursors.dust_event_id, 11, "a rescan is shielded-only");
         assert_eq!(stored_generations(dir.path()), vec![1]);
     }
 
@@ -2178,7 +2192,7 @@ mod tests {
             zswap_event_id: wallet.zswap_event_id,
             unshielded_utxos: wallet.unshielded_utxos.clone(),
             last_tx_id: wallet.last_tx_id.unwrap_or(0),
-            last_block_height: 0,
+            last_block_height: wallet.last_block_height,
             spent_unshielded: Vec::new(),
             chain_tblock: Timestamp::from_secs(1_000),
             parameters: wallet.parameters.clone(),
@@ -2329,7 +2343,11 @@ mod tests {
         commit.spent_unshielded = vec![confirmed];
         wallet.commit_resync(commit).unwrap();
 
-        let remaining: Vec<_> = wallet.pending.unshielded_keys().cloned().collect();
+        let remaining: Vec<_> = wallet
+            .pending
+            .unshielded_spends()
+            .map(|spend| spend.key.clone())
+            .collect();
         assert_eq!(remaining, vec![late], "late reservation must survive");
     }
 
@@ -2353,7 +2371,7 @@ mod tests {
             Timestamp::from_secs(100),
         );
 
-        assert_eq!(wallet.pending.unshielded_keys().count(), 1);
+        assert_eq!(wallet.pending.unshielded_spends().count(), 1);
         assert_eq!(wallet.pending.dust_batches().count(), 1);
         // With no dust state to replay the pending batch against, the
         // surviving reservation still refuses the build.
@@ -2369,7 +2387,7 @@ mod tests {
         let saved = PendingReservations::load(&blocker, "undeployed", &wallet.storage_id())
             .unwrap()
             .expect("a no-op commit after a failed pending write must save");
-        assert_eq!(saved.unshielded_keys().count(), 1);
+        assert_eq!(saved.unshielded_spends().count(), 1);
     }
 
     fn params_with(
@@ -2481,7 +2499,7 @@ mod tests {
                 wallet.spendable_shielded_coins().is_empty(),
                 "an unregistered coin with no ciphertext is not discoverable"
             );
-            assert_eq!(wallet.zswap_event_id(), 1);
+            assert_eq!(wallet.sync_cursors().zswap_event_id, 1);
 
             wallet.watch_for_coin(coin).unwrap();
             rescan(&mut wallet, &url).await;

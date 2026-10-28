@@ -14,13 +14,11 @@ make dev-up   # from the repo root
 
 `make dev-up` waits for the chain to produce a block past genesis. Starting the compose file directly is not enough: a transaction built while only genesis exists carries an expired TTL and the node rejects it.
 
-Export the URLs:
+The example connects to the local devnet. To override an endpoint or the network, set these environment variables:
 
-```bash
-export MIDNIGHT_NODE_URL="ws://127.0.0.1:9944"
-export MIDNIGHT_INDEXER_URL="http://127.0.0.1:8088"
-export MIDNIGHT_NETWORK="undeployed"   # defaults to undeployed if unset
-```
+- `MIDNIGHT_NODE_URL`: the node, by default `ws://127.0.0.1:9944`
+- `MIDNIGHT_INDEXER_URL`: the indexer, by default `http://127.0.0.1:8088`
+- `MIDNIGHT_NETWORK`: the network, by default `undeployed`
 
 ## Run
 
