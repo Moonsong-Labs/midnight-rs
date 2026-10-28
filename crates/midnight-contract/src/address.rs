@@ -174,6 +174,6 @@ mod tests {
     fn contract_address_serde_rejects_invalid_hex() {
         let mut de = serde_json::Deserializer::from_str(r#""zz""#);
         let err = contract_address_serde::deserialize(&mut de).unwrap_err();
-        assert!(err.to_string().contains("invalid address"));
+        assert!(err.to_string().contains("invalid contract address"));
     }
 }
