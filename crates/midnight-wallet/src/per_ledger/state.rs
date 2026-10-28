@@ -1046,23 +1046,6 @@ impl Wallet {
     // Accessors
     // -------------------------------------------------------------------------
 
-    /// See [`crate::Wallet::last_block_height`].
-    pub fn last_block_height(&self) -> i64 {
-        self.last_block_height
-    }
-
-    pub fn last_tx_id(&self) -> Option<i64> {
-        self.last_tx_id
-    }
-
-    pub fn zswap_event_id(&self) -> i64 {
-        self.zswap_event_id
-    }
-
-    pub fn dust_event_id(&self) -> i64 {
-        self.dust_event_id
-    }
-
     /// See [`crate::Wallet::sync_cursors`].
     pub fn sync_cursors(&self) -> SyncCursors {
         SyncCursors {
@@ -2146,8 +2129,9 @@ mod tests {
             .unwrap();
 
         assert!(wallet.spendable_shielded_coins().is_empty());
-        assert_eq!(wallet.zswap_event_id(), 9);
-        assert_eq!(wallet.dust_event_id(), 11, "a rescan is shielded-only");
+        let cursors = wallet.sync_cursors();
+        assert_eq!(cursors.zswap_event_id, 9);
+        assert_eq!(cursors.dust_event_id, 11, "a rescan is shielded-only");
         assert_eq!(stored_generations(dir.path()), vec![1]);
     }
 
@@ -2515,7 +2499,7 @@ mod tests {
                 wallet.spendable_shielded_coins().is_empty(),
                 "an unregistered coin with no ciphertext is not discoverable"
             );
-            assert_eq!(wallet.zswap_event_id(), 1);
+            assert_eq!(wallet.sync_cursors().zswap_event_id, 1);
 
             wallet.watch_for_coin(coin).unwrap();
             rescan(&mut wallet, &url).await;
