@@ -60,16 +60,24 @@ pub trait WalletFacade: Send + Sync {
     /// The public keys a coin addressed to this wallet commits to.
     async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey);
 
-    /// What this wallet can spend, across shielded coins, unshielded UTXOs and
+    /// What this wallet holds, across shielded coins, unshielded UTXOs and
     /// Dust.
     ///
-    /// An implementation fills [`DustBalance::spendable_speck`] and
+    /// The balance includes the inputs that a pending build reserves. An
+    /// implementation fills [`DustBalance::spendable_speck`] and
     /// [`DustBalance::spendable_utxos`] with the Dust that a new build can draw
     /// on, which leaves out the Dust that its pending builds reserve. A field
-    /// left at its `Default` reads as no spendable Dust.
+    /// left at its `Default` reads as no spendable Dust. An implementation
+    /// also sets [`ShieldedCoinBalance::spendable`] and
+    /// [`UnshieldedUtxoInfo::spendable`] to `false` on each coin and UTXO that
+    /// a pending build reserves. [`WalletBalance::spendable_shielded_value`]
+    /// and [`WalletBalance::spendable_unshielded_value`] read these flags, so
+    /// they leave out the inputs that a pending build reserves.
     ///
     /// [`DustBalance::spendable_speck`]: midnight_types::DustBalance::spendable_speck
     /// [`DustBalance::spendable_utxos`]: midnight_types::DustBalance::spendable_utxos
+    /// [`ShieldedCoinBalance::spendable`]: midnight_types::ShieldedCoinBalance::spendable
+    /// [`UnshieldedUtxoInfo::spendable`]: midnight_types::UnshieldedUtxoInfo::spendable
     async fn balance(&self) -> WalletBalance;
 
     /// The shielded coins this wallet can spend, each with the nullifier that
