@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use crate::error::ContractError;
 use crate::zk_config::{ZkArtifacts, ZkConfigError, ZkConfigProvider};
 
-type Registry = HashMap<[u8; 32], Weak<dyn ZkConfigProvider>>;
+type Registry = HashMap<[u8; 32], Vec<Weak<dyn ZkConfigProvider>>>;
 
 static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(Mutex::default);
 
@@ -36,8 +36,15 @@ pub(crate) fn register(
         .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))?;
     let hash: [u8; 32] = Sha256::digest(&verifier_key).into();
     let mut registry = REGISTRY.lock().expect("resolver registry poisoned");
-    registry.retain(|_, config| config.strong_count() > 0);
-    registry.insert(hash, Arc::downgrade(zk_config));
+    registry.retain(|_, configs| {
+        configs.retain(|config| config.strong_count() > 0);
+        !configs.is_empty()
+    });
+    let configs = registry.entry(hash).or_default();
+    let zk_config = Arc::downgrade(zk_config);
+    if !configs.iter().any(|config| config.ptr_eq(&zk_config)) {
+        configs.push(zk_config);
+    }
     Ok(format!(
         "contract:{address_hex}/{circuit}?vk={}",
         hex::encode(hash)
@@ -55,7 +62,7 @@ pub(crate) fn resolve(location: &str) -> Result<Option<ZkArtifacts>, ZkConfigErr
         .lock()
         .expect("resolver registry poisoned")
         .get(&hash)
-        .and_then(Weak::upgrade);
+        .and_then(|configs| configs.iter().find_map(Weak::upgrade));
     let Some(zk_config) = zk_config else {
         return Ok(None);
     };
@@ -127,5 +134,32 @@ mod tests {
         let location = register("cc", "increment", &config).unwrap();
         drop(config);
         assert!(resolve(&location).unwrap().is_none());
+    }
+
+    /// Two handles of one compiled contract register two zk configs under
+    /// one verifier key. Dropping one must not stop the other from proving.
+    #[test]
+    fn a_location_resolves_while_any_zk_config_under_it_lives() {
+        let kept = config(b"shared verifier key");
+        let dropped = config(b"shared verifier key");
+        let location = register("dd", "increment", &kept).unwrap();
+        register("dd", "increment", &dropped).unwrap();
+        drop(dropped);
+
+        let found = resolve(&location).unwrap().expect("still registered");
+        assert_eq!(found.verifier_key, b"shared verifier key");
+    }
+
+    /// A handle registers its zk config on every call, so the registry must
+    /// not grow with the number of calls.
+    #[test]
+    fn registering_one_zk_config_again_adds_no_entry() {
+        let config = config(b"re-registered verifier key");
+        register("ee", "increment", &config).unwrap();
+        let location = register("ee", "increment", &config).unwrap();
+
+        let (_, hash) = parse(&location).unwrap();
+        let entries = REGISTRY.lock().unwrap()[&hash].len();
+        assert_eq!(entries, 1);
     }
 }
