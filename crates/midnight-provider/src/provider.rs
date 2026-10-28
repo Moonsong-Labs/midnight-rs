@@ -1396,7 +1396,7 @@ impl HeldInputs {
 ///
 /// Under a Tokio runtime the release runs as a task of its own, so a drop of
 /// this future cannot cut it short. With no runtime, it runs inline.
-async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
+pub(crate) async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
     if spent.is_empty() {
         return;
     }
