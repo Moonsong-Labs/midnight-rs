@@ -9,7 +9,7 @@ use midnight_provider::MidnightProvider;
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{BlockHash, ExtrinsicHash, TransferResult};
 
-use crate::address::IntoAddress;
+use crate::address::IntoContractAddress;
 use crate::deploy::{deploy_funded, deployed_state};
 use crate::error::ContractError;
 use crate::state::populate_verifier_keys;
@@ -855,10 +855,10 @@ pub struct ConnectBuilder<P> {
 }
 
 impl<P> ConnectBuilder<P> {
-    pub(crate) fn new(provider: P, address: impl IntoAddress) -> Self {
+    pub(crate) fn new(provider: P, address: impl IntoContractAddress) -> Self {
         Self {
             provider,
-            address: address.into_address_string(),
+            address: address.into_contract_address_string(),
             zk_config: None,
             at_block: None,
             declares_witnesses: false,
@@ -960,15 +960,16 @@ impl Contract<()> {
         DeployBuilder::new(provider)
     }
 
-    /// Create a handle for an already-deployed contract at the given address:
-    /// a hex string or a typed [`ContractAddress`](crate::ContractAddress)
-    /// (see [`IntoAddress`]).
+    /// Create a handle for an already-deployed contract at the given contract
+    /// address: a hex string or a typed
+    /// [`ContractAddress`](crate::ContractAddress) (see
+    /// [`IntoContractAddress`]).
     ///
     /// This is synchronous, no network calls are made. Use `deploy()` to
     /// deploy a new contract.
     ///
     /// `provider` can be an owned or borrowed `MidnightProvider`.
-    pub fn at<P>(provider: P, address: impl IntoAddress) -> ConnectBuilder<P>
+    pub fn at<P>(provider: P, address: impl IntoContractAddress) -> ConnectBuilder<P>
     where
         P: AsMidnightProvider,
     {
@@ -1084,8 +1085,8 @@ impl<P> Contract<P> {
     ///
     /// # Errors
     ///
-    /// - [`ContractError::InvalidAddress`] when the handle's address does not
-    ///   parse.
+    /// - [`ContractError::InvalidContractAddress`] when the handle's contract
+    ///   address does not parse.
     /// - [`ContractError::Construction`] when the contract declares witnesses
     ///   and the provider has no private-state store.
     /// - [`ContractError::NotFound`] when the node has no contract at the
@@ -1124,7 +1125,7 @@ impl<P> Contract<P> {
         P: AsMidnightProvider,
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
-        let address = crate::address::parse_address(&self.address)?;
+        let address = crate::address::parse_contract_address(&self.address)?;
 
         let store = provider.private_state();
         require_private_state_for_witnesses(self.declares_witnesses, store.is_some())?;
@@ -1182,8 +1183,8 @@ impl<P> Contract<P> {
     /// - [`ContractError::UnrecordedPrivateState`] when the witnesses change
     ///   the private state. The call reserves no input and makes no proof.
     ///   Submit the call with [`Self::send_call_with`] or [`Self::call_with`].
-    /// - [`ContractError::InvalidAddress`] when the handle's address does not
-    ///   parse.
+    /// - [`ContractError::InvalidContractAddress`] when the handle's contract
+    ///   address does not parse.
     /// - [`ContractError::Construction`] when the contract declares witnesses
     ///   and the provider has no private-state store, or when the handle has
     ///   no zk config. Both checks come before any query to the node.
@@ -1311,7 +1312,7 @@ impl<P> Contract<P> {
         P: AsMidnightProvider,
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
-        let address = crate::address::parse_address(&self.address)?;
+        let address = crate::address::parse_contract_address(&self.address)?;
         let zk_config = self.zk_config.clone().ok_or_else(missing_zk_config)?;
         let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
         let (baseline, depends_on) = self.witness_baseline(store).await?;
@@ -1453,8 +1454,8 @@ impl<P> Contract<P> {
     ///
     /// # Errors
     ///
-    /// - [`ContractError::InvalidAddress`] when the handle's address does not
-    ///   parse.
+    /// - [`ContractError::InvalidContractAddress`] when the handle's contract
+    ///   address does not parse.
     /// - [`ContractError::NotFound`] when the node has no contract at the
     ///   address.
     /// - [`ContractError::StateFetch`] when the node's contract state does not
