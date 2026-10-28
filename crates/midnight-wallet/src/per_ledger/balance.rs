@@ -17,7 +17,7 @@ impl Wallet {
         }
     }
 
-    pub fn dust_balance(&self) -> DustBalance {
+    fn dust_balance(&self) -> DustBalance {
         let confirmed = self.dust_wallet().dust_local_state.as_deref();
         let unreserved = confirmed.map(|state| {
             self.reserved_dust_nullifiers()
@@ -60,7 +60,7 @@ impl Wallet {
         }
     }
 
-    pub fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
+    fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
         self.unshielded_utxos()
             .iter()
             .map(|utxo| UnshieldedUtxoInfo {
@@ -70,7 +70,7 @@ impl Wallet {
             .collect()
     }
 
-    pub fn shielded_balance(&self) -> ShieldedBalance {
+    fn shielded_balance(&self) -> ShieldedBalance {
         let coins: Vec<ShieldedCoinBalance> = self
             .zswap_state()
             .coins
