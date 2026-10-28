@@ -70,7 +70,6 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-tokio-util = "0.7"
 futures-util = "0.3"
 # Mirrors subxt 0.50's default feature set (jsonrpsee, native), made explicit
 # to guard against upstream default drift, plus the auto-reconnecting websocket
@@ -83,7 +82,6 @@ proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
 prettyplease = "0.2"
-clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 aes-gcm = "0.10"
 argon2 = "0.5"
@@ -139,12 +137,10 @@ midnight-serialize = { version = "=1.2.0", git = "https://github.com/RomarQ/midn
 midnight-base-crypto = { version = "=1.1.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "425ef0c2f48fcbd188ee8324550b388e13160795" }
 midnight-storage = { version = "=2.0.4", git = "https://github.com/RomarQ/midnight-ledger", rev = "425ef0c2f48fcbd188ee8324550b388e13160795" }
 
-# The ledger helpers of midnight-node: `midnight-node-ledger-helpers` carries
-# the per-generation type surface, `midnight-ledger-unsafe-helpers` the
-# transaction and wallet builders. Both expose a `ledger_8` and a `ledger_9`
-# module. They come from the RomarQ/midnight-node fork's
-# rq/midnight-rs-toolkit-2.1.0-rc.3 branch, which is `toolkit-2.1.0-rc.3` with
-# its ledger crates taken from the revisions above.
-midnight-node-ledger-helpers = { git = "https://github.com/RomarQ/midnight-node", rev = "ef1330ebbc9f7b7f7f3f3210a91bef2422b0d74f" }
+# The ledger helpers of midnight-node: `midnight-ledger-unsafe-helpers` carries
+# the per-generation type surface and the transaction and wallet builders, in a
+# `ledger_8` and a `ledger_9` module. It comes from the RomarQ/midnight-node
+# fork's rq/midnight-rs-toolkit-2.1.0-rc.3 branch, which is `toolkit-2.1.0-rc.3`
+# with its ledger crates taken from the revisions above.
 midnight-ledger-unsafe-helpers = { git = "https://github.com/RomarQ/midnight-node", rev = "ef1330ebbc9f7b7f7f3f3210a91bef2422b0d74f" }
 

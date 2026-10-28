@@ -3,7 +3,6 @@
 //! Parses a Compact compiler's `analyzed-ir.sexp` artifact and emits typed
 //! Rust code for the `compact_bindgen::contract!` proc macro.
 
-pub mod arg_types;
 pub mod artifact;
 pub mod error;
 pub mod expand;

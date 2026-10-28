@@ -395,11 +395,12 @@ fn the_recipient_argument_type_carries_its_nested_layout() {
     let info = mint_probe_info();
     let mint = common::exported_circuit(&info, "mint");
 
-    let arg_types = compact_codegen::arg_types::circuit_arg_types(mint.arguments());
-    let (_, recipient) = arg_types
+    let recipient = &mint
+        .arguments()
         .iter()
-        .find(|(n, _)| n == "recipient")
-        .expect("mint takes a recipient argument");
+        .find(|a| a.name.name() == "recipient")
+        .expect("mint takes a recipient argument")
+        .ty;
 
     let Type::Struct { name, fields } = recipient else {
         panic!("recipient must be a struct type, got {recipient:?}")

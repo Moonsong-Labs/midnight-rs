@@ -780,24 +780,43 @@ impl Wallet {
         }
     }
 
-    /// Nullifiers of shielded coins reserved by recent, still-pending builds,
-    /// so [`Wallet::spendable_shielded_coins`] can exclude them (the build
-    /// context excludes them from Zswap coin selection directly).
-    pub(crate) fn reserved_shielded_nullifiers(&self) -> impl Iterator<Item = &helpers::Nullifier> {
-        self.pending.shielded_nullifiers()
-    }
-
-    /// Nullifiers of the Dust UTXOs that recent, still-pending builds reserved.
+    /// Whether a reservation that expires at `expires_at` still holds its
+    /// inputs.
     ///
     /// A reservation outside [`within_ttl`] at the chain time of
-    /// `block_context` does not count, because [`Self::add_funding`] evicts it
-    /// before a build selects. With no block context, every reservation
-    /// counts, as no eviction runs.
+    /// `block_context` does not, because [`Self::add_funding`] evicts it before
+    /// a build selects. With no block context, every reservation holds, as no
+    /// eviction runs.
+    fn reservation_holds(&self, expires_at: Timestamp) -> bool {
+        self.block_context
+            .as_ref()
+            .is_none_or(|bc| within_ttl(expires_at, chain_time(bc)))
+    }
+
+    /// Nullifiers of the shielded coins that a reservation holds; see
+    /// [`Self::reservation_holds`].
+    pub(crate) fn reserved_shielded_nullifiers(&self) -> impl Iterator<Item = &helpers::Nullifier> {
+        self.pending
+            .shielded_spends()
+            .filter(|spend| self.reservation_holds(spend.expires_at))
+            .map(|spend| &spend.nullifier)
+    }
+
+    /// Keys of the unshielded UTXOs that a reservation holds; see
+    /// [`Self::reservation_holds`].
+    pub(crate) fn reserved_unshielded_keys(&self) -> impl Iterator<Item = &SpentUtxoKey> {
+        self.pending
+            .unshielded_spends()
+            .filter(|spend| self.reservation_holds(spend.expires_at))
+            .map(|spend| &spend.key)
+    }
+
+    /// Nullifiers of the Dust UTXOs that a reservation holds; see
+    /// [`Self::reservation_holds`].
     pub(crate) fn reserved_dust_nullifiers(&self) -> impl Iterator<Item = &DustNullifier> {
-        let now = self.block_context.as_ref().map(chain_time);
         self.pending
             .dust_batches()
-            .filter(move |batch| now.is_none_or(|now| within_ttl(batch.expires_at, now)))
+            .filter(|batch| self.reservation_holds(batch.expires_at))
             .flat_map(|batch| batch.spends.iter().map(|spend| &spend.old_nullifier))
     }
 
@@ -933,7 +952,7 @@ impl Wallet {
         // Filter out UTXOs reserved by recent (still-pending) builds so the
         // selector doesn't re-pick them before the indexer confirms the
         // spend.
-        let pending_unshielded: Vec<&SpentUtxoKey> = self.pending.unshielded_keys().collect();
+        let pending_unshielded: Vec<&SpentUtxoKey> = self.reserved_unshielded_keys().collect();
 
         {
             let mut guard = ctx
@@ -965,7 +984,7 @@ impl Wallet {
             // indexer confirms the spend. `remove` on an already-absent
             // nullifier (the spend confirmed and resync dropped the coin) is a
             // harmless no-op.
-            for nullifier in self.pending.shielded_nullifiers() {
+            for nullifier in self.reserved_shielded_nullifiers() {
                 shielded.state.coins = shielded.state.coins.remove(nullifier);
             }
 
@@ -1039,23 +1058,6 @@ impl Wallet {
     // -------------------------------------------------------------------------
     // Accessors
     // -------------------------------------------------------------------------
-
-    /// See [`crate::Wallet::last_block_height`].
-    pub fn last_block_height(&self) -> i64 {
-        self.last_block_height
-    }
-
-    pub fn last_tx_id(&self) -> Option<i64> {
-        self.last_tx_id
-    }
-
-    pub fn zswap_event_id(&self) -> i64 {
-        self.zswap_event_id
-    }
-
-    pub fn dust_event_id(&self) -> i64 {
-        self.dust_event_id
-    }
 
     /// See [`crate::Wallet::sync_cursors`].
     pub fn sync_cursors(&self) -> SyncCursors {
@@ -1789,6 +1791,56 @@ mod tests {
         assert_eq!(reserved, vec![DustNullifier(Fr::from(2u64))]);
     }
 
+    /// The shielded and unshielded readings hold the inputs of a live
+    /// reservation and free those of an expired one, as a build does.
+    #[test]
+    fn readings_hold_only_the_inputs_of_a_live_reservation() {
+        let mut wallet = test_wallet(None);
+        let now = Timestamp::from_secs(100_000);
+        wallet.block_context = Some(helpers::make_block_context(now, Default::default(), now));
+        let reserved_at = now - helpers::Duration::from_secs(60);
+        let expired = now - helpers::Duration::from_secs(1);
+        let expired_coin = insert_shielded_coin(&mut wallet, 1, 100);
+        let live_coin = insert_shielded_coin(&mut wallet, 2, 200);
+        let expired_utxo = tracked_night_utxo();
+        let live_utxo = TrackedUtxo {
+            output_index: 1,
+            value: 58,
+            ..tracked_night_utxo()
+        };
+        wallet.unshielded_utxos = vec![expired_utxo.clone(), live_utxo.clone()];
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![expired_utxo.spent_key()],
+            vec![expired_coin],
+            reserved_at,
+            expired,
+        );
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![live_utxo.spent_key()],
+            vec![live_coin],
+            reserved_at,
+            now,
+        );
+
+        let spendable: Vec<u128> = wallet
+            .spendable_shielded_coins()
+            .iter()
+            .map(|coin| coin.value)
+            .collect();
+        assert_eq!(spendable, vec![100]);
+        let balance = wallet.balance();
+        let token = midnight_types::ShieldedTokenType(midnight_types::HashOutput([0; 32]));
+        assert_eq!(balance.shielded_value(token), 300);
+        assert_eq!(balance.spendable_shielded_value(token), 100);
+        assert_eq!(balance.unshielded_value(midnight_types::NIGHT), 100);
+        assert_eq!(
+            balance.spendable_unshielded_value(midnight_types::NIGHT),
+            42
+        );
+    }
+
     /// One shielded coin in the wallet's Zswap state, keyed by `nullifier`. The
     /// key is what selection and the reservation filter compare against, so it
     /// need not be a cryptographically-derived nullifier for this test.
@@ -1975,7 +2027,7 @@ mod tests {
         )
         .unwrap()
         .expect("pending.json should exist after reserve_pending");
-        assert_eq!(loaded.unshielded_keys().count(), 1);
+        assert_eq!(loaded.unshielded_spends().count(), 1);
     }
 
     /// The commitment `coin`'s output carries when `wallet` owns it.
@@ -2122,8 +2174,9 @@ mod tests {
             .unwrap();
 
         assert!(wallet.spendable_shielded_coins().is_empty());
-        assert_eq!(wallet.zswap_event_id(), 9);
-        assert_eq!(wallet.dust_event_id(), 11, "a rescan is shielded-only");
+        let cursors = wallet.sync_cursors();
+        assert_eq!(cursors.zswap_event_id, 9);
+        assert_eq!(cursors.dust_event_id, 11, "a rescan is shielded-only");
         assert_eq!(stored_generations(dir.path()), vec![1]);
     }
 
@@ -2372,7 +2425,11 @@ mod tests {
         commit.spent_unshielded = vec![confirmed];
         wallet.commit_resync(commit).unwrap();
 
-        let remaining: Vec<_> = wallet.pending.unshielded_keys().cloned().collect();
+        let remaining: Vec<_> = wallet
+            .pending
+            .unshielded_spends()
+            .map(|spend| spend.key.clone())
+            .collect();
         assert_eq!(remaining, vec![late], "late reservation must survive");
     }
 
@@ -2397,7 +2454,7 @@ mod tests {
             Timestamp::MAX,
         );
 
-        assert_eq!(wallet.pending.unshielded_keys().count(), 1);
+        assert_eq!(wallet.pending.unshielded_spends().count(), 1);
         assert_eq!(wallet.pending.dust_batches().count(), 1);
         // With no dust state to replay the pending batch against, the
         // surviving reservation still refuses the build.
@@ -2418,7 +2475,7 @@ mod tests {
         )
         .unwrap()
         .expect("a no-op commit after a failed pending write must save");
-        assert_eq!(saved.unshielded_keys().count(), 1);
+        assert_eq!(saved.unshielded_spends().count(), 1);
     }
 
     fn params_with(
@@ -2530,7 +2587,7 @@ mod tests {
                 wallet.spendable_shielded_coins().is_empty(),
                 "an unregistered coin with no ciphertext is not discoverable"
             );
-            assert_eq!(wallet.zswap_event_id(), 1);
+            assert_eq!(wallet.sync_cursors().zswap_event_id, 1);
 
             wallet.watch_for_coin(coin).unwrap();
             rescan(&mut wallet, &url).await;
