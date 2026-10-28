@@ -33,8 +33,9 @@ pub fn format_address(address: &ContractAddress) -> String {
 ///
 /// A typed [`ContractAddress`], and a string that [`parse_address`] accepts,
 /// become the hex form of [`format_address`]: lower case, without `0x`. A
-/// deploy gives the address in the same form. A string that does not parse
-/// stays as given. The first query or call with that address fails.
+/// deploy gives the contract address in the same form. A string that does not
+/// parse as a contract address stays as given. The first query or call with
+/// that string fails.
 pub trait IntoAddress {
     fn into_address_string(self) -> String;
 }
