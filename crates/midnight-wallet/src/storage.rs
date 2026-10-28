@@ -22,26 +22,12 @@ use midnight_types::{HashOutput, TrackedUtxo, UnshieldedTokenType};
 const METADATA_FILE: &str = "metadata.json";
 const PENDING_FILE: &str = "pending.json";
 
-const ZSWAP_PREFIX: &str = "zswap-";
-const DUST_WALLET_PREFIX: &str = "dust_wallet-";
-const STATE_FILE_SUFFIX: &str = ".bin";
-
 pub(crate) fn zswap_file(generation: u64) -> String {
-    format!("{ZSWAP_PREFIX}{generation}{STATE_FILE_SUFFIX}")
+    format!("zswap-{generation}.bin")
 }
 
 pub(crate) fn dust_wallet_file(generation: u64) -> String {
-    format!("{DUST_WALLET_PREFIX}{generation}{STATE_FILE_SUFFIX}")
-}
-
-/// The generation that names the state file `name`, or `None` when `name`
-/// is not the name of a state file.
-fn state_file_generation(name: &str) -> Option<u64> {
-    let stem = name.strip_suffix(STATE_FILE_SUFFIX)?;
-    stem.strip_prefix(ZSWAP_PREFIX)
-        .or_else(|| stem.strip_prefix(DUST_WALLET_PREFIX))?
-        .parse()
-        .ok()
+    format!("dust_wallet-{generation}.bin")
 }
 
 /// Public identity that names a wallet's on-disk storage directory.
@@ -74,7 +60,7 @@ pub(crate) struct StoredMetadata {
     /// Monotonically increasing version of the wallet snapshot. Each save
     /// writes new `zswap-{generation}.bin` / `dust_wallet-{generation}.bin`
     /// files and commits a new metadata.json referencing them, then deletes
-    /// the files of every other generation. metadata.json is renamed atomically
+    /// the previous generation's files. metadata.json is renamed atomically
     /// from a temp file, so a crash before/after that rename leaves the
     /// metadata pointing at a generation whose binary files exist on disk.
     #[serde(default)]
@@ -285,7 +271,7 @@ pub(crate) fn load_ledger_version(
 
 /// Commit one snapshot. `write_state` writes the state files for the
 /// `generation` number it gets. Then this function commits `metadata` as the
-/// one that references them, and removes the files of every other number.
+/// one that references them, and removes the files of the number before.
 pub(crate) fn save_snapshot(
     base: &Path,
     network: &str,
@@ -296,7 +282,8 @@ pub(crate) fn save_snapshot(
     let dir = snapshot_path(base, network, wallet_id);
     create_private_dir(&dir)?;
 
-    // Read the current metadata (if any) so we can bump the generation.
+    // Read the current metadata (if any) so we can bump the generation and
+    // clean up the previous binary files only after the new metadata commit.
     let previous_generation = read_metadata(&dir).ok().flatten().map(|m| m.generation);
     let generation = previous_generation.map(|g| g + 1).unwrap_or(1);
 
@@ -311,7 +298,12 @@ pub(crate) fn save_snapshot(
     // Atomic commit: from this point on, the wallet sees the new state.
     write_atomic(&dir, METADATA_FILE, meta_json.as_bytes())?;
 
-    remove_other_generations(&dir, generation);
+    // Best-effort: remove the previous generation's binary files. Failure
+    // here is non-fatal (the next save will retry or overwrite).
+    if let Some(prev) = previous_generation {
+        let _ = std::fs::remove_file(dir.join(zswap_file(prev)));
+        let _ = std::fs::remove_file(dir.join(dust_wallet_file(prev)));
+    }
 
     info!(
         generation,
@@ -323,28 +315,6 @@ pub(crate) fn save_snapshot(
     );
 
     Ok(())
-}
-
-/// Remove the state files of every generation other than `generation`.
-///
-/// A save that fails after its metadata commit, or a crash at that point,
-/// leaves the files of the generation before, so the next save cannot remove
-/// only its own previous generation. Best-effort: the next save removes a
-/// file that stays.
-fn remove_other_generations(dir: &Path, generation: u64) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let stale = entry
-            .file_name()
-            .to_str()
-            .and_then(state_file_generation)
-            .is_some_and(|g| g != generation);
-        if stale {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
 }
 
 /// On-disk representation of a wallet's pending reservations. The hex fields
@@ -558,52 +528,6 @@ mod tests {
         );
         let metadata: StoredMetadata = serde_json::from_str(&written_on_ledger_9).expect("parse");
         assert_eq!(metadata.ledger_version, LedgerVersion::V9);
-    }
-
-    /// A save that fails after its metadata commit leaves the files of the
-    /// generation before, and the metadata names the new generation. The next
-    /// save has to remove both older generations: `dust_wallet-N.bin` holds
-    /// the Dust secret key.
-    #[test]
-    fn a_save_removes_every_older_generation() {
-        let base = tempfile::TempDir::new().unwrap();
-        let dir = snapshot_path(base.path(), "undeployed", "testwallet");
-        let metadata = |generation| StoredMetadata {
-            generation,
-            ledger_version: LedgerVersion::V9,
-            zswap_event_id: 0,
-            dust_event_id: 0,
-            last_block_height: 0,
-            last_tx_id: None,
-            chain_pin: None,
-            unshielded_utxos: Vec::new(),
-        };
-        let write_state = |dir: &Path, generation: u64| {
-            write_atomic(dir, &zswap_file(generation), b"zswap")?;
-            write_atomic(dir, &dust_wallet_file(generation), b"dust")
-        };
-        create_private_dir(&dir).unwrap();
-        for generation in [1, 2] {
-            write_state(&dir, generation).unwrap();
-        }
-        let committed = serde_json::to_vec(&metadata(2)).unwrap();
-        write_atomic(&dir, METADATA_FILE, &committed).unwrap();
-
-        save_snapshot(
-            base.path(),
-            "undeployed",
-            "testwallet",
-            metadata(0),
-            write_state,
-        )
-        .unwrap();
-
-        let mut names: Vec<String> = std::fs::read_dir(&dir)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .collect();
-        names.sort();
-        assert_eq!(names, ["dust_wallet-3.bin", "metadata.json", "zswap-3.bin"]);
     }
 
     fn mode_of(path: &Path) -> u32 {

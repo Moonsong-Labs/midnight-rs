@@ -286,7 +286,7 @@ With `.with_storage(dir)`, the sync writes to:
 
 The directory holds the Dust secret key, so protect it as key material. On Unix, the SDK creates the wallet's directory with mode 0700 and its files with mode 0600.
 
-Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the SDK removes the files of every older generation. The SDK syncs each file and each rename to disk before the next step, so a crash mid-write, or a power loss on a file system that can sync, leaves the previous generation intact.
+Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the old generation is cleaned up. The SDK syncs each file and each rename to disk before the next step, so a crash mid-write, or a power loss on a file system that can sync, leaves the previous generation intact.
 
 A snapshot that names no ledger generation reads as ledger 8, the only generation an older build wrote. A snapshot of a later generation than the chain runs belongs to a replaced chain: the sync returns `WalletError::LedgerRegression`, which names the directory to remove.
 
