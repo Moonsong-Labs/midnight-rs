@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use midnight_types::{
-    DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, UnshieldedUtxoInfo,
-    WalletBalance,
+    DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, SpentUtxoKey,
+    UnshieldedUtxoInfo, WalletBalance,
 };
 
 use super::helpers;
@@ -17,7 +19,7 @@ impl Wallet {
         }
     }
 
-    pub fn dust_balance(&self) -> DustBalance {
+    fn dust_balance(&self) -> DustBalance {
         let confirmed = self.dust_wallet().dust_local_state.as_deref();
         let unreserved = confirmed.map(|state| {
             self.reserved_dust_nullifiers()
@@ -60,24 +62,29 @@ impl Wallet {
         }
     }
 
-    pub fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
+    fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
+        let reserved: Vec<&SpentUtxoKey> = self.reserved_unshielded_keys().collect();
         self.unshielded_utxos()
             .iter()
             .map(|utxo| UnshieldedUtxoInfo {
                 token_type: utxo.token_type,
                 value: utxo.value,
+                spendable: !reserved.contains(&&utxo.spent_key()),
             })
             .collect()
     }
 
-    pub fn shielded_balance(&self) -> ShieldedBalance {
+    fn shielded_balance(&self) -> ShieldedBalance {
+        let reserved: HashSet<helpers::Nullifier> =
+            self.reserved_shielded_nullifiers().copied().collect();
         let coins: Vec<ShieldedCoinBalance> = self
             .zswap_state()
             .coins
             .iter()
-            .map(|(_nullifier, coin)| ShieldedCoinBalance {
+            .map(|(nullifier, coin)| ShieldedCoinBalance {
                 token_type: coin.type_.into_sdk(),
                 value: coin.value,
+                spendable: !reserved.contains(&nullifier),
             })
             .collect();
         let total_count = coins.len();
@@ -89,7 +96,7 @@ impl Wallet {
         // Exclude coins a recent still-pending build already spent, so callers
         // (and the pinned-coin validation in the contract-call builder) don't
         // re-select a coin that is no longer available.
-        let reserved: std::collections::HashSet<helpers::Nullifier> =
+        let reserved: HashSet<helpers::Nullifier> =
             self.reserved_shielded_nullifiers().copied().collect();
         self.zswap_state()
             .coins
