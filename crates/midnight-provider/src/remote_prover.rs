@@ -148,6 +148,7 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 /// [`WalletError::Proving`](crate::WalletError::Proving). A caller of `prove`
 /// outside a build must catch the unwind (for example with
 /// `FutureExt::catch_unwind`) to get the message.
+#[derive(Debug)]
 pub struct RemoteProofServer {
     pub(crate) url: String,
     pub(crate) timeout: Duration,
