@@ -1,7 +1,7 @@
 //! The outcome of interpreting a circuit: updated state plus the transcript
 //! and proving inputs the transaction-construction layer needs.
 
-use midnight_onchain_runtime::ops::Op;
+use midnight_onchain_runtime::ops::{Op, VersionedLogItem};
 use midnight_onchain_runtime::result_mode::{ResultModeGather, ResultModeVerify};
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 
@@ -40,6 +40,11 @@ pub struct ExecutionResult {
     /// `Transient`) in the Zswap offer. Empty for circuits that don't spend
     /// shielded coins.
     pub zswap_inputs: Vec<CircuitZswapInput>,
+    /// The events that the circuit emitted with `emit`, in emission order, as
+    /// the VM decodes each `log` op: a version, an event type and the payload.
+    /// The public transcript holds the same `log` ops, so a chain that applies
+    /// the call logs the same events. Empty for a circuit that emits none.
+    pub logs: Vec<VersionedLogItem<InMemoryDB>>,
 }
 
 impl ExecutionResult {

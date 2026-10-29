@@ -182,6 +182,18 @@ What the events do not carry is which segment failed. Every transaction the SDK 
 
 When `wait_best` / `wait_finalized` fail with no verdict, the error is `ProviderError::Submission` carrying a typed [`SubmitError`](../crates/midnight-provider/src/submit.rs) instead of a string to parse. The variants encode the retry semantics: `Invalid` is a definitive node rejection (safe to rebuild and resubmit), `Dropped` and `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means the watch subscription itself broke while the tx's fate stayed unknown.
 
+## Contract events
+
+A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes the payloads. Its ledger 8 result has no `logEvents`.
+
+midnight-rs returns the events as `logs` on `CallOutcome` (from `.await` or `PendingCall::wait_finalized`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
+
+The differences:
+
+- An item carries no address. The interpreter refuses a cross-contract call, so every event comes from the called contract, and the caller has its address.
+- The SDK has no typed decoder like `ContractLog.decodeAll`.
+- The SDK returns the events on both ledger generations. The local run decodes each event as the ledger 9 VM does. A ledger 9 chain logs the same item, and a ledger 8 chain logs the `[version, type, payload]` array that the item comes from.
+
 ## ZK artifacts
 
 A Compact circuit compiles to three files per circuit name `<C>`:

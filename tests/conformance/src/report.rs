@@ -5,7 +5,7 @@
 //! both executors; anything one side cannot compute canonically stays out of
 //! the report.
 
-use midnight_contract::runtime::ExecutionResult;
+use midnight_contract::runtime::{ExecutionResult, VersionedLogItem};
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
 use midnight_typed_state::{ContractState, InMemoryDB, StateValue};
 use serde_json::{Value as Json, json};
@@ -156,5 +156,16 @@ pub fn step_report(
                 ),
             }))
             .collect::<Vec<_>>(),
+        "logs": result.logs.iter().map(log_to_json).collect::<Vec<_>>(),
+    })
+}
+
+/// Canonical JSON for an emitted event, matching the TS runtime's `LogEvent`
+/// without its `address`.
+fn log_to_json(item: &VersionedLogItem<InMemoryDB>) -> Json {
+    json!({
+        "version": item.version,
+        "eventType": serde_json::to_value(item.event_type).expect("LogEventType serializes"),
+        "data": state_value_to_json(&item.data),
     })
 }
