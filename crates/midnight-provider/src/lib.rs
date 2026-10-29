@@ -1,3 +1,5 @@
+#![warn(missing_debug_implementations)]
+
 mod error;
 pub mod ledger_8;
 #[expect(

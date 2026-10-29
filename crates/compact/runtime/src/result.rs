@@ -16,8 +16,9 @@ pub struct ExecutionResult {
     pub reads: Vec<AlignedValue>,
     /// Ops executed in gather mode (for building transcripts).
     pub gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
-    /// The circuit's return value, if any (non-void circuits).
-    pub result: Option<Value>,
+    /// The circuit's return value: `Value::Void` for a circuit that returns
+    /// `Void`.
+    pub result: Value,
     /// The communication outputs: the circuit's result encoded at its declared
     /// result type, or empty for a circuit that returns `Void`.
     pub communication_outputs: Vec<AlignedValue>,

@@ -196,7 +196,7 @@ fn tiny_get_typed() {
         .iter(),
     );
     match r.result {
-        Some(Value::AlignedValue(av)) => assert_eq!(av, expected, "get() must return some(42)"),
+        Value::AlignedValue(av) => assert_eq!(av, expected, "get() must return some(42)"),
         other => panic!("expected an AlignedValue result, got {other:?}"),
     }
     eprintln!("tiny get: returned some(42) ✓ ({} reads)", r.reads.len());
@@ -438,7 +438,7 @@ fn bboard_take_down_executes() {
 
     // Returns the former message.
     match r.result {
-        Some(Value::AlignedValue(av)) => {
+        Value::AlignedValue(av) => {
             assert_eq!(
                 av,
                 AlignedValue::from(message),

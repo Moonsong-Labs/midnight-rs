@@ -89,6 +89,17 @@ pub struct MidnightProvider {
     conn: Arc<RwLock<Option<NodeConnection>>>,
 }
 
+impl std::fmt::Debug for MidnightProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MidnightProvider")
+            .field("node_url", &self.node_url)
+            .field("wallet_attached", &self.wallet.is_some())
+            .field("proof_provider", &self.proof_provider)
+            .field("private_state_attached", &self.private_state.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl MidnightProvider {
     /// Create a provider from the node's WebSocket URL.
     ///
@@ -1396,7 +1407,7 @@ impl HeldInputs {
 ///
 /// Under a Tokio runtime the release runs as a task of its own, so a drop of
 /// this future cannot cut it short. With no runtime, it runs inline.
-async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
+pub(crate) async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
     if spent.is_empty() {
         return;
     }

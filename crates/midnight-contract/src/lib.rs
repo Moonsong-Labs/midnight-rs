@@ -40,13 +40,16 @@ pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };
 
-// Typed contract addresses. `ContractAddress` is re-exported so callers can
-// hold and validate addresses without depending on `midnight-types`;
-// `parse_address` / `format_address` convert to and from the hex form used at
-// the SDK's string boundaries (`Contract::address`). `Contract::at` accepts
-// either form via `IntoAddress`, and `address_serde` (de)serializes the typed
-// address as hex for use in config structs.
-pub use address::{IntoAddress, address_serde, format_address, parse_address};
+// Typed contract addresses. The crate re-exports `ContractAddress`, so a
+// caller can hold and validate a contract address without a dependency on
+// `midnight-types`. `parse_contract_address` and `format_contract_address`
+// convert a contract address to and from the hex form at the SDK's string
+// boundaries (`Contract::address`). `Contract::at` accepts either form through
+// `IntoContractAddress`. `contract_address_serde` (de)serializes a typed
+// contract address as hex for config structs.
+pub use address::{
+    IntoContractAddress, contract_address_serde, format_contract_address, parse_contract_address,
+};
 pub use midnight_types::ContractAddress;
 
 // Contract maintenance / governance (verifier-key rotation, authority

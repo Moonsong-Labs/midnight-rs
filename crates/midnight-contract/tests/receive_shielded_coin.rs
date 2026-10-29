@@ -64,7 +64,7 @@ async fn a_call_spends_the_callers_coin_and_returns_the_change() {
         )
         .await
         .expect("mint to the dev wallet");
-    let token_type = midnight_contract::parse_address(mint_contract.address())
+    let token_type = midnight_contract::parse_contract_address(mint_contract.address())
         .expect("contract address")
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
     let coin = common::resync_until_coin(
