@@ -125,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
         println!("\n--- Dust ---");
         let dust_params = &parameters.dust;
         println!(
-            "Dust ratio:      {} DUST/NIGHT",
+            "Dust ratio:      {} SPECK/STAR",
             dust_params.night_dust_ratio
         );
         println!(

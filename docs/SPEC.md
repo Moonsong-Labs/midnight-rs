@@ -85,7 +85,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 | Type | Crate | Role |
 |---|---|---|
-| `MidnightProvider` | provider | Network entry. Holds node URL, the indexer URL that the wallet sync reads, wallet (`Arc<dyn WalletFacade>`), proof backend. |
+| `MidnightProvider` | provider | Network entry. Holds node URL, the attached wallet (`Arc<dyn WalletFacade>`), the proof backends and the optional private-state store. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | The synced state itself. It runs the indexer replays of a sync, a resync and a rescan. The provider reaches it through `WalletFacade`. |
 | `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
@@ -104,7 +104,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 ## Provider ↔ Wallet model
 
-The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every build resyncs the wallet first, and when asked, `LocalWallet::sync_in_background` resyncs it in a background task. A sync reads its indexer and its node from its `SyncSource`, such as the provider. The wallet keeps that indexer for later replays, and the provider answers a resync's pin queries.
+The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every build resyncs the wallet first, and when asked, `LocalWallet::sync_in_background` resyncs it in a background task. A sync replays from the indexer at the `indexer_url` it gets. It asks its `SyncSource`, such as the provider, for the network and the chain pin. The wallet keeps that indexer URL for later replays, and the provider answers a resync's pin queries.
 
 Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three under a mutex of its own, which serializes its resyncs, rescans, coin watches and forgets. Under one hold of that mutex, a rescan of a state in an earlier generation than the chain resyncs first, and a coin watch registers and then rescans. A `Wallet` has no resync of its own: to resync or rescan one outside a provider, wrap it in `LocalWallet`.
 
@@ -433,6 +433,7 @@ Ledger 9 ships only as git tags, and upstream's ledger crates and helpers name e
 | Feature | Notes |
 |---|---|
 | State change subscriptions | WebSocket subscription support for contract state updates |
+| Cross-contract calls | Bindings generate for a circuit that calls another contract, but the interpreter refuses the call with `InterpreterError::Unsupported` |
 | Lazy query batching | `query_contract_state` already takes a batch, but each generated `ledger_query()` accessor sends one query of its own |
 | Production proving | `ProofProvider::prove` returns `Transaction`, not `Result`, so a backend signals failure by panicking. The SDK catches that unwind and reports `WalletError::Proving` rather than losing the task, but the trait has no error channel and this is not mainnet-ready |
 | A remote signer | The facade lets a different local wallet stand in, and it asks for no seed. But a build signs inside `prepare_transfer`, so a browser extension or an HSM needs it to return something unsigned plus a separate signing step |

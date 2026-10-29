@@ -28,7 +28,7 @@ anyhow = "1"
 
 ## Quick start
 
-The Quick start runs against a local devnet (node, indexer and proof server) in Docker. Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
+The Quick start runs against a local devnet (node, indexer and proof server) in Docker. The Quick start proves in its own process. Its first proofs download the public parameters into a local cache (see [proof backends](docs/ledger-generations.md#proof-backends)). Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
 
 ```rust
 use midnight_core::provider::{NIGHT, STARS_PER_NIGHT};

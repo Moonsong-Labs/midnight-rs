@@ -109,7 +109,7 @@ let provider = provider.with_proof_provider(
 );
 ```
 
-`ProofProviders::local()` is the default, and proves both generations in process. A remote proof server must support the chain's generation.
+`ProofProviders::local()` is the default, and proves both generations in process. Its first proofs download the public parameters and the built-in Zswap and Dust keys when the cache does not hold them. [`ProofProviders::local`](../crates/midnight-provider/src/proof_providers.rs) names the source and the cache. A remote proof server must support the chain's generation.
 
 ### Maintenance updates
 
