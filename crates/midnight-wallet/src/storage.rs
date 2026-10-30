@@ -380,7 +380,8 @@ pub(crate) fn save_pending(
 
     if pending.is_empty() {
         match std::fs::remove_file(&path) {
-            Ok(()) => {}
+            Ok(()) => midnight_owner_only::sync_dir(&dir)
+                .map_err(|e| WalletError::Storage(format!("sync {}: {e}", dir.display())))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
                 return Err(WalletError::Storage(format!(

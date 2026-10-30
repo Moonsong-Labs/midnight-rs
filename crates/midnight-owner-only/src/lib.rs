@@ -120,8 +120,8 @@ fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
     sync(&file)
 }
 
-/// Syncs the entries of `dir` to disk, so a rename or a create in `dir`
-/// persists.
+/// Syncs the entries of `dir` to disk, so a create, a rename or a remove in
+/// `dir` persists.
 ///
 /// On a file system that refuses the sync of a directory, the call skips it
 /// (see the module docs). On platforms other than Unix, the call does nothing,

@@ -739,8 +739,8 @@ fn walk_children<'a>(
 /// Cascade-drop a snapshot and every snapshot that transitively depends on
 /// it. Walks the dependency graph (`depends_on` edges) starting from
 /// `start_hash`, collects every reachable extrinsic_hash, then deletes the
-/// corresponding files. Errors with [`PrivateStateError::SnapshotNotFound`]
-/// if `start_hash` is not present.
+/// corresponding files and syncs their directory. Errors with
+/// [`PrivateStateError::SnapshotNotFound`] if `start_hash` is not present.
 fn cascade_drop(
     provider: &FsPrivateStateProvider,
     address: &str,
@@ -782,7 +782,9 @@ fn cascade_drop(
             })?;
         }
     }
-    Ok(())
+    let dir = provider.address_dir(address);
+    midnight_owner_only::sync_dir(&dir)
+        .map_err(|e| PrivateStateError::Io(format!("sync {}: {e}", dir.display())))
 }
 
 /// Walk the per-address journal directories, collecting every snapshot
