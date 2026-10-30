@@ -59,7 +59,7 @@ pub fn load_str(text: &str) -> Result<ContractInfo, Box<dyn std::error::Error>> 
 }
 
 /// The whole artifact as the crate's typed model.
-pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactError> {
+fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactError> {
     let cx = Context::new(artifact);
 
     let mut circuits = Vec::new();
