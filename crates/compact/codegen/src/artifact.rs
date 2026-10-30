@@ -47,10 +47,15 @@ pub fn load(path: &Path) -> Result<ContractInfo, Box<dyn std::error::Error>> {
 ///
 /// # Errors
 ///
-/// When the artifact is not of the supported compiler (see
-/// [`check_compiler_version`]), does not parse, or holds a construct that no
-/// consumer can execute. The loader checks the compiler version first, so an
-/// artifact of another compiler gets the version error and not a parse error.
+/// The loader stops at the first check that fails, in this order:
+///
+/// 1. The text reads as one datum.
+/// 2. The artifact is of the supported compiler (see [`check_compiler_version`]).
+/// 3. The IR parses.
+/// 4. A consumer can execute every construct.
+///
+/// So a readable artifact of another compiler gets the version error, not an
+/// IR parse error.
 pub fn load_str(text: &str) -> Result<ContractInfo, Box<dyn std::error::Error>> {
     let datum = ir::sexp::read_one(text).map_err(ir::Error::from)?;
     check_compiler_version(&ir::parse::compiler_version(&datum)?)?;
