@@ -28,7 +28,7 @@ use midnight_types::TransferResult;
 use super::types::PreparedInput;
 use crate::call::ShieldedInputs;
 use crate::change::{change_due, total_by_key};
-use crate::error::{ContractError, KeyMismatch};
+use crate::error::ContractError;
 use crate::runtime;
 
 /// The segment of the intent that a call, a deploy or a maintenance update
@@ -197,10 +197,7 @@ pub(crate) async fn call_transaction(
         .operations
         .get(&entry_point)
         .map(|op| (*op).clone())
-        .ok_or_else(|| ContractError::VerifierKeyMismatch {
-            circuit: circuit_name.to_owned(),
-            reason: KeyMismatch::Missing,
-        })?;
+        .expect("the verifier key check before the run refuses a circuit with no operation");
 
     // 4. The circuit's input and output. Witness private values become the
     //    prototype's private transcript outputs (the ZKIR's private inputs).
