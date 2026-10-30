@@ -23,12 +23,14 @@ use crate::deploy::DeployResult;
 use crate::error::ContractError;
 use crate::offer::refuse_shortfall;
 
-/// Deploy `initial_state` with Dust fee payment from the provider's funded
-/// wallet. See [`crate::deploy::deploy_funded`].
-pub(crate) async fn deploy_funded(
+/// Build and prove the deploy of `initial_state`. When `pay_fees`, the
+/// provider's wallet also pays the Dust fee. See
+/// [`crate::deploy::deploy_transaction`].
+pub(crate) async fn deploy_transaction(
     builds: &Builds<'_>,
     initial_state: &ContractState<InMemoryDB>,
     shielded_offer: Option<&ShieldedOffer>,
+    pay_fees: bool,
 ) -> Result<DeployResult, ContractError> {
     let context = builds.execution_context().await?;
     let state = super::state::from_view(initial_state)?;
@@ -53,9 +55,15 @@ pub(crate) async fn deploy_funded(
     }
 
     let tx_info = single_action_tx_info(builds, context.clone(), DeployAction { deploy });
-    let transaction = match shielded_offer {
-        None => build_with_mock_fee_proofs(builds, tx_info).await?,
-        Some(offer) => Box::pin(offer_transaction(builds, &context, tx_info, offer)).await?,
+    let transaction = match (shielded_offer, pay_fees) {
+        (None, true) => build_with_mock_fee_proofs(builds, tx_info).await?,
+        (None, false) => prove_without_fee(tx_info).await?,
+        (Some(offer), _) => {
+            Box::pin(offer_transaction(
+                builds, &context, tx_info, offer, pay_fees,
+            ))
+            .await?
+        }
     };
 
     Ok(DeployResult {
@@ -102,22 +110,24 @@ pub(super) async fn build_with_mock_fee_proofs(
     Ok(builds.build_funded(tx_info).await?)
 }
 
-/// Add `offer` to the deploy in `tx_info`, prove it, and pay its fee.
+/// Add `offer` to the deploy in `tx_info`, prove it, and pay its fee when
+/// `pay_fees`.
 ///
 /// The wallet spends the offer's coins into `context` and reserves them. The
-/// deploy then proves with no fee, and the wallet pays the Dust fee in an
-/// intent of its own, as it does for a circuit call. `build_funded` cannot
-/// pay it: it funds `context` again, and the wallet refuses a second funding
-/// of one context.
+/// deploy then proves with no fee. When `pay_fees`, the wallet pays the Dust
+/// fee in an intent of its own, as it does for a circuit call. `build_funded`
+/// cannot pay it: it funds `context` again, and the wallet refuses a second
+/// funding of one context.
 ///
-/// The coins go back to the wallet when a step fails. Once the fee is paid,
-/// they stay reserved, and the result names them beside the fee Dust, so its
-/// submit can hand both back.
+/// The coins go back to the wallet when a step fails. Once the deploy is
+/// proven, they stay reserved. The result names them beside the fee Dust, if
+/// any, because `submit_reserved` hands back only what a result names.
 async fn offer_transaction(
     builds: &Builds<'_>,
     context: &Arc<BuildContext>,
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     offer: &ShieldedOffer,
+    pay_fees: bool,
 ) -> Result<TransferResult, ContractError> {
     let (change_cpk, change_epk) = builds.provider().shielded_public_keys().await?;
 
@@ -135,22 +145,24 @@ async fn offer_transaction(
             offer,
             prepared,
             (change_cpk, change_epk),
+            pay_fees,
         ))
         .await?;
     transaction.spent.merge(pinned);
     Ok(transaction)
 }
 
-/// Pay `offer` from the reserved `prepared` coins, then prove the deploy and
-/// pay its fee.
+/// Pay `offer` from the reserved `prepared` coins, then prove the deploy.
 ///
-/// Any surplus goes back to the wallet as change.
+/// Any surplus goes back to the wallet as change. When `pay_fees`, the
+/// wallet also pays the deploy's fee.
 async fn pay_offer(
     builds: &Builds<'_>,
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     offer: &ShieldedOffer,
     prepared: Vec<PreparedInput>,
     (change_cpk, change_epk): (CoinPublicKey, EncryptionPublicKey),
+    pay_fees: bool,
 ) -> Result<TransferResult, ContractError> {
     let held_value = total_by_key(
         prepared
@@ -196,5 +208,8 @@ async fn pay_offer(
     });
 
     let unpaid = prove_without_fee(tx_info).await?;
+    if !pay_fees {
+        return Ok(unpaid);
+    }
     Ok(builds.balance_transaction(&unpaid.tx_bytes).await?)
 }

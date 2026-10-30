@@ -160,7 +160,7 @@ pub(crate) fn emit_ledger_wrapper(
 
         /// Builder wrapper around `midnight_contract::DeployBuilder` that
         /// yields the generated `Contract<P>` on deploy.
-        #[must_use = "does nothing until awaited or sent"]
+        #[must_use = "does nothing until awaited, sent or built with .without_dust()"]
         pub struct DeployBuilder<'a, P>(midnight_contract::DeployBuilder<'a, P>);
 
         impl<P> DeployBuilder<'_, P> {
@@ -220,6 +220,23 @@ pub(crate) fn emit_ledger_wrapper(
             {
                 // Boxed for the same reason the `IntoFuture` impl below is.
                 Box::pin(async move { Ok(PendingDeploy(self.0.send().await?)) }).await
+            }
+
+            /// Build and prove the deploy with no Dust fee, for another wallet to
+            /// sponsor, and return it with the address of the contract.
+            ///
+            /// The sponsor pays the fee with `MidnightProvider::balance_transaction`
+            /// and submits with `MidnightProvider::submit_reserved`. Then connect with
+            /// [`Contract::at`] at the address. The coins of a shielded offer stay
+            /// reserved until a sync sees the chain spend them, or until their TTL
+            /// passes. See [`midnight_contract::DeployBuilder::without_dust`].
+            pub async fn without_dust(
+                self,
+            ) -> Result<midnight_contract::DustlessDeploy, midnight_contract::ContractError>
+            where
+                P: midnight_contract::AsMidnightProvider + Send,
+            {
+                self.0.without_dust().await
             }
         }
 

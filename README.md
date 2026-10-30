@@ -8,7 +8,7 @@
 ## Features
 
 - **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token). A wallet can register its NIGHT to generate Dust for another wallet's Dust address.
-- **Swaps and sponsored fees**: two-party shielded swaps, and one party paying the Dust fees of another party's transactions.
+- **Swaps and sponsored fees**: two-party shielded swaps, and one party paying the Dust fees of another party's transfers, contract calls and contract deploys.
 - **Node and indexer clients**: node RPC over subxt for contract state and submission, and a GraphQL client for the indexer that the wallet sync reads.
 - **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
 - **Deploy and call Compact smart contracts**: typed Rust bindings generated from the compiled contract. A circuit call takes typed arguments, and returns a typed value and the events that the circuit emits.
@@ -93,6 +93,23 @@ sponsor.submit_reserved(funded).await?;
 ```
 
 A party with no Dust builds a transfer or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A contract call built this way, or with `.build()`, records no private state. So it fails with `ContractError::UnrecordedPrivateState` when its witnesses change the private state, before it reserves Dust or makes a proof. A sponsor pays its Dust fee with `balance_transaction` and submits it with `submit_reserved`, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
+
+A contract deploy has a `.without_dust()` of its own, with no import. It returns a `DustlessDeploy`, which holds the fee-less transaction and the address of the contract:
+
+```rust,ignore
+let deploy = counter::Contract::deploy(&user)
+    .with_initial_state(counter::LedgerInitialState::default())
+    .with_zk_config(counter::ZK_CONFIG_DIR)
+    .without_dust()
+    .await?;
+let funded = sponsor.balance_transaction(deploy.transaction.as_bytes()).await?;
+sponsor.submit_reserved(funded).await?.wait_finalized().await?;
+let contract = counter::Contract::at(&user, deploy.address)
+    .with_zk_config(counter::ZK_CONFIG_DIR)
+    .build();
+```
+
+A deploy with no shielded offer reserves no wallet input. The coins of a shielded offer stay reserved until a sync sees the chain spend them, or until their TTL passes, because the transaction bytes do not name them.
 
 ## Compile a contract
 

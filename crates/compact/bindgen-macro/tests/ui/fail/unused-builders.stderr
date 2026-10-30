@@ -4,7 +4,7 @@ error: unused `__ledger_bindings::DeployBuilder` that must be used
 13 |     Contract::deploy(provider);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: does nothing until awaited or sent
+   = note: does nothing until awaited, sent or built with .without_dust()
 note: the lint level is defined here
   --> tests/ui/fail/unused-builders.rs:4:9
    |

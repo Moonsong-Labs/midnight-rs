@@ -261,7 +261,9 @@ impl<'a> IntoFuture for ShieldedSwap<'a> {
 /// sponsor them. `.without_dust()` is uniform across builder kinds because
 /// paying fees is a general transaction concern, not tied to any transaction
 /// kind. Implemented for shielded transfers, unshielded transfers, and
-/// generated contract-call builders.
+/// generated contract-call builders. A contract deploy builder has an
+/// inherent `without_dust` of its own, which also returns the address of the
+/// contract.
 ///
 /// Bring this trait into scope to call [`without_dust`](Self::without_dust).
 pub trait DustlessBuilder: Sized {

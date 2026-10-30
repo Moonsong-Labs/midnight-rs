@@ -156,7 +156,7 @@ Arc<LocalWallet>                                    // a handle on the attached 
 
 Each node read of the provider, its connect included, ends within 10 s (60 s for a contract state read), and a read with no answer returns `ProviderError::Rpc`.
 
-`transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits with `submit_reserved`. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md). A contract call's `.build()` and `.without_dust()` record no private state, so they fail with `ContractError::UnrecordedPrivateState` when the call's witnesses change it. The refusal comes after the local run and before the build reserves an input or makes a proof.
+`transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. A deploy builder's own `.without_dust()` returns a `DustlessDeploy`, which holds that transaction and the address of the contract. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits with `submit_reserved`. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md). A contract call's `.build()` and `.without_dust()` record no private state, so they fail with `ContractError::UnrecordedPrivateState` when the call's witnesses change it. The refusal comes after the local run and before the build reserves an input or makes a proof.
 
 `with_network` takes a `Network` (via `impl Into<Network>`). Parse a name with `.parse::<Network>()?`, which refuses a name that is not safe in an address or in the storage path. See [`docs/wallet.md`](wallet.md#address-derivation) for the rule.
 
@@ -164,7 +164,7 @@ Each node read of the provider, its connect included, ends within 10 s (60 s for
 
 `PendingReservations` records the spends of builds that the chain has not yet confirmed. Every build reserves its dust spends, unshielded UTXOs and shielded nullifiers before it proves, under the same hold of the wallet that selected them. Thus a second build in this process cannot pick the same input.
 
-A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy with no shielded offer and a maintenance update reserve theirs through `prepare_funded`. A sponsor's build reserves the Dust for the fee it pays through `prepare_fees`. A call, or a deploy with a shielded offer, reserves its pinned coins through `spend_shielded`. It then reserves the Dust for its own fee through `prepare_fees`.
+A `transfer_*` build reserves its inputs through `prepare_transfer`. A maintenance update, and a deploy with no shielded offer that pays its own fee, reserve theirs through `prepare_funded`. A sponsor's build reserves the Dust for the fee it pays through `prepare_fees`. A call, or a deploy with a shielded offer, reserves its pinned coins through `spend_shielded`. When it pays its own fee, it then reserves the Dust for that fee through `prepare_fees`. The `.without_dust()` of a call or a deploy draws no Dust, so it reserves only its pinned coins, if any.
 
 Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm.
 
@@ -204,10 +204,12 @@ Contract::deploy(&provider)                              // DeployBuilder<'_, P>
 
   .await                                                 // IntoFuture: send + into_contract
     │
-    └─ .send().await   →  PendingDeploy<P>               // explicit form
-         ├─ .wait_best().await        → (TxInBlock, PendingDeploy)   // TransactionFailed if not applied
-         ├─ .wait_finalized().await   → (TxInBlock, PendingDeploy)   // TransactionFailed if not applied
-         └─ .into_contract().await    → Contract<P>
+    ├─ .send().await   →  PendingDeploy<P>               // explicit form
+    │    ├─ .wait_best().await        → (TxInBlock, PendingDeploy)   // TransactionFailed if not applied
+    │    ├─ .wait_finalized().await   → (TxInBlock, PendingDeploy)   // TransactionFailed if not applied
+    │    └─ .into_contract().await    → Contract<P>
+    │
+    └─ .without_dust().await  →  DustlessDeploy { address, transaction }   // no fee, no submit
 ```
 
 Internally:
@@ -245,6 +247,8 @@ into_contract
   ↓
 Contract<P>   // stateless handle, no cached state
 ```
+
+`.without_dust()` runs the same build with no fee. With no offer it proves the deploy with no fee (`prepare_no_validate`, then `PreparedTransfer::prove`) and reserves nothing. With an offer it stops before `builds.balance_transaction`. It submits nothing, and returns the address and the transaction bytes, which do not name the offer's coins.
 
 ### Connect to an existing contract
 
@@ -391,7 +395,7 @@ Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancel
 
 `MidnightProvider::prepare_reserved` prepares a `TransferResult`, and the `PreparedTx` holds the reservation of its build. A failed prepare hands the inputs back before it returns. A `PreparedTx` that drops before its submit hands them back too, and `PreparedTx::release` does the same and waits for it. `PreparedTx::submit` moves the reservation to the `PendingTx`, so a wait that reads `Invalid` hands the inputs back. A failed submit keeps them reserved.
 
-`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call prepares with `prepare_reserved`, because it records its private-state snapshot between the prepare and the submit. So an error before its submit, or an `Invalid` at its wait, hands its inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
+`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call prepares with `prepare_reserved`, because it records its private-state snapshot between the prepare and the submit. So an error before its submit, or an `Invalid` at its wait, hands its inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, and the `.without_dust()` of a deploy builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
 
 ## Block pinning
 

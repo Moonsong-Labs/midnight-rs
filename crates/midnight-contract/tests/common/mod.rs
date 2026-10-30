@@ -29,6 +29,15 @@ pub(crate) const DEV_WALLET_SEED: &str =
 pub(crate) const RECIPIENT_SEED: &str =
     "0000000000000000000000000000000000000000000000000000000000000002";
 
+/// A seed that no other run uses, so its wallet holds nothing.
+pub(crate) fn unused_seed() -> String {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    format!("{nonce:064x}")
+}
+
 /// The devnet's node and indexer URLs, from `MIDNIGHT_NODE_URL` and
 /// `MIDNIGHT_INDEXER_URL`.
 ///

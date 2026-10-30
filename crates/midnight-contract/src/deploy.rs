@@ -2,6 +2,7 @@
 //!
 //! - [`deploy_funded`] is the production path: takes a provider with a synced
 //!   wallet, balances Dust fees, proves, and returns a [`DeployResult`].
+//! - `deploy_transaction` is the same build, with or without the Dust fee.
 //! - `deployed_state` reads the deployed contract at the block that applied
 //!   the deploy.
 //!
@@ -59,22 +60,39 @@ pub async fn deploy_funded(
     provider: &midnight_provider::MidnightProvider,
     shielded_offer: Option<ShieldedOffer>,
 ) -> Result<DeployResult, ContractError> {
+    deploy_transaction(initial_state, provider, shielded_offer, true).await
+}
+
+/// Build and prove the deploy of `initial_state` for the ledger generation
+/// that the provider's wallet is in.
+///
+/// When `pay_fees`, it is [`deploy_funded`]. Otherwise the transaction pays
+/// no Dust fee, and the result names only the coins of `shielded_offer`. The
+/// errors are those of [`deploy_funded`].
+pub(crate) async fn deploy_transaction(
+    initial_state: &ContractState<InMemoryDB>,
+    provider: &midnight_provider::MidnightProvider,
+    shielded_offer: Option<ShieldedOffer>,
+    pay_fees: bool,
+) -> Result<DeployResult, ContractError> {
     let offer = shielded_offer.as_ref();
     // Each arm is boxed so this frame holds one generation's future, not both.
     match provider.builds().await? {
         Builds::Ledger8(builds) => {
-            Box::pin(crate::ledger_8::deploy::deploy_funded(
+            Box::pin(crate::ledger_8::deploy::deploy_transaction(
                 &builds,
                 initial_state,
                 offer,
+                pay_fees,
             ))
             .await
         }
         Builds::Ledger9(builds) => {
-            Box::pin(crate::ledger_9::deploy::deploy_funded(
+            Box::pin(crate::ledger_9::deploy::deploy_transaction(
                 &builds,
                 initial_state,
                 offer,
+                pay_fees,
             ))
             .await
         }

@@ -30,8 +30,8 @@ pub use midnight_types::{BlockHash, ExtrinsicHash};
 // Primary API: deploy / connect / call.
 pub use call::ShieldedInputs;
 pub use contract::{
-    AsMidnightProvider, CallOutcome, ConnectBuilder, Contract, DeployBuilder, PendingCall,
-    PendingDeploy, Simulated,
+    AsMidnightProvider, CallOutcome, ConnectBuilder, Contract, DeployBuilder, DustlessDeploy,
+    PendingCall, PendingDeploy, Simulated,
 };
 pub use error::ContractError;
 pub use zk_config::{
