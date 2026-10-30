@@ -594,7 +594,11 @@ impl MidnightProvider {
     /// reservation semantics and the `.await` vs `.build()` distinction.
     ///
     /// One call spends and re-creates every tNIGHT UTXO that no pending build
-    /// reserves, and pays its fee from the wallet's Dust. The Dust that the
+    /// reserves, and pays its fee from the wallet's Dust. A wallet that
+    /// registered its tNIGHT to another wallet's Dust address with
+    /// [`DustRegistration::to`] holds no Dust of its own. It builds the
+    /// deregistration with [`DustlessBuilder::without_dust`], and the other
+    /// wallet pays the fee with [`Self::balance_transaction`]. The Dust that the
     /// wallet holds stays spendable while it decays. A wallet that holds too
     /// many tNIGHT UTXOs exceeds a block limit, and the build fails with a
     /// [`WalletError::Transfer`] that names `BlockLimitExceeded`.
@@ -604,6 +608,7 @@ impl MidnightProvider {
     ///
     /// [`WalletError::Transfer`]: midnight_types::WalletError::Transfer
     /// [`TransferBuilder::prepare_deregister_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_deregister_dust
+    /// [`DustlessBuilder::without_dust`]: crate::DustlessBuilder::without_dust
     pub fn deregister_dust(&self) -> DustDeregistration<'_> {
         DustDeregistration::new(self)
     }

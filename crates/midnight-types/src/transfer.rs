@@ -169,7 +169,10 @@ pub enum TransferKind {
     },
     /// A Dust deregistration, which stops the wallet's tNIGHT from
     /// generating Dust. See `TransferBuilder::prepare_deregister_dust`.
-    DustDeregistration,
+    DustDeregistration {
+        /// False leaves the transaction fee-less, for another wallet to fund.
+        pay_fees: bool,
+    },
 }
 
 /// One build, as data: what to make, and how to choose the inputs that make

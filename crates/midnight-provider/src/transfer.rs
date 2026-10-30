@@ -260,8 +260,8 @@ impl<'a> IntoFuture for ShieldedSwap<'a> {
 /// A transaction builder that can drop its Dust (fees), so another wallet can
 /// sponsor them. `.without_dust()` is uniform across builder kinds because
 /// paying fees is a general transaction concern, not tied to any transaction
-/// kind. Implemented for shielded transfers, unshielded transfers, and
-/// generated contract-call builders.
+/// kind. Implemented for shielded transfers, unshielded transfers, Dust
+/// deregistrations, and generated contract-call builders.
 ///
 /// Bring this trait into scope to call [`without_dust`](Self::without_dust).
 pub trait DustlessBuilder: Sized {
@@ -412,9 +412,12 @@ impl<'a> DustDeregistration<'a> {
     /// Build the deregistration transaction without submitting. Spends and
     /// re-creates every tNIGHT UTXO that no pending build reserves.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
-        self.provider
-            .build_then_prove(TransferKind::DustDeregistration.into())
-            .await
+        let provider = self.provider;
+        provider.build_then_prove(self.into_request(true)).await
+    }
+
+    fn into_request(self, pay_fees: bool) -> TransferRequest {
+        TransferKind::DustDeregistration { pay_fees }.into()
     }
 }
 
@@ -423,10 +426,17 @@ impl<'a> IntoFuture for DustDeregistration<'a> {
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(build_and_submit(
-            self.provider,
-            TransferKind::DustDeregistration.into(),
-        ))
+        let provider = self.provider;
+        Box::pin(build_and_submit(provider, self.into_request(true)))
+    }
+}
+
+impl<'a> DustlessBuilder for DustDeregistration<'a> {
+    type Error = ProviderError;
+    async fn without_dust(self) -> Result<DustlessTransaction, ProviderError> {
+        let provider = self.provider;
+        let result = provider.build_then_prove(self.into_request(false)).await?;
+        Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
     }
 }
 

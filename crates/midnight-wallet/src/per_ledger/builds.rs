@@ -71,7 +71,7 @@ impl WalletBuilds for LocalWallet {
         let mut guard = self.inner().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
         fund_from(wallet, &mut tx_info)?;
-        let prepared = prepare_no_validate(tx_info).await?;
+        let prepared = prepare_no_validate(tx_info, true).await?;
         Ok(reserve(wallet, prepared))
     }
 
