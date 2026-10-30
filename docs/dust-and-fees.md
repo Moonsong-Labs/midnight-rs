@@ -216,7 +216,7 @@ The dust public key of a registration can belong to another wallet. `register_du
 
 A registration with no Dust address is a deregistration. `MidnightProvider::deregister_dust` builds one. On chain, `apply_registration` removes the address delegation of the NIGHT address, and it fails with `DustDeregistrationNotRegistered` when the address has no delegation. NIGHT that reaches the address after that generates no Dust.
 
-The removal alone does not stop a NIGHT UTXO that already generates. Its generation entry keeps a `dtime` of "never" until a transaction spends the UTXO, and the spend sets `dtime` to the block time. So the deregistration that the SDK builds also spends every tNIGHT UTXO of the wallet, and creates each one again with the same value:
+The removal alone does not stop a NIGHT UTXO that already generates. Its generation entry keeps a `dtime` of "never" until a transaction spends the UTXO, and the spend sets `dtime` to the block time. So the deregistration that the SDK builds also spends every tNIGHT UTXO of the wallet that generates Dust, and creates each one again with the same value. A spend of a UTXO that generates no Dust stops nothing, so the build leaves those UTXOs unspent, and they keep their age. When no UTXO generates, the build spends one tNIGHT UTXO, because the address can still be registered. The spent UTXOs go in two offers:
 
 - The first UTXO goes in the guaranteed offer. `apply_offer` creates no Dust for a guaranteed NIGHT output of an address that the intent registers or deregisters. A deregistration names no Dust address, so `apply_registration` creates none either.
 - The other UTXOs go in the fallible offer. The ledger applies that offer after the deregistration, when the address has no delegation, so their outputs generate no Dust.
@@ -229,7 +229,7 @@ Some tNIGHT UTXOs generate Dust after the deregistration: a UTXO that a pending 
 
 A deregistration declares `allow_fee_payment` of 0, so it claims no generationless availability. The wallet's Dust pays its fee through `set_funding_seeds()`. A deregistration built with `.without_dust()` names no funding seed and carries no Dust spend. Another wallet pays its fee with `balance_transaction`, in a fee intent of its own. A wallet that registered its tNIGHT to another Dust address has no Dust, so it deregisters this way.
 
-After its `dtime`, a Dust UTXO decays at the rate it grew, until its value is zero. So the Dust that a deregistered wallet holds stays spendable, and it shrinks. A deregistered wallet can register again with `register_dust`. The UTXOs that the deregistration created are not in `night_indices`, so each one funds its own registration with generationless availability.
+After its `dtime`, a Dust UTXO decays at the rate it grew, until its value is zero. So the Dust that a deregistered wallet holds stays spendable, and it shrinks. A deregistered wallet can register again with `register_dust`. The UTXOs that the deregistration created are not in `night_indices`, so each one funds its own registration with generationless availability. But the age of each of these UTXOs starts at the deregistration block, so its generationless availability starts at zero. A registration takes the tNIGHT UTXO with the most generationless availability, so soon after the deregistration it takes a UTXO that the deregistration left unspent, if there is one. Otherwise the registration can fall short of its fee (see [Dust Shortfalls](#dust-shortfalls)).
 
 ## Dust Across the Ledger 8 to 9 Fork
 

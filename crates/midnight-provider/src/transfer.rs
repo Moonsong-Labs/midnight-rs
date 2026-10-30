@@ -410,7 +410,8 @@ impl<'a> DustDeregistration<'a> {
     }
 
     /// Build the deregistration transaction without submitting. Spends and
-    /// re-creates every tNIGHT UTXO that no pending build reserves.
+    /// re-creates every tNIGHT UTXO that generates Dust and that no pending
+    /// build reserves.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
         let provider = self.provider;
         provider.build_then_prove(self.into_request(true)).await

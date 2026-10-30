@@ -593,8 +593,9 @@ impl MidnightProvider {
     /// tNIGHT from generating Dust. See [`Self::transfer_shielded`] for
     /// reservation semantics and the `.await` vs `.build()` distinction.
     ///
-    /// One call spends and re-creates every tNIGHT UTXO that no pending build
-    /// reserves, and pays its fee from the wallet's Dust. A wallet that
+    /// One call spends and re-creates every tNIGHT UTXO that generates Dust
+    /// and that no pending build reserves, and pays its fee from the wallet's
+    /// Dust. A wallet that
     /// registered its tNIGHT to another wallet's Dust address with
     /// [`DustRegistration::to`] holds no Dust of its own. It builds the
     /// deregistration with [`DustlessBuilder::without_dust`], and the other
