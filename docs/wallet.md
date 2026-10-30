@@ -404,6 +404,8 @@ let pending = provider
 
 The list form returns the same builder as the one-recipient method, so `.build()`, `.without_dust()` and `.with_coin_selection()` work the same way. The one-recipient method is the list form with one payment.
 
+Each NIGHT input, NIGHT output and Dust spend adds to the time that the node takes to dismiss the transaction. The node refuses a transaction that goes past its allowance with `FeeCalculation(OutsideTimeToDismiss)`: custom error 168 from the node of the ledger 8 image, and 231 from the node of the ledger 9 image. It does this at submit, after the proof, and the build does not check the rule first. So a transfer to a few NIGHT recipients can build and still be refused. How many fit depends on the chain parameters and on the inputs and Dust that the build selects. `submit_reserved` hands the inputs back when the node refuses the transaction. Then pay the recipients over more than one transaction. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) gives the rule.
+
 Two unshielded transfers cannot merge into one transaction, because each carries its intent at segment 1. So use `transfer_unshielded_many` to pay several unshielded recipients in one transaction. A list holds payments of one kind. To pay shielded and unshielded recipients in one transaction:
 
 1. Build the shielded list with `.without_dust()`.

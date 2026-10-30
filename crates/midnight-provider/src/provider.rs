@@ -641,6 +641,13 @@ impl MidnightProvider {
     /// each carries its intent at segment 1 (see [`Self::merge_transactions`]).
     /// So this is the way to pay several recipients in one transaction.
     ///
+    /// Each NIGHT input, NIGHT output and Dust spend adds to the time that the
+    /// node takes to dismiss the transaction. The node refuses a transaction
+    /// that goes past its allowance (see [`TransferResult::fee_speck`]), at
+    /// submit and after the proof. So a transfer to a few NIGHT recipients can
+    /// build and still be refused. How many fit depends on the chain
+    /// parameters and on the inputs and Dust that the build selects.
+    ///
     /// ```rust,no_run
     /// # use midnight_provider::{MidnightProvider, NIGHT, Payment};
     /// # async fn f(provider: MidnightProvider, alice: String, bob: String) -> anyhow::Result<()> {
