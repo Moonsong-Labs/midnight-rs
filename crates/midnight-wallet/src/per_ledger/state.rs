@@ -712,8 +712,9 @@ impl Wallet {
     ///
     /// `reserved_at` should be the block time of the build context (typically
     /// [`PreparedTransfer::reserved_at`](super::types::PreparedTransfer::reserved_at)),
-    /// which a release names. `expires_at` should be the TTL of the
-    /// transaction ([`PreparedTransfer::expires_at`](super::types::PreparedTransfer::expires_at)):
+    /// which a release names. `expires_at` should be
+    /// [`PreparedTransfer::expires_at`](super::types::PreparedTransfer::expires_at),
+    /// or the TTL of the call or deploy for the shielded coins that it pins.
     /// TTL eviction compares it against the chain time of `block_context`.
     /// Confirmed-state files never persist these reservations, they live in
     /// `pending.json` only and are dropped from disk once `Wallet::pending`

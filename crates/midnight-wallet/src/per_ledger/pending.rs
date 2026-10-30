@@ -18,9 +18,9 @@
 //! - **Release**: [`PendingReservations::release`], for a build known to be
 //!   dead.
 //! - **TTL eviction**: once the chain time passes an entry's `expires_at`,
-//!   the TTL of the transaction it was made for, that transaction can no
-//!   longer land, and the entry is dropped. This is the backstop for
-//!   transactions that neither confirm nor get released.
+//!   the transaction it was made for can no longer land, and the entry is
+//!   dropped. This is the backstop for transactions that neither confirm nor
+//!   get released.
 //!
 //! Pending state is persisted to its own file (`pending.json`) so that a
 //! process restart between submit and confirmation does not lose track of
@@ -54,7 +54,8 @@ pub(crate) struct PendingDustBatch {
     pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
     /// The block time of the build, which a release names.
     pub reserved_at: Timestamp,
-    /// The TTL of the transaction, for TTL eviction.
+    /// The time after which the transaction can no longer land, for TTL
+    /// eviction.
     pub expires_at: Timestamp,
 }
 
@@ -237,8 +238,8 @@ impl PendingReservations {
 /// Whether a reservation that expires at `expires_at` can still let its
 /// transaction land at the chain time `now`.
 ///
-/// Past `expires_at`, the TTL of the transaction it was made for, that
-/// transaction is dead, so its inputs are free again.
+/// Past `expires_at`, the transaction it was made for can no longer land, so
+/// its inputs are free again.
 pub(crate) fn within_ttl(expires_at: Timestamp, now: Timestamp) -> bool {
     expires_at >= now
 }
