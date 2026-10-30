@@ -398,6 +398,7 @@ impl<'a> IntoFuture for DustRegistration<'a> {
 
 /// Pending Dust deregistration. See [module docs](crate::transfer) for the
 /// `.await` vs `.build()` distinction.
+#[derive(Debug)]
 #[must_use = "does nothing until awaited or built"]
 pub struct DustDeregistration<'a> {
     provider: &'a MidnightProvider,
