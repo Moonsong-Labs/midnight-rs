@@ -18,15 +18,6 @@ mod counter {
 use midnight_onchain_runtime::state::EntryPointBuf;
 use midnight_provider::MidnightProvider;
 
-/// A seed that no other run uses, so its wallet holds nothing.
-fn unused_seed() -> String {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    format!("{nonce:064x}")
-}
-
 /// The deployer's wallet holds no Dust. The chain must apply the sponsored
 /// deploy, and the contract at the returned address must hold the verifier
 /// key of the counter's circuit, so a later call can prove against it.
@@ -37,7 +28,7 @@ async fn a_wallet_with_no_dust_deploys_and_a_sponsor_pays_the_fee() {
     };
 
     let deployer = MidnightProvider::new(&node_url);
-    let wallet = common::synced_wallet(&deployer, &indexer_url, &unused_seed()).await;
+    let wallet = common::synced_wallet(&deployer, &indexer_url, &common::unused_seed()).await;
     let deployer = deployer.with_wallet(wallet);
     assert_eq!(
         deployer
