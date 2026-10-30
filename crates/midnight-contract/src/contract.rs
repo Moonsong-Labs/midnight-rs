@@ -472,6 +472,7 @@ pub struct DeployBuilder<'a, P> {
     maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
     declared_circuits: Option<Vec<String>>,
     declares_witnesses: bool,
+    ttl: Option<Duration>,
     // Ties the awaited deploy to the provider's borrow. `IntoFuture` boxes the
     // deploy as `dyn Future`, and without a lifetime on the builder that box
     // defaults to `'static`, which rules out `Contract::deploy(&provider).await`.
@@ -489,6 +490,7 @@ impl<P> DeployBuilder<'_, P> {
             maintenance_authority: None,
             declared_circuits: None,
             declares_witnesses: false,
+            ttl: None,
             borrow: PhantomData,
         }
     }
@@ -543,6 +545,27 @@ impl<P> DeployBuilder<'_, P> {
     /// deadline. See [`PendingTx`] to bound one with `tokio::time::timeout`.
     pub fn with_deploy_timeout(mut self, timeout: Duration) -> Self {
         self.deploy_timeout = timeout;
+        self
+    }
+
+    /// Make the deploy transaction expire `ttl` after the chain time of the
+    /// build. Defaults to the chain's `global_ttl`, the longest TTL the chain
+    /// accepts.
+    ///
+    /// The wallet holds the coins of a shielded offer until the TTL passes.
+    /// It holds the fee Dust until then, or until the `ctime` of that Dust is
+    /// older than the chain's `dust_grace_period` when that comes first. A
+    /// sync that sees the chain spend them, or a release, hands them back
+    /// sooner. After a submit whose fate is unknown, such as
+    /// [`SubmitError::Dropped`](midnight_provider::SubmitError::Dropped), the
+    /// deploy can no longer land once the TTL passes.
+    ///
+    /// [`Self::send`] fails with [`ContractError::Provider`] and
+    /// [`WalletError::TtlOutOfRange`](midnight_types::WalletError::TtlOutOfRange)
+    /// when `ttl` is under one second or longer than `global_ttl`, before it
+    /// spends or proves anything.
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = Some(ttl);
         self
     }
 
@@ -642,7 +665,7 @@ where
             state = crate::maintenance::set_maintenance_authority(state, committee, threshold);
         }
 
-        let result = deploy_funded(&state, provider, self.shielded_offer).await?;
+        let result = deploy_funded(&state, provider, self.shielded_offer, self.ttl).await?;
         let address = result.address_hex();
         let pending = provider.submit_reserved(result.transaction).await?;
 
@@ -1077,6 +1100,7 @@ impl<P> Contract<P> {
             &crate::runtime::NoWitnesses,
             &[],
             crate::call::ShieldedInputs::default(),
+            None,
         )
         .await
     }
@@ -1189,7 +1213,10 @@ impl<P> Contract<P> {
     /// reserves the wallet inputs that the transaction spends, as
     /// [`Self::call_with`] does. The bytes do not name those inputs, so
     /// nothing can hand them back. They stay reserved until a sync sees the
-    /// chain spend them, or until their TTL passes.
+    /// chain spend them, or until their TTL passes. `ttl` sets that TTL, as
+    /// [`Self::call_with`] describes. When the call pays its own fee, the fee
+    /// Dust also goes back when its `ctime` is older than the chain's
+    /// `dust_grace_period`, if that comes first.
     ///
     /// # Errors
     ///
@@ -1213,7 +1240,10 @@ impl<P> Contract<P> {
     ///   ledger values does not serialize.
     /// - [`ContractError::Provider`] when the provider has no wallet, or when
     ///   the read of the state or the block time, the build or the proof
-    ///   fails.
+    ///   fails. For a `ttl` under one second or longer than `global_ttl`, it
+    ///   carries
+    ///   [`WalletError::TtlOutOfRange`](midnight_types::WalletError::TtlOutOfRange),
+    ///   before the build reserves an input or makes a proof.
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,
@@ -1224,6 +1254,7 @@ impl<P> Contract<P> {
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
+        ttl: Option<Duration>,
         pay_fees: bool,
     ) -> Result<Vec<u8>, ContractError>
     where
@@ -1238,6 +1269,7 @@ impl<P> Contract<P> {
             witnesses,
             coin_encryption_keys,
             shielded,
+            ttl,
             pay_fees,
         ))
         .await
@@ -1256,6 +1288,7 @@ impl<P> Contract<P> {
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
+        ttl: Option<Duration>,
         pay_fees: bool,
     ) -> Result<Vec<u8>, ContractError>
     where
@@ -1281,6 +1314,7 @@ impl<P> Contract<P> {
             args,
             coin_encryption_keys,
             shielded,
+            ttl,
             pay_fees,
         ))
         .await?;
@@ -1371,6 +1405,7 @@ impl<P> Contract<P> {
         args: &[(&str, crate::runtime::Value)],
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
+        ttl: Option<Duration>,
         pay_fees: bool,
     ) -> Result<(BuiltCall, crate::runtime::Value), ContractError>
     where
@@ -1387,6 +1422,7 @@ impl<P> Contract<P> {
             ran.zk_config,
             coin_encryption_keys,
             shielded,
+            ttl,
             pay_fees,
         )
         .await?;
@@ -1409,6 +1445,12 @@ impl<P> Contract<P> {
     /// It runs [`Self::send_call_with`], then [`PendingCall::wait_finalized`]
     /// with a bound of 60 s on the wait for finality. The snapshot settles
     /// after that wait, so the bound does not cancel the store write.
+    ///
+    /// The transaction expires `ttl` after the chain time of the build, or
+    /// after the chain's `global_ttl` for `None`, the longest TTL the chain
+    /// accepts. The fee intent expires with it. Once the TTL passes, a call
+    /// whose fate is unknown can no longer land, and the wallet frees the
+    /// inputs that its build reserved.
     ///
     /// # Errors
     ///
@@ -1434,6 +1476,7 @@ impl<P> Contract<P> {
         // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)
         // from the caller's wallet. Pass `ShieldedInputs::default()` for none.
         shielded: crate::call::ShieldedInputs,
+        ttl: Option<Duration>,
     ) -> Result<CallOutcome<crate::runtime::Value>, ContractError>
     where
         P: AsMidnightProvider,
@@ -1447,6 +1490,7 @@ impl<P> Contract<P> {
                 witnesses,
                 coin_encryption_keys,
                 shielded,
+                ttl,
                 Ok,
             )
             .await?;
@@ -1463,7 +1507,8 @@ impl<P> Contract<P> {
     /// the private-state snapshot as `Pending`, and submits. A result that does
     /// not decode stops the call before the store records a snapshot and before
     /// the node gets the transaction. Call [`PendingCall::wait_finalized`] to
-    /// finish the call.
+    /// finish the call. `ttl` sets the TTL of the transaction, as
+    /// [`Self::call_with`] describes.
     ///
     /// # Errors
     ///
@@ -1485,7 +1530,10 @@ impl<P> Contract<P> {
     /// - [`ContractError::Provider`] when the read of the state or the block
     ///   time, the build or the proof fails. It is also the error when the
     ///   connection to the node or the build of the extrinsic fails. The call
-    ///   records no snapshot and submits nothing.
+    ///   records no snapshot and submits nothing. For a `ttl` under one second
+    ///   or longer than `global_ttl`, it carries
+    ///   [`WalletError::TtlOutOfRange`](midnight_types::WalletError::TtlOutOfRange),
+    ///   before the build reserves an input or makes a proof.
     /// - The error of `decode` when the circuit's result does not decode. For
     ///   a generated call builder, that is [`ContractError::Interpreter`].
     ///   The call records no snapshot and submits nothing.
@@ -1501,7 +1549,9 @@ impl<P> Contract<P> {
     /// them back before it returns. A wait on the [`PendingCall`] that reads
     /// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid) also
     /// hands them back. Any other error from the submit on keeps them reserved
-    /// until a sync sees the chain spend them, or until their TTL passes.
+    /// until a sync sees the chain spend them, or until their TTL passes. The
+    /// fee Dust also goes back when its `ctime` is older than the chain's
+    /// `dust_grace_period`, if that comes first.
     #[expect(
         clippy::too_many_arguments,
         reason = "the arguments of `call_with`, plus the decoder"
@@ -1515,6 +1565,7 @@ impl<P> Contract<P> {
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
+        ttl: Option<Duration>,
         decode: impl FnOnce(crate::runtime::Value) -> Result<T, ContractError>,
     ) -> Result<PendingCall<T>, ContractError>
     where
@@ -1537,6 +1588,7 @@ impl<P> Contract<P> {
             args,
             coin_encryption_keys,
             shielded,
+            ttl,
             // The submit path always self-funds its fees.
             true,
         ))

@@ -67,6 +67,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
             &midnight_contract::runtime::NoWitnesses,
             &[],
             midnight_contract::ShieldedInputs::default(),
+            None,
         )
         .await
         .expect("the contract must be able to mint to itself");
@@ -101,6 +102,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
             &midnight_contract::runtime::NoWitnesses,
             &[],
             midnight_contract::ShieldedInputs::default(),
+            None,
         )
         .await
         .expect("paying a user an unshielded token must be accepted");

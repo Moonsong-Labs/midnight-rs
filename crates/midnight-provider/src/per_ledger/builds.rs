@@ -104,11 +104,18 @@ impl<'a> Builds<'a> {
     /// One call rather than a reserve step and a prove step, so a build cannot
     /// reach a different provider between them. The reservation belongs to
     /// this provider's wallet, and only this provider can hand it back.
+    ///
+    /// The intents expire `ttl` after the chain time of the build, or after
+    /// the chain's `global_ttl` for `None`. The wallet holds the inputs until
+    /// then, or until the `ctime` of the fee Dust is older than the chain's
+    /// `dust_grace_period` when that comes first. See
+    /// [`WalletBuilds::prepare_funded`].
     pub async fn build_funded(
         &self,
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+        ttl: Option<std::time::Duration>,
     ) -> Result<TransferResult, ProviderError> {
-        let reserved = self.wallet.prepare_funded(tx_info).await?;
+        let reserved = self.wallet.prepare_funded(tx_info, ttl).await?;
         self.prove_reserved(reserved).await
     }
 
@@ -122,6 +129,10 @@ impl<'a> Builds<'a> {
     /// Each coin is named by a nullifier the wallet already knows, so this
     /// selects nothing; the caller decides what to spend.
     ///
+    /// The wallet holds the coins until `ttl` after the chain time of
+    /// `context` passes, or the chain's `global_ttl` for `None`. Pass the TTL
+    /// of the transaction that spends them.
+    ///
     /// # Errors
     ///
     /// [`ProviderError::Wallet`] with
@@ -134,11 +145,15 @@ impl<'a> Builds<'a> {
         &self,
         context: &Arc<BuildContext>,
         coins: &[SpendableShieldedCoin],
+        ttl: Option<std::time::Duration>,
         rng: &mut StdRng,
     ) -> Result<(Vec<PreparedInput>, HeldInputs), ProviderError> {
         let nullifiers: Vec<_> = coins.iter().map(|c| c.nullifier).collect();
         midnight_types::refuse_repeated_nullifiers(&nullifiers)?;
-        let (prepared, spent) = self.wallet.spend_shielded(context, nullifiers, rng).await?;
+        let (prepared, spent) = self
+            .wallet
+            .spend_shielded(context, nullifiers, ttl, rng)
+            .await?;
         Ok((prepared, HeldInputs::of(spent, self.provider.facade())))
     }
 
@@ -213,7 +228,7 @@ impl<'a> Builds<'a> {
     /// reaches the prover only through a wallet that says it reserved the
     /// inputs first. A proof that fails hands them back, because the
     /// reservation outlives the decision that made it and would otherwise
-    /// strand them until their TTL elapses. For a sponsored fee, the proof
+    /// strand them until their reservation expires. For a sponsored fee, the proof
     /// includes the merge into the external transaction and its price.
     async fn prove_reserved(
         &self,

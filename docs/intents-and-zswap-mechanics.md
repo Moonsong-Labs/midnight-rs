@@ -131,9 +131,9 @@ Every intent carries a `ttl: Timestamp`. At validation the ledger enforces (spec
 assert!(intent.ttl >= tblock && intent.ttl <= tblock + global_ttl);
 ```
 
-— the TTL must be no earlier than the current block time and no further in the future than `global_ttl`. The SDK computes `intent.ttl = chain_tblock + global_ttl` from the wallet's view of the chain (`block_context.tblock` populated during sync); it does **not** use the client's system clock.
+So the TTL must be no earlier than the current block time and no further in the future than `global_ttl`. The SDK computes `intent.ttl = chain_tblock + ttl` from the wallet's view of the chain: `chain_tblock` is the time of the latest block that the wallet's last sync read. It does **not** use the client's system clock, and it does not count from the Dust anchor (`block_context.tblock`), which can trail the chain by up to `min(global_ttl, dust_grace_period)`.
 
-`global_ttl` is a chain ledger parameter (read from `LedgerParameters` during sync), not an SDK knob: the upstream `StandardTransactionInfo::build` reads it directly from chain state. The SDK has no API to override TTL on a per-transaction basis; callers always get `chain_tblock + global_ttl`.
+`global_ttl` is a chain ledger parameter (read from `LedgerParameters` during sync). By default `ttl` is `global_ttl`, the longest TTL the chain accepts. A build can ask for a shorter one with `.with_ttl(duration)` on the transfer, deploy and call builders. The build refuses a TTL under one second or longer than `global_ttl` with `WalletError::TtlOutOfRange`. A fee intent that a sponsor adds with `balance_transaction` takes the earliest TTL of the transaction it pays for.
 
 That's correct on any chain whose successive blocks track real time. It's a trap on the **local dev devnet**, where block 0 ships with a hardcoded `tblock` from months before wall clock (`midnightntwrk/midnight-node:0.22.1` genesis: 2025-08-05) but block 1+ uses the validator's real clock. If you build a transaction while the chain has only genesis, `intent.ttl` lands months in the past relative to the chain's view as soon as block 1 arrives — submission is rejected with chain custom error 182.
 

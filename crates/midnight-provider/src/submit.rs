@@ -65,7 +65,8 @@ pub enum SubmitError {
     ///
     /// Treat the fate as unknown. Before you build again from the same inputs,
     /// make sure that the chain does not hold the transaction. You can also
-    /// wait until its TTL passes.
+    /// wait until its TTL passes. A build with `with_ttl` (on the transfer,
+    /// deploy and call builders) makes that wait shorter than `global_ttl`.
     #[error("submit RPC: {message}")]
     SubmitRpc { message: String },
 
@@ -88,7 +89,9 @@ pub enum SubmitError {
     /// and can still be included in a later block. Resubmitting a
     /// transaction that spends the same inputs risks a double-spend
     /// conflict — confirm the original is absent from the chain (or let its
-    /// TTL expire) before rebuilding.
+    /// TTL expire) before rebuilding. A build with `with_ttl` (on the
+    /// transfer, deploy and call builders) makes that wait shorter than
+    /// `global_ttl`.
     #[error("dropped: {message}")]
     Dropped { message: String },
 
@@ -315,7 +318,7 @@ impl std::fmt::Display for Verdict {
 /// reserved inputs (see [`PreparedTx`]). Under a Tokio runtime, that release
 /// runs to its end, even when the caller drops the wait future during it. A
 /// drop before the wait reads `Invalid` leaves the inputs reserved until their
-/// TTL passes.
+/// reservation expires.
 pub struct PendingTx {
     progress: subxt::tx::TransactionProgress<subxt::SubstrateConfig, AtBlock>,
     reservation: Option<Reservation>,

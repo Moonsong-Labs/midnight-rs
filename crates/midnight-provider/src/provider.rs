@@ -750,6 +750,13 @@ impl MidnightProvider {
     /// it with [`Self::submit_reserved`], which hands the Dust back when the
     /// node never gets the transaction or rejects it. A transaction that
     /// already pays its own fee comes back unchanged, with nothing reserved.
+    ///
+    /// The fee intent expires with the earliest intent of the transaction, or
+    /// after the chain's `global_ttl` when that comes first. So a party that
+    /// builds its transaction with a short TTL (`with_ttl`) bounds the fee
+    /// intent too. The Dust stays reserved until the fee intent expires, or
+    /// until the `ctime` of that Dust is older than the chain's
+    /// `dust_grace_period` when that comes first.
     pub async fn balance_transaction(
         &self,
         tx_bytes: &[u8],
@@ -783,7 +790,7 @@ impl MidnightProvider {
     ///
     /// A build reserves its inputs so a later one does not re-select them, so
     /// a transaction that is rejected at submit, or built and then abandoned,
-    /// keeps its coins out of circulation until the TTL window elapses.
+    /// keeps its coins out of circulation until the reservation expires.
     /// Releasing frees them at once.
     ///
     /// Only for a transaction that cannot land. Releasing one still in flight
@@ -811,7 +818,7 @@ impl MidnightProvider {
     ///   definitive rejection. It arrives after this method returns, so the
     ///   reservation travels with the handle.
     ///
-    /// Any other failure keeps the inputs reserved until their TTL passes,
+    /// Any other failure keeps the inputs reserved until their reservation expires,
     /// because the node can still hold the transaction. Use [`Self::submit`]
     /// for bytes that this wallet did not build. This is
     /// [`Self::prepare_reserved`], then [`PreparedTx::submit`](crate::PreparedTx::submit).
@@ -1315,8 +1322,8 @@ fn transaction_ledger_version(tx_bytes: &[u8]) -> Result<LedgerVersion, Provider
 /// The inputs a build has reserved, released if the build does not finish.
 ///
 /// The reservation is recorded before proving, so anything that ends a build
-/// early has to hand the inputs back or they stay unusable until their TTL
-/// elapses. Run the rest of the build through [`Self::keep_on_ok`], which
+/// early has to hand the inputs back or they stay unusable until their
+/// reservation expires. Run the rest of the build through [`Self::keep_on_ok`], which
 /// keeps the reservation when the build succeeds and awaits the release when
 /// it fails. A caller can drop the build future (a `timeout`, a `select!`, an
 /// aborted task) before the release runs. `Drop` cannot await, so under a
@@ -1360,7 +1367,7 @@ impl HeldInputs {
     ///
     /// With no Tokio runtime, a drop releases nothing, and the release on
     /// `Err` runs inline. Inputs that a drop leaves reserved stay unusable
-    /// until their TTL elapses.
+    /// until their reservation expires.
     pub fn keep_on_ok<T, E>(
         mut self,
         work: impl Future<Output = Result<T, E>>,

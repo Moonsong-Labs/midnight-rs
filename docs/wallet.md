@@ -312,7 +312,7 @@ balance.dust.balance_speck;                // u128: all the Dust, reserved or no
 balance.dust.spendable_speck;              // u128: the Dust a new build can draw on now
 ```
 
-A build reserves the inputs it spends: shielded coins, unshielded UTXOs and Dust UTXOs. A reservation ends when a release hands the inputs back, or when its TTL ends (see [Pending reservations](#pending-reservations)). A reservation of unshielded UTXOs or Dust UTXOs also ends when a sync or resync sees the chain confirm the transaction. A confirmed shielded coin leaves the balance when a sync or resync drops it from the wallet's Zswap state.
+A build reserves the inputs it spends: shielded coins, unshielded UTXOs and Dust UTXOs. A reservation ends when a release hands the inputs back, or when it expires (see [Pending reservations](#pending-reservations)). A reservation of unshielded UTXOs or Dust UTXOs also ends when a sync or resync sees the chain confirm the transaction. A confirmed shielded coin leaves the balance when a sync or resync drops it from the wallet's Zswap state.
 
 A reserved coin or UTXO reads `spendable: false`. `spendable_shielded_value` and `spendable_unshielded_value` leave it out, and `shielded_value` and `unshielded_value` count it. In the same way, `spendable_utxos` and `spendable_speck` leave the reserved Dust out, and `balance_speck` counts it. So a wallet whose only Dust UTXO a pending build reserves reads a `spendable_speck` of 0 and a positive `balance_speck`.
 
@@ -393,6 +393,21 @@ let pending = provider
 4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
 5. Submits the proven bytes to the node and returns a `PendingTx`.
 
+Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the chain's latest block that the resync read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships), and `Wallet::parameters().global_ttl` gives the value of the connected chain. To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
+
+```rust
+use std::time::Duration;
+
+let pending = provider
+    .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
+    .with_ttl(Duration::from_secs(300))
+    .await?;
+```
+
+`transfer_shielded`, `transfer_unshielded` and `register_dust` take it, and so do a contract deploy (`DeployBuilder::with_ttl`) and a circuit call (`.with_ttl` on the call builder, or the `ttl` argument of `Contract::call_with`). The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the build with `WalletError::TtlOutOfRange`, before it spends or proves anything. A Dustless shielded transfer (`.without_dust()`) is a Zswap offer with no intent, so it cannot carry a TTL, and its build fails with `WalletError::TtlWithoutIntent`. A shielded swap half has no `with_ttl` for the same reason. When a wallet pays the fee of another party's transaction (`balance_transaction`), its fee intent expires with the earliest intent of that transaction.
+
+A shorter TTL bounds two waits: how long a transaction whose fate is unknown can still land, and how long the wallet holds its inputs (see [Pending reservations](#pending-reservations)). A transaction that pays its fee with Dust has a second bound, its Dust window: the chain refuses its Dust actions once their `ctime` is older than the Dust grace period (`dust_grace_period`, 3 hours on the networks that midnight-node ships). The `ctime` is the block time of the wallet's Dust state, which can trail the chain.
+
 To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder instead of awaiting it:
 
 ```rust
@@ -405,7 +420,7 @@ println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64
 let pending = provider.submit_reserved(result).await?;
 ```
 
-`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved. `submit_reserved` hands them back when the node never gets the transaction or rejects it (see [Pending reservations](#pending-reservations)).
+`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or the reservation expires), the inputs stay reserved. `submit_reserved` hands them back when the node never gets the transaction or rejects it (see [Pending reservations](#pending-reservations)).
 
 ## Submission and waiting
 
@@ -424,6 +439,8 @@ let (finalized, _pending) = pending.wait_finalized().await?;
 Both waits return `Ok` only when the chain applied the transaction. When the transaction landed but did not apply (`PartialSuccess` or `Failure`), the wait fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TxInBlock` with the verdict. The verdict of `wait_best` is provisional: a reorg can drop the block, and the transaction can land again with another verdict, which `wait_best` does not follow. `wait_finalized` gives the final verdict. An `Err` consumes the handle, so when the final verdict matters, call `wait_finalized` in place of `wait_best`.
 
 When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch variants come from the submit: after `NotSubmitted` the tx never left the process, and after `SubmitRpc` the node can still hold it.
+
+When the fate is unknown, a transaction can still land until its TTL passes, or until its Dust window ends when it pays with Dust. After that, a rebuild from the same inputs is safe from a double spend. The wallet frees the inputs at its first build after their reservation expires (see [Pending reservations](#pending-reservations)). Build with `.with_ttl(duration)` (see [Transfers](#transfers)) to make that wait shorter than `global_ttl`.
 
 ## Recovering a coin the wallet cannot discover
 
@@ -463,7 +480,9 @@ The registration is recorded and persisted before the replay starts. If the repl
 In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`, persisted as `pending.json` next to the wallet state. They serve two purposes:
 
 - **Prevent double-spending across builds.** Input selection skips reserved coins.
-- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL window elapsed, as a backstop for transactions that never confirm. Transaction TTL defaults to one hour.
+- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL passed, as a backstop for transactions that never confirm.
+
+Each reservation holds an expiry, and the wallet drops the reservation once the time of the chain's latest block passes it. For the inputs that a build selects and the Dust that pays a fee, the expiry is the time after which the transaction can no longer land. That is the earliest TTL of the transaction's intents, or the end of the Dust window of an intent that pays with Dust when that comes first. The coins that a contract call or a deploy spends from the wallet (`spend_shielded`) expire at the TTL of that call or deploy, even when the fee Dust of the same transaction expires sooner. The wallet reserves those coins before it knows who pays the fee, and a sponsor can pay it later with Dust that has a later `ctime`. The TTL is the chain's `global_ttl` after the build by default, and `.with_ttl(duration)` on a builder makes it shorter (see [Transfers](#transfers)).
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
@@ -474,7 +493,7 @@ A release also drops a reservation, for a transaction that can never land. It ma
 - A build whose proof fails, and a deploy whose shielded offer fails before its fee is paid.
 - `MidnightProvider::release(&spent)`, for a `TransferResult` that you build and never submit.
 
-A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node can still hold the transaction. The bytes of a contract call's `.build()` or `.without_dust()` do not name their inputs, so their reservation ends only when a sync sees the chain spend them, or when their TTL ends. Other than that, you don't normally interact with this directly: the builds reserve, and the sync loop clears.
+A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node can still hold the transaction. The bytes of a contract call's `.build()` or `.without_dust()` do not name their inputs, so their reservation ends only when a sync sees the chain spend them, or when it expires. Other than that, you don't normally interact with this directly: the builds reserve, and the sync loop clears.
 
 ## Lifecycle summary
 

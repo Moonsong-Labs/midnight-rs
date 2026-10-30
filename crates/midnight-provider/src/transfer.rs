@@ -15,7 +15,7 @@
 //!   [`MidnightProvider::submit_reserved`], which hands them back when the
 //!   node never gets the transaction or rejects it. Bytes that never reach
 //!   the chain keep them until [`MidnightProvider::release`] gets
-//!   `result.spent`, or until their TTL passes.
+//!   `result.spent`, or until their reservation expires.
 //!
 //! Constructors are sync methods on [`MidnightProvider`]: `transfer_unshielded`,
 //! `transfer_shielded`, `register_dust`. They borrow the provider and capture
@@ -62,6 +62,7 @@ pub struct UnshieldedTransfer<'a> {
     amount: u128,
     recipient: String,
     coin_selection: midnight_types::CoinSelectionStrategy,
+    ttl: Option<std::time::Duration>,
 }
 
 impl<'a> UnshieldedTransfer<'a> {
@@ -77,6 +78,7 @@ impl<'a> UnshieldedTransfer<'a> {
             amount,
             recipient: recipient.to_string(),
             coin_selection: midnight_types::CoinSelectionStrategy::default(),
+            ttl: None,
         }
     }
 
@@ -89,6 +91,22 @@ impl<'a> UnshieldedTransfer<'a> {
         self
     }
 
+    /// Make the transaction expire `ttl` after the chain time of the build.
+    /// See [`TransferRequest::ttl`](crate::TransferRequest::ttl).
+    /// Defaults to the chain's `global_ttl`, the longest TTL the chain accepts.
+    ///
+    /// Once the TTL passes, the transaction can no longer land, and the next
+    /// build frees the inputs it reserved. So after a submit whose fate is
+    /// unknown, such as [`SubmitError::Dropped`](crate::SubmitError::Dropped),
+    /// a rebuild from the same inputs is safe from a double spend after
+    /// `ttl`, not after the whole `global_ttl`. A transaction that pays its
+    /// fee with Dust can stop landing sooner, once its Dust `ctime` is older
+    /// than the chain's `dust_grace_period`.
+    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
     /// Build the transaction without submitting it. Reserves pending UTXOs /
     /// dust in the wallet so concurrent in-process builds don't double-select
     /// the same inputs.
@@ -98,13 +116,15 @@ impl<'a> UnshieldedTransfer<'a> {
     }
 
     fn into_request(self, pay_fees: bool) -> TransferRequest {
-        TransferRequest::new(TransferKind::Unshielded {
+        let mut request = TransferRequest::new(TransferKind::Unshielded {
             token_type: self.token_type,
             amount: self.amount,
             recipient: self.recipient,
             pay_fees,
         })
-        .with_coin_selection(self.coin_selection)
+        .with_coin_selection(self.coin_selection);
+        request.ttl = self.ttl;
+        request
     }
 }
 
@@ -128,6 +148,7 @@ pub struct ShieldedTransfer<'a> {
     amount: u128,
     recipient: String,
     coin_selection: midnight_types::CoinSelectionStrategy,
+    ttl: Option<std::time::Duration>,
 }
 
 impl<'a> ShieldedTransfer<'a> {
@@ -143,6 +164,7 @@ impl<'a> ShieldedTransfer<'a> {
             amount,
             recipient: recipient.to_string(),
             coin_selection: midnight_types::CoinSelectionStrategy::default(),
+            ttl: None,
         }
     }
 
@@ -155,6 +177,27 @@ impl<'a> ShieldedTransfer<'a> {
         self
     }
 
+    /// Make the transaction expire `ttl` after the chain time of the build.
+    /// See [`TransferRequest::ttl`](crate::TransferRequest::ttl).
+    /// Defaults to the chain's `global_ttl`, the longest TTL the chain accepts.
+    ///
+    /// Once the TTL passes, the transaction can no longer land, and the next
+    /// build frees the inputs it reserved. So after a submit whose fate is
+    /// unknown, such as [`SubmitError::Dropped`](crate::SubmitError::Dropped),
+    /// a rebuild from the same inputs is safe from a double spend after
+    /// `ttl`, not after the whole `global_ttl`. A transaction that pays its
+    /// fee with Dust can stop landing sooner, once its Dust `ctime` is older
+    /// than the chain's `dust_grace_period`.
+    ///
+    /// A Dustless build, [`DustlessBuilder::without_dust`], refuses a TTL with
+    /// [`WalletError::TtlWithoutIntent`](midnight_types::WalletError::TtlWithoutIntent):
+    /// a shielded transfer that pays no fee is a Zswap offer alone, with no
+    /// intent to carry it.
+    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
     /// Build the transaction without submitting it. Reserves pending dust in
     /// the wallet so concurrent in-process builds don't double-select.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
@@ -163,13 +206,15 @@ impl<'a> ShieldedTransfer<'a> {
     }
 
     fn into_request(self, pay_fees: bool) -> TransferRequest {
-        TransferRequest::new(TransferKind::Shielded {
+        let mut request = TransferRequest::new(TransferKind::Shielded {
             token_type: self.token_type,
             amount: self.amount,
             recipient: self.recipient,
             pay_fees,
         })
-        .with_coin_selection(self.coin_selection)
+        .with_coin_selection(self.coin_selection);
+        request.ttl = self.ttl;
+        request
     }
 }
 
@@ -342,6 +387,7 @@ pub struct DustRegistration<'a> {
     provider: &'a MidnightProvider,
     utxo_ctime: Option<u64>,
     target: Option<DustPublicKey>,
+    ttl: Option<std::time::Duration>,
 }
 
 impl<'a> DustRegistration<'a> {
@@ -350,6 +396,7 @@ impl<'a> DustRegistration<'a> {
             provider,
             utxo_ctime,
             target: None,
+            ttl: None,
         }
     }
 
@@ -370,6 +417,13 @@ impl<'a> DustRegistration<'a> {
         self
     }
 
+    /// Make the transaction expire `ttl` after the chain time of the build.
+    /// See [`UnshieldedTransfer::with_ttl`].
+    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
     /// Build the registration transaction without submitting. Spends and
     /// re-creates one of the wallet's tNIGHT UTXOs as part of the build.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
@@ -378,11 +432,12 @@ impl<'a> DustRegistration<'a> {
     }
 
     fn into_request(self) -> TransferRequest {
-        TransferKind::DustRegistration {
+        let mut request = TransferRequest::from(TransferKind::DustRegistration {
             utxo_ctime: self.utxo_ctime,
             target: self.target,
-        }
-        .into()
+        });
+        request.ttl = self.ttl;
+        request
     }
 }
 

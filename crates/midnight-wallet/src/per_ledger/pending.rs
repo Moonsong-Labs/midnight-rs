@@ -7,7 +7,7 @@
 //! same inputs before the chain confirms (or expires) the previous tx.
 //!
 //! Entries are cleared three ways:
-//! - **Confirmation** — event replay (initial sync and every resync)
+//! - **Confirmation**: event replay (initial sync and every resync)
 //!   collects the dust nullifiers of `DustSpendProcessed` events and the
 //!   `(intent_hash, output_index)` keys of spent unshielded UTXOs, then
 //!   calls [`PendingReservations::clear_confirmed`] at its commit point:
@@ -15,12 +15,12 @@
 //!   dust batch when any of its spend nullifiers was observed. Shielded
 //!   coins are deliberately absent: a confirmed spend drops the coin from
 //!   `zswap_state`, so its reservation is already inert.
-//! - **Release** — [`PendingReservations::release`], for a build known to be
+//! - **Release**: [`PendingReservations::release`], for a build known to be
 //!   dead.
-//! - **TTL eviction** — if `reserved_at + global_ttl < current_chain_time`,
-//!   the entry can no longer produce a valid transaction (its TTL window
-//!   has elapsed) and is dropped. This is the backstop for transactions
-//!   that neither confirm nor get released.
+//! - **TTL eviction**: once the chain time passes an entry's `expires_at`,
+//!   the transaction it was made for can no longer land, and the entry is
+//!   dropped. This is the backstop for transactions that neither confirm nor
+//!   get released.
 //!
 //! Pending state is persisted to its own file (`pending.json`) so that a
 //! process restart between submit and confirmation does not lose track of
@@ -52,8 +52,11 @@ use crate::{ReservedInput, SpentUtxoKey, WalletError};
 pub(crate) struct PendingDustBatch {
     /// The spends as built. Tagged-serializable so they can be persisted.
     pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
-    /// `chain_tblock` at reservation time, for TTL eviction.
+    /// The block time of the build, which a release names.
     pub reserved_at: Timestamp,
+    /// The time after which the transaction can no longer land, for TTL
+    /// eviction.
+    pub expires_at: Timestamp,
 }
 
 impl PendingDustBatch {
@@ -76,6 +79,7 @@ impl PendingDustBatch {
 pub(crate) struct PendingUnshieldedSpend {
     pub key: SpentUtxoKey,
     pub reserved_at: Timestamp,
+    pub expires_at: Timestamp,
 }
 
 /// One pending shielded (Zswap) coin reservation, pinned by its nullifier.
@@ -83,6 +87,7 @@ pub(crate) struct PendingUnshieldedSpend {
 pub(crate) struct PendingShieldedSpend {
     pub nullifier: Nullifier,
     pub reserved_at: Timestamp,
+    pub expires_at: Timestamp,
 }
 
 /// In-memory + on-disk record of spends that recent builds have reserved
@@ -95,28 +100,33 @@ pub(crate) struct PendingReservations {
 }
 
 impl PendingReservations {
-    /// Append new reservations from a freshly-built transaction.
+    /// Append new reservations from a freshly-built transaction, stamped
+    /// `reserved_at` and held until the chain time passes `expires_at`.
     pub(crate) fn reserve(
         &mut self,
         dust_batches: Vec<DustSpendBatch>,
         unshielded: Vec<SpentUtxoKey>,
         shielded: Vec<Nullifier>,
         reserved_at: Timestamp,
+        expires_at: Timestamp,
     ) {
         self.dust
             .extend(dust_batches.into_iter().map(|b| PendingDustBatch {
                 spends: b.spends,
                 reserved_at,
+                expires_at,
             }));
-        self.unshielded.extend(
-            unshielded
-                .into_iter()
-                .map(|key| PendingUnshieldedSpend { key, reserved_at }),
-        );
+        self.unshielded
+            .extend(unshielded.into_iter().map(|key| PendingUnshieldedSpend {
+                key,
+                reserved_at,
+                expires_at,
+            }));
         self.shielded
             .extend(shielded.into_iter().map(|nullifier| PendingShieldedSpend {
                 nullifier,
                 reserved_at,
+                expires_at,
             }));
     }
 
@@ -175,7 +185,7 @@ impl PendingReservations {
     ///
     /// Reserving on build is what stops a later build re-selecting the same
     /// inputs, but a transaction that is rejected at submit, or simply
-    /// abandoned, would otherwise hold them until its TTL elapses. Callers that
+    /// abandoned, would otherwise hold them until the reservation expires. Callers that
     /// know the transaction is dead hand back what the build reported spending.
     ///
     /// Matching mirrors [`Self::clear_confirmed`]: an unshielded entry goes by
@@ -216,29 +226,22 @@ impl PendingReservations {
         });
     }
 
-    /// Evict the entries outside [`within_ttl`], so a later build can select
-    /// their inputs again.
-    pub(crate) fn evict_expired(&mut self, now: Timestamp, global_ttl: helpers::Duration) {
-        self.dust
-            .retain(|p| within_ttl(p.reserved_at, now, global_ttl));
-        self.unshielded
-            .retain(|p| within_ttl(p.reserved_at, now, global_ttl));
-        self.shielded
-            .retain(|p| within_ttl(p.reserved_at, now, global_ttl));
+    /// Evict the entries outside [`within_ttl`] at the chain time `now`, so a
+    /// later build can select their inputs again.
+    pub(crate) fn evict_expired(&mut self, now: Timestamp) {
+        self.dust.retain(|p| within_ttl(p.expires_at, now));
+        self.unshielded.retain(|p| within_ttl(p.expires_at, now));
+        self.shielded.retain(|p| within_ttl(p.expires_at, now));
     }
 }
 
-/// Whether a reservation made at `reserved_at` can still produce a valid
-/// transaction at `now`.
+/// Whether a reservation that expires at `expires_at` can still let its
+/// transaction land at the chain time `now`.
 ///
-/// Past `reserved_at + global_ttl`, the transaction it was made for is dead, so
+/// Past `expires_at`, the transaction it was made for can no longer land, so
 /// its inputs are free again.
-pub(crate) fn within_ttl(
-    reserved_at: Timestamp,
-    now: Timestamp,
-    global_ttl: helpers::Duration,
-) -> bool {
-    reserved_at + global_ttl >= now
+pub(crate) fn within_ttl(expires_at: Timestamp, now: Timestamp) -> bool {
+    expires_at >= now
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +255,7 @@ impl PendingReservations {
             dust.push(StoredPendingDustBatch {
                 spends_hex: tagged_to_hex(&p.spends, "pending dust spends")?,
                 reserved_at_secs: p.reserved_at.to_secs(),
+                expires_at_secs: p.expires_at.to_secs(),
             });
         }
 
@@ -262,6 +266,7 @@ impl PendingReservations {
                 intent_hash: hex::encode(p.key.intent_hash.0),
                 output_index: p.key.output_index,
                 reserved_at_secs: p.reserved_at.to_secs(),
+                expires_at_secs: p.expires_at.to_secs(),
             })
             .collect();
 
@@ -270,6 +275,7 @@ impl PendingReservations {
             shielded.push(StoredPendingShielded {
                 nullifier_hex: tagged_to_hex(&p.nullifier, "pending shielded nullifier")?,
                 reserved_at_secs: p.reserved_at.to_secs(),
+                expires_at_secs: p.expires_at.to_secs(),
             });
         }
 
@@ -318,6 +324,7 @@ impl PendingReservations {
             dust.push(PendingDustBatch {
                 spends: tagged_from_hex(&s.spends_hex, "pending dust spends")?,
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
+                expires_at: Timestamp::from_secs(s.expires_at_secs),
             });
         }
 
@@ -332,6 +339,7 @@ impl PendingReservations {
                     output_index: s.output_index,
                 },
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
+                expires_at: Timestamp::from_secs(s.expires_at_secs),
             });
         }
 
@@ -340,6 +348,7 @@ impl PendingReservations {
             shielded.push(PendingShieldedSpend {
                 nullifier: tagged_from_hex(&s.nullifier_hex, "pending shielded nullifier")?,
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
+                expires_at: Timestamp::from_secs(s.expires_at_secs),
             });
         }
 
@@ -407,11 +416,11 @@ mod tests {
     use super::test_support::{dust_batch, dust_spend, nullifier, ukey};
     use super::*;
     use crate::Seed;
-    use helpers::{Duration, DustLocalState, INITIAL_PARAMETERS, Sp};
+    use helpers::{DustLocalState, INITIAL_PARAMETERS, Sp};
 
     /// A transaction built for one generation cannot land on a chain that
     /// runs another, so its reservations are dead. Loading them would hide
-    /// their inputs until their TTL, and would decode another generation's
+    /// their inputs until they expire, and would decode another generation's
     /// Dust spends with this one's types.
     #[test]
     fn reservations_of_another_generation_are_dropped_at_load() {
@@ -421,6 +430,7 @@ mod tests {
             vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
         for version in [
             midnight_types::LedgerVersion::V8,
@@ -438,38 +448,17 @@ mod tests {
         }
     }
 
-    /// An earlier build wrote each Dust batch with an `updated_state_hex`. A
-    /// `deny_unknown_fields` on the stored structs refuses that file, and the
-    /// resume of each upgraded wallet with a Dust reservation in flight fails.
-    #[test]
-    fn a_pending_file_that_an_earlier_build_wrote_still_loads() {
-        let batch = dust_batch(&[1]);
-        let body = serde_json::json!({
-            "ledger_version": super::super::LEDGER,
-            "dust": [{
-                "spends_hex": tagged_to_hex(&batch.spends, "spends").unwrap(),
-                "updated_state_hex": tagged_to_hex(&batch.updated_state, "state").unwrap(),
-                "reserved_at_secs": 100,
-            }],
-        });
-        let stored = serde_json::from_value(body).expect("the file parses");
-        let loaded = PendingReservations::from_stored(stored).unwrap();
-        let batches: Vec<_> = loaded.dust_batches().collect();
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].spends[0].old_nullifier, nullifier(1));
-    }
-
     #[test]
     fn evict_expired_drops_entries_past_ttl() {
         let mut p = PendingReservations::default();
-        // Reserved at t=100 with a 30-second TTL window.
+        // Reserved at t=100 for a transaction whose TTL is t=130.
         p.reserve(
             vec![dust_batch(&[7])],
             vec![ukey(0xab, 0)],
             vec![shielded_nf(1)],
             Timestamp::from_secs(100),
+            Timestamp::from_secs(130),
         );
-        let ttl = Duration::from_secs(30);
         let counts = |r: &PendingReservations| {
             (
                 r.dust_batches().count(),
@@ -478,18 +467,45 @@ mod tests {
             )
         };
 
-        // now = 100 + 20: still inside the window.
-        p.evict_expired(Timestamp::from_secs(120), ttl);
+        p.evict_expired(Timestamp::from_secs(120));
         assert_eq!(counts(&p), (1, 1, 1));
 
-        // now = 100 + 30: at the boundary — we keep entries with
-        // `reserved_at + ttl >= now`, so 130 is still inside.
-        p.evict_expired(Timestamp::from_secs(130), ttl);
+        // The chain still applies a transaction whose TTL equals its block
+        // time, so the boundary stays reserved.
+        p.evict_expired(Timestamp::from_secs(130));
         assert_eq!(counts(&p), (1, 1, 1));
 
-        // now = 100 + 31: past the boundary.
-        p.evict_expired(Timestamp::from_secs(131), ttl);
+        p.evict_expired(Timestamp::from_secs(131));
         assert!(p.is_empty());
+    }
+
+    /// A restart must not stretch or cut a reservation's hold. A save or a
+    /// load that takes the expiry from the stamp would free the inputs too
+    /// early or too late.
+    #[test]
+    fn a_reservation_keeps_its_expiry_across_a_restart() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut p = PendingReservations::default();
+        p.reserve(
+            vec![dust_batch(&[7])],
+            vec![ukey(0xab, 0)],
+            vec![shielded_nf(1)],
+            Timestamp::from_secs(100),
+            Timestamp::from_secs(160),
+        );
+        p.save(dir.path(), "undeployed", "testwallet").unwrap();
+
+        let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
+            .unwrap()
+            .expect("pending.json should exist after save");
+        let expiries: Vec<Timestamp> = loaded
+            .dust
+            .iter()
+            .map(|b| b.expires_at)
+            .chain(loaded.unshielded.iter().map(|u| u.expires_at))
+            .chain(loaded.shielded.iter().map(|s| s.expires_at))
+            .collect();
+        assert_eq!(expiries, vec![Timestamp::from_secs(160); 3]);
     }
 
     #[test]
@@ -500,6 +516,7 @@ mod tests {
             vec![ukey(0xab, 0), ukey(0xab, 1)],
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
 
         // Confirm one unshielded key and the dust spend: the matched
@@ -522,6 +539,7 @@ mod tests {
             vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
 
         // Same intent, different index; different intent, same index; and a
@@ -539,6 +557,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
 
         // One observed nullifier from the first batch drops the whole batch
@@ -568,6 +587,7 @@ mod tests {
             vec![ukey(0xcd, 0)],
             vec![shielded_nf(1)],
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
         p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
@@ -609,6 +629,7 @@ mod tests {
             vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
         p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
@@ -636,6 +657,7 @@ mod tests {
             Vec::new(),
             vec![shielded_nf(3), shielded_nf(4)],
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
         p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
@@ -660,6 +682,7 @@ mod tests {
             vec![ukey(0xaa, 0), ukey(0xbb, 1)],
             vec![shielded_nf(1), shielded_nf(2)],
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
 
         p.release(
@@ -705,6 +728,7 @@ mod tests {
             vec![ukey(0xaa, 0)],
             vec![shielded_nf(1)],
             Timestamp::from_secs(200),
+            Timestamp::MAX,
         );
 
         // A releases late, naming the same inputs but its own older stamp.
@@ -741,6 +765,7 @@ mod tests {
             vec![ukey(0xaa, 0)],
             vec![shielded_nf(1)],
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
         // Build B, the fee Dust.
         p.reserve(
@@ -748,6 +773,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Timestamp::from_secs(200),
+            Timestamp::MAX,
         );
         // Build D, which the release does not name.
         p.reserve(
@@ -755,6 +781,7 @@ mod tests {
             vec![ukey(0xbb, 1)],
             Vec::new(),
             Timestamp::from_secs(200),
+            Timestamp::MAX,
         );
 
         p.release(

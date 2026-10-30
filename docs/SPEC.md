@@ -134,7 +134,7 @@ provider
   .builds().await                  → Builds::Ledger8(b) | Builds::Ledger9(b) (resyncs first)
       b.build_context().await      → Arc<BuildContext> (evicts expired pending)
       b.execution_context().await  → the half a circuit runs against, with no funding view
-      b.add_funding(&ctx) / b.build_funded(tx_info) / b.prepare_shielded_inputs(..)
+      b.add_funding(&ctx) / b.build_funded(tx_info, ttl) / b.prepare_shielded_inputs(..)
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
   .prepare_reserved(result).await  → PreparedTx that holds the reservation of the build
@@ -166,7 +166,7 @@ Each node read of the provider, its connect included, ends within 10 s (60 s for
 
 A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy with no shielded offer and a maintenance update reserve theirs through `prepare_funded`. A sponsor's build reserves the Dust for the fee it pays through `prepare_fees`. A call, or a deploy with a shielded offer, reserves its pinned coins through `spend_shielded`. It then reserves the Dust for its own fee through `prepare_fees`.
 
-Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm.
+Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm. A reservation from `prepare_transfer`, `prepare_funded` or `prepare_fees` expires when its transaction can no longer land: at the TTL of its transaction, which `.with_ttl(..)` on a builder makes shorter than the chain's `global_ttl`, or earlier when the Dust that the transaction spends leaves the chain's `dust_grace_period`. The pinned coins that `spend_shielded` reserves expire at the TTL of their call or deploy, even when the fee Dust of the same transaction expires sooner. The wallet compares the expiry with the time of the chain's latest block.
 
 `watch_for_coin` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The wallet records and replays under one hold of its sync lock. A state in an earlier generation than the chain first crosses the fork with a resync, because it cannot apply the later generation's events. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. A resync carries registrations across for the same reason. `forget_coin` drops a registration whose rebuilt `CoinInfo` matched no output, which would otherwise ride along on every replay. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
 
@@ -201,6 +201,7 @@ Contract::deploy(&provider)                              // DeployBuilder<'_, P>
   .with_initial_state(LedgerInitialState::default())
   .with_zk_config("compiled")
   [.with_deploy_timeout(...)]
+  [.with_ttl(...)]                                       // default: the chain's global_ttl
 
   .await                                                 // IntoFuture: send + into_contract
     │
@@ -215,12 +216,12 @@ Internally:
 ```
 with_zk_config(initial_state, zk_config)      // load *.verifier files into state.operations
   ↓
-deploy_funded(state, provider, shielded_offer)
+deploy_funded(state, provider, shielded_offer, ttl)
   ├─ provider.builds().await                  // resync wallet, pick its generation's Builds
   ├─ builds.execution_context().await         // build that generation's context
   ├─ builds.proof_provider()                  // that generation's prover (ProofProviders)
   ├─ build deploy intent (state re-encoded for the generation)
-  ├─ no offer: builds.build_funded(tx_info).await  → DeployResult { address, transaction }
+  ├─ no offer: builds.build_funded(tx_info, ttl).await  → DeployResult { address, transaction }
   │   ├─ one transition: add the funding view, balance the fee with mock
   │   │  proofs (speculative_spend loop), record what it drew
   │   └─ prove the balanced tx once, for real, with the wallet free
@@ -358,7 +359,7 @@ ledger_N::WalletBuilds::prepare_transfer(request, proof_provider)   // one hold 
     └─ select inputs from wallet's local state
     └─ balance Dust fees (speculative_spend loop, mock proofs only)
     └─ prepare_no_validate
-  reserve_pending(dust_batches, spent_unshielded_inputs, shielded, reserved_at)
+  reserve_pending(dust_batches, spent_unshielded_inputs, shielded, reserved_at, expires_at)
   → ReservedBuild
   ↓
 (wallet released)    PreparedTransfer::prove       // the only real proving
@@ -391,7 +392,7 @@ Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancel
 
 `MidnightProvider::prepare_reserved` prepares a `TransferResult`, and the `PreparedTx` holds the reservation of its build. A failed prepare hands the inputs back before it returns. A `PreparedTx` that drops before its submit hands them back too, and `PreparedTx::release` does the same and waits for it. `PreparedTx::submit` moves the reservation to the `PendingTx`, so a wait that reads `Invalid` hands the inputs back. A failed submit keeps them reserved.
 
-`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call prepares with `prepare_reserved`, because it records its private-state snapshot between the prepare and the submit. So an error before its submit, or an `Invalid` at its wait, hands its inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
+`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their reservation expires (see [Pending reservations](wallet.md#pending-reservations)). The transfers, `register_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call prepares with `prepare_reserved`, because it records its private-state snapshot between the prepare and the submit. So an error before its submit, or an `Invalid` at its wait, hands its inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their reservation expires.
 
 ## Block pinning
 

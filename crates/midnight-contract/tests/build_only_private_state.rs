@@ -39,8 +39,8 @@ impl secret_counter::Witnesses for NextSecret {
     }
 }
 
-/// A refusal after the build leaves the build's Dust reserved until its TTL
-/// passes, and a refusal that writes the store leaves a snapshot of a call
+/// A refusal after the build leaves the build's Dust reserved until its
+/// reservation expires, and a refusal that writes the store leaves a snapshot of a call
 /// that never reaches the chain.
 #[tokio::test]
 async fn a_build_only_call_that_changes_the_private_state_refuses_before_the_build() {

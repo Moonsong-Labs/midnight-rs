@@ -451,7 +451,9 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     ///
     /// The build reserves the Dust that pays the fee, and returns only the
     /// bytes. So when the bytes never land, nothing can hand that Dust back,
-    /// and it stays reserved until its TTL passes. `.await` submits with the
+    /// and it stays reserved until the TTL of the update passes, or until the
+    /// `ctime` of that Dust is older than the chain's `dust_grace_period`
+    /// when that comes first. `.await` submits with the
     /// reservation instead.
     pub async fn build(self) -> Result<Vec<u8>, ContractError>
     where

@@ -29,6 +29,7 @@ pub(crate) async fn deploy_funded(
     builds: &Builds<'_>,
     initial_state: &ContractState<InMemoryDB>,
     shielded_offer: Option<&ShieldedOffer>,
+    ttl: Option<std::time::Duration>,
 ) -> Result<DeployResult, ContractError> {
     let context = builds.execution_context().await?;
     let state = super::state::from_view(initial_state)?;
@@ -54,8 +55,8 @@ pub(crate) async fn deploy_funded(
 
     let tx_info = single_action_tx_info(builds, context.clone(), DeployAction { deploy });
     let transaction = match shielded_offer {
-        None => build_with_mock_fee_proofs(builds, tx_info).await?,
-        Some(offer) => Box::pin(offer_transaction(builds, &context, tx_info, offer)).await?,
+        None => build_with_mock_fee_proofs(builds, tx_info, ttl).await?,
+        Some(offer) => Box::pin(offer_transaction(builds, &context, tx_info, offer, ttl)).await?,
     };
 
     Ok(DeployResult {
@@ -85,13 +86,16 @@ pub(super) fn single_action_tx_info(
 }
 
 /// Build `tx_info` with an empty guaranteed offer, pay its fee, and prove the
-/// result. The wallet balances the fee against mock proofs.
+/// result. The wallet balances the fee against mock proofs. The intents
+/// expire `ttl` after the chain time of the build, or after the chain's
+/// `global_ttl` for `None`.
 ///
 /// Only a transaction with no user circuit can take this path: upstream
 /// `MockProver::check` rejects a circuit that is not built in.
 pub(super) async fn build_with_mock_fee_proofs(
     builds: &Builds<'_>,
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+    ttl: Option<std::time::Duration>,
 ) -> Result<TransferResult, ContractError> {
     tx_info.set_guaranteed_offer(OfferInfo {
         inputs: vec![],
@@ -99,7 +103,7 @@ pub(super) async fn build_with_mock_fee_proofs(
         transients: vec![],
     });
     tx_info.use_mock_proofs_for_fees(true);
-    Ok(builds.build_funded(tx_info).await?)
+    Ok(builds.build_funded(tx_info, ttl).await?)
 }
 
 /// Add `offer` to the deploy in `tx_info`, prove it, and pay its fee.
@@ -118,6 +122,7 @@ async fn offer_transaction(
     context: &Arc<BuildContext>,
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     offer: &ShieldedOffer,
+    ttl: Option<std::time::Duration>,
 ) -> Result<TransferResult, ContractError> {
     let (change_cpk, change_epk) = builds.provider().shielded_public_keys().await?;
 
@@ -125,7 +130,7 @@ async fn offer_transaction(
     // would hide these coins from it.
     builds.add_funding(context).await?;
     let (prepared, held) = builds
-        .prepare_shielded_inputs(context, &offer.coins, &mut tx_info.rng.split())
+        .prepare_shielded_inputs(context, &offer.coins, ttl, &mut tx_info.rng.split())
         .await?;
     let pinned = held.spent().clone();
     let mut transaction = held
@@ -135,6 +140,7 @@ async fn offer_transaction(
             offer,
             prepared,
             (change_cpk, change_epk),
+            ttl,
         ))
         .await?;
     transaction.spent.merge(pinned);
@@ -151,6 +157,7 @@ async fn pay_offer(
     offer: &ShieldedOffer,
     prepared: Vec<PreparedInput>,
     (change_cpk, change_epk): (CoinPublicKey, EncryptionPublicKey),
+    ttl: Option<std::time::Duration>,
 ) -> Result<TransferResult, ContractError> {
     let held_value = total_by_key(
         prepared
@@ -195,6 +202,6 @@ async fn pay_offer(
         transients: vec![],
     });
 
-    let unpaid = prove_without_fee(tx_info).await?;
+    let unpaid = prove_without_fee(tx_info, ttl).await?;
     Ok(builds.balance_transaction(&unpaid.tx_bytes).await?)
 }

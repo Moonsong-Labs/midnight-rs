@@ -74,6 +74,12 @@ What you *can* now do is stop before submission and get the proven bytes back: `
 
 Both the one-shot path (`provider.transfer_*.await`) and `Contract::deploy(...).await` collapse the whole pipeline into one.
 
+### Transaction TTL
+
+**midnight-js:** `MidnightConfig.ttlSeconds` sets the TTL of every transaction that the framework builds, counted from the system clock when the build starts. The framework also passes it to `walletProvider.balanceTx(tx, ttl)`, so the fee intent that the wallet adds gets the same TTL, and the wallet facade reserves the inputs for that time.
+
+**midnight-rs:** the TTL is an option of each build: `.with_ttl(duration)` on the transfer builders, on `DeployBuilder` and on the generated call builders, or the `ttl` argument of `Contract::call_with`. With no option, the TTL is the chain's `global_ttl`, the longest that the chain accepts. The build counts it from the time of the chain's latest block that the wallet's last sync read, not from the system clock. The fee intent of a call, and the fee intent that `balance_transaction` adds, expire with the earliest intent of the transaction they pay for. A reservation of the inputs that a build selects, or of the Dust that pays a fee, ends when its transaction can no longer land: at its TTL, or sooner when the Dust that it spends leaves the chain's `dust_grace_period`. The coins that a call or a deploy pins keep the TTL of that call or deploy. There is no provider-wide default like `ttlSeconds`.
+
 ## Combining and balancing transactions (multi-party)
 
 Several parties can contribute to one transaction (atomic swaps, or "one wallet pays the fees for another's transaction"). midnight-js expresses this with two wallet-SDK primitives; we now mirror both, with one gap.
