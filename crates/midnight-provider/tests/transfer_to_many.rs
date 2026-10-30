@@ -6,8 +6,14 @@
 //! also merges a Dustless list of each kind into one transaction, which
 //! `balance_transaction` funds.
 //!
-//! Needs a devnet. Every build funds from the genesis wallet, so the builds
-//! stay in one fn: a second fn would race it for the same Dust.
+//! The self-funded unshielded transfer comes from a fresh payer that holds one
+//! Dust UTXO. With its change, a transfer to two NIGHT recipients is close to
+//! the node's time-to-dismiss limit, and a fee that draws a second Dust spend
+//! can push it past. The genesis wallet holds many Dust UTXOs, so its fee can
+//! draw two. The payer's fee always draws one.
+//!
+//! Needs a devnet. The other builds fund from the genesis wallet, so the
+//! builds stay in one fn: a second fn would race it for the same Dust.
 
 #[expect(dead_code, reason = "this test needs no synced_provider")]
 mod common;
@@ -16,10 +22,10 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use midnight_provider::{
-    DustlessBuilder, HashOutput, LedgerVersion, MidnightProvider, NIGHT, Network, Payment, Seed,
-    ShieldedTokenType, TransferResult, UnshieldedTokenType,
+    DustlessBuilder, HashOutput, LedgerVersion, MidnightProvider, NIGHT, Network, Payment,
+    ProviderError, Seed, ShieldedTokenType, TransferResult, UnshieldedTokenType, WalletError,
 };
-use midnight_wallet::WalletBuilder;
+use midnight_wallet::{DustBalance, WalletBuilder};
 
 /// The shielded token the dev preset mints with the all-zero id. The chain
 /// refuses a transfer of the other tokens it mints after inclusion, so only
@@ -29,6 +35,10 @@ const DEFAULT_SHIELDED_TOKEN: ShieldedTokenType = ShieldedTokenType(HashOutput([
 /// What each of the two recipients receives, in each kind. They differ, so a
 /// build that pays one recipient the amount of the other fails.
 const AMOUNTS: [u128; 2] = [3, 5];
+
+/// The tNIGHT the genesis wallet sends the payer. Enough that the Dust it
+/// generates soon covers a fee.
+const PAYER_NIGHT: u128 = 5_000_000_000_000;
 
 #[tokio::test]
 async fn a_transfer_to_many_pays_each_recipient_its_own_amount() {
@@ -52,13 +62,27 @@ async fn a_transfer_to_many_pays_each_recipient_its_own_amount() {
     assert_no_surplus(&shielded.tx_bytes, "the shielded transfer");
     submit(&funder, shielded, "the shielded transfer").await;
 
-    let unshielded = funder
-        .transfer_unshielded_many(unshielded_payments(&recipients))
-        .build()
-        .await
-        .expect("build the unshielded transfer");
+    let payer = payer_with_one_dust_utxo(&funder, &node_url, &indexer_url).await;
+    // The payer's Dust grows from its registration, so the first build can
+    // fall short of the fee.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let unshielded = loop {
+        match payer
+            .transfer_unshielded_many(unshielded_payments(&recipients))
+            .build()
+            .await
+        {
+            Ok(result) => break result,
+            Err(ProviderError::Wallet(WalletError::InsufficientDust { .. }))
+                if Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(e) => panic!("build the unshielded transfer: {e}"),
+        }
+    };
     assert_no_surplus(&unshielded.tx_bytes, "the unshielded transfer");
-    submit(&funder, unshielded, "the unshielded transfer").await;
+    submit(&payer, unshielded, "the unshielded transfer").await;
 
     assert_each_received_its_amounts(&node_url, &indexer_url, &recipients).await;
 
@@ -114,6 +138,76 @@ async fn a_transfer_to_many_pays_each_recipient_its_own_amount() {
         .release(&two_tokens.spent)
         .await
         .expect("wallet attached");
+}
+
+/// A fresh wallet that `funder` funds with one tNIGHT UTXO, and that registers
+/// it for Dust. So the wallet holds one tNIGHT UTXO and one Dust UTXO.
+async fn payer_with_one_dust_utxo(
+    funder: &MidnightProvider,
+    node_url: &str,
+    indexer_url: &str,
+) -> MidnightProvider {
+    let seed = Seed::generate();
+    funder
+        .transfer_unshielded(
+            NIGHT,
+            PAYER_NIGHT,
+            &seed.unshielded_address(Network::Undeployed),
+        )
+        .await
+        .expect("fund the payer")
+        .wait_finalized()
+        .await
+        .expect("the chain applies the funding of the payer");
+
+    let payer = MidnightProvider::new(node_url);
+    let wallet = WalletBuilder::new(&seed)
+        .with_network(Network::Undeployed)
+        .sync(&payer, indexer_url)
+        .await
+        .expect("sync the payer");
+    let payer = payer.with_wallet(wallet);
+    wait_for_dust(&payer, "the payer must hold the funded tNIGHT", |d| {
+        d.unregistered_night_utxos == 1
+    })
+    .await;
+
+    payer
+        .register_dust(None)
+        .await
+        .expect("build and submit the registration of the payer")
+        .wait_finalized()
+        .await
+        .expect("the chain applies the registration of the payer");
+    let dust = wait_for_dust(&payer, "the registered tNIGHT must generate Dust", |d| {
+        d.night_generates_dust && d.spendable_utxos > 0
+    })
+    .await;
+    assert_eq!(
+        dust.spendable_utxos, 1,
+        "the payer's fee must draw exactly one Dust spend"
+    );
+    payer
+}
+
+/// Resync `provider` until its Dust balance satisfies `done`, and return that
+/// balance. Finalized on chain is not yet visible through the indexer, which
+/// the wallet syncs from.
+async fn wait_for_dust(
+    provider: &MidnightProvider,
+    what: &str,
+    done: impl Fn(&DustBalance) -> bool,
+) -> DustBalance {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        provider.resync_wallet().await.expect("resync");
+        let dust = provider.balance().await.expect("wallet attached").dust;
+        if done(&dust) {
+            return dust;
+        }
+        assert!(Instant::now() < deadline, "{what}, got {dust:?}");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
 }
 
 /// One payment of the default shielded token to each of `recipients`, of the
