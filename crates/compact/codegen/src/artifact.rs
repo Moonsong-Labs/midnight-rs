@@ -14,7 +14,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::types::{Circuit, ContractInfo, FieldIndex, LedgerField, StorageKind};
+use crate::types::{
+    Circuit, ContractInfo, FieldIndex, LedgerField, StorageKind, check_compiler_version,
+};
 use compact_analyzed_ir as ir;
 
 /// A conversion failure: a construct the internal IR cannot represent or a
@@ -41,13 +43,28 @@ pub fn load(path: &Path) -> Result<ContractInfo, Box<dyn std::error::Error>> {
     load_str(&content)
 }
 
+/// Load an `analyzed-ir.sexp` artifact from its text.
+///
+/// # Errors
+///
+/// The loader stops at the first check that fails, in this order:
+///
+/// 1. The text reads as one datum.
+/// 2. The artifact is of the supported compiler (see [`check_compiler_version`]).
+/// 3. The IR parses.
+/// 4. A consumer can execute every construct.
+///
+/// So a readable artifact of another compiler gets the version error, not an
+/// IR parse error.
 pub fn load_str(text: &str) -> Result<ContractInfo, Box<dyn std::error::Error>> {
-    let artifact = ir::parse_str(text)?;
+    let datum = ir::sexp::read_one(text).map_err(ir::Error::from)?;
+    check_compiler_version(&ir::parse::compiler_version(&datum)?)?;
+    let artifact = ir::parse::parse(&datum)?;
     Ok(from_program(&artifact)?)
 }
 
 /// The whole artifact as the crate's typed model.
-pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactError> {
+fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactError> {
     let cx = Context::new(artifact);
 
     let mut circuits = Vec::new();
@@ -104,7 +121,6 @@ pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactE
         .is_some_and(|decl| !is_empty_constructor(&decl.constructor));
 
     Ok(ContractInfo {
-        compiler_version: artifact.compiler_version.clone(),
         circuits,
         witnesses,
         ledger,
@@ -499,11 +515,14 @@ mod tests {
     /// must not execute the operation until it does the check itself.
     #[test]
     fn refuses_a_coin_check_operation() {
-        let src = r#"(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
+        let family = crate::types::SUPPORTED_COMPILER_FAMILY;
+        let src = &format!(
+            r#"(analyzed-ir (compiler-version "{family}.0") (language-version "0.25.107")
           (runtime-version "0.18.107") (exports (stash . %stash.0)) (contract-types)
           (circuit %stash.0 (exported #t) (pure #f) (proof #t) () (ttuple)
             (public-ledger %vault.1 (update-with-coin-check 0 1) (0) writeCoin (ttuple)
-              (instructions (ins (cached #t) (n 1))))))"#;
+              (instructions (ins (cached #t) (n 1))))))"#
+        );
         let e = load_str(src).expect_err("a coin-check operation is refused");
         assert!(
             e.to_string().contains("update-with-coin-check"),
@@ -515,17 +534,36 @@ mod tests {
     /// a struct that a cell holds, where `default_aligned` panics on it.
     #[test]
     fn refuses_a_ledger_field_that_holds_an_unknown_type() {
-        let src = r#"(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
+        let family = crate::types::SUPPORTED_COMPILER_FAMILY;
+        let src = &format!(
+            r#"(analyzed-ir (compiler-version "{family}.0") (language-version "0.25.107")
           (runtime-version "0.18.107") (exports (slot . %slot.0)) (contract-types)
           (public-ledger-declaration
             (public-ledger-array
               (%slot.0 (0) (exported #t) (__compact_Cell (tstruct S (inner (tunknown))))))
-            (constructor () (tuple))))"#;
+            (constructor () (tuple))))"#
+        );
         let e = load_str(src).expect_err("an unknown field type is refused");
         assert!(
             e.to_string()
                 .contains("ledger field `slot` of an unknown type"),
             "the error names the field: {e}"
+        );
+    }
+
+    /// The parser refuses `mystery-form`, so only a check that runs before
+    /// the parse gives the version error.
+    #[test]
+    fn checks_the_compiler_version_before_the_parse() {
+        let src = r#"(analyzed-ir (compiler-version "0.99.0") (language-version "0.25.107")
+          (runtime-version "0.18.107") (exports) (contract-types) (mystery-form))"#;
+        let e = load_str(src).expect_err("another compiler is refused");
+        assert!(
+            matches!(
+                e.downcast_ref::<crate::types::CompilerVersionError>(),
+                Some(crate::types::CompilerVersionError::Unsupported { found }) if found == "0.99.0"
+            ),
+            "{e}"
         );
     }
 

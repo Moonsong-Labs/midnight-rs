@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::error::CodegenError;
 use crate::types::ContractInfo;
 
 /// Expansion context that centralises resolution state across all emitters.
@@ -44,13 +43,7 @@ impl<'a> EmitCtxt<'a> {
     }
 
     /// Run the full expansion pipeline, returning the combined `TokenStream`.
-    ///
-    /// Validates the contract info first with [`crate::validate::validate`].
-    /// A violation aborts with a [`CodegenError`] instead of generating broken
-    /// or panicking code.
-    pub fn expand(&mut self) -> Result<TokenStream, CodegenError> {
-        crate::validate::validate(self.info)?;
-
+    pub fn expand(&mut self) -> TokenStream {
         let crate_path = self.crate_path;
         let constants = constants::emit_field_constants(&self.info.ledger);
         let data_types = data_types::emit_data_types(
@@ -99,7 +92,7 @@ impl<'a> EmitCtxt<'a> {
             };
         };
 
-        Ok(quote! {
+        quote! {
             #runtime_imports
             #contract_import
 
@@ -116,7 +109,7 @@ impl<'a> EmitCtxt<'a> {
                 #lazy_wrapper
             }
             pub use __lazy_query::*;
-        })
+        }
     }
 }
 
@@ -130,7 +123,7 @@ pub fn generate_bindings(
     info: &ContractInfo,
     contract_name: &str,
     crate_path: Option<&TokenStream>,
-) -> Result<TokenStream, CodegenError> {
+) -> TokenStream {
     let default_path = quote! { compact_bindgen };
     let crate_path = crate_path.unwrap_or(&default_path);
     let mut ctx = EmitCtxt::new(info, contract_name, crate_path);
@@ -142,7 +135,7 @@ mod tests {
     /// Render generated bindings as source text. The emitters produce token
     /// streams; these tests assert on the rendered form.
     fn generated_source(info: &ContractInfo, contract_name: &str) -> String {
-        let tokens = generate_bindings(info, contract_name, None).expect("codegen should succeed");
+        let tokens = generate_bindings(info, contract_name, None);
         let file: syn::File =
             syn::parse2(tokens).expect("generated code must be a valid Rust file");
         prettyplease::unparse(&file)
@@ -730,7 +723,6 @@ mod tests {
     #[test]
     fn generate_empty_contract() {
         let info = ContractInfo {
-            compiler_version: format!("{}.0", crate::types::SUPPORTED_COMPILER_FAMILY),
             circuits: vec![crate::types::Circuit {
                 name: "noop".to_string(),
                 def: crate::ir::Circuit {

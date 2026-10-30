@@ -1,4 +1,4 @@
-use crate::error::CodegenError;
+use std::fmt;
 
 /// The `major.minor` of the compactc at `COMPACT_REV` in the root `Makefile`,
 /// the only compiler whose `analyzed-ir.sexp` this generator reads. The
@@ -10,22 +10,70 @@ use crate::error::CodegenError;
 /// compiler that wrote it, so the compiler version alone decides.
 ///
 /// When `COMPACT_REV` moves to a new `major.minor`, change this value too.
-/// Until then, `contract!` refuses the regenerated devnet contracts.
+/// Until then, [`crate::artifact::load_str`] and `contract!` refuse the
+/// regenerated devnet contracts.
 pub const SUPPORTED_COMPILER_FAMILY: &str = "0.35";
 
-/// Check the `compiler-version` of the artifact against
-/// [`SUPPORTED_COMPILER_FAMILY`]. Called before expansion; a mismatch aborts
-/// code generation with a compile error that names the version found.
-pub fn check_compiler_version(info: &ContractInfo) -> Result<(), CodegenError> {
-    let found = &info.compiler_version;
-    let family = version_family(found).ok_or_else(|| CodegenError::MalformedCompilerVersion {
-        found: found.clone(),
+/// A `compiler-version` that [`check_compiler_version`] refuses.
+///
+/// [`crate::artifact::load_str`] returns it, and the proc macro surfaces it as
+/// a compile error.
+#[derive(Debug)]
+pub enum CompilerVersionError {
+    /// The version is outside [`SUPPORTED_COMPILER_FAMILY`].
+    Unsupported {
+        /// The version string found in the file.
+        found: String,
+    },
+    /// The version does not start with numeric `major.minor` components.
+    Malformed {
+        /// The version string found in the file.
+        found: String,
+    },
+}
+
+impl fmt::Display for CompilerVersionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompilerVersionError::Unsupported { found } => {
+                let family = SUPPORTED_COMPILER_FAMILY;
+                write!(
+                    f,
+                    "unsupported compiler-version `{found}` (supported: {family}.x); \
+                     recompile the contract with compactc {family}.x (see \"Compile a contract\" \
+                     in the midnight-rs README), or use a midnight-rs release that supports \
+                     compactc {found}"
+                )
+            }
+            CompilerVersionError::Malformed { found } => {
+                write!(
+                    f,
+                    "malformed compiler-version `{found}`: expected a `major.minor[.patch]` version"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for CompilerVersionError {}
+
+/// Check the `compiler-version` of an artifact, `found`, against
+/// [`SUPPORTED_COMPILER_FAMILY`].
+///
+/// # Errors
+///
+/// [`CompilerVersionError::Malformed`] when `found` does not start with a
+/// numeric `major.minor`, and [`CompilerVersionError::Unsupported`] when it
+/// is of another family.
+pub fn check_compiler_version(found: &str) -> Result<(), CompilerVersionError> {
+    let family = version_family(found).ok_or_else(|| CompilerVersionError::Malformed {
+        found: found.to_string(),
     })?;
     if family == SUPPORTED_COMPILER_FAMILY {
         Ok(())
     } else {
-        Err(CodegenError::UnsupportedCompilerVersion {
-            found: found.clone(),
+        Err(CompilerVersionError::Unsupported {
+            found: found.to_string(),
         })
     }
 }
@@ -46,7 +94,6 @@ fn version_family(version: &str) -> Option<String> {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Default))]
 pub struct ContractInfo {
-    pub compiler_version: String,
     pub circuits: Vec<Circuit>,
     pub witnesses: Vec<crate::ir::Witness>,
     pub ledger: Vec<LedgerField>,
@@ -141,5 +188,26 @@ impl Circuit {
 
     pub fn result_type(&self) -> &crate::ir::Type {
         &self.def.result_type
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_a_compiler_outside_the_supported_family() {
+        let msg = check_compiler_version("0.0.1").unwrap_err().to_string();
+        let supported = format!("{SUPPORTED_COMPILER_FAMILY}.x");
+        for part in ["compiler-version", "0.0.1", supported.as_str()] {
+            assert!(msg.contains(part), "the error should name `{part}`: {msg}");
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_version() {
+        let msg = check_compiler_version("nightly").unwrap_err().to_string();
+        assert!(msg.contains("malformed compiler-version"), "{msg}");
+        assert!(msg.contains("nightly"), "{msg}");
     }
 }
