@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-[`docs/wallet.md`](docs/wallet.md) covers sync, balances, transfers, Dust registration and persistence.
+[`docs/wallet.md`](docs/wallet.md) covers sync, balances, transfers, Dust registration and deregistration, and persistence.
 
 The crates in [`examples/`](examples) run against the same devnet. Run one from the root of the clone with `make run-<name>`, for example `make run-shielded-transfer`.
 
@@ -92,7 +92,7 @@ let funded = sponsor.balance_transaction(&merged).await?;
 sponsor.submit_reserved(funded).await?;
 ```
 
-A party with no Dust builds a transfer or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A contract call built this way, or with `.build()`, records no private state. So it fails with `ContractError::UnrecordedPrivateState` when its witnesses change the private state, before it reserves Dust or makes a proof. A sponsor pays its Dust fee with `balance_transaction` and submits it with `submit_reserved`, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
+A party with no Dust builds a transfer, a Dust deregistration or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A contract call built this way, or with `.build()`, records no private state. So it fails with `ContractError::UnrecordedPrivateState` when its witnesses change the private state, before it reserves Dust or makes a proof. A sponsor pays its Dust fee with `balance_transaction` and submits it with `submit_reserved`, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
 
 ## Compile a contract
 

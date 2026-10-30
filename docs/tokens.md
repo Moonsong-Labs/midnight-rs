@@ -113,11 +113,7 @@ for coin in &balance.shielded.coins {
 
 ## Where the SDK is NIGHT-aware
 
-Only `MidnightProvider::register_dust` (and the helpers it composes) is
-intrinsically NIGHT-specific — dust generation only flows from NIGHT holdings,
-so registration filters unshielded UTXOs by the NIGHT token type. Every other
-transfer path (`transfer_shielded`, `transfer_unshielded`) is generic over
-its token type.
+Only `MidnightProvider::register_dust` and `MidnightProvider::deregister_dust` (and the helpers they compose) are intrinsically NIGHT-specific. Dust generation flows only from NIGHT holdings, so both filter the unshielded UTXOs by the NIGHT token type. Every other transfer path (`transfer_shielded`, `transfer_unshielded`) is generic over its token type.
 
 ## See also
 

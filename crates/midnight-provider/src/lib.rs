@@ -22,8 +22,8 @@ pub use provider::{Builds, HeldInputs, MidnightProvider, NodeHeader};
 pub use remote_prover::RemoteProofServer;
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{
-    DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedSwap, ShieldedTransfer,
-    UnshieldedTransfer,
+    DustDeregistration, DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedSwap,
+    ShieldedTransfer, UnshieldedTransfer,
 };
 pub use types::{Health, TransactionHash};
 

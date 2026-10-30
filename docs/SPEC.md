@@ -22,7 +22,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     └── interpreter / runtime  re-exports of compact-interpreter and compact-runtime
   │
   ├── midnight-provider          network entrypoint; wallet reached only through the facade
-  │     ├── MidnightProvider     Provider impl; transfer_*, register_dust, resync, submit
+  │     ├── MidnightProvider     Provider impl; transfer_*, register_dust, deregister_dust, resync, submit
   │     ├── ledger_8 / ledger_9  Builds: the attached wallet's builds on one generation
   │     ├── ProofProviders       one ProofProvider per generation
   │     ├── remote_prover        RemoteProofServer (ProofProvider over an HTTP proof server)
@@ -135,7 +135,7 @@ provider
       b.build_context().await      → Arc<BuildContext> (evicts expired pending)
       b.execution_context().await  → the half a circuit runs against, with no funding view
       b.add_funding(&ctx) / b.build_funded(tx_info) / b.prepare_shielded_inputs(..)
-  .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
+  .transfer_shielded / transfer_unshielded / shielded_swap / register_dust / deregister_dust
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
   .prepare_reserved(result).await  → PreparedTx that holds the reservation of the build
   .submit(tx_bytes).await          → PendingTx
@@ -156,7 +156,7 @@ Arc<LocalWallet>                                    // a handle on the attached 
 
 Each node read of the provider, its connect included, ends within 10 s (60 s for a contract state read), and a read with no answer returns `ProviderError::Rpc`.
 
-`transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits with `submit_reserved`. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md). A contract call's `.build()` and `.without_dust()` record no private state, so they fail with `ContractError::UnrecordedPrivateState` when the call's witnesses change it. The refusal comes after the local run and before the build reserves an input or makes a proof.
+`transfer_shielded`, `transfer_unshielded`, `deregister_dust` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits with `submit_reserved`. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md). A contract call's `.build()` and `.without_dust()` record no private state, so they fail with `ContractError::UnrecordedPrivateState` when the call's witnesses change it. The refusal comes after the local run and before the build reserves an input or makes a proof.
 
 `with_network` takes a `Network` (via `impl Into<Network>`). Parse a name with `.parse::<Network>()?`, which refuses a name that is not safe in an address or in the storage path. See [`docs/wallet.md`](wallet.md#address-derivation) for the rule.
 
@@ -338,15 +338,16 @@ settle the result of the wait:
 
 `Contract<P>` is not mutated; the new state is discarded because the next call will fetch fresh state anyway.
 
-### Transfer (shielded / unshielded / swap / register dust)
+### Transfer (shielded / unshielded / swap / register and deregister dust)
 
-Each of the four provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`). The builder defers all work until awaited or `.build()` is called:
+Each of the five provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`, `DustDeregistration<'a>`). The builder defers all work until awaited or `.build()` is called:
 
 ```
 provider.transfer_shielded(token_type, amount, recipient)       // bech32 address; no work yet
         .transfer_unshielded(token_type, amount, recipient)
         .shielded_swap(give_token, give_amount, receive_token, receive_amount)
         .register_dust(utxo_ctime)                              // .to(dust_key) sends the Dust to another wallet
+        .deregister_dust()
 
   ↓ .await? (or .build().await? for the no-submit escape hatch)
 
@@ -391,7 +392,7 @@ Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancel
 
 `MidnightProvider::prepare_reserved` prepares a `TransferResult`, and the `PreparedTx` holds the reservation of its build. A failed prepare hands the inputs back before it returns. A `PreparedTx` that drops before its submit hands them back too, and `PreparedTx::release` does the same and waits for it. `PreparedTx::submit` moves the reservation to the `PendingTx`, so a wait that reads `Invalid` hands the inputs back. A failed submit keeps them reserved.
 
-`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call prepares with `prepare_reserved`, because it records its private-state snapshot between the prepare and the submit. So an error before its submit, or an `Invalid` at its wait, hands its inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
+`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, `deregister_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call prepares with `prepare_reserved`, because it records its private-state snapshot between the prepare and the submit. So an error before its submit, or an `Invalid` at its wait, hands its inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
 
 ## Block pinning
 
@@ -422,7 +423,7 @@ Ledger 9 ships only as git tags, and upstream's ledger crates and helpers name e
 | `tagged-serialization.md` | midnight-ledger's tagged serialization format |
 | `dust-and-fees.md` | Dust token model, fee balancing, generation transitions |
 | `intents-and-zswap-mechanics.md` | Intent structure, zswap shielded transfer mechanics |
-| `wallet.md` | Wallet usage: sync, balances, transfers, Dust registration, persistence |
+| `wallet.md` | Wallet usage: sync, balances, transfers, Dust registration and deregistration, persistence |
 | `tokens.md` | Token model: shielded vs unshielded ledgers, NIGHT, DUST, the zero-id pitfall |
 | `private-state.md` | Per-contract private state store, witnesses, encrypted export/import |
 | `contract-maintenance-governance.md` | k-of-n maintenance committees, verifier-key rotation, authority replacement |

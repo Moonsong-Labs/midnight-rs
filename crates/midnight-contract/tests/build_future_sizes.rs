@@ -190,4 +190,5 @@ fn provider_entry_points_return_small_futures() {
         .build(),
     );
     assert_small("DustRegistration::build", p.register_dust(None).build());
+    assert_small("DustDeregistration::build", p.deregister_dust().build());
 }
