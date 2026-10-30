@@ -90,7 +90,7 @@ async fn a_payer_completes_a_one_sided_offer_and_takes_what_it_gives() {
         )
         .await
         .expect("mint Y to the maker");
-    let token_y = midnight_contract::parse_address(mint.address())
+    let token_y = midnight_contract::parse_contract_address(mint.address())
         .expect("contract address")
         .custom_shielded_token_type(HashOutput(domain_sep));
 

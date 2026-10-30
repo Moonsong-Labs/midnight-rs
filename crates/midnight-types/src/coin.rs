@@ -110,6 +110,21 @@ impl fmt::Debug for DustNullifier {
     }
 }
 
+/// The public key that a Dust address carries. It owns the Dust that the
+/// tNIGHT registered to this address generates.
+///
+/// A field element, held in its 32-byte little-endian form, which every
+/// ledger generation shares. [`crate::address::parse_dust_address`] reads one
+/// from a `mn_dust_*` address.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DustPublicKey(pub(crate) [u8; 32]);
+
+impl fmt::Debug for DustPublicKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DustPublicKey({})", hex::encode(self.0))
+    }
+}
+
 /// The address of a deployed contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContractAddress(pub HashOutput);

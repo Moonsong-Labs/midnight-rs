@@ -210,6 +210,8 @@ After registration, the on-chain `apply_registration` function:
 - Stores NIGHT UTXO nonces in `night_indices` (preventing future generationless
   availability for these UTXOs).
 
+The dust public key of a registration can belong to another wallet. `register_dust(None).to(key)` names it, and `parse_dust_address` reads the key from a `mn_dust_*` address (see [`wallet.md`](wallet.md#registration-to-another-dust-address)). The ledger keeps one delegation per NIGHT address, and each registration replaces it. Every NIGHT output that the address gets later generates dust for the key that the last registration named. A UTXO that already generates dust keeps the key of its generation entry until it is spent. The fee still comes from the generationless availability of the NIGHT input, so the dust public key changes nothing in the fee.
+
 ## Dust Across the Ledger 8 to 9 Fork
 
 The hard fork from ledger 8 to ledger 9 resets the chain's whole Dust state: every Dust UTXO, every address delegation and every entry in `night_indices`. The node's migration restores Dust generation for cNIGHT only.
@@ -219,6 +221,7 @@ So after the fork, no NIGHT that existed before it generates Dust, and a wallet 
 - One registration covers one NIGHT UTXO. It spends the UTXO and creates it again, now generating. `DustBalance::unregistered_night_utxos` counts the UTXOs left to register.
 - A registration pays its own fee from the generationless availability of the NIGHT it spends. The fork emptied `night_indices`, so every UTXO from before the fork has that availability again.
 - NIGHT that arrives after the first registration generates Dust with no further call, because the address delegation exists again.
+- A wallet that sent its Dust to another Dust address passes `.to()` again, because the fork removed that delegation too.
 
 A wallet that crosses the fork resets the registration flags of the UTXOs it held, because the chain no longer holds those registrations. A wallet that syncs from genesis after the fork reads the same flags from the indexer.
 
@@ -248,7 +251,7 @@ The wallet sync has three independent phases:
 
 3. **Dust sync** (~30 min from genesis): replays `dustLedgerEvents` for dust UTXO tracking (two global Merkle trees). Required for every transaction other than a dust registration.
 
-All three phases run concurrently inside the sync step of the `WalletBuilder`, against the indexer at `indexer_url`: `.sync(&provider, indexer_url)`, or `.sync_with_progress(&provider, indexer_url)` for progress events.
+The sync step of the `WalletBuilder` runs the three phases against the indexer at `indexer_url`: `.sync(&provider, indexer_url)`, or `.sync_with_progress(&provider, indexer_url)` for progress events. It replays the unshielded and zswap streams at the same time, then the Dust stream. A resync replays all three at the same time.
 
 A brand-new wallet can submit its dust registrations, one per tNIGHT UTXO that it holds, without a dust sync. Every other transaction needs the dust sync.
 

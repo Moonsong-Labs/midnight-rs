@@ -310,10 +310,26 @@ impl std::fmt::Display for Verdict {
 /// and asynchronously closes the subxt subscription. It does **not**
 /// retract the transaction from the mempool; the node keeps it queued
 /// until it lands in a block or is dropped by the node itself.
+///
+/// A wait that reads [`SubmitError::Invalid`] starts the release of the
+/// reserved inputs (see [`PreparedTx`]). Under a Tokio runtime, that release
+/// runs to its end, even when the caller drops the wait future during it. A
+/// drop before the wait reads `Invalid` leaves the inputs reserved until their
+/// TTL passes.
 pub struct PendingTx {
     progress: subxt::tx::TransactionProgress<subxt::SubstrateConfig, AtBlock>,
     reservation: Option<Reservation>,
     transaction_hash: TransactionHash,
+}
+
+impl std::fmt::Debug for PendingTx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingTx")
+            .field("extrinsic_hash", &self.extrinsic_hash())
+            .field("transaction_hash", &self.transaction_hash)
+            .field("reserved", &self.reservation.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// What a build reserved, kept alive so it can be handed back if the
@@ -332,8 +348,8 @@ impl Reservation {
         Self { wallet, spent }
     }
 
-    async fn release(&self) {
-        self.wallet.release(&self.spent).await;
+    async fn release(self) {
+        crate::provider::hand_back(self.wallet, self.spent).await;
     }
 }
 
@@ -489,6 +505,16 @@ pub struct PreparedTx {
     tx: subxt::tx::SubmittableTransaction<subxt::SubstrateConfig, AtBlock>,
     transaction_hash: TransactionHash,
     held: Option<HeldInputs>,
+}
+
+impl std::fmt::Debug for PreparedTx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedTx")
+            .field("extrinsic_hash", &self.extrinsic_hash())
+            .field("transaction_hash", &self.transaction_hash)
+            .field("held", &self.held)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PreparedTx {

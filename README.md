@@ -7,11 +7,11 @@
 
 ## Features
 
-- **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token).
+- **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token). A wallet can register its NIGHT to generate Dust for another wallet's Dust address.
 - **Swaps and sponsored fees**: two-party shielded swaps, one party paying the Dust fees of another party's transactions, and a payer that completes a one-sided offer from its own tokens.
 - **Node and indexer clients**: node RPC over subxt for contract state and submission, and a GraphQL client for the indexer that the wallet sync reads.
 - **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
-- **Deploy and call Compact smart contracts**: typed Rust bindings generated from the compiled contract. A circuit call takes typed arguments and returns a typed value.
+- **Deploy and call Compact smart contracts**: typed Rust bindings generated from the compiled contract. A circuit call takes typed arguments, and returns a typed value and the events that the circuit emits.
 - **Per-contract private state**: a pluggable `PrivateStateProvider` store with password-encrypted export and import. Witnesses read and update the state during circuit calls (see [`docs/private-state.md`](docs/private-state.md)).
 - **Contract maintenance**: deploy with a k-of-n maintenance committee, then rotate verifier keys or replace the authority with signed updates (see [`docs/contract-maintenance-governance.md`](docs/contract-maintenance-governance.md)).
 
@@ -28,7 +28,7 @@ anyhow = "1"
 
 ## Quick start
 
-The Quick start runs against a local devnet (node, indexer and proof server) in Docker. Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
+The Quick start runs against a local devnet (node, indexer and proof server) in Docker. The Quick start proves in its own process. Its first proofs download the public parameters into a local cache (see [proof backends](docs/ledger-generations.md#proof-backends)). Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
 
 ```rust
 use midnight_core::provider::{NIGHT, STARS_PER_NIGHT};
