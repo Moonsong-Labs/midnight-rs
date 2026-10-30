@@ -1215,8 +1215,8 @@ impl<P> Contract<P> {
     /// nothing can hand them back. They stay reserved until a sync sees the
     /// chain spend them, or until their TTL passes. `ttl` sets that TTL, as
     /// [`Self::call_with`] describes. When the call pays its own fee, the fee
-    /// Dust goes back sooner, once its `ctime` is older than the chain's
-    /// `dust_grace_period`.
+    /// Dust also goes back when its `ctime` is older than the chain's
+    /// `dust_grace_period`, if that comes first.
     ///
     /// # Errors
     ///
@@ -1550,8 +1550,8 @@ impl<P> Contract<P> {
     /// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid) also
     /// hands them back. Any other error from the submit on keeps them reserved
     /// until a sync sees the chain spend them, or until their TTL passes. The
-    /// fee Dust goes back sooner, once its `ctime` is older than the chain's
-    /// `dust_grace_period`.
+    /// fee Dust also goes back when its `ctime` is older than the chain's
+    /// `dust_grace_period`, if that comes first.
     #[expect(
         clippy::too_many_arguments,
         reason = "the arguments of `call_with`, plus the decoder"

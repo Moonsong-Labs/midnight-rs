@@ -1148,8 +1148,9 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 ///
                 /// The build reserves the wallet inputs that the transaction spends. The
                 /// bytes do not name them, so they stay reserved until a sync sees the chain
-                /// spend them, or until their TTL passes. The fee Dust goes back sooner,
-                /// once its `ctime` is older than the chain's `dust_grace_period`.
+                /// spend them, or until their TTL passes. The fee Dust also goes back when
+                /// its `ctime` is older than the chain's `dust_grace_period`, if that comes
+                /// first.
                 /// See `midnight_contract::Contract::build_call_with`.
                 pub async fn build(
                     self,
