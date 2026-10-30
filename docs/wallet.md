@@ -432,6 +432,8 @@ let pending = provider.submit_reserved(funded).await?;
 
 A Dustless shielded transfer carries no intent, so the merge has no segment collision. The fee goes in an intent of its own.
 
+`balance_transaction` reserves only the Dust of the fee. So when the node refuses the merged transaction, `submit_reserved` hands back only that Dust. The coins and UTXOs that the two `.without_dust()` builds reserved stay reserved until their TTL ends. That TTL is `global_ttl`, which is 14 days on the networks that the node ships.
+
 A build refuses an empty list, a payment of 0, and payments of one token that add up to more than `u128::MAX`. It returns `WalletError::Transfer` before it reserves an input. For a recipient that is not an address of the right kind, it returns `WalletError::InvalidAddress`, and for an address of another network, `WalletError::AddressNetworkMismatch`.
 
 Each builder:
@@ -523,7 +525,7 @@ A release also drops a reservation, for a transaction that can never land. It ma
 - A build whose proof fails, and a deploy whose shielded offer fails before its fee is paid.
 - `MidnightProvider::release(&spent)`, for a `TransferResult` that you build and never submit.
 
-A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node can still hold the transaction. The bytes of a contract call's `.build()` or `.without_dust()` do not name their inputs, so their reservation ends only when a sync sees the chain spend them, or when their TTL ends. Other than that, you don't normally interact with this directly: the builds reserve, and the sync loop clears.
+A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node can still hold the transaction. The bytes of a contract call's `.build()`, and of the `.without_dust()` of any builder, do not name their inputs. So their reservation ends only when a sync sees the chain spend them, or when their TTL ends. Other than that, you don't normally interact with this directly: the builds reserve, and the sync loop clears.
 
 ## Lifecycle summary
 
