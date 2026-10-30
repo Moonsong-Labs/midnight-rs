@@ -11,7 +11,7 @@ use midnight_coin_structure::coin::PublicKey as CoinPublicKey;
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_onchain_runtime::context::{CallContext, QueryContext};
 use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
-use midnight_onchain_runtime::ops::{Key, Op};
+use midnight_onchain_runtime::ops::{Key, Op, VersionedLogItem};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{
     AlignedValue, ContractState, InMemoryDB, MerkleTree, StateValue, StorageArray, StorageHashMap,
@@ -268,6 +268,7 @@ pub fn execute(
         private_transcript_outputs: Vec::new(),
         zswap_outputs: Vec::new(),
         zswap_inputs: Vec::new(),
+        logs: Vec::new(),
         witnesses: Some(witnesses),
         private_state,
         program,
@@ -293,11 +294,12 @@ pub fn execute(
         state: ctx.state,
         reads: ctx.reads,
         gather_ops: ctx.gather_ops,
-        result: Some(result),
+        result,
         communication_outputs,
         private_transcript_outputs: ctx.private_transcript_outputs,
         zswap_outputs: ctx.zswap_outputs,
         zswap_inputs: ctx.zswap_inputs,
+        logs: ctx.logs,
     })
 }
 
@@ -326,14 +328,14 @@ fn refuse_foreign_cast(field: &ir::FieldType) -> Result<(), InterpreterError> {
 /// FAB-encode a circuit's argument list into the single input value the
 /// prover binds (`ContractCallPrototype::input`).
 ///
-/// Each argument is encoded at its declared type's width when `arg_types`
-/// carries an entry for it: the canonical runtime routes arguments through
-/// per-type descriptors, so a `Uint<32>` argument is a 4-byte atom even
-/// though the interpreter's width-preserving fallback would pick 8 bytes.
+/// Each argument is encoded at its declared type's width when `arguments`
+/// declares it: the canonical runtime routes arguments through per-type
+/// descriptors, so a `Uint<32>` argument is a 4-byte atom even though the
+/// interpreter's width-preserving fallback would pick 8 bytes.
 /// Arguments without a declared type keep the fallback encoding.
 pub fn encode_circuit_input(
     args: &[(&str, Value)],
-    arg_types: &[(&str, Type)],
+    arguments: &[ir::Argument],
 ) -> Result<AlignedValue, InterpreterError> {
     if args.is_empty() {
         return Ok(AlignedValue::from(()));
@@ -341,8 +343,8 @@ pub fn encode_circuit_input(
     let parts: Vec<AlignedValue> = args
         .iter()
         .map(
-            |(name, value)| match arg_types.iter().find(|(n, _)| n == name) {
-                Some((_, ty)) => encode_typed(value, ty),
+            |(name, value)| match arguments.iter().find(|a| a.name.name() == *name) {
+                Some(argument) => encode_typed(value, &argument.ty),
                 None => value.try_to_aligned_value(),
             },
         )
@@ -368,6 +370,9 @@ struct ExecContext<'a> {
     /// Coins the circuit asked to spend via `createZswapInput`, in call order.
     /// Surfaced on `ExecutionResult` for the call/deploy path.
     zswap_inputs: Vec<CircuitZswapInput>,
+    /// The events of the `log` ops, in emission order. Surfaced as
+    /// `ExecutionResult::logs`.
+    logs: Vec<VersionedLogItem<InMemoryDB>>,
     witnesses: Option<&'a dyn WitnessProvider>,
     /// Mutable private-state buffer threaded through witness calls.
     private_state: &'a mut Vec<u8>,
@@ -1819,14 +1824,13 @@ fn exec_ledger_query(
     let res = qc
         .query::<ResultModeGather>(&ops, None, cost_model)
         .map_err(|e| InterpreterError::LedgerQueryFailed(format!("{e:?}")))?;
-    let reads: Vec<AlignedValue> = res
-        .events
-        .into_iter()
-        .filter_map(|e| match e {
-            GatherEvent::Read(av) => Some(av),
-            GatherEvent::Log(_) => None,
-        })
-        .collect();
+    let mut reads: Vec<AlignedValue> = Vec::new();
+    for event in res.events {
+        match event {
+            GatherEvent::Read(av) => reads.push(av),
+            GatherEvent::Log(item) => ctx.logs.push(item),
+        }
+    }
     ctx.state = ContractState {
         data: res.context.state,
         ..ctx.state.clone()
@@ -2335,7 +2339,7 @@ mod tests {
     /// Execute a circuit that calls nothing, and take its value.
     fn run(circuit: &ir::Circuit, args: &[(&str, Value)]) -> Result<Value, InterpreterError> {
         let program = Program::new(&[], &[], &[]);
-        execute_in(circuit, &program, args).map(|r| r.result.expect("a result value"))
+        execute_in(circuit, &program, args).map(|r| r.result)
     }
 
     /// Evaluate one expression as a whole circuit body.
@@ -2489,11 +2493,7 @@ mod tests {
         let program = Program::new(&[], &[], &[]);
         let result = execute(&circ, &program, state, &[], epoch()).expect("execute the sequence");
         assert_eq!(counter_cell(&result.state), 2, "both items ran");
-        assert!(equal_at(
-            &uint("255"),
-            &result.result.expect("a result value"),
-            &Value::Integer(3)
-        ));
+        assert!(equal_at(&uint("255"), &result.result, &Value::Integer(3)));
     }
 
     // -----------------------------------------------------------------------
@@ -3412,6 +3412,7 @@ mod tests {
             private_transcript_outputs: Vec::new(),
             zswap_outputs: Vec::new(),
             zswap_inputs: Vec::new(),
+            logs: Vec::new(),
             witnesses: None,
             private_state,
             program,
@@ -3927,11 +3928,7 @@ mod tests {
             },
         )
         .expect("the witness runs");
-        assert!(equal_at(
-            &uint("255"),
-            &result.result.expect("a result value"),
-            &Value::Integer(9)
-        ));
+        assert!(equal_at(&uint("255"), &result.result, &Value::Integer(9)));
     }
 
     /// An alias is transparent to every value-level operation, so a field read

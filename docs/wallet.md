@@ -116,8 +116,10 @@ let seed = Seed::from_hex(
 
 let unshielded = seed.unshielded_address(Network::Preprod);
 let shielded   = seed.shielded_address(Network::Preprod);
+let dust       = seed.dust_address(Network::Preprod);
 // mn_addr_preprod1...
 // mn_shield-addr_preprod1...
+// mn_dust_preprod1...
 ```
 
 Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `Seed` address methods take the network as `impl Into<Network>`, so a `Network` or a `&Network`. For a name, such as the value of an environment variable, parse it first:
@@ -128,13 +130,14 @@ let network: Network = env::var("MIDNIGHT_NETWORK")?.parse()?;
 
 The parse gives the variant of a known name (`Network::Preprod`, `Network::Mainnet` and the others), and `Network::Other` for any other valid name, for example the name of a custom devnet. A valid name has 1 to 68 characters, each a lowercase ASCII letter, a digit, `-` or `_`. Such a name is safe in an address prefix and in the storage path. The parse refuses any other name with `InvalidNetworkName`.
 
-`Network::Mainnet` produces bech32 HRPs without a `_<name>` suffix (`mn_addr1...`, `mn_shield-addr1...`), matching the upstream convention; all other variants get the suffix.
+`Network::Mainnet` produces bech32 HRPs without a `_<name>` suffix (`mn_addr1...`, `mn_shield-addr1...`, `mn_dust1...`), matching the upstream convention; all other variants get the suffix.
 
 A synced `Wallet` gives its own addresses on the network it synced as, so these methods take no network:
 
 ```rust
 let unshielded = wallet.unshielded_address();
 let shielded   = wallet.shielded_address();
+let dust       = wallet.dust_address();
 ```
 
 ## Sync
@@ -297,17 +300,21 @@ Persistence is not a one-shot at initial sync: every successful `resync_wallet` 
 ```rust
 let balance = provider.balance().await?;
 
-balance.shielded.coins;          // Vec<ShieldedCoinBalance { token_type, value }>
-balance.shielded.total_count;    // usize
-balance.shielded_value(token);   // u128, summed over the coins of one ShieldedTokenType
-balance.unshielded;              // Vec<UnshieldedUtxoInfo { token_type, value }>
-balance.unshielded_value(NIGHT); // u128, summed over the UTXOs of one UnshieldedTokenType
-balance.dust.spendable_utxos;    // usize: the Dust UTXOs no pending build reserves
-balance.dust.balance_speck;      // u128: all the Dust, reserved or not (1 DUST = 10^15 SPECK)
-balance.dust.spendable_speck;    // u128: the Dust a new build can draw on now
+balance.shielded.coins;                    // Vec<ShieldedCoinBalance { token_type, value, spendable }>
+balance.shielded.total_count;              // usize
+balance.shielded_value(token);             // u128, summed over the coins of one ShieldedTokenType
+balance.spendable_shielded_value(token);   // u128, the same sum over the spendable coins only
+balance.unshielded;                        // Vec<UnshieldedUtxoInfo { token_type, value, spendable }>
+balance.unshielded_value(NIGHT);           // u128, summed over the UTXOs of one UnshieldedTokenType
+balance.spendable_unshielded_value(NIGHT); // u128, the same sum over the spendable UTXOs only
+balance.dust.spendable_utxos;              // usize: the Dust UTXOs no pending build reserves
+balance.dust.balance_speck;                // u128: all the Dust, reserved or not (1 DUST = 10^15 SPECK)
+balance.dust.spendable_speck;              // u128: the Dust a new build can draw on now
 ```
 
-A build reserves the Dust UTXOs it spends. The reservation ends when a sync or resync sees the chain confirm the transaction. It also ends when a release hands the UTXOs back, or when its TTL ends (see [Pending reservations](#pending-reservations)). `spendable_utxos` and `spendable_speck` leave the reserved Dust out, and `balance_speck` counts it. So a wallet whose only Dust UTXO a pending build reserves reads a `spendable_speck` of 0 and a positive `balance_speck`.
+A build reserves the inputs it spends: shielded coins, unshielded UTXOs and Dust UTXOs. A reservation ends when a release hands the inputs back, or when its TTL ends (see [Pending reservations](#pending-reservations)). A reservation of unshielded UTXOs or Dust UTXOs also ends when a sync or resync sees the chain confirm the transaction. A confirmed shielded coin leaves the balance when a sync or resync drops it from the wallet's Zswap state.
+
+A reserved coin or UTXO reads `spendable: false`. `spendable_shielded_value` and `spendable_unshielded_value` leave it out, and `shielded_value` and `unshielded_value` count it. In the same way, `spendable_utxos` and `spendable_speck` leave the reserved Dust out, and `balance_speck` counts it. So a wallet whose only Dust UTXO a pending build reserves reads a `spendable_speck` of 0 and a positive `balance_speck`.
 
 `token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_core::wallet::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT. See [`tokens.md`](tokens.md) for the two-ledger model.
 
@@ -338,6 +345,26 @@ pending.wait_best().await?;
 tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not: call `register_dust` again until `DustBalance::unregistered_night_utxos` is 0. [`ledger-generations.md`](ledger-generations.md#register-dust-again) shows that loop.
 
 See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation rate, and how fees are balanced.
+
+### Registration to another Dust address
+
+A registration can send the Dust to the Dust address of another wallet. For example, a cold wallet that holds the tNIGHT registers it to the Dust address of a hot wallet. The hot wallet then gets the Dust. The cold wallet builds its transactions with `.without_dust()`, and the hot wallet pays their fees with `balance_transaction` ([`examples/combine-and-sponsor`](../examples/combine-and-sponsor) shows that flow). Read the address with `parse_dust_address`, and give the key to `.to()`:
+
+```rust
+use midnight_core::wallet::parse_dust_address;
+
+let hot_address = hot_wallet.dust_address(); // mn_dust_undeployed1...
+let target = parse_dust_address(&hot_address, provider.network().await?)?;
+provider.register_dust(None).to(target).await?.wait_finalized().await?;
+```
+
+The registration sets the Dust address of the whole NIGHT address, not only of the UTXO it spends:
+
+- tNIGHT that reaches the address after the registration generates Dust for the Dust address that the last registration set.
+- A later `register_dust` without `.to()` points the address back to the wallet's own Dust address. So pass `.to(target)` to each call until `unregistered_night_utxos` is 0.
+- tNIGHT that already generates Dust keeps its Dust address until the wallet spends it.
+
+The cold wallet gets no Dust of its own. Its registrations still pay their own fees, and its other transactions need a sponsor.
 
 ## Transfers
 
@@ -521,6 +548,7 @@ provider.with_wallet(wallet)
   provider.rescan_shielded()             replay the shielded stream (a resync first, to cross a fork)
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
+      .to(dust_key)                          the Dust goes to another wallet's Dust address
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx
   provider.transfer_*_many(payments).await   pays several recipients in one transaction → PendingTx

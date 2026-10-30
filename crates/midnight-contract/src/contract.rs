@@ -9,7 +9,7 @@ use midnight_provider::MidnightProvider;
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{BlockHash, ExtrinsicHash, TransferResult};
 
-use crate::address::IntoAddress;
+use crate::address::IntoContractAddress;
 use crate::deploy::{deploy_funded, deployed_state};
 use crate::error::ContractError;
 use crate::state::populate_verifier_keys;
@@ -18,8 +18,8 @@ use midnight_provider::{
     PendingTx, PreparedTx, PrivateStateProvider, ProviderError, TransactionHash, TxInBlock,
 };
 
-/// A circuit call that landed on chain: the circuit's own result, plus the
-/// identity of the transaction that carried it.
+/// A circuit call that landed on chain: the circuit's own result and events,
+/// plus the identity of the transaction that carried it.
 ///
 /// The identity is what lets a caller log the call, link to it in an explorer,
 /// or reconcile it against their own records. Deploys have always exposed this
@@ -36,27 +36,33 @@ pub struct CallOutcome<T> {
     pub transaction_hash: TransactionHash,
     /// Hash of the block it landed in.
     pub block_hash: BlockHash,
+    /// The events that the circuit emitted, in emission order. They come from
+    /// the local run of the call, and the chain logs the same events. See
+    /// [`ExecutionResult::logs`](crate::runtime::ExecutionResult::logs).
+    pub logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
 }
 
 impl<T> CallOutcome<T> {
-    /// Replace the circuit result, keeping the transaction identity.
+    /// Replace the circuit result, keeping the transaction identity and the
+    /// events.
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> CallOutcome<U> {
         CallOutcome {
             value: f(self.value),
             extrinsic_hash: self.extrinsic_hash,
             transaction_hash: self.transaction_hash,
             block_hash: self.block_hash,
+            logs: self.logs,
         }
     }
 }
 
 /// The result of a circuit call that ran with no proof, fee or transaction.
 ///
-/// It holds the circuit's value and the ledger after the call, from a run on
-/// the contract's state at one block. [`Contract::simulate_with`] and the
-/// `simulate` method of a generated call builder return it. The result is
-/// true for the block that the run read. A later block can change the outcome
-/// of the real call.
+/// It holds the circuit's value, the ledger after the call and the events that
+/// the circuit emitted, from a run on the contract's state at one block.
+/// [`Contract::simulate_with`] and the `simulate` method of a generated call
+/// builder return it. The result is true for the block that the run read. A
+/// later block can change the outcome of the real call.
 #[derive(Debug, Clone)]
 pub struct Simulated<T, L> {
     /// The circuit's return value.
@@ -65,6 +71,9 @@ pub struct Simulated<T, L> {
     pub ledger: L,
     /// The block whose state and time the run read.
     pub block_hash: BlockHash,
+    /// The events that the circuit emitted, in emission order. See
+    /// [`ExecutionResult::logs`](crate::runtime::ExecutionResult::logs).
+    pub logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
 }
 
 /// A circuit call that ran locally, before the build of its transaction
@@ -293,6 +302,7 @@ const DEFAULT_TX_FINALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct PendingCall<T> {
     pending: PendingTx,
     value: T,
+    logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
     address: String,
     /// The store that holds the call's `Pending` snapshot, or `None` when the
     /// call recorded none.
@@ -343,6 +353,7 @@ impl<T> PendingCall<T> {
         let Self {
             pending,
             value,
+            logs,
             address,
             snapshot_store,
         } = self;
@@ -373,6 +384,7 @@ impl<T> PendingCall<T> {
             extrinsic_hash,
             transaction_hash: in_block.transaction_hash,
             block_hash: in_block.block_hash,
+            logs,
         })
     }
 }
@@ -381,8 +393,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for PendingCall<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PendingCall")
             .field("address", &self.address)
-            .field("extrinsic_hash", &self.pending.extrinsic_hash())
-            .field("transaction_hash", &self.pending.transaction_hash())
+            .field("pending", &self.pending)
             .field("value", &self.value)
             .field("snapshot_written", &self.snapshot_store.is_some())
             .finish_non_exhaustive()
@@ -855,10 +866,10 @@ pub struct ConnectBuilder<P> {
 }
 
 impl<P> ConnectBuilder<P> {
-    pub(crate) fn new(provider: P, address: impl IntoAddress) -> Self {
+    pub(crate) fn new(provider: P, address: impl IntoContractAddress) -> Self {
         Self {
             provider,
-            address: address.into_address_string(),
+            address: address.into_contract_address_string(),
             zk_config: None,
             at_block: None,
             declares_witnesses: false,
@@ -960,15 +971,16 @@ impl Contract<()> {
         DeployBuilder::new(provider)
     }
 
-    /// Create a handle for an already-deployed contract at the given address:
-    /// a hex string or a typed [`ContractAddress`](crate::ContractAddress)
-    /// (see [`IntoAddress`]).
+    /// Create a handle for an already-deployed contract at the given contract
+    /// address: a hex string or a typed
+    /// [`ContractAddress`](crate::ContractAddress) (see
+    /// [`IntoContractAddress`]).
     ///
     /// This is synchronous, no network calls are made. Use `deploy()` to
     /// deploy a new contract.
     ///
     /// `provider` can be an owned or borrowed `MidnightProvider`.
-    pub fn at<P>(provider: P, address: impl IntoAddress) -> ConnectBuilder<P>
+    pub fn at<P>(provider: P, address: impl IntoContractAddress) -> ConnectBuilder<P>
     where
         P: AsMidnightProvider,
     {
@@ -1053,7 +1065,7 @@ impl<P> Contract<P> {
         circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
-    ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
+    ) -> Result<CallOutcome<crate::runtime::Value>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1071,7 +1083,8 @@ impl<P> Contract<P> {
 
     /// Run a circuit call locally, with no proof, fee or transaction.
     ///
-    /// It returns the circuit's value and the contract state after the call.
+    /// It returns the circuit's value, the contract state after the call and
+    /// the events that the circuit emitted.
     /// It does the work of a call before the build. It reads the state and
     /// the block time at the node's best block (or at the `at_block` pin), and
     /// runs the circuit IR locally at that time. The witnesses start from the
@@ -1084,8 +1097,8 @@ impl<P> Contract<P> {
     ///
     /// # Errors
     ///
-    /// - [`ContractError::InvalidAddress`] when the handle's address does not
-    ///   parse.
+    /// - [`ContractError::InvalidContractAddress`] when the handle's contract
+    ///   address does not parse.
     /// - [`ContractError::Construction`] when the contract declares witnesses
     ///   and the provider has no private-state store.
     /// - [`ContractError::NotFound`] when the node has no contract at the
@@ -1105,7 +1118,7 @@ impl<P> Contract<P> {
         program: &compact_interpreter::Program<'_>,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-    ) -> Result<Simulated<Option<crate::runtime::Value>, ContractState<InMemoryDB>>, ContractError>
+    ) -> Result<Simulated<crate::runtime::Value, ContractState<InMemoryDB>>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1119,12 +1132,12 @@ impl<P> Contract<P> {
         program: &compact_interpreter::Program<'_>,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-    ) -> Result<Simulated<Option<crate::runtime::Value>, ContractState<InMemoryDB>>, ContractError>
+    ) -> Result<Simulated<crate::runtime::Value, ContractState<InMemoryDB>>, ContractError>
     where
         P: AsMidnightProvider,
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
-        let address = crate::address::parse_address(&self.address)?;
+        let address = crate::address::parse_contract_address(&self.address)?;
 
         let store = provider.private_state();
         require_private_state_for_witnesses(self.declares_witnesses, store.is_some())?;
@@ -1153,6 +1166,7 @@ impl<P> Contract<P> {
             value: run.result,
             ledger: run.state,
             block_hash: state.hash,
+            logs: run.logs,
         })
     }
 
@@ -1182,8 +1196,8 @@ impl<P> Contract<P> {
     /// - [`ContractError::UnrecordedPrivateState`] when the witnesses change
     ///   the private state. The call reserves no input and makes no proof.
     ///   Submit the call with [`Self::send_call_with`] or [`Self::call_with`].
-    /// - [`ContractError::InvalidAddress`] when the handle's address does not
-    ///   parse.
+    /// - [`ContractError::InvalidContractAddress`] when the handle's contract
+    ///   address does not parse.
     /// - [`ContractError::Construction`] when the contract declares witnesses
     ///   and the provider has no private-state store, or when the handle has
     ///   no zk config. Both checks come before any query to the node.
@@ -1311,7 +1325,7 @@ impl<P> Contract<P> {
         P: AsMidnightProvider,
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
-        let address = crate::address::parse_address(&self.address)?;
+        let address = crate::address::parse_contract_address(&self.address)?;
         let zk_config = self.zk_config.clone().ok_or_else(missing_zk_config)?;
         let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
         let (baseline, depends_on) = self.witness_baseline(store).await?;
@@ -1358,7 +1372,7 @@ impl<P> Contract<P> {
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
         pay_fees: bool,
-    ) -> Result<(BuiltCall, Option<crate::runtime::Value>), ContractError>
+    ) -> Result<(BuiltCall, crate::runtime::Value), ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1420,7 +1434,7 @@ impl<P> Contract<P> {
         // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)
         // from the caller's wallet. Pass `ShieldedInputs::default()` for none.
         shielded: crate::call::ShieldedInputs,
-    ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
+    ) -> Result<CallOutcome<crate::runtime::Value>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1453,8 +1467,8 @@ impl<P> Contract<P> {
     ///
     /// # Errors
     ///
-    /// - [`ContractError::InvalidAddress`] when the handle's address does not
-    ///   parse.
+    /// - [`ContractError::InvalidContractAddress`] when the handle's contract
+    ///   address does not parse.
     /// - [`ContractError::NotFound`] when the node has no contract at the
     ///   address.
     /// - [`ContractError::StateFetch`] when the node's contract state does not
@@ -1501,7 +1515,7 @@ impl<P> Contract<P> {
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
-        decode: impl FnOnce(Option<crate::runtime::Value>) -> Result<T, ContractError>,
+        decode: impl FnOnce(crate::runtime::Value) -> Result<T, ContractError>,
     ) -> Result<PendingCall<T>, ContractError>
     where
         P: AsMidnightProvider,
@@ -1512,8 +1526,10 @@ impl<P> Contract<P> {
 
         // Each step is boxed; see the frame-size note on
         // `MidnightProvider::resync_wallet`.
-        let ran = Box::pin(self.run_for_build(circuit, program, args, witnesses, store.as_deref()))
-            .await?;
+        let mut ran =
+            Box::pin(self.run_for_build(circuit, program, args, witnesses, store.as_deref()))
+                .await?;
+        let logs = std::mem::take(&mut ran.exec_result.logs);
         let (built, result) = Box::pin(self.build_call(
             ran,
             circuit,
@@ -1560,6 +1576,7 @@ impl<P> Contract<P> {
         Ok(PendingCall {
             pending,
             value,
+            logs,
             address: self.address.clone(),
             snapshot_store,
         })

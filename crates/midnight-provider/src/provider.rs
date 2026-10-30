@@ -7,7 +7,7 @@ use subxt::backend::CombinedBackend;
 use subxt::config::RpcConfigFor;
 use subxt::ext::futures::StreamExt;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
-use subxt::rpcs::client::{RpcClient, RpcParams, rpc_params};
+use subxt::rpcs::client::{RpcClient, rpc_params};
 use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -87,6 +87,17 @@ pub struct MidnightProvider {
     /// witnesses are stateless.
     private_state: Option<Arc<dyn PrivateStateProvider>>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
+}
+
+impl std::fmt::Debug for MidnightProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MidnightProvider")
+            .field("node_url", &self.node_url)
+            .field("wallet_attached", &self.wallet.is_some())
+            .field("proof_provider", &self.proof_provider)
+            .field("private_state_attached", &self.private_state.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl MidnightProvider {
@@ -677,7 +688,8 @@ impl MidnightProvider {
     /// One call registers one tNIGHT UTXO and pays its own fee from that
     /// UTXO. Call it again until [`DustBalance::unregistered_night_utxos`]
     /// is 0. [`TransferBuilder::prepare_register_dust`] gives the full rule
-    /// and the meaning of `utxo_ctime`.
+    /// and the meaning of `utxo_ctime`. The Dust goes to this wallet's own
+    /// Dust address, or to another wallet's with [`DustRegistration::to`].
     ///
     /// [`DustBalance::unregistered_night_utxos`]: midnight_types::DustBalance::unregistered_night_utxos
     /// [`TransferBuilder::prepare_register_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_register_dust
@@ -829,7 +841,7 @@ impl MidnightProvider {
     /// this provider's wallet, returning the completed transaction ready to
     /// submit.
     ///
-    /// This is the "one party pays fees" flow (midnight-js `balanceTransaction`):
+    /// This is the "one party pays fees" flow (midnight-js `balanceTx`):
     /// the caller (fee payer) covers the Dust fees for a transaction someone
     /// else already built and proved, without holding their keys. Purely
     /// additive, the external transaction's proofs are untouched; a separately
@@ -1209,9 +1221,8 @@ impl MidnightProvider {
         query_within(QUERY_TIMEOUT, async {
             let conn = self.get_or_connect().await?;
 
-            let chain: String = conn
-                .rpc
-                .request("system_chain", RpcParams::new())
+            let chain = legacy_rpc(&conn)
+                .system_chain()
                 .await
                 .map_err(rpc_error("system_chain"))?;
 
@@ -1278,8 +1289,8 @@ impl MidnightProvider {
 
         let (sys_health, header) = tokio::join!(
             query_within(QUERY_TIMEOUT, async {
-                conn.rpc
-                    .request::<serde_json::Value>("system_health", RpcParams::new())
+                legacy_rpc(&conn)
+                    .system_health()
                     .await
                     .map_err(|e| ProviderError::Rpc(e.to_string()))
             }),
@@ -1300,14 +1311,8 @@ impl MidnightProvider {
         debug!(health = ?sys_health, "system_health response");
         debug!(header = ?header, "chain_getHeader response");
 
-        let peers = sys_health
-            .as_ref()
-            .and_then(|v| v.get("peers"))
-            .and_then(|v| v.as_u64());
-        let is_syncing = sys_health
-            .as_ref()
-            .and_then(|v| v.get("isSyncing"))
-            .and_then(|v| v.as_bool());
+        let peers = sys_health.as_ref().map(|health| health.peers as u64);
+        let is_syncing = sys_health.as_ref().map(|health| health.is_syncing);
         let block_height = header
             .as_ref()
             .and_then(Option::as_ref)
@@ -1514,7 +1519,7 @@ impl HeldInputs {
 ///
 /// Under a Tokio runtime the release runs as a task of its own, so a drop of
 /// this future cannot cut it short. With no runtime, it runs inline.
-async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
+pub(crate) async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
     if spent.is_empty() {
         return;
     }
@@ -1608,8 +1613,8 @@ fn archive_rpc(conn: &NodeConnection) -> ChainHeadRpcMethods<RpcConfigFor<subxt:
     ChainHeadRpcMethods::new(conn.rpc.clone())
 }
 
-/// Typed view over a connection's raw client for the legacy `chain_*` RPCs,
-/// with hash and header types derived from the chain's Substrate config.
+/// Typed view over a connection's raw client for the legacy RPCs, with hash
+/// and header types derived from the chain's Substrate config.
 fn legacy_rpc(conn: &NodeConnection) -> LegacyRpcMethods<RpcConfigFor<subxt::SubstrateConfig>> {
     LegacyRpcMethods::new(conn.rpc.clone())
 }

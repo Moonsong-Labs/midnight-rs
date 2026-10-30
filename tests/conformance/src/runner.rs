@@ -3,8 +3,6 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use compact_codegen::arg_types::circuit_arg_types;
-use compact_codegen::ir::Type;
 use compact_codegen::types::ContractInfo;
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::coin::{
@@ -135,19 +133,19 @@ pub fn run_step(
         .iter()
         .find(|c| c.name == circuit)
         .ok_or_else(|| format!("circuit {circuit} not found"))?;
-    let arg_types = circuit_arg_types(entry.arguments());
+    let arguments = entry.arguments();
 
-    if args_tagged.len() != arg_types.len() {
+    if args_tagged.len() != arguments.len() {
         return Err(format!(
             "circuit {circuit} expects {} argument(s), case has {}",
-            arg_types.len(),
+            arguments.len(),
             args_tagged.len()
         ));
     }
-    let args: Vec<(&str, Value)> = arg_types
+    let args: Vec<(&str, Value)> = arguments
         .iter()
         .zip(args_tagged)
-        .map(|((name, _ty), tagged)| Ok((name.as_str(), to_interpreter_value(tagged)?)))
+        .map(|(argument, tagged)| Ok((argument.name.name(), to_interpreter_value(tagged)?)))
         .collect::<Result<Vec<_>, String>>()?;
 
     let program = interpreter::Program::new(
@@ -168,11 +166,7 @@ pub fn run_step(
     )
     .map_err(|e| format!("circuit {circuit}: {e}"))?;
 
-    let type_refs: Vec<(&str, Type)> = arg_types
-        .iter()
-        .map(|(n, t)| (n.as_str(), t.clone()))
-        .collect();
-    let report = step_report(circuit, &args, &type_refs, &result);
+    let report = step_report(circuit, &args, arguments, &result);
     Ok((report, result))
 }
 

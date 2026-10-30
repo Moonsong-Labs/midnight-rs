@@ -5,7 +5,7 @@
 //! both executors; anything one side cannot compute canonically stays out of
 //! the report.
 
-use midnight_contract::runtime::ExecutionResult;
+use midnight_contract::runtime::{ExecutionResult, VersionedLogItem};
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
 use midnight_typed_state::{ContractState, InMemoryDB, StateValue};
 use serde_json::{Value as Json, json};
@@ -83,9 +83,9 @@ pub fn op_to_json(op: &midnight_onchain_runtime::ops::Op<ResultModeVerify, InMem
 /// uses for `ContractCallPrototype::input`.
 pub fn input_json(
     args: &[(&str, midnight_contract::runtime::Value)],
-    arg_types: &[(&str, compact_codegen::ir::Type)],
+    arguments: &[compact_codegen::ir::Argument],
 ) -> Json {
-    let input = midnight_contract::interpreter::encode_circuit_input(args, arg_types)
+    let input = midnight_contract::interpreter::encode_circuit_input(args, arguments)
         .expect("case arguments encode at their declared types");
     aligned_value_to_json(&input)
 }
@@ -109,10 +109,11 @@ pub fn state_report_json(sv: &StateValue<InMemoryDB>) -> Json {
 
 /// Hex of the untagged serialization of a `ContractState` holding only `sv`.
 ///
-/// Untagged because the two executors link different ledger releases, and
-/// `tagged_serialize` writes the ledger version into the tag
-/// (`midnight:contract-state[vN]:`). Everything after that prefix is what both
-/// sides must agree on byte for byte.
+/// Untagged because the two executors link separate builds of the ledger 9
+/// on-chain runtime. Each build can change the `ContractState` format version
+/// that `tagged_serialize` writes into the tag (`midnight:contract-state[vN]:`).
+/// Everything after that prefix is what both sides must agree on byte for
+/// byte.
 pub fn normalized_state_hex(sv: &StateValue<InMemoryDB>) -> String {
     let cs: ContractState<InMemoryDB> = ContractState::new(
         sv.clone(),
@@ -129,12 +130,12 @@ pub fn normalized_state_hex(sv: &StateValue<InMemoryDB>) -> String {
 pub fn step_report(
     circuit: &str,
     args: &[(&str, midnight_contract::runtime::Value)],
-    arg_types: &[(&str, compact_codegen::ir::Type)],
+    arguments: &[compact_codegen::ir::Argument],
     result: &ExecutionResult,
 ) -> Json {
     json!({
         "circuit": circuit,
-        "input": input_json(args, arg_types),
+        "input": input_json(args, arguments),
         "output": output_json(result),
         "publicTranscript": public_transcript_json(result),
         "privateTranscriptOutputs": result
@@ -155,5 +156,16 @@ pub fn step_report(
                 ),
             }))
             .collect::<Vec<_>>(),
+        "logs": result.logs.iter().map(log_to_json).collect::<Vec<_>>(),
+    })
+}
+
+/// Canonical JSON for an emitted event, matching the TS runtime's `LogEvent`
+/// without its `address`.
+fn log_to_json(item: &VersionedLogItem<InMemoryDB>) -> Json {
+    json!({
+        "version": item.version,
+        "eventType": serde_json::to_value(item.event_type).expect("LogEventType serializes"),
+        "data": state_value_to_json(&item.data),
     })
 }
