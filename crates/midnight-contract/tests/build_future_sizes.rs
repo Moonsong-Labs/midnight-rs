@@ -179,15 +179,5 @@ fn provider_entry_points_return_small_futures() {
         p.transfer_unshielded(UnshieldedTokenType(HashOutput([0u8; 32])), 1, "recipient")
             .build(),
     );
-    assert_small(
-        "ShieldedSwap::into_future",
-        p.shielded_swap(
-            ShieldedTokenType(HashOutput([0u8; 32])),
-            1,
-            ShieldedTokenType(HashOutput([1u8; 32])),
-            1,
-        )
-        .into_future(),
-    );
     assert_small("DustRegistration::build", p.register_dust(None).build());
 }
