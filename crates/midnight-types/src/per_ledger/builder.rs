@@ -162,8 +162,8 @@ impl PreparedTransfer {
     /// # Errors
     ///
     /// [`WalletError::OutsideTimeToDismiss`] when the build pays a fee (see
-    /// [`Self::new`]) and the node would refuse the proven transaction, the
-    /// merged one for a build from [`balance_external`]. The caller owns the
+    /// [`Self::new`]) and the ledger's check refuses the proven transaction,
+    /// the merged one for a build from [`balance_external`]. The caller owns the
     /// release of what the build reserved. [`WalletError::Proving`] when the
     /// prover fails, and [`WalletError::Transfer`] when the merge or the
     /// serialization fails.
@@ -1051,8 +1051,8 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 /// `None` when `external` already balances its Dust. There is nothing to
 /// draw then, and an intent with no spends is one the ledger rejects.
 ///
-/// Fails with [`WalletError::OutsideTimeToDismiss`] when the node would refuse
-/// the merge whose fee converges, before any real proof. Before it returns
+/// Fails with [`WalletError::OutsideTimeToDismiss`] when the ledger's check
+/// refuses the merge whose fee converges, before any real proof. Before it returns
 /// `None`, it applies the same check to `external` as it is.
 pub fn balance_external(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,

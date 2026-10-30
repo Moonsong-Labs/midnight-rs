@@ -754,7 +754,7 @@ impl MidnightProvider {
     /// The provider applies the ledger's time-to-dismiss check to the merged
     /// result after the proof. A `LocalWallet` applies it in `prepare_fees`
     /// too: before the proof, and to a transaction that comes back unchanged.
-    /// When the node would refuse the result, the call fails with
+    /// When the check refuses the result, the call fails with
     /// [`WalletError::OutsideTimeToDismiss`](midnight_types::WalletError::OutsideTimeToDismiss)
     /// and leaves no Dust reserved.
     pub async fn balance_transaction(

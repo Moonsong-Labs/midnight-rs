@@ -253,6 +253,8 @@ A build that pays a fee applies the ledger's own check before it returns, and fa
 
 The build checks the candidate whose fee converges, before the real proof, and checks the proven transaction again. `balance_transaction` checks the merged transaction. With a `LocalWallet`, it also checks a transaction that already pays its own fee and comes back unchanged. The build skips the check for a Dustless build (`.without_dust()`), because the sponsor's merge adds Dust spends that change its time and its size.
 
+The check never refuses a transaction that the node accepts. On ledger 8 the node runs the same check. On ledger 9 the node prices each verifier key that the transaction calls at its real size, and the check prices it as one 4 KiB block. So on ledger 9, a transaction at the limit that calls a key larger than 4 KiB can pass the check, and the node then refuses it.
+
 The time grows with each intent, each Dust spend that pays the fee, and each NIGHT input and output in the guaranteed offer. The cost model in the ledger parameters sets the cost of each part. So the costs can be different on each network, and so can the part that costs the most. With 2 µs for each byte and a floor of 15 ms, as in the initial parameters, a transaction under 7.5 KB gets the floor whatever its size. Below that size, each part that a transaction leaves out reduces its time and keeps its allowance the same.
 
 Input selection and Dust selection do not account for this rule. To recover from a refused transfer:
