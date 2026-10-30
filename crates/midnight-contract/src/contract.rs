@@ -1549,7 +1549,9 @@ impl<P> Contract<P> {
     /// them back before it returns. A wait on the [`PendingCall`] that reads
     /// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid) also
     /// hands them back. Any other error from the submit on keeps them reserved
-    /// until a sync sees the chain spend them, or until their TTL passes.
+    /// until a sync sees the chain spend them, or until their TTL passes. The
+    /// fee Dust goes back sooner, once its `ctime` is older than the chain's
+    /// `dust_grace_period`.
     #[expect(
         clippy::too_many_arguments,
         reason = "the arguments of `call_with`, plus the decoder"
