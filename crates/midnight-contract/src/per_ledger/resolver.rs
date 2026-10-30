@@ -29,7 +29,7 @@ pub(crate) fn shared() -> &'static helpers::Resolver {
                 OutputMode::Log,
                 DUST_EXPECTED_FILES.to_owned(),
             )
-            .expect("the dust key provider takes only built-in settings"),
+            .expect("one of MIDNIGHT_PP, XDG_CACHE_HOME or HOME gives the zk parameter cache"),
         );
         let external: KeyLoader = Box::new(|KeyLocation(location)| {
             Box::pin(async move {

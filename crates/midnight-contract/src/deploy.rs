@@ -15,7 +15,7 @@ use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{ContractAddress, TransferResult};
 
 use crate::ShieldedOffer;
-use crate::address::format_address;
+use crate::address::format_contract_address;
 use crate::error::ContractError;
 use crate::state::fetch_state;
 
@@ -34,7 +34,7 @@ pub struct DeployResult {
 impl DeployResult {
     /// The contract address as a hex string.
     pub fn address_hex(&self) -> String {
-        format_address(&self.address)
+        format_contract_address(&self.address)
     }
 }
 

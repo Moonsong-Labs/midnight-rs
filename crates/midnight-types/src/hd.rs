@@ -34,7 +34,9 @@ use std::fmt;
 use std::str::FromStr;
 
 use bip32::{ChildNumber, DerivationPath as Bip32DerivationPath, XPrv};
-use midnight_helpers::ledger_9::{DefaultDB, IntoWalletAddress, ShieldedWallet, UnshieldedWallet};
+use midnight_helpers::ledger_9::{
+    DefaultDB, DustWallet, IntoWalletAddress, ShieldedWallet, UnshieldedWallet,
+};
 use rand::RngCore;
 use zeroize::Zeroize;
 
@@ -247,6 +249,19 @@ impl Seed {
     /// `network` is a [`Network`] or a `&Network`.
     pub fn shielded_address(&self, network: impl Into<Network>) -> String {
         ShieldedWallet::<DefaultDB>::default(self.into_ledger())
+            .address(network.into().as_str())
+            .to_bech32()
+    }
+
+    /// The Dust address of this seed on `network`, e.g.
+    /// `mn_dust_undeployed1...`. It carries the public key that owns the Dust
+    /// this seed's registered tNIGHT generates, and another wallet can register
+    /// its tNIGHT to it. [`crate::address::parse_dust_address`] reads the key
+    /// back.
+    ///
+    /// `network` is a [`Network`] or a `&Network`.
+    pub fn dust_address(&self, network: impl Into<Network>) -> String {
+        DustWallet::<DefaultDB>::default(self.into_ledger(), None)
             .address(network.into().as_str())
             .to_bech32()
     }

@@ -41,9 +41,9 @@ pub use balance::{
     WalletBalance,
 };
 pub use coin::{
-    CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, EncryptionPublicKey, NIGHT, Nonce,
-    Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType,
-    UnshieldedTokenType,
+    CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustPublicKey, EncryptionPublicKey,
+    NIGHT, Nonce, Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient,
+    ShieldedTokenType, UnshieldedTokenType,
 };
 pub use error::{WalletError, refuse_repeated_nullifiers};
 pub use hash::{BlockHash, ExtrinsicHash};

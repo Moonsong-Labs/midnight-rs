@@ -7,7 +7,7 @@
 //! None of this is part of the swap itself; it is just arranging something to
 //! trade.
 
-use midnight_core::contract::parse_address;
+use midnight_core::contract::parse_contract_address;
 use midnight_core::provider::{HashOutput, ShieldedTokenType};
 use midnight_core::{MidnightProvider, Seed};
 
@@ -51,5 +51,5 @@ pub async fn mint_token_to(
         )
         .await?;
 
-    Ok(parse_address(mint.address())?.custom_shielded_token_type(HashOutput(domain_sep)))
+    Ok(parse_contract_address(mint.address())?.custom_shielded_token_type(HashOutput(domain_sep)))
 }
