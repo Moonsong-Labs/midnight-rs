@@ -139,7 +139,8 @@ pub enum WalletError {
         /// The amount the transfer spends.
         required: u128,
         /// The amount the wallet can spend now, less the coins that pending
-        /// builds reserve.
+        /// builds reserve. A build that covers a deficit at several segments
+        /// also subtracts the coins that it picked for an earlier segment.
         available: u128,
     },
 

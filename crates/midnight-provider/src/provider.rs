@@ -828,7 +828,9 @@ impl MidnightProvider {
     /// [`WalletError::InsufficientShielded`](crate::WalletError::InsufficientShielded),
     /// [`WalletError::InsufficientUnshielded`](crate::WalletError::InsufficientUnshielded)
     /// or [`WalletError::InsufficientDust`](crate::WalletError::InsufficientDust)
-    /// when the wallet holds too little.
+    /// when the wallet cannot cover a deficit or the fee. Each segment spends
+    /// coins of its own, so a shielded deficit can fail when the wallet holds
+    /// enough of the token in total.
     /// [`ProviderError::Wallet`] with
     /// [`WalletError::LedgerMismatch`](crate::WalletError::LedgerMismatch)
     /// when the bytes belong to another ledger generation than the wallet.

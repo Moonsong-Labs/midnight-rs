@@ -1035,9 +1035,13 @@ pub async fn balance_external(
 /// [`WalletError::FallibleUnshieldedDeficit`] when a fallible segment of
 /// `external` lacks an unshielded token, before anything is selected.
 /// [`WalletError::InsufficientShielded`] or
-/// [`WalletError::InsufficientUnshielded`] when `payer` holds too little of a
-/// token, and [`WalletError::InsufficientDust`] when it holds too little Dust
-/// for the fee.
+/// [`WalletError::InsufficientUnshielded`] when `payer` cannot cover a
+/// deficit. Each segment spends coins of its own, in segment order, so a
+/// shielded deficit can fail when `payer` holds enough of the token in total.
+/// The error then gives the deficit of one segment as `required`, and what
+/// the earlier segments of this call left as `available`.
+/// [`WalletError::InsufficientDust`] when `payer` holds too little Dust for
+/// the fee.
 ///
 /// # Panics
 ///
