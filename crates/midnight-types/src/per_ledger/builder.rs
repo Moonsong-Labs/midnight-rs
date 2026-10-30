@@ -384,12 +384,7 @@ impl<'a> TransferBuilder<'a> {
                 receive_amount,
             } => {
                 builder
-                    .prepare_shielded_swap(
-                        give_token.into_ledger(),
-                        give_amount,
-                        receive_token.into_ledger(),
-                        receive_amount,
-                    )
+                    .prepare_shielded_swap(give_token, give_amount, receive_token, receive_amount)
                     .await
             }
             TransferKind::DustRegistration { utxo_ctime, target } => {
@@ -482,21 +477,21 @@ impl<'a> TransferBuilder<'a> {
     /// [`PreparedTransfer::spent_shielded_inputs`].
     pub async fn prepare_shielded_swap(
         self,
-        give_token: ShieldedTokenType,
+        give_token: crate::ShieldedTokenType,
         give_amount: u128,
-        receive_token: ShieldedTokenType,
+        receive_token: crate::ShieldedTokenType,
         receive_amount: u128,
     ) -> Result<PreparedTransfer, WalletError> {
         // Destination is our own seed so the build's `watch_for` tracks the
         // incoming coin.
         let payment = OutputInfo {
             destination: self.state.seed().into_ledger(),
-            token_type: receive_token,
+            token_type: receive_token.into_ledger(),
             value: receive_amount,
         };
         // No funding seed: an unbalanced half can't self-fund its Dust.
         self.prepare_shielded_offer(
-            vec![(give_token, give_amount)],
+            vec![(give_token.into_ledger(), give_amount)],
             vec![Box::new(payment)],
             false,
         )
