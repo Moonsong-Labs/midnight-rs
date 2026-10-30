@@ -106,8 +106,10 @@ impl<'a> Builds<'a> {
     /// this provider's wallet, and only this provider can hand it back.
     ///
     /// The intents expire `ttl` after the chain time of the build, or after
-    /// the chain's `global_ttl` for `None`, and the wallet holds the inputs
-    /// until then. See [`WalletBuilds::prepare_funded`].
+    /// the chain's `global_ttl` for `None`. The wallet holds the inputs until
+    /// then, or until the `ctime` of the fee Dust is older than the chain's
+    /// `dust_grace_period` when that comes first. See
+    /// [`WalletBuilds::prepare_funded`].
     pub async fn build_funded(
         &self,
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,

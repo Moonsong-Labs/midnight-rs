@@ -552,9 +552,11 @@ impl<P> DeployBuilder<'_, P> {
     /// build. Defaults to the chain's `global_ttl`, the longest TTL the chain
     /// accepts.
     ///
-    /// The wallet holds the fee Dust and the coins of a shielded offer until
-    /// the TTL passes, unless a sync sees the chain spend them or a release
-    /// hands them back first. After a submit whose fate is unknown, such as
+    /// The wallet holds the coins of a shielded offer until the TTL passes.
+    /// It holds the fee Dust until then, or until the `ctime` of that Dust is
+    /// older than the chain's `dust_grace_period` when that comes first. A
+    /// sync that sees the chain spend them, or a release, hands them back
+    /// sooner. After a submit whose fate is unknown, such as
     /// [`SubmitError::Dropped`](midnight_provider::SubmitError::Dropped), the
     /// deploy can no longer land once the TTL passes.
     ///
@@ -1212,7 +1214,9 @@ impl<P> Contract<P> {
     /// [`Self::call_with`] does. The bytes do not name those inputs, so
     /// nothing can hand them back. They stay reserved until a sync sees the
     /// chain spend them, or until their TTL passes. `ttl` sets that TTL, as
-    /// [`Self::call_with`] describes.
+    /// [`Self::call_with`] describes. When the call pays its own fee, the fee
+    /// Dust goes back sooner, once its `ctime` is older than the chain's
+    /// `dust_grace_period`.
     ///
     /// # Errors
     ///

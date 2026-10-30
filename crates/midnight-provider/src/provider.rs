@@ -752,9 +752,11 @@ impl MidnightProvider {
     /// already pays its own fee comes back unchanged, with nothing reserved.
     ///
     /// The fee intent expires with the earliest intent of the transaction, or
-    /// after the chain's `global_ttl` when that comes first, and the Dust stays
-    /// reserved until then. So a party that builds its transaction with a
-    /// short TTL (`with_ttl`) bounds the fee intent too.
+    /// after the chain's `global_ttl` when that comes first. So a party that
+    /// builds its transaction with a short TTL (`with_ttl`) bounds the fee
+    /// intent too. The Dust stays reserved until the fee intent expires, or
+    /// until the `ctime` of that Dust is older than the chain's
+    /// `dust_grace_period` when that comes first.
     pub async fn balance_transaction(
         &self,
         tx_bytes: &[u8],

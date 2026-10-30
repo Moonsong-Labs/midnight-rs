@@ -79,7 +79,9 @@ pub trait WalletBuilds: WalletFacade {
     /// a transaction carrying a user circuit cannot mock-prove at all.
     ///
     /// The intents expire `ttl` after the chain time of the build, or after
-    /// the chain's `global_ttl` for `None`, and the reservation ends then too.
+    /// the chain's `global_ttl` for `None`. The reservation ends at
+    /// [`PreparedTransfer::expires_at`]: at that TTL, or sooner, once the
+    /// `ctime` of the fee Dust is older than the chain's `dust_grace_period`.
     /// An implementation refuses a `ttl` that the chain refuses with
     /// [`WalletError::TtlOutOfRange`], before it spends anything.
     async fn prepare_funded(
