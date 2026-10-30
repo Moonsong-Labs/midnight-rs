@@ -126,18 +126,14 @@ impl PendingReservations {
         self.dust.iter()
     }
 
-    /// View the pending unshielded UTXO keys; the caller uses these to
-    /// filter `unshielded_utxos` when populating the `LedgerContext`.
-    pub(crate) fn unshielded_keys(&self) -> impl Iterator<Item = &SpentUtxoKey> {
-        self.unshielded.iter().map(|p| &p.key)
+    /// View the pending unshielded UTXO reservations.
+    pub(crate) fn unshielded_spends(&self) -> impl Iterator<Item = &PendingUnshieldedSpend> {
+        self.unshielded.iter()
     }
 
-    /// View the pending shielded coin nullifiers; the caller removes these
-    /// coins from the build context's Zswap state and from
-    /// `spendable_shielded_coins` so a coin an unconfirmed build already spent
-    /// is not re-selected.
-    pub(crate) fn shielded_nullifiers(&self) -> impl Iterator<Item = &Nullifier> {
-        self.shielded.iter().map(|p| &p.nullifier)
+    /// View the pending shielded coin reservations.
+    pub(crate) fn shielded_spends(&self) -> impl Iterator<Item = &PendingShieldedSpend> {
+        self.shielded.iter()
     }
 
     /// True when the wallet has no in-flight reservations.
@@ -434,7 +430,7 @@ mod tests {
             stored.ledger_version = version;
             let loaded = PendingReservations::from_stored(stored).unwrap();
             assert_eq!(
-                loaded.unshielded_keys().count() == 1,
+                loaded.unshielded_spends().count() == 1,
                 version == super::super::LEDGER,
                 "{version} reservations loaded into a {} wallet",
                 super::super::LEDGER
@@ -477,8 +473,8 @@ mod tests {
         let counts = |r: &PendingReservations| {
             (
                 r.dust_batches().count(),
-                r.unshielded_keys().count(),
-                r.shielded_nullifiers().count(),
+                r.unshielded_spends().count(),
+                r.shielded_spends().count(),
             )
         };
 
@@ -511,7 +507,10 @@ mod tests {
         // unshielded reservation stays.
         p.clear_confirmed(&[ukey(0xab, 0)], &[nullifier(7)]);
         assert_eq!(p.dust_batches().count(), 0);
-        let remaining: Vec<_> = p.unshielded_keys().cloned().collect();
+        let remaining: Vec<_> = p
+            .unshielded_spends()
+            .map(|spend| spend.key.clone())
+            .collect();
         assert_eq!(remaining, vec![ukey(0xab, 1)]);
     }
 
@@ -528,7 +527,7 @@ mod tests {
         // Same intent, different index; different intent, same index; and a
         // foreign dust nullifier — none of them may clear anything.
         p.clear_confirmed(&[ukey(0xab, 9), ukey(0xff, 0)], &[nullifier(99)]);
-        assert_eq!(p.unshielded_keys().count(), 1);
+        assert_eq!(p.unshielded_spends().count(), 1);
         assert_eq!(p.dust_batches().count(), 1);
     }
 
@@ -616,7 +615,7 @@ mod tests {
         let mut loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
             .unwrap()
             .expect("pending.json should exist after save");
-        assert_eq!(loaded.unshielded_keys().count(), 1);
+        assert_eq!(loaded.unshielded_spends().count(), 1);
         assert_eq!(loaded.dust_batches().count(), 1);
 
         loaded.clear_confirmed(&[ukey(0xab, 0)], &[nullifier(7)]);
@@ -643,7 +642,10 @@ mod tests {
         let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
             .unwrap()
             .expect("pending.json should exist after save");
-        let got: Vec<_> = loaded.shielded_nullifiers().cloned().collect();
+        let got: Vec<_> = loaded
+            .shielded_spends()
+            .map(|spend| spend.nullifier)
+            .collect();
         assert_eq!(got, vec![shielded_nf(3), shielded_nf(4)]);
     }
 
@@ -675,11 +677,15 @@ mod tests {
             vec![nullifier(3)]
         );
         assert_eq!(
-            p.unshielded_keys().cloned().collect::<Vec<_>>(),
+            p.unshielded_spends()
+                .map(|spend| spend.key.clone())
+                .collect::<Vec<_>>(),
             vec![ukey(0xbb, 1)]
         );
         assert_eq!(
-            p.shielded_nullifiers().cloned().collect::<Vec<_>>(),
+            p.shielded_spends()
+                .map(|spend| spend.nullifier)
+                .collect::<Vec<_>>(),
             vec![shielded_nf(2)]
         );
     }
@@ -710,12 +716,12 @@ mod tests {
 
         assert_eq!(p.dust_batches().count(), 1, "A's release dropped B's dust");
         assert_eq!(
-            p.unshielded_keys().count(),
+            p.unshielded_spends().count(),
             1,
             "A's release dropped B's unshielded entry"
         );
         assert_eq!(
-            p.shielded_nullifiers().count(),
+            p.shielded_spends().count(),
             1,
             "A's release dropped B's shielded entry"
         );
@@ -759,12 +765,14 @@ mod tests {
 
         assert_eq!(p.dust_batches().count(), 0, "B's Dust stayed reserved");
         assert_eq!(
-            p.shielded_nullifiers().count(),
+            p.shielded_spends().count(),
             0,
             "A's shielded coin stayed reserved"
         );
         assert_eq!(
-            p.unshielded_keys().cloned().collect::<Vec<_>>(),
+            p.unshielded_spends()
+                .map(|spend| spend.key.clone())
+                .collect::<Vec<_>>(),
             vec![ukey(0xbb, 1)],
             "the release must drop A's UTXO and keep D's"
         );

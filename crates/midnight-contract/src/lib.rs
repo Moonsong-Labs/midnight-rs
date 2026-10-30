@@ -1,5 +1,5 @@
 mod address;
-pub mod call;
+mod call;
 mod change;
 mod contract;
 pub mod deploy;
@@ -38,13 +38,16 @@ pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };
 
-// Typed contract addresses. `ContractAddress` is re-exported so callers can
-// hold and validate addresses without depending on `midnight-types`;
-// `parse_address` / `format_address` convert to and from the hex form used at
-// the SDK's string boundaries (`Contract::address`). `Contract::at` accepts
-// either form via `IntoAddress`, and `address_serde` (de)serializes the typed
-// address as hex for use in config structs.
-pub use address::{IntoAddress, address_serde, format_address, parse_address};
+// Typed contract addresses. The crate re-exports `ContractAddress`, so a
+// caller can hold and validate a contract address without a dependency on
+// `midnight-types`. `parse_contract_address` and `format_contract_address`
+// convert a contract address to and from the hex form at the SDK's string
+// boundaries (`Contract::address`). `Contract::at` accepts either form through
+// `IntoContractAddress`. `contract_address_serde` (de)serializes a typed
+// contract address as hex for config structs.
+pub use address::{
+    IntoContractAddress, contract_address_serde, format_contract_address, parse_contract_address,
+};
 pub use midnight_types::ContractAddress;
 
 // Contract maintenance / governance (verifier-key rotation, authority
@@ -83,13 +86,7 @@ pub use offer::{ShieldedOffer, ShieldedPayment};
 // The shielded coin a caller spends, from `MidnightProvider::spendable_shielded_coins`.
 pub use midnight_types::SpendableShieldedCoin;
 
-/// Trait for types that can be deserialized from hex-encoded contract state.
-pub trait FromHex: Sized {
-    fn from_hex(hex_state: &str) -> Result<Self, midnight_typed_state::StateError>;
-}
-
-// The `state`, `call`, and `deploy` modules expose a thin sliver of the
-// plumbing underneath `Contract::deploy`/`Contract::at` — `state::fetch_state`
-// and `state::fetch_state_from_node` are reached from bindgen-generated code,
-// and `deploy::deploy_funded` / `call::build_unproven_call_tx` are reached
-// from integration tests. Everything else is `pub(crate)`.
+// The `state` and `deploy` modules expose a small part of the code under
+// `Contract::deploy` and `Contract::at`. Bindgen-generated code reaches
+// `state::fetch_state`, and integration tests reach `deploy::deploy_funded`
+// and its `DeployResult`. Everything else stays inside the crate.

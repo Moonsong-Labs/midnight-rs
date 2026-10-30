@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
-use midnight_core::contract::parse_address;
+use midnight_core::contract::parse_contract_address;
 use midnight_core::provider::{HashOutput, ShieldedCoinBalance};
 use midnight_core::wallet::LocalWallet;
 use midnight_core::{MidnightProvider, Seed, Wallet};
@@ -118,7 +118,8 @@ async fn main() -> anyhow::Result<()> {
     let recipient_provider = Arc::new(recipient_provider.with_wallet(Arc::clone(&wallet)));
     let sync = wallet.sync_in_background(recipient_provider.clone(), SYNC_PAUSE);
 
-    let token_type = parse_address(&address)?.custom_shielded_token_type(HashOutput(domain_sep));
+    let token_type =
+        parse_contract_address(&address)?.custom_shielded_token_type(HashOutput(domain_sep));
     let is_minted =
         |c: &ShieldedCoinBalance| c.token_type == token_type && c.value == u128::from(value);
     // The first sync can end before it sees the mint. On a timeout, the check

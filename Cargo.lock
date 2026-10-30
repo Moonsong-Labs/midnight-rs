@@ -2917,7 +2917,6 @@ dependencies = [
  "midnight-onchain-runtime 4.0.0",
  "midnight-provider",
  "midnight-serialize",
- "midnight-storage",
  "midnight-transient-crypto 3.0.0",
  "midnight-typed-state",
  "midnight-types",
@@ -3015,7 +3014,6 @@ name = "midnight-helpers"
 version = "0.1.0"
 dependencies = [
  "midnight-ledger-unsafe-helpers",
- "midnight-node-ledger-helpers",
 ]
 
 [[package]]

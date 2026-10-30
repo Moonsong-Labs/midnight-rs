@@ -1,15 +1,11 @@
 //! A funded contract call must run the ZK prover over its circuit exactly once.
 //!
-//! Handing the funding seed to the wallet's fee-balancing fixpoint makes it
-//! rebuild and re-prove the whole transaction on every iteration, circuit
-//! included, and the first iteration always requests zero Dust so it always
-//! loops at least once. That charged the most expensive operation in the SDK
-//! three to four times per call. Nothing asserted the property, so it could
-//! regress silently.
+//! A fee balanced with real proofs proves the whole transaction again on every
+//! round, circuit included. That charges the most expensive operation in the
+//! SDK several times per call, and no other test catches it.
 //!
 //! Counting proofs needs a real prover: mock proving is not available for user
-//! circuits (upstream `MockProver::check` rejects non-builtin circuits), which
-//! is the whole reason the fixpoint was expensive here.
+//! circuits (upstream `MockProver::check` rejects non-builtin circuits).
 //!
 //! The same prover then fails on purpose. A call, a deploy and a maintenance
 //! update must each return the failure typed, as `WalletError::Proving` inside
