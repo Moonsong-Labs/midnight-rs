@@ -1170,8 +1170,9 @@ impl<P> Contract<P> {
         })
     }
 
-    /// Build and prove a circuit call transaction, returning its tagged-serialized
-    /// proven bytes **without submitting**.
+    /// Build and prove a circuit call transaction **without submitting** it.
+    /// The [`TransferResult`] holds the tagged-serialized proven bytes and the
+    /// wallet inputs that the build reserved.
     ///
     /// Use this to obtain a contract call as a transaction you combine with
     /// others before submitting: e.g. merge a counterparty's proven transaction
@@ -1185,11 +1186,19 @@ impl<P> Contract<P> {
     /// A build-only call records no private-state snapshot. So it refuses a
     /// call whose witnesses change the private state, after the local run of
     /// the circuit and before the build. A call that leaves the private state
-    /// as it was, or a contract with no witnesses, builds as usual. The build
-    /// reserves the wallet inputs that the transaction spends, as
-    /// [`Self::call_with`] does. The bytes do not name those inputs, so
-    /// nothing can hand them back. They stay reserved until a sync sees the
-    /// chain spend them, or until their TTL passes.
+    /// as it was, or a contract with no witnesses, builds as usual.
+    ///
+    /// The build reserves the wallet inputs that the transaction spends, as
+    /// [`Self::call_with`] does, and [`TransferResult::spent`] names them.
+    /// Submit a result that pays its fee with
+    /// [`MidnightProvider::submit_reserved`](midnight_provider::MidnightProvider::submit_reserved),
+    /// which hands them back when the node rejects the transaction. Wrap a
+    /// fee-less result for the fee payer with
+    /// [`DustlessTransaction::from_build`](midnight_provider::DustlessTransaction::from_build).
+    /// When the transaction will not land, pass the inputs to
+    /// [`MidnightProvider::release`](midnight_provider::MidnightProvider::release).
+    /// Otherwise they stay reserved until a sync sees the chain spend them, or
+    /// until their TTL passes.
     ///
     /// # Errors
     ///
@@ -1225,7 +1234,7 @@ impl<P> Contract<P> {
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
         pay_fees: bool,
-    ) -> Result<Vec<u8>, ContractError>
+    ) -> Result<TransferResult, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1257,7 +1266,7 @@ impl<P> Contract<P> {
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
         pay_fees: bool,
-    ) -> Result<Vec<u8>, ContractError>
+    ) -> Result<TransferResult, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -1284,7 +1293,7 @@ impl<P> Contract<P> {
             pay_fees,
         ))
         .await?;
-        Ok(built.transaction.tx_bytes)
+        Ok(built.transaction)
     }
 
     /// The head of the contract's private-state journal, which the witnesses

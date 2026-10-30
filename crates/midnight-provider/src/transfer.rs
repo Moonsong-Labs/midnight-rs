@@ -15,7 +15,9 @@
 //!   [`MidnightProvider::submit_reserved`], which hands them back when the
 //!   node never gets the transaction or rejects it. Bytes that never reach
 //!   the chain keep them until [`MidnightProvider::release`] gets
-//!   `result.spent`, or until their TTL passes.
+//!   `result.spent`, or until their TTL passes. A fee-less build keeps its
+//!   reservation on the [`DustlessTransaction`] (see
+//!   [`DustlessTransaction::spent`]).
 //!
 //! Constructors are sync methods on [`MidnightProvider`]: `transfer_unshielded`,
 //! `transfer_shielded`, `register_dust`. They borrow the provider and capture
@@ -46,7 +48,7 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
 use midnight_types::{
-    DustPublicKey, ShieldedTokenType, TransferKind, TransferRequest, TransferResult,
+    DustPublicKey, ShieldedTokenType, SpentInputs, TransferKind, TransferRequest, TransferResult,
     UnshieldedTokenType,
 };
 
@@ -189,7 +191,7 @@ impl<'a> IntoFuture for ShieldedTransfer<'a> {
 /// its own (there is no `pay_fees` path and no `.without_dust()` step). See
 /// [`MidnightProvider::shielded_swap`] for the full two-party flow.
 #[derive(Debug)]
-#[must_use = "does nothing until awaited or built"]
+#[must_use = "does nothing until awaited"]
 pub struct ShieldedSwap<'a> {
     provider: &'a MidnightProvider,
     give_token: ShieldedTokenType,
@@ -225,24 +227,6 @@ impl<'a> ShieldedSwap<'a> {
         self.coin_selection = strategy;
         self
     }
-
-    /// Build the swap half without wrapping it, returning the raw
-    /// [`TransferResult`]. Reserves the spent give-side coins so concurrent
-    /// in-process builds don't re-select them. Most callers want the
-    /// [`DustlessTransaction`] from `.await`; use this only to inspect the raw
-    /// `tx_bytes`. Note [`TransferResult::fee_speck`] here prices this half in
-    /// isolation and is not the fee the merged swap pays; the sponsor learns
-    /// that when [`MidnightProvider::balance_transaction`] funds the merge.
-    pub async fn build(self) -> Result<TransferResult, ProviderError> {
-        let request = TransferRequest::new(TransferKind::ShieldedSwap {
-            give_token: self.give_token,
-            give_amount: self.give_amount,
-            receive_token: self.receive_token,
-            receive_amount: self.receive_amount,
-        })
-        .with_coin_selection(self.coin_selection);
-        self.provider.build_then_prove(request).await
-    }
 }
 
 impl<'a> IntoFuture for ShieldedSwap<'a> {
@@ -250,9 +234,19 @@ impl<'a> IntoFuture for ShieldedSwap<'a> {
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
+        let request = TransferRequest::new(TransferKind::ShieldedSwap {
+            give_token: self.give_token,
+            give_amount: self.give_amount,
+            receive_token: self.receive_token,
+            receive_amount: self.receive_amount,
+        })
+        .with_coin_selection(self.coin_selection);
+        let provider = self.provider;
         Box::pin(async move {
-            let result = self.build().await?;
-            Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
+            provider
+                .build_then_prove(request)
+                .await
+                .map(DustlessTransaction::from_build)
         })
     }
 }
@@ -274,6 +268,9 @@ pub trait DustlessBuilder: Sized {
     /// submittable on its own: hand it to the fee payer, who completes it with
     /// [`MidnightProvider::balance_transaction`] (one payer) or
     /// [`MidnightProvider::merge_transactions`], then submits.
+    ///
+    /// The [`DustlessTransaction::spent`] names the inputs that the build
+    /// reserved, for a release when the fee payer never submits.
     fn without_dust(self) -> impl Future<Output = Result<DustlessTransaction, Self::Error>> + Send;
 }
 
@@ -281,8 +278,10 @@ impl<'a> DustlessBuilder for ShieldedTransfer<'a> {
     type Error = ProviderError;
     async fn without_dust(self) -> Result<DustlessTransaction, ProviderError> {
         let provider = self.provider;
-        let result = provider.build_then_prove(self.into_request(false)).await?;
-        Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
+        provider
+            .build_then_prove(self.into_request(false))
+            .await
+            .map(DustlessTransaction::from_build)
     }
 }
 
@@ -290,37 +289,49 @@ impl<'a> DustlessBuilder for UnshieldedTransfer<'a> {
     type Error = ProviderError;
     async fn without_dust(self) -> Result<DustlessTransaction, ProviderError> {
         let provider = self.provider;
-        let result = provider.build_then_prove(self.into_request(false)).await?;
-        Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
+        provider
+            .build_then_prove(self.into_request(false))
+            .await
+            .map(DustlessTransaction::from_build)
     }
 }
 
 /// A proven transaction that carries its effects but pays **no Dust** (no
-/// fees). Produced by `.without_dust()` on any builder.
+/// fees). Produced by `.without_dust()` on any builder, and by awaiting a
+/// [`ShieldedSwap`].
 ///
 /// Dust is Midnight's fee token, so "Dustless" names the general fee-less state
 /// of a transaction regardless of what it does. It is not submittable on its
 /// own: complete it with [`MidnightProvider::balance_transaction`] (one wallet
 /// sponsors the fees) or fold it into a larger transaction with
 /// [`MidnightProvider::merge_transactions`], then submit.
+///
+/// It also names the inputs that its build reserved, in [`Self::spent`].
 pub struct DustlessTransaction {
     tx_bytes: Vec<u8>,
+    spent: SpentInputs,
 }
 
 impl std::fmt::Debug for DustlessTransaction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DustlessTransaction")
             .field("tx_bytes", &format_args!("{} bytes", self.tx_bytes.len()))
+            .field("spent", &self.spent)
             .finish()
     }
 }
 
 impl DustlessTransaction {
-    /// Wrap already-proven, Dustless transaction bytes. Called by the
-    /// `.without_dust()` build paths (transfers here, generated contract-call
-    /// builders in other crates); not intended for wrapping arbitrary bytes.
-    pub fn from_proven_bytes(tx_bytes: Vec<u8>) -> Self {
-        DustlessTransaction { tx_bytes }
+    /// Wrap the [`TransferResult`] of a build that pays no Dust fee, and keep
+    /// the inputs that the build reserved in [`Self::spent`].
+    ///
+    /// A build that pays its own fee gives a transaction that is valid alone.
+    /// Submit that result with [`MidnightProvider::submit_reserved`] instead.
+    pub fn from_build(result: TransferResult) -> Self {
+        DustlessTransaction {
+            tx_bytes: result.tx_bytes,
+            spent: result.spent,
+        }
     }
 
     /// The proven transaction bytes, to hand to the fee payer.
@@ -331,6 +342,30 @@ impl DustlessTransaction {
     /// Consume this, returning the proven transaction bytes.
     pub fn into_bytes(self) -> Vec<u8> {
         self.tx_bytes
+    }
+
+    /// The inputs that the build of this transaction reserved in the wallet
+    /// of the provider that built it.
+    ///
+    /// They stay reserved while the fee payer completes and submits the
+    /// transaction, so a later build of that wallet does not select them.
+    /// When the transaction will not land, pass them to
+    /// [`MidnightProvider::release`] on that provider. For example, the
+    /// counterparty or the fee payer gives up. Otherwise they stay reserved
+    /// until a sync sees the chain spend them, or until their TTL passes. A
+    /// fee payer that submits with [`MidnightProvider::submit_reserved`]
+    /// hands back only its own Dust when the node rejects the transaction.
+    /// So these inputs need this release too.
+    ///
+    /// Release only a transaction that cannot land. A shielded transfer or a
+    /// swap half has no TTL of its own. The chain accepts it while it keeps
+    /// the Merkle root that the inputs prove against. The chain keeps a root
+    /// for the ledger's `global_ttl` after its coin tree moves past that
+    /// root, and for a fixed hour on ledger 8. Until then, the fee payer can
+    /// still submit the transaction. A later build can then select the
+    /// released inputs, and the chain rejects one of the two transactions.
+    pub fn spent(&self) -> &SpentInputs {
+        &self.spent
     }
 }
 

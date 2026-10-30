@@ -113,6 +113,10 @@ async fn a_registration_to_another_dust_address_funds_that_wallet() {
         .without_dust()
         .await
         .expect("build the fee-less transfer");
+    assert!(
+        !dustless.spent().unshielded.is_empty(),
+        "a fee-less transfer must name the UTXOs that it reserved, so its builder can release them"
+    );
     // The hot wallet values its Dust at the time of its last Dust event, so
     // the first attempt can fall short.
     let deadline = Instant::now() + Duration::from_secs(120);

@@ -402,6 +402,10 @@ async fn shielded_transfer_spans_multiple_coins() {
 /// it. Fee-less by construction: no funding seed, so no Dust intent rides the
 /// transaction and the receive deficit is the only shortfall. Stops at build
 /// (the half is not submittable on its own).
+///
+/// The half names the give-side coins it reserved, so a party whose swap
+/// never lands can release them. A half that drops its reservation releases
+/// nothing, and the coins stay out of the spendable reading until their TTL.
 #[tokio::test]
 async fn build_shielded_swap_half_has_mirror_deltas() {
     let Some((node, indexer)) = devnet_urls() else {
@@ -416,25 +420,54 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
     const GIVE: u128 = 1;
     const RECEIVE: u128 = 3;
 
-    let result = provider
+    let half = provider
         .shielded_swap(give_token, GIVE, receive_token, RECEIVE)
-        .build()
         .await
         .expect("swap half should build (coin selection + proofs + serialize)");
 
     // The build selects concrete give-side coins up front and surfaces their
-    // nullifiers so the caller can reserve them.
+    // nullifiers so the caller can release them.
+    let reserved: Vec<_> = half
+        .spent()
+        .shielded
+        .iter()
+        .map(|reserved| reserved.input)
+        .collect();
     assert!(
-        !result.spent.shielded.is_empty(),
+        !reserved.is_empty(),
         "swap half should surface the spent give-side coin nullifiers"
     );
     assert!(
-        result.tx_bytes.len() > 1000,
+        half.as_bytes().len() > 1000,
         "tx bytes too small to be a real proven offer ({})",
-        result.tx_bytes.len()
+        half.as_bytes().len()
     );
 
-    let delta = |token: midnight_wallet::ShieldedTokenType| shielded_delta(&result.tx_bytes, token);
+    let spendable = || async {
+        provider
+            .spendable_shielded_coins()
+            .await
+            .expect("wallet attached")
+            .into_iter()
+            .map(|coin| coin.nullifier)
+            .collect::<Vec<_>>()
+    };
+    let before_release = spendable().await;
+    assert!(
+        reserved.iter().all(|n| !before_release.contains(n)),
+        "a reserved give-side coin must leave the spendable coins"
+    );
+    provider
+        .release(half.spent())
+        .await
+        .expect("release the reservation");
+    let after_release = spendable().await;
+    assert!(
+        reserved.iter().all(|n| after_release.contains(n)),
+        "a release of the half's reservation must make its coins spendable again"
+    );
+
+    let delta = |token: midnight_wallet::ShieldedTokenType| shielded_delta(half.as_bytes(), token);
 
     assert_eq!(
         delta(give_token),
