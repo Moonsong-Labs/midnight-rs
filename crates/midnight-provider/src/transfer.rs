@@ -322,6 +322,7 @@ impl std::fmt::Debug for DustlessTransaction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DustlessTransaction")
             .field("tx_bytes", &format_args!("{} bytes", self.tx_bytes.len()))
+            .field("spent", &self.spent)
             .finish()
     }
 }
