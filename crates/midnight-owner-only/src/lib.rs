@@ -215,4 +215,15 @@ mod tests {
         assert_eq!(mode_of(&dir), 0o700);
         assert_eq!(mode_of(&file), 0o600);
     }
+
+    #[test]
+    fn only_a_refused_sync_is_skipped() {
+        use std::io;
+        for code in [libc::EBADF, libc::EINVAL, libc::ENOTSUP] {
+            let err = io::Error::from_raw_os_error(code);
+            assert!(super::sync_refused(&err), "{err} is a refused sync");
+        }
+        let err = io::Error::from_raw_os_error(libc::EIO);
+        assert!(!super::sync_refused(&err), "{err} is a failed sync");
+    }
 }
