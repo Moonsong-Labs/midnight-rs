@@ -39,7 +39,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
   │     ├── sync.rs              TrackedUtxo, SyncCursors
   │     ├── hd.rs                Seed and its addresses, mnemonic, Role and the BIP-32 role keys
-  │     ├── address.rs           parse_shielded_recipient
+  │     ├── address.rs           parse_shielded_recipient, parse_dust_address
   │     ├── network.rs           Network: the bech32 HRP suffix, typed
   │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap; SyncSource
   │     └── error.rs             WalletError
@@ -346,7 +346,7 @@ Each of the four provider methods is a *sync constructor* that returns a builder
 provider.transfer_shielded(token_type, amount, recipient)       // bech32 address; no work yet
         .transfer_unshielded(token_type, amount, recipient)
         .shielded_swap(give_token, give_amount, receive_token, receive_amount)
-        .register_dust(utxo_ctime)
+        .register_dust(utxo_ctime)                              // .to(dust_key) sends the Dust to another wallet
 
   ↓ .await? (or .build().await? for the no-submit escape hatch)
 

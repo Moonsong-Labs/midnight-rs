@@ -30,7 +30,7 @@ Most of the API is the same on both generations:
 - the wallet sync (the `WalletBuilder` that `Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase` and `WalletBuilder::new` start) and `LocalWallet`
 - the generated contract bindings (`Contract::deploy`, `circuits()`, `ledger()`), `Contract::call_with`, a deploy's `ShieldedOffer`, and contract maintenance
 
-Its vocabulary lives in `midnight-types`, one type for both generations: `ShieldedTokenType`, `UnshieldedTokenType`, `Nullifier`, `Nonce`, `CoinInfo`, `CoinPublicKey`, `EncryptionPublicKey`, `ShieldedRecipient`, `ContractAddress`, `DustNullifier`, `ChainParameters` and `LedgerVersion`. The provider, wallet and contract crates re-export it. A DApp that uses only this surface runs on either chain with no code for a generation.
+Its vocabulary lives in `midnight-types`, one type for both generations: `ShieldedTokenType`, `UnshieldedTokenType`, `Nullifier`, `Nonce`, `CoinInfo`, `CoinPublicKey`, `EncryptionPublicKey`, `ShieldedRecipient`, `ContractAddress`, `DustNullifier`, `DustPublicKey`, `ChainParameters` and `LedgerVersion`. The provider, wallet and contract crates re-export it. A DApp that uses only this surface runs on either chain with no code for a generation.
 
 The Compact side (the interpreter, the typed state and the generated bindings) reads ledger 9's types on both chains. The two generations share the Impact ops and the state encoding, and `midnight_typed_state::decode_contract_state` converts the state a ledger 8 chain serves.
 
@@ -134,6 +134,8 @@ What the crossing keeps and what it drops:
 ### Register Dust again
 
 After the fork, no NIGHT generates Dust, so the wallet cannot pay a fee. Register each NIGHT UTXO again. `DustBalance::unregistered_night_utxos` counts the UTXOs left, and each `register_dust` call registers one. A registration pays its own fee from the NIGHT it spends, so a wallet with no Dust can register.
+
+A wallet that sent its Dust to another wallet's Dust address must name that address again, because the fork removed that delegation too. Add `.to(target)` to each `register_dust` call in the loop below. A call without it points the whole NIGHT address back to the wallet's own Dust address. See [`wallet.md`](wallet.md#registration-to-another-dust-address).
 
 ```rust
 use std::time::{Duration, Instant};
