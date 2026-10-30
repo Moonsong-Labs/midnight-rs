@@ -393,7 +393,7 @@ let pending = provider
 4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
 5. Submits the proven bytes to the node and returns a `PendingTx`.
 
-Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` (one hour on the default parameters) after the time of the chain's latest block that the resync read. That is the longest TTL that the chain accepts. To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
+Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the chain's latest block that the resync read. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships), and `Wallet::parameters().global_ttl` gives the value of the connected chain. That is the longest TTL that the chain accepts. To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
 
 ```rust
 use std::time::Duration;
