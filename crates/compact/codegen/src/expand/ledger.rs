@@ -1641,17 +1641,23 @@ pub(crate) fn emit_simulator(
         let params = typed_params(&c.arguments);
         let program = program_setup(&ledger_name);
         let args = args_binding(&c.arguments);
+        let private_state = if info.witnesses.is_empty() {
+            ""
+        } else {
+            " The witnesses start from the simulator's private state, which starts at \
+             `Default`. A deploy starts them from the state of `with_initial_private_state`."
+        };
         let doc = format!(
             "Run the contract's constructor in process, as a deploy does.\n\n\
-             The constructor runs on the simulator's ledger. A simulator over \
+             The constructor runs on the simulator's ledger. On success, the simulator keeps the \
+             ledger and the private state after the constructor. A simulator over \
              `{contract_name}InitialState::default()` then holds the state that a deploy with \
-             these arguments makes. On success, the simulator keeps the ledger and the private \
-             state after the constructor.\n\n\
+             these arguments makes, when the inputs below are the same.\n\n\
              The constructor runs at the address, the block time and the coin public key of the \
              simulator. A deploy runs it at the zero address, the wall-clock time and the \
-             wallet's coin public key. The simulator refuses no effect. A deploy refuses a \
-             constructor that mints, claims, spends a coin or creates a shielded coin, or makes \
-             an unshielded input or output.\n\n\
+             wallet's coin public key.{private_state} The simulator refuses no effect. A deploy \
+             refuses a constructor that mints, claims, spends a coin or creates a shielded coin, \
+             or makes an unshielded input or output.\n\n\
              # Errors\n\n\
              `ContractError::Interpreter` when the constructor or a witness fails, for example \
              on a failed `assert`. The simulator then keeps the state from before the run."
