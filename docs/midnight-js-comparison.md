@@ -240,9 +240,9 @@ These are real Midnight chain features that midnight-js exposes and this SDK doe
 
 ### Shielded and unshielded payments in one transfer
 
-midnight-js's `transferTransaction(outputs, { ttl, payFees })` takes shielded and unshielded outputs together, of any tokens, and builds one transaction that pays one Dust fee.
+The wallet-SDK's `WalletFacade.transferTransaction(outputs, secretKeys, { ttl, payFees })` takes shielded and unshielded outputs together, of any tokens, and builds one transaction that pays one Dust fee.
 
-midnight-rs builds one kind per transfer. [`transfer_shielded_many` and `transfer_unshielded_many`](../crates/midnight-provider/src/provider.rs) each take a list of `Payment`s of one kind, of any tokens. Each builds one transaction that pays one Dust fee. To pay shielded and unshielded recipients in one transaction, build each list with `.without_dust()`. Merge the two transactions with `merge_transactions`. Then pay the fee with `balance_transaction`. A Dustless shielded transfer carries no intent, so the merge has no segment collision. That takes three builds where midnight-js takes one. [`wallet.md`](./wallet.md#transfers) shows the steps.
+midnight-rs builds one kind per transfer. [`transfer_shielded_many` and `transfer_unshielded_many`](../crates/midnight-provider/src/provider.rs) each take a list of `Payment`s of one kind, of any tokens. Each builds one transaction that pays one Dust fee. To pay shielded and unshielded recipients in one transaction, build each list with `.without_dust()`. Merge the two transactions with `merge_transactions`. Then pay the fee with `balance_transaction`. A Dustless shielded transfer carries no intent, so the merge has no segment collision. That takes three builds where the wallet SDK takes one. [`wallet.md`](./wallet.md#transfers) shows the steps.
 
 ### Wallet observability
 
