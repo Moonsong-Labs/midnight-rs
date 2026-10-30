@@ -4,9 +4,9 @@
 //! narrows a path that already exists to that mode. On other platforms, a path
 //! keeps the default permissions.
 //!
-//! To replace a file durably, write a temporary file with [`write()`], rename it
-//! into place, and then call [`sync_dir`] on its directory. After a crash or a
-//! power loss, the path holds the old contents or the new contents.
+//! [`replace`] writes a file through a temporary sibling, which it syncs to
+//! disk and renames into place before it syncs the directory. After a crash or
+//! a power loss, the path holds the old contents or the new contents.
 //!
 //! A file system that cannot sync a file or a directory refuses the sync. The
 //! calls then skip that sync, and the file system alone decides what persists
@@ -14,7 +14,7 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Creates `dir` and its missing ancestors, readable only by the owner.
 ///
@@ -39,19 +39,51 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)
 }
 
-/// Writes `contents` to `path`, in a file readable only by the owner, and
-/// syncs the file to disk.
+/// Replaces the contents of `path` with `contents`, in a file readable only by
+/// the owner.
 ///
-/// On Unix, the file gets mode 0600, also when it exists. The call replaces
-/// the contents of an existing file. When the call returns, the contents are
-/// on disk, so a rename of `path` cannot persist before them. On a file system
-/// that refuses the sync, the call skips it (see the module docs).
+/// The call writes `contents` to a temporary sibling, the name of `path` with
+/// `.tmp` appended, and syncs it to disk. It then renames the sibling to `path`
+/// and syncs the directory. After a crash or a power loss, `path` holds the
+/// old contents or the new contents. On Unix, `path` gets mode 0600. On a file
+/// system that refuses a sync, the call skips it (see the module docs).
 ///
 /// # Errors
 ///
-/// Returns the error of the open, of the mode change, of the write or of the
-/// sync.
-pub fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
+/// Returns the error of the first step that fails, with the step and the path
+/// in its message. The directory sync comes after the rename, so `path` can
+/// hold the new contents when that sync fails.
+pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let tmp = tmp_path(path);
+    write(&tmp, contents).map_err(|err| at_step(err, "write", &tmp))?;
+    fs::rename(&tmp, path).map_err(|err| at_step(err, "rename into", path))?;
+    let dir = parent_dir(path);
+    sync_dir(dir).map_err(|err| at_step(err, "sync", dir))
+}
+
+/// The temporary sibling that [`replace`] writes before its rename.
+fn tmp_path(path: &Path) -> PathBuf {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    tmp.into()
+}
+
+/// The directory that holds `path`, or `.` for a bare file name.
+fn parent_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    }
+}
+
+/// `err` with the failed `step` and its `path` in the message.
+fn at_step(err: io::Error, step: &str, path: &Path) -> io::Error {
+    io::Error::new(err.kind(), format!("{step} {}: {err}", path.display()))
+}
+
+/// Writes `contents` to `path` with mode 0600 on Unix, also when the file
+/// exists, and syncs the file to disk.
+fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
     use std::io::Write;
     #[cfg(unix)]
     let mut file = {
@@ -135,11 +167,12 @@ mod tests {
         let file = dir.join("file");
         fs::create_dir(&dir).unwrap();
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
-        fs::write(&file, b"old").unwrap();
-        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        let stale_tmp = super::tmp_path(&file);
+        fs::write(&stale_tmp, b"old").unwrap();
+        fs::set_permissions(&stale_tmp, fs::Permissions::from_mode(0o644)).unwrap();
 
         super::create_dir_all(&dir).unwrap();
-        super::write(&file, b"new").unwrap();
+        super::replace(&file, b"new").unwrap();
 
         assert_eq!(mode_of(&dir), 0o700);
         assert_eq!(mode_of(&file), 0o600);

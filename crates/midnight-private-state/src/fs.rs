@@ -27,10 +27,10 @@
 //! filenames with new timestamps. `mark_failed` / `rollback_from` likewise
 //! walk the graph to cascade through dependents.
 //!
-//! A write syncs a `.tmp` sibling to disk and then `rename`s it into place
-//! (see `midnight_owner_only`), so a crash, or a power loss on a file system
-//! that can sync, never leaves a half-written file. The wallet uses the same
-//! discipline.
+//! A write goes through `midnight_owner_only::replace`, which syncs a `.tmp`
+//! sibling to disk and then `rename`s it into place. So a crash, or a power
+//! loss on a file system that can sync, never leaves a half-written file. The
+//! wallet uses the same discipline.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -1014,19 +1014,9 @@ fn create_private_dir(dir: &Path) -> Result<(), PrivateStateError> {
         .map_err(|e| PrivateStateError::Io(format!("create dir {}: {e}", dir.display())))
 }
 
-/// Write `contents` to a `.tmp` sibling of `path`, rename it into place, and
-/// sync the directory (see the module docs).
+/// [`midnight_owner_only::replace`] (see the module docs).
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), PrivateStateError> {
-    let tmp = path.with_extension("tmp");
-    midnight_owner_only::write(&tmp, contents)
-        .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
-    fs::rename(&tmp, path)
-        .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))?;
-    let dir = path
-        .parent()
-        .ok_or_else(|| PrivateStateError::Io(format!("{} has no parent", path.display())))?;
-    midnight_owner_only::sync_dir(dir)
-        .map_err(|e| PrivateStateError::Io(format!("sync {}: {e}", dir.display())))
+    midnight_owner_only::replace(path, contents).map_err(|e| PrivateStateError::Io(e.to_string()))
 }
 
 /// `None` when `result` failed with `NotFound`. Any other error becomes
@@ -2038,8 +2028,7 @@ mod tests {
 
     /// A store that an earlier version wrote at the umask keeps its modes
     /// until a write narrows them, because a mode given at create does not
-    /// touch what already exists. This includes a temporary file that a crash
-    /// left before its rename, which the next write of that snapshot reuses.
+    /// touch what already exists.
     #[cfg(unix)]
     #[tokio::test]
     async fn the_next_write_narrows_an_existing_store() {
@@ -2055,9 +2044,6 @@ mod tests {
             .unwrap();
         fs::set_permissions(&p.root, fs::Permissions::from_mode(0o755)).unwrap();
         fs::set_permissions(&snapshot, fs::Permissions::from_mode(0o644)).unwrap();
-        let stale_tmp = snapshot.with_extension("tmp");
-        fs::write(&stale_tmp, b"{}").unwrap();
-        fs::set_permissions(&stale_tmp, fs::Permissions::from_mode(0o644)).unwrap();
 
         p.confirm("0200aa", ext(1), None, ext(9)).await.unwrap();
 
