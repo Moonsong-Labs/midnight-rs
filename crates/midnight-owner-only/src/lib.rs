@@ -7,6 +7,8 @@
 //! [`replace`] writes a file through a temporary sibling, which it syncs to
 //! disk and renames into place before it syncs the directory. After a crash or
 //! a power loss, the path holds the old contents or the new contents.
+//! [`create_dir_all`] syncs the parent of each directory that it creates, so a
+//! new directory persists too.
 //!
 //! A file system that cannot sync a file or a directory refuses the sync. The
 //! calls then skip that sync, and the file system alone decides what persists
@@ -20,12 +22,18 @@ use std::path::{Path, PathBuf};
 ///
 /// On Unix, each directory that the call creates gets mode 0700, and `dir`
 /// gets mode 0700 also when it exists. An existing ancestor keeps its mode.
-/// On other platforms, this is [`std::fs::create_dir_all`].
+/// The call syncs the parent of each directory that it creates, so the new
+/// directories persist after a power loss. When `dir` exists, the call syncs
+/// nothing. On other platforms, this is [`std::fs::create_dir_all`].
 ///
 /// # Errors
 ///
-/// Returns the error of the create or of the mode change.
+/// Returns the error of the create, of the mode change or of a sync.
 pub fn create_dir_all(dir: &Path) -> io::Result<()> {
+    let missing: Vec<&Path> = dir
+        .ancestors()
+        .take_while(|ancestor| !ancestor.as_os_str().is_empty() && !ancestor.exists())
+        .collect();
     #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -33,10 +41,15 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
     #[cfg(not(unix))]
-    fs::create_dir_all(dir)
+    fs::create_dir_all(dir)?;
+    for created in missing {
+        let parent = parent_dir(created);
+        sync_dir(parent).map_err(|err| at_step(err, "sync", parent))?;
+    }
+    Ok(())
 }
 
 /// Replaces the contents of `path` with `contents`, in a file readable only by
