@@ -168,7 +168,10 @@ fn make_dust_checkpoint(
 /// its intents from `chain_now`, which the block context keeps beside the
 /// anchor as its `last_block_time`. The chain checks two things of `ctime`:
 ///
-/// 1. `root_history.get(ctime)` matches the wallet's Dust root.
+/// 1. `root_history.get(ctime)` matches the wallet's Dust root. The chain
+///    keeps `root_history` only for `global_ttl`: each block drops the
+///    entries before `tblock - global_ttl`, so an older `ctime` resolves to no
+///    root.
 /// 2. `ctime + dust_grace_period >= chain.current_tblock` when it applies the
 ///    transaction.
 ///
@@ -194,10 +197,8 @@ fn dust_anchor(
     chain_now: Timestamp,
     parameters: &LedgerParameters,
 ) -> Timestamp {
-    // The chain bounds the anchor only by `dust_grace_period`: it refuses an
-    // older `ctime` with `OutOfDustValidityWindow`. The cap at `global_ttl`
-    // keeps a margin under a longer grace period, for the time that a build
-    // takes to prove and to reach a block.
+    // The chain enforces both bounds. The Dust grace period is often much
+    // shorter, and it rejects a stale `ctime` with `OutOfDustValidityWindow`.
     let window = parameters.global_ttl.min(parameters.dust.dust_grace_period);
     match last_dust_block_time
         .map(|t| t + helpers::Duration::from_secs(1))
