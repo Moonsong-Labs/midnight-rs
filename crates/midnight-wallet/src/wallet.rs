@@ -376,10 +376,14 @@ impl Wallet {
     ///   coin registration (see below): transfer builds record their
     ///   in-flight spends in the separate pending set and never touch
     ///   confirmed state.
-    /// - Coin registrations ([`Self::watch_for_coin`]) are **carried over**.
-    ///   They live in `zswap_state`, so one made after the plan snapshot
-    ///   would otherwise be dropped by the overwrite. A registration this
-    ///   replay claimed is not carried, since the coin is now held.
+    /// - Coin registrations ([`Self::watch_for_coin`]) live in `zswap_state`.
+    ///   The replay starts from the plan's registrations, so the commit keeps
+    ///   each one that the replay did not consume. A replay consumes a
+    ///   registration when it claims the coin. The overwrite drops a
+    ///   registration made after the plan snapshot, and brings back one
+    ///   forgotten after it. So callers must not change a registration
+    ///   between plan and commit, as [`LocalWallet`](crate::LocalWallet)
+    ///   makes sure with its sync lock.
     /// - The pending reservation set is **merged, not overwritten**:
     ///   `clear_confirmed` drops exactly the entries whose spends this
     ///   replay observed on-chain, evaluated against the pending set as it
@@ -389,16 +393,15 @@ impl Wallet {
     ///   the replay fetched.
     ///
     /// A resync that crossed a hard fork replaces the state with the later
-    /// generation's and saves it. Registrations carry over as above, and the
-    /// chain pin stays as the commit finds it. The reservations do not carry
-    /// over: a transaction built for the earlier generation cannot land on
-    /// the chain that left it.
+    /// generation's and saves it. The shielded state crosses with its
+    /// registrations, and the chain pin stays as the commit finds it. The
+    /// reservations do not carry over: a transaction built for the earlier
+    /// generation cannot land on the chain that left it.
     pub(crate) fn commit_resync(&mut self, commit: ResyncCommit) -> Result<(), WalletError> {
         match (&mut self.state, commit.0) {
             (State::Ledger8(w), ResyncCommitKind::Ledger8(c)) => w.commit_resync(c),
             (State::Ledger9(w), ResyncCommitKind::Ledger9(c)) => w.commit_resync(c),
             (State::Ledger8(w8), ResyncCommitKind::Crossed(mut w9)) => {
-                w9.carry_registrations(w8.watched_coins());
                 if let Some(pin) = w8.chain_pin() {
                     w9.set_chain_pin(pin.clone());
                 }
@@ -444,11 +447,13 @@ impl Wallet {
     /// storage directory is configured.
     ///
     /// The rebuilt shielded state and its cursor replace what the wallet
-    /// holds, and registrations are carried over as [`Self::commit_resync`]
-    /// carries them. Callers must keep resyncs from interleaving (see
-    /// [`ShieldedRescanPlan::run`]). Everything else a resync writes (dust,
-    /// unshielded, parameters, block context, pending reservations) is left
-    /// alone here.
+    /// holds. The plan seeds the replay with every registration, so the
+    /// commit keeps each one that the replay did not consume, and callers
+    /// must not change a registration between plan and commit, as for
+    /// [`Self::commit_resync`]. Callers must keep resyncs from interleaving
+    /// (see [`ShieldedRescanPlan::run`]). Everything else a resync writes
+    /// (dust, unshielded, parameters, block context, pending reservations) is
+    /// left alone here.
     pub(crate) fn commit_shielded_rescan(
         &mut self,
         commit: ShieldedRescanCommit,
