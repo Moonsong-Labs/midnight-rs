@@ -393,7 +393,7 @@ let pending = provider
 4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
 5. Submits the proven bytes to the node and returns a `PendingTx`.
 
-Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the chain's latest block that the resync read. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships), and `Wallet::parameters().global_ttl` gives the value of the connected chain. That is the longest TTL that the chain accepts. To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
+Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the chain's latest block that the resync read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships), and `Wallet::parameters().global_ttl` gives the value of the connected chain. To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
 
 ```rust
 use std::time::Duration;
@@ -406,7 +406,7 @@ let pending = provider
 
 `transfer_shielded`, `transfer_unshielded` and `register_dust` take it, and so do a contract deploy (`DeployBuilder::with_ttl`) and a circuit call (`.with_ttl` on the call builder, or the `ttl` argument of `Contract::call_with`). The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the build with `WalletError::TtlOutOfRange`, before it spends or proves anything. A Dustless shielded transfer (`.without_dust()`) is a Zswap offer with no intent, so it cannot carry a TTL, and its build fails with `WalletError::TtlWithoutIntent`. A shielded swap half has no `with_ttl` for the same reason. When a wallet pays the fee of another party's transaction (`balance_transaction`), its fee intent expires with the earliest intent of that transaction.
 
-A shorter TTL bounds two waits: how long a transaction whose fate is unknown can still land, and how long the wallet holds its inputs (see [Pending reservations](#pending-reservations)). A transaction that pays its fee with Dust has a second bound: the chain refuses its Dust actions once their `ctime` is older than the Dust grace period (`dust_grace_period`, 3 hours on the networks that midnight-node ships). The `ctime` is the block time of the wallet's Dust state, which can trail the chain.
+A shorter TTL bounds two waits: how long a transaction whose fate is unknown can still land, and how long the wallet holds its inputs (see [Pending reservations](#pending-reservations)). A transaction that pays its fee with Dust has a second bound, its Dust window: the chain refuses its Dust actions once their `ctime` is older than the Dust grace period (`dust_grace_period`, 3 hours on the networks that midnight-node ships). The `ctime` is the block time of the wallet's Dust state, which can trail the chain.
 
 To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder instead of awaiting it:
 
