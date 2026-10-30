@@ -228,7 +228,7 @@ async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
 /// A prepare sends nothing to the node, so a reserved build whose prepare
 /// fails gets its inputs back, whatever the error. A failed connect is
 /// `ProviderError::Rpc`, so a release that follows the error variant keeps
-/// the inputs reserved until their TTL.
+/// the inputs reserved until their reservation expires.
 #[tokio::test]
 async fn a_reserved_build_whose_connect_fails_gets_its_inputs_back() {
     let wallet = Arc::new(StubWallet::default());

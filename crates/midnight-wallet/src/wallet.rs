@@ -154,7 +154,7 @@ impl Wallet {
     ///
     /// Reserving on build stops a later build re-selecting the same inputs, so
     /// a transaction that is rejected at submit, or built and then abandoned,
-    /// holds its coins until the TTL window elapses. Releasing returns them at
+    /// holds its coins until the reservation expires. Releasing returns them at
     /// once. Pass what the build reported spending.
     ///
     /// Only call this for a transaction that cannot land. Releasing one that is

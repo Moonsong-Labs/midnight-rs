@@ -17,7 +17,7 @@ use crate::{NIGHT, Nullifier, ShieldedTokenType, UnshieldedTokenType};
 ///
 /// A build reserves the Dust UTXOs it spends. The reservation ends when a sync
 /// or resync sees the chain confirm the transaction. It also ends when a
-/// release hands the UTXOs back, or when its TTL ends.
+/// release hands the UTXOs back, or when it expires.
 /// [`Self::spendable_utxos`] and [`Self::spendable_speck`] leave the reserved
 /// UTXOs out, and [`Self::balance_speck`] counts them.
 #[derive(Debug, Clone, Default)]

@@ -228,7 +228,7 @@ impl<'a> Builds<'a> {
     /// reaches the prover only through a wallet that says it reserved the
     /// inputs first. A proof that fails hands them back, because the
     /// reservation outlives the decision that made it and would otherwise
-    /// strand them until their TTL elapses. For a sponsored fee, the proof
+    /// strand them until their reservation expires. For a sponsored fee, the proof
     /// includes the merge into the external transaction and its price.
     async fn prove_reserved(
         &self,

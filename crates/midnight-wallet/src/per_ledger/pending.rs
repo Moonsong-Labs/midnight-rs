@@ -185,7 +185,7 @@ impl PendingReservations {
     ///
     /// Reserving on build is what stops a later build re-selecting the same
     /// inputs, but a transaction that is rejected at submit, or simply
-    /// abandoned, would otherwise hold them until its TTL elapses. Callers that
+    /// abandoned, would otherwise hold them until the reservation expires. Callers that
     /// know the transaction is dead hand back what the build reported spending.
     ///
     /// Matching mirrors [`Self::clear_confirmed`]: an unshielded entry goes by
@@ -420,7 +420,7 @@ mod tests {
 
     /// A transaction built for one generation cannot land on a chain that
     /// runs another, so its reservations are dead. Loading them would hide
-    /// their inputs until their TTL, and would decode another generation's
+    /// their inputs until they expire, and would decode another generation's
     /// Dust spends with this one's types.
     #[test]
     fn reservations_of_another_generation_are_dropped_at_load() {

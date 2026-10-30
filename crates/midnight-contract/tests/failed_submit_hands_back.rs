@@ -7,7 +7,7 @@
 //! its prepare and before its submit. Neither transaction left the process, so
 //! the wallet must get the fee Dust back at once. A deploy that submits with
 //! plain `submit`, or a call that prepares with plain `prepare`, keeps that
-//! Dust reserved until its TTL passes, and the next fee-paying build then
+//! Dust reserved until its reservation expires, and the next fee-paying build then
 //! fails with `InsufficientDust`.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).

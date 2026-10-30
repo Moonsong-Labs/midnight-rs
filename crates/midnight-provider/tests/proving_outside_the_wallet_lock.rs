@@ -12,7 +12,7 @@
 //!
 //! A reservation outlives the decision that made it, so a build whose proof
 //! fails has to hand its inputs back. Otherwise they stay unusable until their
-//! TTL elapses and the wallet looks poorer than it is.
+//! reservation expires and the wallet looks poorer than it is.
 //!
 //! The spendable Dust readings leave out reserved Dust, and the total counts
 //! it. A new build cannot draw on reserved Dust, so a spendable reading that

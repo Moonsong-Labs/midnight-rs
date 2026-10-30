@@ -1606,7 +1606,8 @@ mod tests {
     }
 
     /// A wallet's block time is its Dust anchor, which can trail the chain
-    /// by up to an hour. A TTL counted from it reaches the chain already
+    /// by up to the smaller of `global_ttl` and `dust_grace_period`. A TTL
+    /// counted from it reaches the chain already
     /// expired when it is shorter than that lag.
     #[test]
     fn a_ttl_counts_from_the_chain_time_not_the_dust_anchor() {

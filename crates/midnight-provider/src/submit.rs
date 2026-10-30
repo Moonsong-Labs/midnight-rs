@@ -318,7 +318,7 @@ impl std::fmt::Display for Verdict {
 /// reserved inputs (see [`PreparedTx`]). Under a Tokio runtime, that release
 /// runs to its end, even when the caller drops the wait future during it. A
 /// drop before the wait reads `Invalid` leaves the inputs reserved until their
-/// TTL passes.
+/// reservation expires.
 pub struct PendingTx {
     progress: subxt::tx::TransactionProgress<subxt::SubstrateConfig, AtBlock>,
     reservation: Option<Reservation>,

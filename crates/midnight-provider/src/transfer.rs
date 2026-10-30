@@ -15,7 +15,7 @@
 //!   [`MidnightProvider::submit_reserved`], which hands them back when the
 //!   node never gets the transaction or rejects it. Bytes that never reach
 //!   the chain keep them until [`MidnightProvider::release`] gets
-//!   `result.spent`, or until their TTL passes.
+//!   `result.spent`, or until their reservation expires.
 //!
 //! Constructors are sync methods on [`MidnightProvider`]: `transfer_unshielded`,
 //! `transfer_shielded`, `register_dust`. They borrow the provider and capture
