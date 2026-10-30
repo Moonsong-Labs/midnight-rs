@@ -339,8 +339,7 @@ impl DustlessTransaction {
         &self.tx_bytes
     }
 
-    /// Consume this, returning the proven transaction bytes. Use
-    /// [`Self::into_parts`] to keep [`Self::spent`] too.
+    /// Consume this, returning the proven transaction bytes.
     pub fn into_bytes(self) -> Vec<u8> {
         self.tx_bytes
     }
@@ -367,12 +366,6 @@ impl DustlessTransaction {
     /// released inputs, and the chain rejects one of the two transactions.
     pub fn spent(&self) -> &SpentInputs {
         &self.spent
-    }
-
-    /// Consume this, returning the proven transaction bytes and
-    /// [`Self::spent`].
-    pub fn into_parts(self) -> (Vec<u8>, SpentInputs) {
-        (self.tx_bytes, self.spent)
     }
 }
 
