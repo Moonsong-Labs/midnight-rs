@@ -40,6 +40,27 @@ impl fmt::Display for UnshieldedTokenType {
 /// NIGHT, the native unshielded token.
 pub const NIGHT: UnshieldedTokenType = UnshieldedTokenType(HashOutput([0; 32]));
 
+/// A token of any kind, as a transaction's balance names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TokenType {
+    /// An unshielded token.
+    Unshielded(UnshieldedTokenType),
+    /// A shielded token.
+    Shielded(ShieldedTokenType),
+    /// Dust, the fee token.
+    Dust,
+}
+
+impl fmt::Display for TokenType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unshielded(token) => write!(f, "unshielded token {token}"),
+            Self::Shielded(token) => write!(f, "shielded token {token}"),
+            Self::Dust => f.write_str("Dust"),
+        }
+    }
+}
+
 // `1 DUST = 10^15 SPECK` and `1 NIGHT = 10^6 STAR`, the same in every
 // generation.
 pub use midnight_helpers::ledger_9::{SPECKS_PER_DUST, STARS_PER_NIGHT};

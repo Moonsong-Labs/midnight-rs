@@ -11,8 +11,8 @@ use super::helpers::{
 };
 use super::types::convert::IntoLedger;
 use super::types::{
-    PreparedInput, PreparedTransfer, TransferBuilder, balance_external, prepare_no_validate,
-    prepare_shielded_inputs,
+    PreparedInput, PreparedTransfer, TransferBuilder, balance_external, balance_external_tokens,
+    prepare_no_validate, prepare_shielded_inputs,
 };
 use crate::LocalWallet;
 
@@ -117,7 +117,22 @@ impl WalletBuilds for LocalWallet {
         let mut guard = self.inner().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
         fund_from(wallet, &mut tx_info)?;
-        let Some(prepared) = balance_external(tx_info, external)? else {
+        let Some(prepared) = balance_external(tx_info, external).await? else {
+            return Ok(None);
+        };
+        Ok(Some(reserve(wallet, prepared)))
+    }
+
+    async fn prepare_balance(
+        &self,
+        mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+        external: &FinalizedTransaction<DefaultDB>,
+    ) -> Result<Option<ReservedBuild>, WalletError> {
+        let mut guard = self.inner().write().await;
+        let wallet = super::wallet_state_mut(&mut guard)?;
+        fund_from(wallet, &mut tx_info)?;
+        let Some(prepared) = balance_external_tokens(tx_info, wallet.seed(), external).await?
+        else {
             return Ok(None);
         };
         Ok(Some(reserve(wallet, prepared)))

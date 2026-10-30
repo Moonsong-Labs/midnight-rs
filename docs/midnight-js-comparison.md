@@ -26,7 +26,7 @@ ContractProviders = {
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
 | `MidnightProvider.submitTx`   | `MidnightProvider::submit`                                                                          |
 | `PublicDataProvider`          | The `Provider` trait (`get_contract_state`), `StateQueryProvider` for the lazy reads, and `MidnightProvider`'s `get_*` reads |
-| `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers), plus `merge_transactions` / `balance_transaction` (see "Combining and balancing transactions") |
+| `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers), plus `merge_transactions` / `balance_transaction` / `balance_transaction_with_tokens` (see "Combining and balancing transactions") |
 | `ProofProvider`               | `ProofProviders` (one prover per ledger generation), set with `with_proof_provider`: local by default, or a `RemoteProofServer` |
 | `ZkConfigProvider`            | The `ZkConfigProvider` trait, set with `with_zk_config`, where a path gives the default `FsZkConfigProvider` |
 | `PrivateStateProvider`        | `midnight-private-state` crate (`FsPrivateStateProvider`); threaded through witnesses via `WitnessContext` — see below |
@@ -113,7 +113,19 @@ let complete = bob.balance_transaction(partial.as_bytes()).await?;
 bob.submit_reserved(complete).await?;
 ```
 
-**The remaining gap.** midnight-js's `balanceTx` also covers a **token deficit** from the balancing wallet: the balancer can supply its *own* tokens, not just fees, in a *single* unbalanced transaction. Our `balance_transaction` is **fee-only**: a leftover shielded-token deficit is rejected with a clear error. This matters only for the asymmetric shape where one wallet both provides the missing tokens and pays the fees for another's transaction; the native two-party swap (next section) no longer needs it, because the two mirrored halves cancel their tokens on merge and only the Dust fee is left to cover. Supplying the balancer's own coins for the asymmetric case is the tracked follow-up.
+**Covering a token deficit.** midnight-js's `balanceTx` also covers a **token deficit** from the balancing wallet, so the balancer can supply its *own* tokens in a *single* unbalanced transaction. The testkit's `MidnightWalletProvider` serves `balanceTx` with the wallet SDK facade's `balanceUnboundTransaction`. The facade's balance calls take a `tokenKindsToBalance` option that limits which token kinds they balance, and they balance every kind by default. `balanceFinalizedTransaction` is the facade call for a finalized transaction, which is what midnight-rs balances. midnight-rs makes this a separate call, so a fee-only sponsor cannot pay a token deficit by mistake: `balance_transaction` is **fee-only** and refuses a token deficit with a clear error, and [`MidnightProvider::balance_transaction_with_tokens(bytes)`](../crates/midnight-provider/src/provider.rs) balances every token too. For each token that a segment of the transaction lacks, the payer spends its own coins into that segment and takes the change. For each token that a segment holds in surplus, the payer takes the surplus as an output, as midnight-js does. Shielded tokens balance at any segment: segment 0 in a guaranteed offer, any other segment in a fallible offer at that segment. Unshielded tokens balance at segment 0, in the payer's fee intent. The facade's `balanceFinalizedTransaction` also balances unshielded tokens at segment 0 only. midnight-js `balanceTx` balances an unbound transaction in place: it merges the payer's UTXOs into the unshielded offers of each intent, so it also covers a deficit at a fallible segment. midnight-rs balances a proven transaction and merges the payer's side in as a separate transaction. A merge refuses a second intent at a segment that the transaction already uses, so midnight-rs refuses an unshielded deficit at a fallible segment with `WalletError::FallibleUnshieldedDeficit`. The result is a `TransferResult` that names every coin, UTXO and Dust spend it reserved, so submit it with `submit_reserved`.
+
+This completes a one-sided offer, with no mirror half:
+
+```rust,ignore
+// Party 1 gives dx of X and asks for dy of Y: an unbalanced, fee-less half.
+let offer = alice.shielded_swap(token_x, dx, token_y, dy).await?;
+// Party 2 supplies the Y, receives the X and pays the fees:
+let complete = bob.balance_transaction_with_tokens(offer.as_bytes()).await?;
+bob.submit_reserved(complete).await?;
+```
+
+`balance_transaction_with_tokens` pays every deficit the bytes carry. Use it only on a transaction whose deficit the payer agreed to cover, and use `balance_transaction` for bytes it does not trust. Before the call, the payer reads the imbalance of each token at each segment with `midnight_provider::imbalances(bytes)` and checks the terms. For a guaranteed shielded swap, the mirror flow in the next section lets the SDK enforce the terms: `balance_transaction` refuses any deficit that the payer's own half leaves. For a deficit at a fallible segment or an unshielded deficit, the payer's check of `imbalances` is the only check. What the payer spends or receives at a fallible segment lands only when that segment succeeds. Its cover at segment 0 and its fee land with the guaranteed phase. So a surplus at a fallible segment does not reach the payer when that segment fails.
 
 ### Native two-party token swaps
 
@@ -133,7 +145,7 @@ let funded = sponsor.balance_transaction(&merged).await?;
 sponsor.submit_reserved(funded).await?;
 ```
 
-Because each half carries only a guaranteed Zswap offer and no intent, two halves merge without the segment-1 collision above, and `balance_transaction`'s fee intent rides its own segment. The two halves must carry exactly mirrored `(token, amount)` pairs or the merge won't balance; the builder can't enforce the counterparty's side. See [`examples/shielded-swap`](../examples/shielded-swap) for the end-to-end flow.
+Because each half carries only a guaranteed Zswap offer and no intent, two halves merge without the segment-1 collision above, and `balance_transaction`'s fee intent rides its own segment. The two halves must carry exactly mirrored `(token, amount)` pairs or the merge won't balance; the builder can't enforce the counterparty's side. With no mirror half, one payer completes a single half with `balance_transaction_with_tokens` (see the previous section). See [`examples/shielded-swap`](../examples/shielded-swap) for the end-to-end flow.
 
 ### Spending your own coin in a call, and coin discovery
 

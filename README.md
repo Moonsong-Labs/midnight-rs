@@ -8,7 +8,7 @@
 ## Features
 
 - **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token). A wallet can register its NIGHT to generate Dust for another wallet's Dust address.
-- **Swaps and sponsored fees**: two-party shielded swaps, and one party paying the Dust fees of another party's transactions.
+- **Swaps and sponsored fees**: two-party shielded swaps, one party paying the Dust fees of another party's transactions, and a payer that completes a one-sided offer from its own tokens.
 - **Node and indexer clients**: node RPC over subxt for contract state and submission, and a GraphQL client for the indexer that the wallet sync reads.
 - **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
 - **Deploy and call Compact smart contracts**: typed Rust bindings generated from the compiled contract. A circuit call takes typed arguments, and returns a typed value and the events that the circuit emits.
@@ -91,6 +91,22 @@ let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes
 let funded = sponsor.balance_transaction(&merged).await?;
 sponsor.submit_reserved(funded).await?;
 ```
+
+A one-sided offer needs no mirror half. One party builds a half that gives one token and asks for another. A payer completes it with `balance_transaction_with_tokens`: the payer supplies the token the half asks for, receives the token it gives, and pays the Dust fee. `balance_transaction` pays only the fee and refuses a token deficit. The second call pays every deficit that the bytes carry, so the payer first reads them with `imbalances` (from `midnight_core::provider`) and checks the terms:
+
+```rust,ignore
+let offer = alice.shielded_swap(token_x, dx, token_y, dy).await?;
+// Bob receives dx of X and supplies dy of Y, at segment 0.
+let terms = BTreeMap::from([
+    ((TokenType::Shielded(token_x), 0), i128::try_from(dx)?),
+    ((TokenType::Shielded(token_y), 0), -i128::try_from(dy)?),
+]);
+anyhow::ensure!(imbalances(offer.as_bytes())? == terms, "the offer has other terms");
+let complete = bob.balance_transaction_with_tokens(offer.as_bytes()).await?;
+bob.submit_reserved(complete).await?;
+```
+
+For a guaranteed shielded swap, the two-party flow above lets the SDK enforce the terms: `balance_transaction` refuses any deficit that the payer's own half leaves.
 
 A party with no Dust builds a transfer or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A contract call built this way, or with `.build()`, records no private state. So it fails with `ContractError::UnrecordedPrivateState` when its witnesses change the private state, before it reserves Dust or makes a proof. A sponsor pays its Dust fee with `balance_transaction` and submits it with `submit_reserved`, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
 

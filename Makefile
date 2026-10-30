@@ -360,6 +360,7 @@ test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test receive_shielded_coin -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test deploy_shielded_offer -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test complete_one_sided_offer -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test failed_submit_hands_back -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test e2e_contracts -- --show-output --test-threads=1
 

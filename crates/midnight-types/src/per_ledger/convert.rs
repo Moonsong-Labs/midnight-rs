@@ -10,7 +10,8 @@ use helpers::{Deserializable, Serializable};
 use crate::hd::{Seed, SeedBytes};
 use crate::{
     ChainParameters, CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustParameters,
-    DustPublicKey, EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, UnshieldedTokenType,
+    DustPublicKey, EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, TokenType,
+    UnshieldedTokenType,
 };
 
 /// An SDK value that has a counterpart in this generation.
@@ -77,6 +78,17 @@ impl IntoSdk for helpers::CoinInfo {
             nonce: self.nonce.into_sdk(),
             type_: self.type_.into_sdk(),
             value: self.value,
+        }
+    }
+}
+
+impl IntoSdk for helpers::TokenType {
+    type Sdk = TokenType;
+    fn into_sdk(self) -> Self::Sdk {
+        match self {
+            helpers::TokenType::Unshielded(token) => TokenType::Unshielded(token.into_sdk()),
+            helpers::TokenType::Shielded(token) => TokenType::Shielded(token.into_sdk()),
+            helpers::TokenType::Dust => TokenType::Dust,
         }
     }
 }

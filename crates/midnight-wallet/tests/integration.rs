@@ -7,8 +7,8 @@
 //!   MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 MIDNIGHT_INDEXER_URL=http://127.0.0.1:8088 \
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
-use midnight_provider::{Builds, MidnightProvider};
-use midnight_wallet::{LedgerVersion, Wallet};
+use midnight_provider::{Builds, MidnightProvider, TokenType, imbalances};
+use midnight_wallet::Wallet;
 
 const DEFAULT_SHIELDED_TOKEN: midnight_wallet::ShieldedTokenType =
     midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0; 32]));
@@ -269,24 +269,12 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
 
 /// Sum the signed deltas a proven transaction carries for one shielded token.
 fn shielded_delta(tx_bytes: &[u8], token: midnight_wallet::ShieldedTokenType) -> i128 {
-    macro_rules! delta_in {
-        ($ledger:ident) => {{
-            use midnight_helpers::$ledger as l;
-            let tx: l::FinalizedTransaction<l::DefaultDB> =
-                l::midnight_serialize::tagged_deserialize(&mut &tx_bytes[..])
-                    .expect("deserialize proven transaction");
-            tx.balance(None)
-                .expect("token balance")
-                .iter()
-                .filter(|((tt, _seg), _)| matches!(tt, l::TokenType::Shielded(s) if s.0 == token.0))
-                .map(|(_, v)| *v)
-                .sum()
-        }};
-    }
-    match LedgerVersion::of_transaction(tx_bytes).expect("a proven transaction") {
-        LedgerVersion::V8 => delta_in!(ledger_8),
-        LedgerVersion::V9 => delta_in!(ledger_9),
-    }
+    imbalances(tx_bytes)
+        .expect("read the imbalance of a proven transaction")
+        .into_iter()
+        .filter(|((tt, _segment), _)| *tt == TokenType::Shielded(token))
+        .map(|(_, value)| value)
+        .sum()
 }
 
 /// A self-funded transfer must conserve the transferred token: whatever the

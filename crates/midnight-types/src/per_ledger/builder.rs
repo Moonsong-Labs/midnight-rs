@@ -4,6 +4,7 @@
 //! with a [`TransferBuilder`]; proving it ([`PreparedTransfer::prove`]) needs
 //! the build context alone.
 
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -63,8 +64,8 @@ pub struct PreparedTransfer {
     /// was handed. The reservation carries the same stamp, so a release can
     /// name this build's own entry.
     reserved_at: Timestamp,
-    /// The finished transaction whose fee this build pays, which
-    /// [`Self::prove`] merges the proven fee into.
+    /// The finished transaction this build balances, which [`Self::prove`]
+    /// merges the proven build into.
     external: Option<FinalizedTx>,
 }
 
@@ -144,10 +145,10 @@ impl PreparedTransfer {
     /// Prove the transaction and serialize it. The slowest step in a build,
     /// and it touches no wallet.
     ///
-    /// A build from [`balance_external`] proves the fee intent and merges it
-    /// into the transaction whose fee it pays. The result then holds the
-    /// merged transaction and its fee, and its `spent` names only the Dust of
-    /// this build.
+    /// A build from [`balance_external`] or [`balance_external_tokens`]
+    /// proves what it adds and merges that into the transaction it balances.
+    /// The result then holds the merged transaction and its fee, and its
+    /// `spent` names only the inputs of this build.
     pub async fn prove(self) -> Result<TransferResult, WalletError> {
         let spent = self.spent_inputs();
         let PreparedTransfer {
@@ -272,6 +273,38 @@ async fn utxo_selection_error(context: &BuildContext, e: UtxoSelectionError) -> 
         }
         e => WalletError::Transfer(format!("utxo selection: {e}")),
     }
+}
+
+/// The nullifier of each coin a selection picked, in the form a reservation
+/// takes.
+///
+/// Every input from `coins_to_cover_value` carries a pinned nullifier. A
+/// missing one is an error rather than a skipped coin, because a coin left
+/// unreserved defeats the double-spend protection.
+fn pinned_nullifiers<O>(inputs: &[InputInfo<O>]) -> Result<Vec<Nullifier>, WalletError> {
+    inputs
+        .iter()
+        .map(|i| {
+            i.nullifier.ok_or_else(|| {
+                WalletError::Transfer("selected shielded coin has no nullifier to reserve".into())
+            })
+        })
+        .collect()
+}
+
+/// The key of each UTXO a selection picked, in the form a reservation takes.
+fn spent_utxo_keys<O>(spends: &[UtxoSpendInfo<O>]) -> Vec<SpentUtxoKey> {
+    spends
+        .iter()
+        .filter_map(|s| {
+            let intent_hash = s.intent_hash.as_ref()?;
+            let output_index = s.output_number?;
+            Some(SpentUtxoKey {
+                intent_hash: intent_hash.0,
+                output_index,
+            })
+        })
+        .collect()
 }
 
 async fn prove_tx_no_validate(
@@ -462,7 +495,9 @@ impl<'a> TransferBuilder<'a> {
     /// stand alone. The counterparty builds the exact mirror
     /// (`shielded_swap(receive_token, receive_amount, give_token, give_amount)`),
     /// and merging the two cancels both tokens into a balanced transaction that
-    /// a sponsor funds (`balance_transaction`) and submits.
+    /// a sponsor funds (`balance_transaction`) and submits. Or a payer
+    /// completes the half alone with `balance_transaction_with_tokens` (both
+    /// on `MidnightProvider` in `midnight-provider`).
     ///
     /// Because the half is unbalanced it can't self-fund its Dust, so it is
     /// always fee-less: no funding seed is set and the returned transaction is
@@ -517,20 +552,7 @@ impl<'a> TransferBuilder<'a> {
             self.coin_selection,
         )
         .map_err(|e| shielded_selection_error(&self.context, e))?;
-
-        // Every input from `coins_to_cover_value` carries a pinned nullifier;
-        // error rather than drop one silently, since a missing nullifier would
-        // leave the coin unreserved and defeat the double-spend protection.
-        let spent_shielded_inputs: Vec<Nullifier> = inputs
-            .iter()
-            .map(|i| {
-                i.nullifier.ok_or_else(|| {
-                    WalletError::Transfer(
-                        "selected shielded coin has no nullifier to reserve".into(),
-                    )
-                })
-            })
-            .collect::<Result<_, _>>()?;
+        let spent_shielded_inputs = pinned_nullifiers(&inputs)?;
 
         let mut outputs = vec![payment];
         // Change back to this wallet, only if any.
@@ -607,18 +629,7 @@ impl<'a> TransferBuilder<'a> {
             Ok(selected) => selected,
             Err(e) => return Err(utxo_selection_error(&self.context, e).await),
         };
-
-        let spent_unshielded_inputs: Vec<SpentUtxoKey> = spend_infos
-            .iter()
-            .filter_map(|s| {
-                let intent_hash = s.intent_hash.as_ref()?;
-                let output_index = s.output_number?;
-                Some(SpentUtxoKey {
-                    intent_hash: intent_hash.0,
-                    output_index,
-                })
-            })
-            .collect();
+        let spent_unshielded_inputs = spent_utxo_keys(&spend_infos);
 
         let mut outputs: Vec<Box<dyn helpers::BuildUtxoOutput<DefaultDB, BuildContext>>> =
             vec![Box::new(UtxoOutputInfo {
@@ -984,61 +995,319 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 /// The fee rides an intent of its own at a segment `external` does not use.
 /// [`PreparedTransfer::prove`] merges it in after proving, so `external` and
 /// its proofs stay as they are.
-/// Each round prices the merge with a mock proof, which is exact here
-/// because the fee intent carries only Dust spends.
 ///
 /// `None` when `external` already balances its Dust. There is nothing to
 /// draw then, and an intent with no spends is one the ledger rejects.
-pub fn balance_external(
-    mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+pub async fn balance_external(
+    tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     external: &FinalizedTx,
 ) -> Result<Option<PreparedTransfer>, WalletError> {
-    let (now, ttl) = now_and_ttl(&tx_info.context);
-    let network_id = tx_info
-        .context
-        .with_ledger_state(|ls| ls.network_id.clone());
     let segment = fee_segment(external)?;
+    balance_external_at(tx_info, external, segment).await
+}
+
+/// Balance the tokens of a finished transaction this wallet did not build
+/// from `payer`'s coins, draw its fee, and stop before proving.
+///
+/// For each shielded token that a segment of `external` lacks, `payer`
+/// spends coins into an offer at that segment and takes the change. For each
+/// shielded token that a segment holds in surplus, `payer` takes the surplus
+/// as an output. The offer for segment 0 is the guaranteed offer, and the
+/// offer for any other segment is a fallible offer at that segment. An
+/// unshielded token at segment 0 works the same way, in a guaranteed
+/// unshielded offer on the fee intent. An unshielded surplus at a fallible
+/// segment stays in `external`, because `payer` has no intent there to take
+/// it in. Then the fee is drawn as [`balance_external`] draws it, and
+/// [`PreparedTransfer::prove`] merges all of it into `external` after
+/// proving.
+///
+/// The coins and UTXOs come from `payer`'s funding view in the context of
+/// `tx_info`, in the default [`CoinSelectionStrategy`] order. `payer` must
+/// be a funding seed of `tx_info`, so its Dust pays the fee too.
+///
+/// This pays every deficit that `external` carries. Call it only on a
+/// transaction whose deficit `payer` agreed to cover.
+///
+/// `None` when `external` balances every token and its Dust.
+///
+/// # Errors
+///
+/// [`WalletError::FallibleUnshieldedDeficit`] when a fallible segment of
+/// `external` lacks an unshielded token, before anything is selected.
+/// [`WalletError::InsufficientShielded`] or
+/// [`WalletError::InsufficientUnshielded`] when `payer` cannot cover a
+/// deficit. Each segment spends coins of its own, in segment order, so a
+/// shielded deficit can fail when `payer` holds enough of the token in total.
+/// The error then gives the deficit of one segment as `required`, and what
+/// the earlier segments of this call left as `available`.
+/// [`WalletError::InsufficientDust`] when `payer` holds too little Dust for
+/// the fee.
+///
+/// # Panics
+///
+/// Panics when the context of `tx_info` holds no funding view for `payer`.
+pub async fn balance_external_tokens(
+    mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+    payer: &Seed,
+    external: &FinalizedTx,
+) -> Result<Option<PreparedTransfer>, WalletError> {
+    let segment = fee_segment(external)?;
+    let imbalance = external.balance(None).map_err(transfer_err("balance"))?;
+    let cover = token_cover(&imbalance)?;
+    let shielded = add_shielded_cover(&mut tx_info, payer, cover.shielded)?;
+    let unshielded = add_unshielded_cover(&mut tx_info, payer, cover.unshielded, segment).await?;
+    let mut prepared = balance_external_at(tx_info, external, segment).await?;
+    if let Some(prepared) = prepared.as_mut() {
+        prepared.set_spent_shielded_inputs(shielded);
+        prepared.set_spent_unshielded_inputs(unshielded);
+    }
+    Ok(prepared)
+}
+
+/// Draw the fee for `external` merged with what `tx_info` adds, with the fee
+/// on the intent at `segment`, and stop before proving.
+///
+/// Each round prices the merge with a mock proof. That is exact here because
+/// what `tx_info` adds carries only builtin proofs: Zswap spends and outputs,
+/// and Dust spends.
+///
+/// `None` when `tx_info` adds nothing and `external` already balances its
+/// Dust.
+async fn balance_external_at(
+    mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+    external: &FinalizedTx,
+    segment: u16,
+) -> Result<Option<PreparedTransfer>, WalletError> {
+    let adds_tokens = tx_info.guaranteed_offer.is_some()
+        || !tx_info.fallible_offers.is_empty()
+        || !tx_info.intents.is_empty();
+    let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
 
     let mut tracker = FeeBalanceTracker::default();
     for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
-        let batches = gather_dust_spends(&tx_info, tracker.request(), now)?;
-        let spends = flat_spends(&batches);
-
-        // The first round draws nothing and prices `external` as it is.
-        let fee_tx: Option<UnprovenTx> = (!spends.is_empty()).then(|| {
-            let mut intent: helpers::UnprovenIntent<DefaultDB> =
-                Intent::empty(&mut tx_info.rng, ttl);
-            intent.dust_actions = Some(Sp::new(DustActions {
-                spends: spends.into(),
-                registrations: Vec::new().into(),
-                ctime: now,
-            }));
-            let intents = HashMapStorage::new().insert(segment, intent);
-            Transaction::from_intents(network_id.as_str(), intents)
-        });
-        let (fee, shortfall) = match &fee_tx {
-            Some(fee_tx) => {
-                let mock = fee_tx.mock_prove().map_err(transfer_err("mock_prove"))?;
-                let merged = external
-                    .merge(&mock)
-                    .map_err(transfer_err("merge fee intent"))?;
-                compute_missing_dust(&tx_info, &merged)?
-            }
-            None => compute_missing_dust(&tx_info, external)?,
+        let (candidate, batches) =
+            dust_candidate(&tx_info, &tx, tracker.request(), now, ttl, segment)?;
+        // The first round draws no Dust, so with no tokens to add it prices
+        // `external` as it is.
+        let adds = adds_tokens || batches.iter().any(|b| !b.spends.is_empty());
+        let (fee, shortfall) = if adds {
+            let mock = candidate.mock_prove().map_err(transfer_err("mock_prove"))?;
+            let merged = external
+                .merge(&mock)
+                .map_err(transfer_err("merge fee intent"))?;
+            compute_missing_dust(&tx_info, &merged)?
+        } else {
+            compute_missing_dust(&tx_info, external)?
         };
         if let Some(dust) = shortfall {
             tracker.record_shortfall(fee, dust);
             continue;
         }
-        let Some(fee_tx) = fee_tx else {
+        if !adds {
             return Ok(None);
-        };
+        }
         confirm_dust_spends(&mut tx_info, &batches);
-        let mut prepared = PreparedTransfer::new(tx_info, fee_tx, batches);
+        let mut prepared = PreparedTransfer::new(tx_info, candidate, batches);
         prepared.external = Some(external.clone());
         return Ok(Some(prepared));
     }
     Err(tracker.into_error())
+}
+
+/// See [`crate::imbalances`].
+pub(crate) fn imbalances(
+    tx_bytes: &[u8],
+) -> Result<BTreeMap<(crate::TokenType, u16), i128>, WalletError> {
+    let tx: FinalizedTx = helpers::midnight_serialize::tagged_deserialize(&mut &tx_bytes[..])
+        .map_err(|e| WalletError::Transfer(format!("deserialize transaction: {e}")))?;
+    let imbalance = tx.balance(None).map_err(transfer_err("balance"))?;
+    Ok(imbalance
+        .into_iter()
+        .map(|((token_type, segment), value)| ((token_type.into_sdk(), segment), value))
+        .collect())
+}
+
+/// The token imbalance of a transaction that a payer balances, by segment.
+///
+/// A negative value is a deficit that the payer covers from its own coins. A
+/// positive value is a surplus that the payer takes as an output.
+#[derive(Debug, Default, PartialEq)]
+struct TokenCover {
+    /// The shielded imbalance, by the segment of the offer that balances it.
+    shielded: BTreeMap<u16, Vec<(ShieldedTokenType, i128)>>,
+    /// The unshielded imbalance at segment 0.
+    unshielded: Vec<(UnshieldedTokenType, i128)>,
+}
+
+/// Sort the imbalance of a transaction into what a payer balances.
+///
+/// Dust is the fee, which the fee rounds pay, so it is left out. So is an
+/// unshielded surplus at a fallible segment, which the payer has no intent
+/// to take in.
+///
+/// # Errors
+///
+/// [`WalletError::FallibleUnshieldedDeficit`] for an unshielded deficit at a
+/// fallible segment.
+fn token_cover(imbalance: &BTreeMap<(TokenType, u16), i128>) -> Result<TokenCover, WalletError> {
+    let guaranteed: u16 = Segment::Guaranteed.into();
+    let mut cover = TokenCover::default();
+    for (&(token_type, segment), &value) in imbalance {
+        match token_type {
+            _ if value == 0 => {}
+            TokenType::Dust => {}
+            TokenType::Shielded(token) => {
+                cover
+                    .shielded
+                    .entry(segment)
+                    .or_default()
+                    .push((token, value));
+            }
+            TokenType::Unshielded(token) if segment == guaranteed => {
+                cover.unshielded.push((token, value));
+            }
+            TokenType::Unshielded(token) if value < 0 => {
+                return Err(WalletError::FallibleUnshieldedDeficit {
+                    token_type: token.into_sdk(),
+                    segment,
+                    deficit: value.unsigned_abs(),
+                });
+            }
+            TokenType::Unshielded(_) => {}
+        }
+    }
+    Ok(cover)
+}
+
+/// Put `payer`'s side of each shielded imbalance in an offer at its segment,
+/// and return the coins those offers spend.
+fn add_shielded_cover(
+    tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
+    payer: &Seed,
+    cover: BTreeMap<u16, Vec<(ShieldedTokenType, i128)>>,
+) -> Result<Vec<Nullifier>, WalletError> {
+    let seed = payer.into_ledger();
+    let mut spent = Vec::new();
+    for (segment, imbalance) in cover {
+        let mut nullifiers = Vec::new();
+        let mut outputs: Vec<Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>> = Vec::new();
+        for (token_type, value) in imbalance {
+            let to_payer = if value > 0 {
+                value.unsigned_abs()
+            } else {
+                let (inputs, change) = InputInfo::coins_to_cover_value(
+                    tx_info.context.clone(),
+                    seed.clone(),
+                    value.unsigned_abs(),
+                    token_type,
+                    CoinSelectionStrategy::default(),
+                )
+                .map_err(|e| shielded_selection_error(&tx_info.context, e))?;
+                nullifiers.extend(pinned_nullifiers(&inputs)?);
+                change
+            };
+            if to_payer > 0 {
+                outputs.push(Box::new(OutputInfo {
+                    destination: seed.clone(),
+                    token_type,
+                    value: to_payer,
+                }));
+            }
+        }
+
+        let inputs = super::inputs::prepare_shielded_inputs(
+            &tx_info.context,
+            payer,
+            &nullifiers,
+            &mut tx_info.rng.split(),
+        )?;
+        // The spends leave each coin in the funding view, so drop it there:
+        // a later segment that lacks the same token must not pick it again.
+        tx_info
+            .context
+            .with_wallet_from_seed(seed.clone(), |wallet| {
+                for nullifier in &nullifiers {
+                    wallet.shielded.state.coins = wallet.shielded.state.coins.remove(nullifier);
+                }
+            });
+
+        // A fallible offer is built at segment 0 like the guaranteed one.
+        // `Transaction::new` moves each fallible offer to its segment.
+        let offer = OfferInfo {
+            inputs: inputs
+                .into_iter()
+                .map(|i| Box::new(i) as Box<dyn helpers::BuildInput<DefaultDB, BuildContext>>)
+                .collect(),
+            outputs,
+            transients: vec![],
+        };
+        if segment == u16::from(Segment::Guaranteed) {
+            tx_info.set_guaranteed_offer(offer);
+        } else {
+            tx_info.fallible_offers.insert(segment, offer);
+        }
+        spent.extend(nullifiers);
+    }
+    Ok(spent)
+}
+
+/// Put `payer`'s side of the unshielded imbalance at segment 0 in a
+/// guaranteed unshielded offer on an intent at `segment`, and return the UTXOs
+/// that offer spends.
+async fn add_unshielded_cover(
+    tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
+    payer: &Seed,
+    cover: Vec<(UnshieldedTokenType, i128)>,
+    segment: u16,
+) -> Result<Vec<SpentUtxoKey>, WalletError> {
+    if cover.is_empty() {
+        return Ok(Vec::new());
+    }
+    let seed = payer.into_ledger();
+    let mut spent = Vec::new();
+    let mut inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB, BuildContext>>> = Vec::new();
+    let mut outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB, BuildContext>>> = Vec::new();
+    for (token_type, value) in cover {
+        let to_payer = if value > 0 {
+            value.unsigned_abs()
+        } else {
+            let selected = UtxoSpendInfo::utxos_to_cover_value(
+                tx_info.context.clone(),
+                seed.clone(),
+                value.unsigned_abs(),
+                token_type,
+                CoinSelectionStrategy::default(),
+            )
+            .await;
+            let (spends, change) = match selected {
+                Ok(selected) => selected,
+                Err(e) => return Err(utxo_selection_error(&tx_info.context, e).await),
+            };
+            spent.extend(spent_utxo_keys(&spends));
+            inputs.extend(
+                spends
+                    .into_iter()
+                    .map(|s| Box::new(s) as Box<dyn BuildUtxoSpend<DefaultDB, BuildContext>>),
+            );
+            change
+        };
+        if to_payer > 0 {
+            outputs.push(Box::new(UtxoOutputInfo {
+                value: to_payer,
+                owner: seed.clone(),
+                token_type,
+            }));
+        }
+    }
+    tx_info.add_intent(
+        segment,
+        Box::new(IntentInfo {
+            guaranteed_unshielded_offer: Some(UnshieldedOfferInfo { inputs, outputs }),
+            fallible_unshielded_offer: None,
+            actions: vec![],
+        }),
+    );
+    Ok(spent)
 }
 
 /// Upper bound on the rounds of a fee-balancing loop. Each round requests the
@@ -1111,7 +1380,14 @@ fn balance_fees_with_mocks(
     let mut tracker = FeeBalanceTracker::default();
 
     for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
-        let (paid_tx, batches) = dust_candidate(tx_info, &tx, tracker.request(), now, ttl)?;
+        let (paid_tx, batches) = dust_candidate(
+            tx_info,
+            &tx,
+            tracker.request(),
+            now,
+            ttl,
+            Segment::Fallible.into(),
+        )?;
         let mock = paid_tx.mock_prove().map_err(transfer_err("mock_prove"))?;
         let (fee, shortfall) = compute_missing_dust(tx_info, &mock)?;
         if let Some(dust) = shortfall {
@@ -1124,14 +1400,15 @@ fn balance_fees_with_mocks(
     Err(tracker.into_error())
 }
 
-/// `tx` paid with Dust spends that cover `request`, and the batches those
-/// spends come from.
+/// `tx` paid with Dust spends that cover `request` on the intent at
+/// `segment`, and the batches those spends come from.
 fn dust_candidate(
     tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>,
     tx: &UnprovenTx,
     request: u128,
     now: Timestamp,
     ttl: Timestamp,
+    segment: u16,
 ) -> Result<(UnprovenTx, Vec<DustSpendBatch>), WalletError> {
     let batches = gather_dust_spends(tx_info, request, now)?;
     let mut paid_tx = tx.clone();
@@ -1142,6 +1419,7 @@ fn dust_candidate(
         tx_info.rng.clone().split(),
         ttl,
         now,
+        segment,
     );
     Ok((paid_tx, batches))
 }
@@ -1242,6 +1520,7 @@ fn apply_dust(
     mut rng: StdRng,
     ttl: Timestamp,
     now: Timestamp,
+    segment_id: u16,
 ) {
     let Transaction::Standard(stx) = tx else {
         return;
@@ -1251,7 +1530,6 @@ fn apply_dust(
         return;
     }
 
-    let segment_id: u16 = Segment::Fallible.into();
     let mut intent = match stx.intents.get(&segment_id) {
         Some(intent) => (*intent).clone(),
         None => Intent::empty(&mut rng, ttl),
@@ -1443,6 +1721,202 @@ mod tests {
         assert_eq!(
             fee_segment(&intent_at(DUST_FEE_SEGMENT + 1)).unwrap(),
             DUST_FEE_SEGMENT
+        );
+    }
+
+    fn shielded(byte: u8) -> ShieldedTokenType {
+        ShieldedTokenType(helpers::HashOutput([byte; 32]))
+    }
+
+    fn unshielded(byte: u8) -> UnshieldedTokenType {
+        UnshieldedTokenType(helpers::HashOutput([byte; 32]))
+    }
+
+    /// A fallible offer proves its spends for its own segment, so a deficit
+    /// balanced in another segment leaves the transaction unbalanced. And a
+    /// dropped surplus burns what the other party gave.
+    #[test]
+    fn each_shielded_imbalance_is_balanced_at_its_own_segment() {
+        let imbalance = BTreeMap::from([
+            ((TokenType::Shielded(shielded(1)), 0), -5),
+            ((TokenType::Shielded(shielded(1)), 3), -4),
+            ((TokenType::Shielded(shielded(2)), 3), 2),
+            ((TokenType::Shielded(shielded(3)), 0), 0),
+        ]);
+        let cover = token_cover(&imbalance).unwrap();
+        assert_eq!(
+            cover.shielded,
+            BTreeMap::from([
+                (0, vec![(shielded(1), -5)]),
+                (3, vec![(shielded(1), -4), (shielded(2), 2)]),
+            ])
+        );
+        assert!(cover.unshielded.is_empty());
+    }
+
+    /// The payer's unshielded inputs ride its own intent, and a merge refuses
+    /// a second intent at a segment the transaction uses. A cover that went
+    /// ahead would fail at the merge, after it reserved the payer's coins.
+    #[test]
+    fn an_unshielded_deficit_at_a_fallible_segment_is_refused() {
+        let imbalance = BTreeMap::from([((TokenType::Unshielded(unshielded(4)), 2), -7)]);
+        let err = token_cover(&imbalance).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                WalletError::FallibleUnshieldedDeficit { token_type, segment: 2, deficit: 7 }
+                    if token_type == unshielded(4).into_sdk()
+            ),
+            "got {err:?}"
+        );
+    }
+
+    /// A funding view of `seed` that holds a coin of `token` for each value.
+    fn payer_context(seed: &Seed, token: ShieldedTokenType, values: &[u128]) -> Arc<BuildContext> {
+        use helpers::SeedableRng;
+        let context = Arc::new(BuildContext::new_from_wallet_seeds(
+            "undeployed",
+            &[seed.into_ledger()],
+        ));
+        let mut rng = StdRng::seed_from_u64(3);
+        context.with_wallet_from_seed(seed.into_ledger(), |wallet| {
+            for &value in values {
+                let coin = helpers::CoinInfo::new(&mut rng, value, token);
+                wallet.shielded.state = wallet
+                    .shielded
+                    .state
+                    .insert_coin(wallet.shielded.secret_keys(), coin)
+                    .expect("insert coin");
+            }
+        });
+        context
+    }
+
+    /// One token short at two segments must draw two coins: a spend leaves
+    /// its coin in the funding view, and the node refuses a coin spent twice.
+    /// Each offer must also return its change and take its segment's surplus,
+    /// or the chain burns that value with no error.
+    #[test]
+    fn each_segment_spends_its_own_coins_and_returns_the_rest() {
+        let seed = Seed::from_bytes(&[1; 32]).unwrap();
+        let mut tx_info = StandardTransactionInfo::new_from_context(
+            payer_context(&seed, shielded(1), &[10, 6]),
+            Arc::new(helpers::LocalProofServer::new()),
+            Some([0; 32]),
+        );
+        let cover = BTreeMap::from([
+            (0, vec![(shielded(1), -5)]),
+            (3, vec![(shielded(1), -4), (shielded(2), 2)]),
+        ]);
+
+        let spent = add_shielded_cover(&mut tx_info, &seed, cover).unwrap();
+        // With no intent to build, the assembly never waits.
+        let (tx, _, _) = assemble_unproven(&mut tx_info)
+            .now_or_never()
+            .expect("an assembly with no intent completes at once")
+            .unwrap();
+
+        assert!(
+            spent.len() == 2 && spent[0] != spent[1],
+            "each segment must spend a coin of its own: {spent:?}"
+        );
+        assert_eq!(
+            tx.balance(None).unwrap(),
+            BTreeMap::from([
+                ((TokenType::Shielded(shielded(1)), 0), 5),
+                ((TokenType::Shielded(shielded(1)), 3), 4),
+                ((TokenType::Shielded(shielded(2)), 3), -2),
+            ])
+        );
+    }
+
+    /// The payer's unshielded side must ride the intent at the fee segment,
+    /// which `external` leaves free: any other segment can collide at the
+    /// merge. It must also return its change and take the surplus, or the
+    /// chain burns that value with no error.
+    #[test]
+    fn the_unshielded_side_rides_the_fee_intent_and_returns_the_rest() {
+        use helpers::mn_ledger::structure::{Utxo, UtxoMeta};
+
+        let seed = Seed::from_bytes(&[1; 32]).unwrap();
+        let context = Arc::new(BuildContext::new_from_wallet_seeds(
+            "undeployed",
+            &[seed.into_ledger()],
+        ));
+        let utxo = Utxo {
+            value: 10,
+            owner: UnshieldedWallet::default(seed.into_ledger()).user_address,
+            type_: unshielded(4),
+            intent_hash: helpers::IntentHash(helpers::HashOutput([9; 32])),
+            output_no: 0,
+        };
+        {
+            let mut guard = context.ledger_state.lock().unwrap();
+            let mut ledger_state = (**guard).clone();
+            ledger_state.utxo = Sp::new(ledger_state.utxo.insert(
+                utxo,
+                UtxoMeta {
+                    ctime: Timestamp::from_secs(0),
+                },
+            ));
+            *guard = Sp::new(ledger_state);
+        }
+        let mut tx_info = StandardTransactionInfo::new_from_context(
+            context,
+            Arc::new(helpers::LocalProofServer::new()),
+            Some([0; 32]),
+        );
+        let cover = vec![(unshielded(4), -7), (unshielded(5), 3)];
+
+        // With no proof server or node to reach, neither step ever waits.
+        let spent = add_unshielded_cover(&mut tx_info, &seed, cover, DUST_FEE_SEGMENT)
+            .now_or_never()
+            .expect("a selection from the funding view completes at once")
+            .unwrap();
+        let (tx, _, _) = assemble_unproven(&mut tx_info)
+            .now_or_never()
+            .expect("an assembly from the funding view completes at once")
+            .unwrap();
+
+        assert_eq!(
+            spent,
+            vec![SpentUtxoKey {
+                intent_hash: helpers::HashOutput([9; 32]),
+                output_index: 0,
+            }]
+        );
+        let Transaction::Standard(stx) = &tx else {
+            panic!("a standard transaction");
+        };
+        assert_eq!(
+            stx.intents.keys().collect::<Vec<_>>(),
+            vec![DUST_FEE_SEGMENT]
+        );
+        assert_eq!(
+            tx.balance(None).unwrap(),
+            BTreeMap::from([
+                ((TokenType::Unshielded(unshielded(4)), 0), 7),
+                ((TokenType::Unshielded(unshielded(5)), 0), -3),
+            ])
+        );
+    }
+
+    /// Dust is the fee the fee rounds pay, and an unshielded surplus at a
+    /// fallible segment is out of the payer's reach. Neither is a reason to
+    /// refuse the unshielded deficit at segment 0.
+    #[test]
+    fn the_fee_and_an_unreachable_surplus_stay_out_of_the_cover() {
+        let imbalance = BTreeMap::from([
+            ((TokenType::Dust, 0), -100),
+            ((TokenType::Unshielded(unshielded(4)), 0), -7),
+            ((TokenType::Unshielded(unshielded(5)), 2), 3),
+        ]);
+        assert_eq!(
+            token_cover(&imbalance).unwrap(),
+            TokenCover {
+                shielded: BTreeMap::new(),
+                unshielded: vec![(unshielded(4), -7)],
+            }
         );
     }
 

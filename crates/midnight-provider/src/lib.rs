@@ -35,7 +35,7 @@ pub use midnight_types::{
     BlockHash, ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
     DustParameters, DustPublicKey, EncryptionPublicKey, ExtrinsicHash, HashOutput, LedgerVersion,
     NIGHT, Nonce, Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient,
-    ShieldedTokenType, UnshieldedTokenType,
+    ShieldedTokenType, TokenType, UnshieldedTokenType, imbalances,
 };
 
 // The wallet's API, so a caller attaching one (or implementing one) needs no

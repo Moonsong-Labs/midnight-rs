@@ -12,10 +12,10 @@ pub mod convert;
 mod inputs;
 
 pub use builder::{
-    BuildInputs, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external, fee_speck,
-    prepare_no_validate,
+    BuildInputs, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external,
+    balance_external_tokens, fee_speck, prepare_no_validate,
 };
-pub(crate) use builder::{parse_wallet_address, shielded_destination};
+pub(crate) use builder::{imbalances, parse_wallet_address, shielded_destination};
 pub use inputs::{PreparedInput, prepare_shielded_inputs};
 
 /// The generation this module builds for.

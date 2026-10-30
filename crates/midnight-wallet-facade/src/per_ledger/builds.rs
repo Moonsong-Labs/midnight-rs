@@ -121,6 +121,32 @@ pub trait WalletBuilds: WalletFacade {
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         external: &FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError>;
+
+    /// Balance the tokens of a transaction someone else finished and pay its
+    /// fee, and reserve what that draws, as one transition.
+    ///
+    /// [`Self::prepare_fees`] with one more step before the fee: this wallet
+    /// spends its own coins into `external`'s token deficit and takes
+    /// `external`'s token surplus as outputs to itself. A shielded token
+    /// balances in an offer at the segment that lacks or holds it, and an
+    /// unshielded token at segment 0 balances in the fee intent. What this
+    /// adds is merged in after proving, so `external` and its proofs stay as
+    /// they are.
+    ///
+    /// It pays every deficit that `external` carries, so call it only on a
+    /// transaction whose deficit this wallet agreed to cover.
+    ///
+    /// `None` when `external` already balances every token and its Dust, so
+    /// there is nothing to draw and nothing to reserve.
+    ///
+    /// An implementation refuses an unshielded deficit at a fallible segment
+    /// with [`WalletError::FallibleUnshieldedDeficit`], before it selects
+    /// anything.
+    async fn prepare_balance(
+        &self,
+        tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+        external: &FinalizedTransaction<DefaultDB>,
+    ) -> Result<Option<ReservedBuild>, WalletError>;
 }
 
 /// A shared wallet builds as the wallet inside does.
@@ -164,5 +190,13 @@ impl<T: WalletBuilds + ?Sized> WalletBuilds for Arc<T> {
         external: &FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         (**self).prepare_fees(tx_info, external).await
+    }
+
+    async fn prepare_balance(
+        &self,
+        tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+        external: &FinalizedTransaction<DefaultDB>,
+    ) -> Result<Option<ReservedBuild>, WalletError> {
+        (**self).prepare_balance(tx_info, external).await
     }
 }

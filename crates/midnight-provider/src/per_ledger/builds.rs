@@ -12,6 +12,7 @@ use super::helpers::{
     StandardTransactionInfo, StdRng, TokenType,
 };
 use super::types::{PreparedInput, fee_speck};
+use crate::provider::Balance;
 use crate::{HeldInputs, MidnightProvider, ProviderError};
 
 /// The attached wallet's builds on this generation.
@@ -150,36 +151,42 @@ impl<'a> Builds<'a> {
     ) -> Result<TransferResult, ProviderError> {
         // Boxed so a caller's future stays small. See the frame-size note on
         // `MidnightProvider::resync_wallet`.
-        Box::pin(self.balance_transaction_inner(tx_bytes)).await
+        Box::pin(self.balance_external(tx_bytes, Balance::Fees)).await
     }
 
-    async fn balance_transaction_inner(
+    pub(crate) async fn balance_external(
         &self,
         tx_bytes: &[u8],
+        balance: Balance,
     ) -> Result<TransferResult, ProviderError> {
         let external = deserialize_transaction(tx_bytes)?;
 
-        // Refuse any non-fee token deficit: this path only adds Dust, so a
-        // shortfall in any other token (an unfunded swap side) would just fail
-        // at submit. Dust itself is what we are here to supply, so skip it.
-        let imbalance = external
-            .balance(None)
-            .map_err(|e| ProviderError::Transaction(format!("compute balance: {e:?}")))?;
-        if imbalance
-            .iter()
-            .any(|((tt, _seg), val)| !matches!(tt, TokenType::Dust) && *val < 0)
-        {
-            return Err(ProviderError::Transaction(
-                "balance_transaction covers fees only; the transaction has a token deficit \
-                 (swap balancing is not supported yet)"
-                    .into(),
-            ));
+        // A fee-only balance adds only Dust, so a shortfall in any other
+        // token would fail at submit.
+        if balance == Balance::Fees {
+            let imbalance = external
+                .balance(None)
+                .map_err(|e| ProviderError::Transaction(format!("compute balance: {e:?}")))?;
+            if imbalance
+                .iter()
+                .any(|((tt, _seg), val)| !matches!(tt, TokenType::Dust) && *val < 0)
+            {
+                return Err(ProviderError::Transaction(
+                    "balance_transaction covers fees only; the transaction has a token deficit, \
+                     which balance_transaction_with_tokens covers from this wallet"
+                        .into(),
+                ));
+            }
         }
 
         let context = self.execution_context().await?;
         let tx_info =
             StandardTransactionInfo::new_from_context(context.clone(), self.prover.clone(), None);
-        let Some(reserved) = self.wallet.prepare_fees(tx_info, &external).await? else {
+        let reserved = match balance {
+            Balance::Fees => self.wallet.prepare_fees(tx_info, &external).await?,
+            Balance::FeesAndTokens => self.wallet.prepare_balance(tx_info, &external).await?,
+        };
+        let Some(reserved) = reserved else {
             return Ok(TransferResult {
                 tx_bytes: tx_bytes.to_vec(),
                 ledger_version: super::LEDGER,
@@ -213,8 +220,8 @@ impl<'a> Builds<'a> {
     /// reaches the prover only through a wallet that says it reserved the
     /// inputs first. A proof that fails hands them back, because the
     /// reservation outlives the decision that made it and would otherwise
-    /// strand them until their TTL elapses. For a sponsored fee, the proof
-    /// includes the merge into the external transaction and its price.
+    /// strand them until their TTL elapses. For a balance of an external
+    /// transaction, the proof includes the merge into it and its price.
     async fn prove_reserved(
         &self,
         reserved: ReservedBuild,
