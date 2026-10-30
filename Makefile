@@ -60,9 +60,9 @@ INDEXER_GQL    := $(INDEXER_URL)/api/v3/graphql
 PROOF_SERVER_URL := http://127.0.0.1:6300
 DEV_SEED       := 0000000000000000000000000000000000000000000000000000000000000001
 
-# Examples that run against the devnet with no extra env (deploy + call).
-# shielded-transfer / wallet-sync get their devnet env from dedicated targets.
-EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shielded-swap
+# Examples that run against the devnet with no extra env.
+# wallet-sync gets its devnet env from a dedicated target.
+EXAMPLES  := counter private-state contract-maintenance shielded-transfer combine-and-sponsor shielded-swap
 CONTRACTS := call-context counter counter-zkir-v3 events receive-shielded secret-counter shielded-mint unshielded-payout
 # The contracts that compile for ZKIR v3. Only a ledger 9 chain verifies their keys.
 ZKIR_V3_CONTRACTS := counter-zkir-v3
@@ -79,7 +79,11 @@ TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 # Codegen test fixtures: tests/fixtures/sources/<name>.compact compiles to
 # tests/fixtures/compiled/<name>/.
-CODEGEN_FIXTURES := gateway many-fields mint-probe pairs results struct-shapes zerocash
+CODEGEN_FIXTURES := cross-contract gateway many-fields mint-probe pairs results struct-shapes tuple-shapes zerocash
+# Parser test fixtures: crates/compact/analyzed-ir/tests/fixtures/<name>/<name>.compact.
+# The SDK refuses each of these contracts at load, so the codegen tests cannot read them.
+PARSER_FIXTURES := adt-defaults
+PARSER_FIXTURE_DIR := crates/compact/analyzed-ir/tests/fixtures
 
 # Conformance corpus: tests/conformance/fixtures/<name>/<name>.compact. The two
 # executors read different compiler outputs of a fixture: the Rust IR
@@ -110,7 +114,8 @@ NATIVES_TEST := crates/compact/interpreter/src/lib.rs
 # conformance fixture to <output directory>/contract/.
 FIXTURES := $(foreach f,$(CONFORMANCE_FIXTURES),$(CONFORMANCE_DIR)/fixtures/$(f):$(CONFORMANCE_DIR)/fixtures/$(f)/$(f).compact) \
             $(foreach f,$(TEST_FIXTURES),$(TEST_FIXTURE_DIR)/$(f):$(TEST_FIXTURE_DIR)/$(f)/$(f).compact) \
-            $(foreach f,$(CODEGEN_FIXTURES),tests/fixtures/compiled/$(f):tests/fixtures/sources/$(f).compact)
+            $(foreach f,$(CODEGEN_FIXTURES),tests/fixtures/compiled/$(f):tests/fixtures/sources/$(f).compact) \
+            $(foreach f,$(PARSER_FIXTURES),$(PARSER_FIXTURE_DIR)/$(f):$(PARSER_FIXTURE_DIR)/$(f)/$(f).compact)
 # The compiler flag of the fixture in $$dir, which only a ZKIR v3 conformance
 # fixture has. The pattern opens with `(` for bash 3.2, as CONTRACT_ZKIR does.
 FIXTURE_ZKIR = case " $(foreach f,$(CONFORMANCE_ZKIR_V3_FIXTURES),$(CONFORMANCE_DIR)/fixtures/$(f)) " in (*" $$dir "*) echo --feature-zkir-v3 ;; esac
@@ -125,7 +130,7 @@ GOLDENS_CKSUM = { echo $(COMPACT_REV) $(CONFORMANCE_ZKIR_V3_FIXTURES); \
 
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
         dev-up dev-wait proof-server-wait dev-settle dev-down dev-status dev-logs \
-        test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
+        test-e2e test-e2e-node-restart examples e2e run-wallet-sync \
         fork-up fork-upgrade fork-test fork-down \
         contracts compile-contracts fixtures goldens conformance \
         vendor-compact-runtime check-natives
@@ -143,7 +148,7 @@ help:
 	@echo "    test          cargo test --workspace"
 	@echo "    build         cargo build --workspace"
 	@echo "    audit         cargo audit (fails on vulnerabilities; warnings allowed)"
-	@echo "    ci            fmt-check + clippy + doc + check + test + audit (the CI gates)"
+	@echo "    ci            fmt-check + clippy + doc + test + audit (the CI gates)"
 	@echo ""
 	@echo "  Devnet (node, indexer and proof server via $(DEVNET_COMPOSE); DEVNET_LEDGER=9 for ledger 9)"
 	@echo "    dev-up        start the devnet and wait until it is ready"
@@ -209,7 +214,7 @@ build: contracts fixtures
 audit:
 	$(CARGO) audit
 
-ci: fmt-check clippy doc check test audit
+ci: fmt-check clippy doc test audit
 	@echo "OK: local CI gates passed"
 
 # ============================================================
@@ -339,6 +344,7 @@ test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test prove_once_per_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_offer -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_submit -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_target -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_deregistration_submit -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test transaction_hash_identity -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
@@ -364,12 +370,8 @@ test-e2e-node-restart:
 	$(E2E_ENV) MIDNIGHT_NODE_CONTAINER=$(NODE_CONTAINER) \
 		$(CARGO) test -p midnight-provider --test devnet -- --ignored --show-output
 
-# shielded-transfer and wallet-sync need devnet env; these explicit targets set
-# it (and override the run-% pattern below).
-run-shielded-transfer:
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_NETWORK=undeployed \
-		$(CARGO) run -p example-shielded-transfer
-
+# wallet-sync needs devnet env; this explicit target sets it (and overrides the
+# run-% pattern below).
 run-wallet-sync:
 	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_NETWORK=undeployed \
 		MIDNIGHT_WALLET_SEED=$(DEV_SEED) $(CARGO) run -p example-wallet-sync

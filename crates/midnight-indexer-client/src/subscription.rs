@@ -37,7 +37,8 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::http::Uri;
+use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Message};
 use tracing::{debug, warn};
 
 use crate::client::graphql_url;
@@ -209,33 +210,13 @@ impl SubscriptionClient {
         query: &str,
         variables: serde_json::Value,
     ) -> Result<Subscription<T>, IndexerError> {
-        self.subscribe_with_protocol(query, variables, "graphql-transport-ws")
-            .await
-    }
-
-    async fn subscribe_with_protocol<T: DeserializeOwned + Send + 'static>(
-        &self,
-        query: &str,
-        variables: serde_json::Value,
-        protocol: &str,
-    ) -> Result<Subscription<T>, IndexerError> {
-        use tokio_tungstenite::tungstenite::http::Request;
-
         ensure_crypto_provider();
 
-        let request = Request::builder()
-            .uri(&self.ws_url)
-            .header("Sec-WebSocket-Protocol", protocol)
-            .header("Host", host_from_url(&self.ws_url))
-            .header("Connection", "Upgrade")
-            .header("Upgrade", "websocket")
-            .header("Sec-WebSocket-Version", "13")
-            .header(
-                "Sec-WebSocket-Key",
-                tokio_tungstenite::tungstenite::handshake::client::generate_key(),
-            )
-            .body(())
-            .map_err(|e| IndexerError::Config(format!("build WS request: {e}")))?;
+        let uri: Uri = self
+            .ws_url
+            .parse()
+            .map_err(|e| IndexerError::Config(format!("parse WS URL: {e}")))?;
+        let request = ClientRequestBuilder::new(uri).with_sub_protocol("graphql-transport-ws");
 
         // One deadline covers TCP/TLS connect plus the init/ack handshake
         // (timeout 1 in the module doc), so a caller-side wrapper timeout is
@@ -454,18 +435,6 @@ impl SubscriptionClient {
 
 fn pong_frame() -> Message {
     Message::Text(serde_json::json!({"type": "pong"}).to_string().into())
-}
-
-fn host_from_url(url: &str) -> String {
-    let without_scheme = url
-        .strip_prefix("ws://")
-        .or_else(|| url.strip_prefix("wss://"))
-        .unwrap_or(url);
-    without_scheme
-        .split('/')
-        .next()
-        .unwrap_or("localhost")
-        .to_string()
 }
 
 /// GraphQL subscription queries for the Midnight indexer.

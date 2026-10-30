@@ -7,10 +7,9 @@
 //! transaction with `EffectsCheckFailure`.
 //!
 //! The recipient is a second wallet, and the assertion is that its balance
-//! grew. Paying the caller's own address would pass even if every payout were
-//! wrongly owned by the caller, which is the distinction `PayoutOutput` exists
-//! for; asserting only that the call returned would pass on a transaction that
-//! paid nobody.
+//! grew. Paying the caller's own address would pass even if every payout went
+//! to the caller and not to the address that the transcript names. Asserting
+//! only that the call returned would pass on a transaction that paid nobody.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
@@ -48,7 +47,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
 
     // The minted token is derived from the contract's own address, so it can
     // only be named once the contract exists.
-    let colour = midnight_contract::parse_address(contract.address())
+    let colour = midnight_contract::parse_contract_address(contract.address())
         .expect("contract address")
         .custom_unshielded_token_type(midnight_base_crypto::hash::HashOutput(DOMAIN_SEP));
 

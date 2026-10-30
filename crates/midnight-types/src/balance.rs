@@ -31,7 +31,9 @@ pub struct DustBalance {
     /// A wallet whose only Dust UTXO a pending build reserves reads 0 here and
     /// a positive [`Self::balance_speck`].
     pub spendable_speck: u128,
-    /// Whether any tNIGHT this wallet holds generates dust.
+    /// Whether any tNIGHT this wallet holds generates dust. The dust goes to
+    /// the Dust address that the registration named, which can be the address
+    /// of another wallet.
     ///
     /// Derived from the coins on hand, which is all the indexer reports, so it
     /// is not the same as "the address is registered". A wallet that registers
@@ -53,6 +55,9 @@ pub struct UnshieldedUtxoInfo {
     /// for display / log output.
     pub token_type: UnshieldedTokenType,
     pub value: u128,
+    /// Whether a new build can spend this UTXO. It is `false` while a pending
+    /// build reserves the UTXO.
+    pub spendable: bool,
 }
 
 impl UnshieldedUtxoInfo {
@@ -85,6 +90,9 @@ pub struct ShieldedCoinBalance {
     /// zero id is **not** NIGHT; see `docs/tokens.md`.
     pub token_type: ShieldedTokenType,
     pub value: u128,
+    /// Whether a new build can spend this coin. It is `false` while a pending
+    /// build reserves the coin.
+    pub spendable: bool,
 }
 
 impl ShieldedCoinBalance {
@@ -152,29 +160,67 @@ impl WalletBalance {
     /// The total value of every coin of `token` in [`Self::shielded`].
     ///
     /// The value is in the token's smallest unit. The sum counts every coin of
-    /// `token`, including the coins that a pending build reserves, so a new
-    /// build can draw on less. It is 0 when the wallet holds no coin of `token`,
-    /// and it saturates at `u128::MAX`.
+    /// `token`, including the coins that a pending build reserves.
+    /// [`Self::spendable_shielded_value`] leaves those out. It is 0 when the
+    /// wallet holds no coin of `token`, and it saturates at `u128::MAX`.
     pub fn shielded_value(&self, token: ShieldedTokenType) -> u128 {
-        self.shielded
-            .coins
-            .iter()
-            .filter(|coin| coin.token_type == token)
-            .fold(0, |sum, coin| sum.saturating_add(coin.value))
+        saturating_sum(
+            self.shielded
+                .coins
+                .iter()
+                .filter(|coin| coin.token_type == token)
+                .map(|coin| coin.value),
+        )
+    }
+
+    /// The value of the coins of `token` in [`Self::shielded`] that a new
+    /// build can spend.
+    ///
+    /// It is [`Self::shielded_value`] without the coins that a pending build
+    /// reserves.
+    pub fn spendable_shielded_value(&self, token: ShieldedTokenType) -> u128 {
+        saturating_sum(
+            self.shielded
+                .coins
+                .iter()
+                .filter(|coin| coin.token_type == token && coin.spendable)
+                .map(|coin| coin.value),
+        )
     }
 
     /// The total value of every UTXO of `token` in [`Self::unshielded`].
     ///
     /// The value is in the token's smallest unit, which is STAR for [`NIGHT`].
     /// The sum counts every UTXO of `token`, including the UTXOs that a pending
-    /// build reserves, so a new build can draw on less. It is 0 when the wallet
-    /// holds no UTXO of `token`, and it saturates at `u128::MAX`.
+    /// build reserves. [`Self::spendable_unshielded_value`] leaves those out.
+    /// It is 0 when the wallet holds no UTXO of `token`, and it saturates at
+    /// `u128::MAX`.
     pub fn unshielded_value(&self, token: UnshieldedTokenType) -> u128 {
-        self.unshielded
-            .iter()
-            .filter(|utxo| utxo.token_type == token)
-            .fold(0, |sum, utxo| sum.saturating_add(utxo.value))
+        saturating_sum(
+            self.unshielded
+                .iter()
+                .filter(|utxo| utxo.token_type == token)
+                .map(|utxo| utxo.value),
+        )
     }
+
+    /// The value of the UTXOs of `token` in [`Self::unshielded`] that a new
+    /// build can spend.
+    ///
+    /// It is [`Self::unshielded_value`] without the UTXOs that a pending build
+    /// reserves.
+    pub fn spendable_unshielded_value(&self, token: UnshieldedTokenType) -> u128 {
+        saturating_sum(
+            self.unshielded
+                .iter()
+                .filter(|utxo| utxo.token_type == token && utxo.spendable)
+                .map(|utxo| utxo.value),
+        )
+    }
+}
+
+fn saturating_sum(values: impl Iterator<Item = u128>) -> u128 {
+    values.fold(0, u128::saturating_add)
 }
 
 #[cfg(test)]
@@ -186,20 +232,22 @@ mod tests {
         UnshieldedUtxoInfo, WalletBalance,
     };
 
-    fn balance(entries: &[(u8, u128)]) -> WalletBalance {
+    fn balance(entries: &[(u8, u128, bool)]) -> WalletBalance {
         let coins: Vec<_> = entries
             .iter()
-            .map(|&(id, value)| ShieldedCoinBalance {
+            .map(|&(id, value, spendable)| ShieldedCoinBalance {
                 token_type: ShieldedTokenType(HashOutput([id; 32])),
                 value,
+                spendable,
             })
             .collect();
         WalletBalance {
             unshielded: entries
                 .iter()
-                .map(|&(id, value)| UnshieldedUtxoInfo {
+                .map(|&(id, value, spendable)| UnshieldedUtxoInfo {
                     token_type: UnshieldedTokenType(HashOutput([id; 32])),
                     value,
+                    spendable,
                 })
                 .collect(),
             shielded: ShieldedBalance {
@@ -214,7 +262,7 @@ mod tests {
     /// takes only the first or the last match, gives another number.
     #[test]
     fn a_token_value_sums_every_entry_of_that_token_only() {
-        let balance = balance(&[(1, 5), (2, 100), (1, 7)]);
+        let balance = balance(&[(1, 5, true), (2, 100, true), (1, 7, true)]);
         let token = HashOutput([1; 32]);
         assert_eq!(balance.shielded_value(ShieldedTokenType(token)), 12);
         assert_eq!(balance.unshielded_value(UnshieldedTokenType(token)), 12);
@@ -224,12 +272,28 @@ mod tests {
     /// wrap.
     #[test]
     fn a_token_value_saturates_on_overflow() {
-        let balance = balance(&[(1, u128::MAX), (1, 1)]);
+        let balance = balance(&[(1, u128::MAX, true), (1, 1, true)]);
         let token = HashOutput([1; 32]);
         assert_eq!(balance.shielded_value(ShieldedTokenType(token)), u128::MAX);
         assert_eq!(
             balance.unshielded_value(UnshieldedTokenType(token)),
             u128::MAX
+        );
+    }
+
+    /// A spendable sum that skips the flag reads the total, and one that
+    /// skips the token filter counts the other token too.
+    #[test]
+    fn a_spendable_value_sums_the_spendable_entries_of_that_token_only() {
+        let balance = balance(&[(1, 5, true), (1, 7, false), (2, 100, true)]);
+        let token = HashOutput([1; 32]);
+        assert_eq!(
+            balance.spendable_shielded_value(ShieldedTokenType(token)),
+            5
+        );
+        assert_eq!(
+            balance.spendable_unshielded_value(UnshieldedTokenType(token)),
+            5
         );
     }
 }

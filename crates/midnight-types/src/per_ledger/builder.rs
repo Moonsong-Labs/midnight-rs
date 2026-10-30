@@ -25,9 +25,10 @@ use helpers::{
 
 use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
+use crate::transfer::panic_message;
 use crate::{
-    Network, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
-    TransferResult, WalletError, panic_message,
+    DustPublicKey, Network, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind,
+    TransferRequest, TransferResult, WalletError,
 };
 
 type UnprovenTx = helpers::UnprovenTransaction<DefaultDB>;
@@ -274,7 +275,7 @@ async fn utxo_selection_error(context: &BuildContext, e: UtxoSelectionError) -> 
     }
 }
 
-pub async fn prove_tx_no_validate(
+async fn prove_tx_no_validate(
     tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
     tx: UnprovenTx,
 ) -> Result<FinalizedTx, WalletError> {
@@ -406,8 +407,8 @@ impl<'a> TransferBuilder<'a> {
                     )
                     .await
             }
-            TransferKind::DustRegistration { utxo_ctime } => {
-                builder.prepare_register_dust(utxo_ctime).await
+            TransferKind::DustRegistration { utxo_ctime, target } => {
+                builder.prepare_register_dust(utxo_ctime, target).await
             }
             TransferKind::DustDeregistration => builder.prepare_deregister_dust().await,
         }
@@ -700,9 +701,19 @@ impl<'a> TransferBuilder<'a> {
     /// `utxo_ctime` is a fallback creation timestamp (seconds since epoch),
     /// used only for UTXOs whose own creation time the indexer did not report.
     /// If `None`, those UTXOs fall back to `now - 1 hour`.
+    ///
+    /// `target` is the Dust public key that gets the Dust of the registered
+    /// tNIGHT, for example the key of another wallet that pays fees. `None`
+    /// names this wallet's own key. The registration sets the Dust public key
+    /// of the whole NIGHT address. A later registration replaces it, also when
+    /// its `target` is `None`. tNIGHT that reaches the address after a
+    /// registration generates Dust for the key that the last registration set.
+    /// tNIGHT that already generates Dust keeps its key until the wallet spends
+    /// it.
     pub async fn prepare_register_dust(
         self,
         utxo_ctime: Option<u64>,
+        target: Option<DustPublicKey>,
     ) -> Result<PreparedTransfer, WalletError> {
         let seed = self.state.seed().into_ledger();
 
@@ -803,9 +814,13 @@ impl<'a> TransferBuilder<'a> {
             None,
         );
         tx_info.add_intent(Segment::Fallible.into(), Box::new(intent));
+        let dust_address = match target {
+            Some(target) => target.into_ledger(),
+            None => DustWallet::<DefaultDB>::default(seed.clone(), None).public_key,
+        };
         tx_info.add_dust_registration(DustRegistrationBuilder {
             wallet: UnshieldedWallet::default(seed.clone()),
-            dust_address: Some(DustWallet::<DefaultDB>::default(seed.clone(), None).public_key),
+            dust_address: Some(dust_address),
             allow_fee_payment,
         });
         tx_info.use_mock_proofs_for_fees(true);
@@ -978,15 +993,6 @@ fn generationless_fee_availability(
     u128::min(dt.saturating_mul(rate), vfull)
 }
 
-/// The proven transaction plus the dust batches that funded it.
-///
-/// Each [`DustSpendBatch`] groups per-seed `(spends, updated_state)` from a
-/// single `speculative_spend` call, which `mark_spent` takes together.
-pub struct BuiltTransaction {
-    pub finalized: FinalizedTx,
-    pub dust_batches: Vec<DustSpendBatch>,
-}
-
 /// The chain time of `context`, and the TTL derived from it: that time plus the
 /// ledger's `global_ttl`.
 fn now_and_ttl(context: &BuildContext) -> (Timestamp, Timestamp) {
@@ -1036,29 +1042,6 @@ async fn assemble_unproven(
     Ok((tx, now, ttl))
 }
 
-/// Build and prove a transaction without the helpers' final `well_formed()`
-/// check. The chain validates with its own `root_history`; matching that
-/// locally would require a 55MB+ global `DustState`. Matches midnight-js.
-pub async fn build_no_validate(
-    mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-) -> Result<BuiltTransaction, WalletError> {
-    if pays_own_fee(&tx_info) && !tx_info.mock_proofs_for_fees {
-        let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
-        return balance_fees_with_proofs(&mut tx_info, tx, now, ttl).await;
-    }
-    let PreparedTransfer {
-        mut tx_info,
-        tx,
-        dust_batches,
-        ..
-    } = prepare_no_validate(tx_info).await?;
-    let finalized = prove_tx_no_validate(&mut tx_info, tx).await?;
-    Ok(BuiltTransaction {
-        finalized,
-        dust_batches,
-    })
-}
-
 /// Whether `tx_info` draws Dust for its own fee: it names a funding seed or
 /// registers a Dust address.
 fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> bool {
@@ -1075,6 +1058,11 @@ fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> b
 ///
 /// Requires mock fee proofs when the build funds itself. Balancing without
 /// them has to prove each round, which is the cost preparing exists to avoid.
+///
+/// The build skips the helpers' final `well_formed()` check, as midnight-js
+/// does. The chain validates the transaction against its own `root_history`.
+/// A local check can match that only with the global `DustState`, which is
+/// 55MB or more.
 pub async fn prepare_no_validate(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
 ) -> Result<PreparedTransfer, WalletError> {
@@ -1258,33 +1246,6 @@ fn balance_fees_with_mocks(
         }
         confirm_dust_spends(tx_info, &batches);
         return Ok((paid_tx, batches));
-    }
-    Err(tracker.into_error())
-}
-
-/// Converge the Dust fee with a real proof of each candidate, and return the
-/// proof of the candidate that balances.
-async fn balance_fees_with_proofs(
-    tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
-    tx: UnprovenTx,
-    now: Timestamp,
-    ttl: Timestamp,
-) -> Result<BuiltTransaction, WalletError> {
-    let mut tracker = FeeBalanceTracker::default();
-
-    for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
-        let (paid_tx, batches) = dust_candidate(tx_info, &tx, tracker.request(), now, ttl)?;
-        let proven = prove_tx_no_validate(tx_info, paid_tx).await?;
-        let (fee, shortfall) = compute_missing_dust(tx_info, &proven)?;
-        if let Some(dust) = shortfall {
-            tracker.record_shortfall(fee, dust);
-            continue;
-        }
-        confirm_dust_spends(tx_info, &batches);
-        return Ok(BuiltTransaction {
-            finalized: proven,
-            dust_batches: batches,
-        });
     }
     Err(tracker.into_error())
 }
@@ -1515,7 +1476,10 @@ fn resign_offer(
 /// the 32-byte serialized encryption public key.
 const SHIELDED_ADDRESS_DATA_LEN: usize = 64;
 
-fn parse_wallet_address(s: &str, network: &Network) -> Result<WalletAddress, WalletError> {
+pub(crate) fn parse_wallet_address(
+    s: &str,
+    network: &Network,
+) -> Result<WalletAddress, WalletError> {
     let addr = WalletAddress::from_str(s)
         .map_err(|e| WalletError::InvalidAddress(format!("bech32 decode: {e}")))?;
     check_address_network(&addr, network)?;

@@ -37,7 +37,7 @@ impl StructLayout {
 ///
 /// Returns `None` for a type with no fixed width, or when the count does not
 /// fit a `usize`.
-pub fn atom_count_for_type(ty: &Type) -> Option<usize> {
+pub(crate) fn atom_count_for_type(ty: &Type) -> Option<usize> {
     match ty {
         Type::Field(field) => Some(match ForeignField::of(field) {
             Some(foreign) => foreign.alignment().0.len(),
@@ -167,7 +167,7 @@ pub fn slice_atoms(av: &AlignedValue, range: Range<usize>) -> Option<AlignedValu
 ///
 /// A `Value::Integer` is a `u128`, so a bound wider than `u128` cannot be
 /// exceeded by any representable value; it saturates for the comparison.
-pub fn check_uint_range(n: u128, maxval: &BigUint) -> Result<u128, InterpreterError> {
+pub(crate) fn check_uint_range(n: u128, maxval: &BigUint) -> Result<u128, InterpreterError> {
     let max = u128::try_from(maxval).unwrap_or(u128::MAX);
     if n > max {
         return Err(InterpreterError::TypeError(format!(
@@ -203,8 +203,7 @@ pub fn bytes_aligned_value(
 /// The Merkle leaf hash of an aligned value, as a `Bytes<32>` aligned value.
 ///
 /// Mirrors the canonical runtime's `leafHash`: the on-chain Merkle tree stores
-/// this digest, never the value itself, so a ledger tree write and the
-/// `leafHash` builtin must produce the same bytes.
+/// this digest, never the value itself.
 pub fn merkle_leaf_hash(av: AlignedValue) -> AlignedValue {
     use midnight_transient_crypto::fab::ValueReprAlignedValue;
     let hash = midnight_transient_crypto::merkle_tree::leaf_hash(&ValueReprAlignedValue(av));
@@ -240,11 +239,6 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
     use midnight_base_crypto::fab;
     let unsupported =
         || InterpreterError::TypeError(format!("cannot encode value {val:?} as type {ty:?}"));
-
-    // A Cell unwraps to its aligned value, which must still satisfy `ty`.
-    if let Value::StateValue(_) = val {
-        return encode_typed(&Value::AlignedValue(val.try_to_aligned_value()?), ty);
-    }
 
     match ty {
         Type::Boolean => match val {

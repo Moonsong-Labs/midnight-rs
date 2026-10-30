@@ -483,18 +483,36 @@ pub(crate) async fn replay_ledger_events(
     })
 }
 
+/// Where an unshielded replay stopped.
+#[derive(Debug)]
+pub(crate) struct UnshieldedReplay {
+    /// The address's unspent UTXOs after the replay.
+    pub utxos: Vec<TrackedUtxo>,
+    /// The transaction id that the next replay resumes after.
+    pub last_tx_id: i64,
+    /// The larger of the start height and the height of the newest block
+    /// among the applied transactions.
+    pub last_block_height: i64,
+    /// The key of each UTXO that an applied transaction spent.
+    pub spent: Vec<SpentUtxoKey>,
+}
+
+/// Replay the unshielded transactions of `address` from `start_tx_id`. The
+/// replay starts from `initial_utxos` and `start_block_height`, which the
+/// transactions before `start_tx_id` left.
 pub(crate) async fn replay_unshielded_events(
     sub_client: &SubscriptionClient,
     address: &str,
     initial_utxos: Vec<TrackedUtxo>,
     start_tx_id: i64,
+    start_block_height: i64,
     resuming: bool,
     progress: Option<mpsc::Sender<SyncProgress>>,
-) -> Result<(Vec<TrackedUtxo>, i64, i64, Vec<SpentUtxoKey>), WalletError> {
+) -> Result<UnshieldedReplay, WalletError> {
     use midnight_indexer_client::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION;
 
     let mut utxos: Vec<TrackedUtxo> = initial_utxos;
-    let mut last_height: i64 = 0;
+    let mut last_height = start_block_height;
     let mut last_seen_tx_id: i64 = last_applied_before(start_tx_id);
     // Keys of every spent UTXO observed during this replay, surfaced to the
     // caller so it can clear confirmed pending reservations.
@@ -618,7 +636,12 @@ pub(crate) async fn replay_unshielded_events(
                                     &progress,
                                     SyncProgress::UnshieldedCaughtUp { utxos: utxos.len() },
                                 );
-                                return Ok((utxos, last_seen_tx_id, last_height, spent_keys));
+                                return Ok(UnshieldedReplay {
+                                    utxos,
+                                    last_tx_id: last_seen_tx_id,
+                                    last_block_height: last_height,
+                                    spent: spent_keys,
+                                });
                             }
                         }
                         UnshieldedTxPayload::UnshieldedTransactionsProgress(prog) => {
@@ -639,12 +662,12 @@ pub(crate) async fn replay_unshielded_events(
                                     &progress,
                                     SyncProgress::UnshieldedCaughtUp { utxos: utxos.len() },
                                 );
-                                return Ok((
+                                return Ok(UnshieldedReplay {
                                     utxos,
-                                    last_seen_tx_id.max(target),
-                                    last_height,
-                                    spent_keys,
-                                ));
+                                    last_tx_id: last_seen_tx_id.max(target),
+                                    last_block_height: last_height,
+                                    spent: spent_keys,
+                                });
                             }
                             target_tx_id = Some(target);
                         }
@@ -681,7 +704,12 @@ pub(crate) async fn replay_unshielded_events(
                     // replay there. Silence is a server that skipped the frame.
                     if resuming {
                         info!(last_seen_tx_id, "unshielded already at tip");
-                        return Ok((utxos, last_seen_tx_id, last_height, spent_keys));
+                        return Ok(UnshieldedReplay {
+                            utxos,
+                            last_tx_id: last_seen_tx_id,
+                            last_block_height: last_height,
+                            spent: spent_keys,
+                        });
                     }
                     return Err(gave_up(
                         "unshielded",
@@ -691,19 +719,6 @@ pub(crate) async fn replay_unshielded_events(
             }
         }
     }
-}
-
-/// Composite key for matching unshielded UTXOs during spend removal.
-type UtxoKey = (String, UnshieldedTokenType, u128, HashOutput, u32);
-
-fn utxo_key(u: &TrackedUtxo) -> UtxoKey {
-    (
-        u.owner.clone(),
-        u.token_type,
-        u.value,
-        u.intent_hash,
-        u.output_index,
-    )
 }
 
 fn parse_utxo(u: &SubscriptionUtxo) -> Result<TrackedUtxo, WalletError> {
@@ -762,22 +777,11 @@ fn apply_unshielded_tx(
         .map(parse_utxo)
         .collect::<Result<_, _>>()?;
 
-    let mut to_remove: std::collections::HashMap<UtxoKey, usize> = std::collections::HashMap::new();
-    for u in &spent {
-        *to_remove.entry(utxo_key(u)).or_insert(0) += 1;
-    }
-    if !to_remove.is_empty() {
-        utxos.retain(|u| match to_remove.get_mut(&utxo_key(u)) {
-            Some(count) if *count > 0 => {
-                *count -= 1;
-                false
-            }
-            _ => true,
-        });
-    }
+    let spent_keys: Vec<SpentUtxoKey> = spent.iter().map(TrackedUtxo::spent_key).collect();
+    utxos.retain(|u| !spent_keys.contains(&u.spent_key()));
     utxos.extend(created);
 
-    Ok(spent.iter().map(TrackedUtxo::spent_key).collect())
+    Ok(spent_keys)
 }
 
 /// Forward a progress event to the optional progress channel.
@@ -1105,15 +1109,38 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let (utxos, last_tx_id, last_height, _spent) =
-                replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
+            let replay =
+                replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, 0, false, None)
                     .await
                     .expect("sync must succeed across the reconnect");
 
-            let values: Vec<u128> = utxos.iter().map(|u| u.value).collect();
+            let values: Vec<u128> = replay.utxos.iter().map(|u| u.value).collect();
             assert_eq!(values, vec![100, 200, 300], "duplicate tx 2 re-applied?");
-            assert_eq!(last_tx_id, 3);
-            assert_eq!(last_height, 30);
+            assert_eq!(replay.last_tx_id, 3);
+            assert_eq!(replay.last_block_height, 30);
+
+            server.await.unwrap();
+        }
+
+        /// A resume with no new transaction for the address must keep the
+        /// wallet's height, or the commit writes 0 into the snapshot.
+        #[tokio::test]
+        async fn unshielded_replay_keeps_the_start_height_when_nothing_is_new() {
+            let (listener, url) = bind().await;
+            let server = tokio::spawn(async move {
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                assert_eq!(subscription_variable(&sub, "transactionId"), 5);
+                send_next(&mut ws, &sub, unshielded_progress(4)).await;
+                while next_json(&mut ws).await.is_some() {}
+            });
+
+            let sub_client = SubscriptionClient::new(&url);
+            let replay =
+                replay_unshielded_events(&sub_client, "addr", Vec::new(), 5, 50, true, None)
+                    .await
+                    .expect("a resume at the tip must succeed");
+            assert_eq!(replay.last_tx_id, 4);
+            assert_eq!(replay.last_block_height, 50);
 
             server.await.unwrap();
         }
@@ -1142,9 +1169,10 @@ mod tests {
                 });
 
                 let sub_client = SubscriptionClient::new(&url);
-                let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
-                    .await
-                    .expect_err("must fail after exhausting reconnect attempts");
+                let err =
+                    replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, 0, false, None)
+                        .await
+                        .expect_err("must fail after exhausting reconnect attempts");
                 assert!(
                     matches!(&err, WalletError::Indexer { retryable, .. } if *retryable),
                     "complete: {complete}, got: {err:?}"
@@ -1192,7 +1220,7 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, 0, false, None)
                 .await
                 .expect_err("duplicate-only re-deliveries must not reset the bound");
             assert!(
@@ -1225,7 +1253,7 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, 0, false, None)
                 .await
                 .expect_err("an id regression within one connection must error");
             assert!(

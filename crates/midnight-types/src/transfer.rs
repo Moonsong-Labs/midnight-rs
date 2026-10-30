@@ -7,7 +7,9 @@
 
 use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 
-use crate::coin::{DustNullifier, Nullifier, ShieldedTokenType, UnshieldedTokenType};
+use crate::coin::{
+    DustNullifier, DustPublicKey, Nullifier, ShieldedTokenType, UnshieldedTokenType,
+};
 use crate::ledger_version::LedgerVersion;
 
 /// A proven transaction a build made, and the inputs the build reserved for
@@ -161,6 +163,9 @@ pub enum TransferKind {
         /// Fallback creation time for the UTXOs whose own creation time the
         /// indexer did not report.
         utxo_ctime: Option<u64>,
+        /// The Dust public key that gets the Dust of the registered tNIGHT.
+        /// `None` names this wallet's own key.
+        target: Option<DustPublicKey>,
     },
     /// A Dust deregistration, which stops the wallet's tNIGHT from
     /// generating Dust. See `TransferBuilder::prepare_deregister_dust`.
@@ -201,10 +206,7 @@ impl From<TransferKind> for TransferRequest {
 }
 
 /// Recover a printable message from a caught panic payload.
-///
-/// Shared with the provider's fee-paying path, which proves through the same
-/// backend and needs the same treatment.
-pub fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<String>() {
         return s.clone();
     }
@@ -231,8 +233,11 @@ mod tests {
     #[test]
     fn the_default_coin_selection_is_largest_first() {
         assert_eq!(
-            TransferRequest::new(TransferKind::DustRegistration { utxo_ctime: None })
-                .coin_selection,
+            TransferRequest::new(TransferKind::DustRegistration {
+                utxo_ctime: None,
+                target: None
+            })
+            .coin_selection,
             CoinSelectionStrategy::LargestFirst,
             "every shielded input carries its own proof, so the default \
              spends the fewest inputs"

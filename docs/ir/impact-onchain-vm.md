@@ -13,6 +13,7 @@ A stack machine over `StateValue` / `AlignedValue`. The ops: `Noop`, `Lt`, `Eq`,
 Notable ones:
 - `Idx` navigates into the current `StateValue` (Array, Map, Cell, BoundedMerkleTree) by an `AlignedValue` key.
 - `Ins` / `Rem` insert and remove. `Member` tests membership. `Root` reads a Merkle root. `Popeq` pops and asserts equality. `Ckpt` checkpoints.
+- `Log` pops a value and records it as an event. A Compact `emit` pushes a `[version, type, payload]` array for it. The ledger 9 VM decodes that array as a `VersionedLogItem`, and the ledger 8 VM records the array as it is.
 
 ## State model
 

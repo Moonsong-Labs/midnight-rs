@@ -15,7 +15,5 @@ pub(crate) mod deploy;
 pub(crate) mod maintenance;
 #[path = "per_ledger/resolver.rs"]
 mod resolver;
-#[path = "per_ledger/shielded.rs"]
-mod shielded;
 #[path = "per_ledger/state.rs"]
 pub(crate) mod state;

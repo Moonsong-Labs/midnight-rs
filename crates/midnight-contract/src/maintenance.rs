@@ -13,7 +13,7 @@ use std::pin::Pin;
 
 use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPointBuf};
-use midnight_provider::{Builds, PendingTx, Provider};
+use midnight_provider::{Builds, PendingTx};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
 use midnight_types::{LedgerVersion, TransferResult, WalletError};
 
@@ -250,7 +250,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
     /// [`PreparedMaintenance`] exposes the bytes each committee member signs.
     pub async fn prepare(self) -> Result<PreparedMaintenance<'a, P>, ContractError>
     where
-        P: Provider + AsMidnightProvider,
+        P: AsMidnightProvider,
     {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
         Box::pin(self.prepare_inner()).await
@@ -258,7 +258,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
 
     async fn prepare_inner(self) -> Result<PreparedMaintenance<'a, P>, ContractError>
     where
-        P: Provider + AsMidnightProvider,
+        P: AsMidnightProvider,
     {
         if self.specs.is_empty() {
             return Err(ContractError::Maintenance(
@@ -268,7 +268,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
 
         let provider = self.contract.provider().as_midnight_provider();
         let address_hex = self.contract.address();
-        let address = crate::address::parse_address(address_hex)?;
+        let address = crate::address::parse_contract_address(address_hex)?;
 
         // Read the current authority at latest (the signed counter must match
         // what the chain will check at submission — not any pinned block).
@@ -455,7 +455,7 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     /// reservation instead.
     pub async fn build(self) -> Result<Vec<u8>, ContractError>
     where
-        P: Provider + AsMidnightProvider,
+        P: AsMidnightProvider,
     {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
         Ok(Box::pin(self.build_inner()).await?.tx_bytes)
@@ -463,7 +463,7 @@ impl<'a, P> PreparedMaintenance<'a, P> {
 
     async fn build_inner(self) -> Result<TransferResult, ContractError>
     where
-        P: Provider + AsMidnightProvider,
+        P: AsMidnightProvider,
     {
         self.check_signatures()?;
         let provider = self.contract.provider().as_midnight_provider();
@@ -497,7 +497,7 @@ impl<'a, P> PreparedMaintenance<'a, P> {
 
 impl<'a, P> IntoFuture for PreparedMaintenance<'a, P>
 where
-    P: Provider + AsMidnightProvider + Send + Sync + 'a,
+    P: AsMidnightProvider + Send + Sync + 'a,
 {
     type Output = Result<PendingTx, ContractError>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;

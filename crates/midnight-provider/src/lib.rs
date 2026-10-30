@@ -1,3 +1,5 @@
+#![warn(missing_debug_implementations)]
+
 mod error;
 pub mod ledger_8;
 #[expect(
@@ -31,9 +33,9 @@ pub use types::{Health, TransactionHash};
 // crate never names them.
 pub use midnight_types::{
     BlockHash, ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
-    DustParameters, EncryptionPublicKey, ExtrinsicHash, HashOutput, LedgerVersion, NIGHT, Nonce,
-    Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType,
-    UnshieldedTokenType,
+    DustParameters, DustPublicKey, EncryptionPublicKey, ExtrinsicHash, HashOutput, LedgerVersion,
+    NIGHT, Nonce, Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient,
+    ShieldedTokenType, UnshieldedTokenType,
 };
 
 // The wallet's API, so a caller attaching one (or implementing one) needs no
