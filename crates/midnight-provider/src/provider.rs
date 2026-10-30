@@ -690,18 +690,19 @@ impl MidnightProvider {
     ///
     /// **Intent segments must not collide.** The ledger rejects a merge where
     /// two inputs both carry an intent at the same segment. Each contract call
-    /// puts its intent at a random segment from 2 up, so two calls merge. The
-    /// chance that two calls draw the same segment is about 1 in 65,000.
-    /// Segment 1 holds the intent of a deploy, of a maintenance update and of
-    /// an unshielded (UTXO) transfer, and the Dust-fee intent of a self-funded
-    /// transfer. A self-funded contract call and [`Self::balance_transaction`]
-    /// put their Dust-fee intent at the first free segment from 0xFEED up. So
-    /// at most one merged input can carry an intent at segment 1, and two
-    /// self-funded calls do not merge. The supported multi-party shape is "one
-    /// party pays": the contributors build fee-less
-    /// ([`crate::DustlessBuilder::without_dust`]), and one payer pays all the
-    /// fees with [`Self::balance_transaction`]. A Dustless *shielded* transfer
-    /// carries no intent at all (pure Zswap), so it always merges cleanly.
+    /// puts its intent at a random segment from 2 up, so two fee-less calls
+    /// merge. The chance that two calls draw the same segment is about 1 in
+    /// 65,000. Segment 1 holds the intent of a deploy, of a maintenance update
+    /// and of an unshielded (UTXO) transfer, and the Dust-fee intent of a
+    /// self-funded transfer. A self-funded contract call and
+    /// [`Self::balance_transaction`] put their Dust-fee intent at the first
+    /// free segment from 0xFEED up. So at most one merged input can carry an
+    /// intent at segment 1, and two self-funded calls do not merge. The
+    /// supported multi-party shape is "one party pays": the contributors build
+    /// fee-less ([`crate::DustlessBuilder::without_dust`]), and one payer pays
+    /// all the fees with [`Self::balance_transaction`]. A Dustless *shielded*
+    /// transfer carries no intent at all (pure Zswap), so it always merges
+    /// cleanly.
     ///
     /// Merge calls to different contracts. Their guaranteed parts apply
     /// together or not at all, and each call's fallible part can fail alone,
