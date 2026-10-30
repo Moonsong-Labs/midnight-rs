@@ -37,10 +37,9 @@ use crate::runtime;
 ///
 /// A merge refuses two intents at one segment, so each call draws its own
 /// segment, as midnight-js `Transaction.fromPartsRandomized` does. The range
-/// leaves out the guaranteed segment and
-/// [`INTENT_SEGMENT`](super::deploy::INTENT_SEGMENT), which a deploy, a
-/// maintenance update and an unshielded transfer use. So a call also merges
-/// with each of those.
+/// leaves out the guaranteed segment and [`helpers::Segment::Fallible`], which
+/// a deploy, a maintenance update and an unshielded transfer use. So a call
+/// also merges with each of those.
 pub(crate) fn call_segment(rng: &mut impl rand::Rng) -> helpers::SegmentId {
     rng.gen_range(2..u16::MAX)
 }

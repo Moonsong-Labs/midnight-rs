@@ -64,15 +64,12 @@ pub(crate) async fn deploy_funded(
     })
 }
 
-/// The segment of the intent that a deploy or a maintenance update adds.
+/// The transaction info for one intent, at the fallible segment, that holds
+/// `action` alone.
 ///
 /// The segment is fixed, as it is for a deploy and a maintenance update in
 /// midnight-js. A call draws its segment with
 /// [`call_segment`](super::call::call_segment) instead.
-const INTENT_SEGMENT: helpers::SegmentId = helpers::Segment::Fallible as helpers::SegmentId;
-
-/// The transaction info for one intent, at [`INTENT_SEGMENT`], that holds
-/// `action` alone.
 pub(super) fn single_action_tx_info(
     builds: &Builds<'_>,
     context: Arc<BuildContext>,
@@ -81,7 +78,7 @@ pub(super) fn single_action_tx_info(
     let mut tx_info =
         StandardTransactionInfo::new_from_context(context, builds.proof_provider(), None);
     tx_info.add_intent(
-        INTENT_SEGMENT,
+        helpers::Segment::Fallible.into(),
         Box::new(IntentInfo {
             guaranteed_unshielded_offer: None,
             fallible_unshielded_offer: None,
