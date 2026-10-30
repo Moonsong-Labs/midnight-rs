@@ -56,10 +56,9 @@ pub(crate) enum DeploySource {
 ///
 /// # Errors
 ///
-/// - [`ContractError::MissingConstructorArgs`] when the deploy runs a
-///   constructor that declares an argument that `args` does not name.
-/// - [`ContractError::Construction`] when the deploy has neither a state nor
-///   a constructor.
+/// [`ContractError::Construction`] when the deploy has neither a state nor a
+/// constructor, or when it runs a constructor that declares an argument that
+/// `args` does not name.
 pub(crate) fn deploy_source(
     initial_state: Option<ContractState<InMemoryDB>>,
     constructor: Option<Constructor>,
@@ -82,7 +81,10 @@ pub(crate) fn deploy_source(
         .map(str::to_owned)
         .collect();
     if !missing.is_empty() {
-        return Err(ContractError::MissingConstructorArgs { missing });
+        return Err(ContractError::Construction(format!(
+            "missing constructor arguments {missing:?}, call .with_constructor_args(...) on the \
+             builder, or .with_initial_state(...) to skip the constructor"
+        )));
     }
     Ok(DeploySource::Constructor { constructor, args })
 }
@@ -267,10 +269,10 @@ mod tests {
 
         let refused = deploy_source(None, Some(constructor(TINY, None)), vec![]);
         match refused {
-            Err(ContractError::MissingConstructorArgs { missing }) => {
-                assert_eq!(missing, ["v"]);
+            Err(ContractError::Construction(message)) => {
+                assert!(message.contains(r#"["v"]"#), "{message}");
             }
-            Err(other) => panic!("expected MissingConstructorArgs, got {other:?}"),
+            Err(other) => panic!("expected Construction, got {other:?}"),
             Ok(_) => panic!("a constructor with no arguments must not run"),
         }
     }

@@ -363,8 +363,8 @@ fn emit_deploy(
                 doc.push_str(
                     " The constructor takes arguments: set them with \
                      `DeployBuilder::with_constructor_args`. Without them, a deploy that runs \
-                     the constructor fails with `ContractError::MissingConstructorArgs` before \
-                     it proves anything.",
+                     the constructor fails with `ContractError::Construction` before it \
+                     proves anything.",
                 );
             }
             let source = quote! {
@@ -438,7 +438,7 @@ fn emit_deploy(
                 /// Set the arguments of the contract's constructor, which the deploy runs.
                 ///
                 /// Without them, a deploy that runs the constructor fails with
-                /// `ContractError::MissingConstructorArgs` before it proves anything.
+                /// `ContractError::Construction` before it proves anything.
                 /// `with_initial_state` skips the constructor, and the arguments then
                 /// have no use.
                 pub fn with_constructor_args(self #(, #params)*) -> Self {

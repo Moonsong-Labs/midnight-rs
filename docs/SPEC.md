@@ -221,7 +221,7 @@ Internally:
 ```
 deploy_source(initial_state, constructor, args)   // no node query
   ├─ an initial state: deploy it as it is, with the initial private state
-  ├─ a constructor: refuse a missing argument (MissingConstructorArgs)
+  ├─ a constructor: refuse a missing argument (Construction)
   └─ neither: Construction("missing initial_state")
   ↓
 constructor::run (a constructor only)

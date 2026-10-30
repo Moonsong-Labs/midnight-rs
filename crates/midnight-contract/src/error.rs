@@ -65,21 +65,6 @@ pub enum ContractError {
         paid: u128,
     },
 
-    /// A deploy runs the contract's constructor, and it does not set each
-    /// argument that the constructor takes.
-    ///
-    /// The deploy stops before it queries the node or proves anything. Set the
-    /// arguments with the generated `with_constructor_args`, or deploy a state
-    /// with `with_initial_state`, which skips the constructor.
-    #[error(
-        "the contract's constructor takes the arguments {missing:?}, and the deploy does not \
-         set them: call `with_constructor_args`, or `with_initial_state` to skip the constructor"
-    )]
-    MissingConstructorArgs {
-        /// The source names of the arguments with no value.
-        missing: Vec<String>,
-    },
-
     /// The contract's constructor has an effect that the deploy does not carry.
     ///
     /// A deploy carries the state that the constructor leaves, and no

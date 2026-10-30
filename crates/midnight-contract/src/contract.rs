@@ -632,9 +632,9 @@ impl<'a, P> DeployBuilder<'a, P> {
     /// Set the arguments of the constructor, as (source name, value) pairs.
     ///
     /// A deploy that runs a constructor fails with
-    /// [`ContractError::MissingConstructorArgs`] when an argument that the
-    /// constructor declares has no value. The generated `with_constructor_args`
-    /// takes them typed.
+    /// [`ContractError::Construction`] when an argument that the constructor
+    /// declares has no value. The generated `with_constructor_args` takes them
+    /// typed.
     pub fn with_constructor_args(mut self, args: Vec<(String, crate::runtime::Value)>) -> Self {
         self.constructor_args = args;
         self
@@ -768,11 +768,10 @@ where
     /// These come before any proof:
     ///
     /// - [`ContractError::Construction`] when the builder has no zk config,
-    ///   when it has neither an initial state nor a constructor, or when the
-    ///   deploy has a private state to record and the provider has no
+    ///   when it has neither an initial state nor a constructor, when the
+    ///   deploy runs a constructor and does not set each of its arguments, or
+    ///   when the deploy has a private state to record and the provider has no
     ///   private-state store.
-    /// - [`ContractError::MissingConstructorArgs`] when the deploy runs a
-    ///   constructor and does not set each of its arguments.
     /// - [`ContractError::Interpreter`] when the constructor or a witness
     ///   fails, for example on a failed `assert`, or on a witness call with no
     ///   witnesses.
