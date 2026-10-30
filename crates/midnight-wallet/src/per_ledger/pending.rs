@@ -254,7 +254,7 @@ impl PendingReservations {
             dust.push(StoredPendingDustBatch {
                 spends_hex: tagged_to_hex(&p.spends, "pending dust spends")?,
                 reserved_at_secs: p.reserved_at.to_secs(),
-                expires_at_secs: Some(p.expires_at.to_secs()),
+                expires_at_secs: p.expires_at.to_secs(),
             });
         }
 
@@ -265,7 +265,7 @@ impl PendingReservations {
                 intent_hash: hex::encode(p.key.intent_hash.0),
                 output_index: p.key.output_index,
                 reserved_at_secs: p.reserved_at.to_secs(),
-                expires_at_secs: Some(p.expires_at.to_secs()),
+                expires_at_secs: p.expires_at.to_secs(),
             })
             .collect();
 
@@ -274,7 +274,7 @@ impl PendingReservations {
             shielded.push(StoredPendingShielded {
                 nullifier_hex: tagged_to_hex(&p.nullifier, "pending shielded nullifier")?,
                 reserved_at_secs: p.reserved_at.to_secs(),
-                expires_at_secs: Some(p.expires_at.to_secs()),
+                expires_at_secs: p.expires_at.to_secs(),
             });
         }
 
@@ -297,29 +297,20 @@ impl PendingReservations {
     }
 
     /// The reservations the wallet's `pending.json` holds, if it has one.
-    /// See [`Self::from_stored`] for `global_ttl`.
     pub(crate) fn load(
         base: &Path,
         network: &str,
         wallet_id: &str,
-        global_ttl: helpers::Duration,
     ) -> Result<Option<Self>, WalletError> {
         crate::storage::load_pending(base, network, wallet_id)?
-            .map(|stored| Self::from_stored(stored, global_ttl))
+            .map(Self::from_stored)
             .transpose()
     }
 
     /// Decode what a `pending.json` holds. Reservations another generation
     /// made are dropped: a transaction built for it cannot land on a chain
     /// that runs this one.
-    ///
-    /// A reservation with no expiry on file expires `global_ttl` after its
-    /// `reserved_at`, the TTL that a wallet which stores no expiry gives its
-    /// transactions.
-    pub(crate) fn from_stored(
-        stored: StoredPending,
-        global_ttl: helpers::Duration,
-    ) -> Result<Self, WalletError> {
+    pub(crate) fn from_stored(stored: StoredPending) -> Result<Self, WalletError> {
         if stored.ledger_version != super::LEDGER {
             warn!(
                 found = %stored.ledger_version,
@@ -327,18 +318,12 @@ impl PendingReservations {
             );
             return Ok(Self::default());
         }
-        let stamps = |reserved_at_secs: u64, expires_at_secs: Option<u64>| {
-            let reserved_at = Timestamp::from_secs(reserved_at_secs);
-            let expires_at = expires_at_secs.map_or(reserved_at + global_ttl, Timestamp::from_secs);
-            (reserved_at, expires_at)
-        };
         let mut dust = Vec::with_capacity(stored.dust.len());
         for s in stored.dust {
-            let (reserved_at, expires_at) = stamps(s.reserved_at_secs, s.expires_at_secs);
             dust.push(PendingDustBatch {
                 spends: tagged_from_hex(&s.spends_hex, "pending dust spends")?,
-                reserved_at,
-                expires_at,
+                reserved_at: Timestamp::from_secs(s.reserved_at_secs),
+                expires_at: Timestamp::from_secs(s.expires_at_secs),
             });
         }
 
@@ -347,24 +332,22 @@ impl PendingReservations {
             let intent_hash = <[u8; 32]>::from_hex(&s.intent_hash).map_err(|e| {
                 WalletError::Storage(format!("decode pending unshielded intent hash: {e}"))
             })?;
-            let (reserved_at, expires_at) = stamps(s.reserved_at_secs, s.expires_at_secs);
             unshielded.push(PendingUnshieldedSpend {
                 key: SpentUtxoKey {
                     intent_hash: HashOutput(intent_hash),
                     output_index: s.output_index,
                 },
-                reserved_at,
-                expires_at,
+                reserved_at: Timestamp::from_secs(s.reserved_at_secs),
+                expires_at: Timestamp::from_secs(s.expires_at_secs),
             });
         }
 
         let mut shielded = Vec::with_capacity(stored.shielded.len());
         for s in stored.shielded {
-            let (reserved_at, expires_at) = stamps(s.reserved_at_secs, s.expires_at_secs);
             shielded.push(PendingShieldedSpend {
                 nullifier: tagged_from_hex(&s.nullifier_hex, "pending shielded nullifier")?,
-                reserved_at,
-                expires_at,
+                reserved_at: Timestamp::from_secs(s.reserved_at_secs),
+                expires_at: Timestamp::from_secs(s.expires_at_secs),
             });
         }
 
@@ -454,8 +437,7 @@ mod tests {
         ] {
             let mut stored = p.to_stored().unwrap();
             stored.ledger_version = version;
-            let loaded =
-                PendingReservations::from_stored(stored, INITIAL_PARAMETERS.global_ttl).unwrap();
+            let loaded = PendingReservations::from_stored(stored).unwrap();
             assert_eq!(
                 loaded.unshielded_spends().count() == 1,
                 version == super::super::LEDGER,
@@ -463,34 +445,6 @@ mod tests {
                 super::super::LEDGER
             );
         }
-    }
-
-    /// An earlier build wrote each Dust batch with an `updated_state_hex`. A
-    /// `deny_unknown_fields` on the stored structs refuses that file, and the
-    /// resume of each upgraded wallet with a Dust reservation in flight fails.
-    #[test]
-    fn a_pending_file_that_an_earlier_build_wrote_still_loads() {
-        let batch = dust_batch(&[1]);
-        let body = serde_json::json!({
-            "ledger_version": super::super::LEDGER,
-            "dust": [{
-                "spends_hex": tagged_to_hex(&batch.spends, "spends").unwrap(),
-                "updated_state_hex": tagged_to_hex(&batch.updated_state, "state").unwrap(),
-                "reserved_at_secs": 100,
-            }],
-        });
-        let stored = serde_json::from_value(body).expect("the file parses");
-        let loaded =
-            PendingReservations::from_stored(stored, INITIAL_PARAMETERS.global_ttl).unwrap();
-        let batches: Vec<_> = loaded.dust_batches().collect();
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].spends[0].old_nullifier, nullifier(1));
-        // The file stores no expiry. A default of zero would evict the
-        // reservation at once and free Dust that its transaction still spends.
-        assert_eq!(
-            batches[0].expires_at,
-            Timestamp::from_secs(100) + INITIAL_PARAMETERS.global_ttl
-        );
     }
 
     #[test]
@@ -524,9 +478,9 @@ mod tests {
         assert!(p.is_empty());
     }
 
-    /// A restart must not stretch or cut a reservation's hold. Read back as
-    /// `reserved_at + global_ttl`, a short TTL would hold its inputs for the
-    /// whole `global_ttl`.
+    /// A restart must not stretch or cut a reservation's hold. A save or a
+    /// load that takes the expiry from the stamp would free the inputs too
+    /// early or too late.
     #[test]
     fn a_reservation_keeps_its_expiry_across_a_restart() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -540,14 +494,9 @@ mod tests {
         );
         p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
-        let loaded = PendingReservations::load(
-            dir.path(),
-            "undeployed",
-            "testwallet",
-            INITIAL_PARAMETERS.global_ttl,
-        )
-        .unwrap()
-        .expect("pending.json should exist after save");
+        let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
+            .unwrap()
+            .expect("pending.json should exist after save");
         let expiries: Vec<Timestamp> = loaded
             .dust
             .iter()
@@ -659,14 +608,9 @@ mod tests {
         );
 
         // The batch still round-trips; the seed comes from the owning wallet.
-        let loaded = PendingReservations::load(
-            dir.path(),
-            "undeployed",
-            "testwallet",
-            INITIAL_PARAMETERS.global_ttl,
-        )
-        .unwrap()
-        .expect("pending.json should load");
+        let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
+            .unwrap()
+            .expect("pending.json should load");
         let batches: Vec<_> = loaded.dust_batches().collect();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].spends[0].old_nullifier, nullifier(1));
@@ -688,14 +632,9 @@ mod tests {
         );
         p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
-        let mut loaded = PendingReservations::load(
-            dir.path(),
-            "undeployed",
-            "testwallet",
-            INITIAL_PARAMETERS.global_ttl,
-        )
-        .unwrap()
-        .expect("pending.json should exist after save");
+        let mut loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
+            .unwrap()
+            .expect("pending.json should exist after save");
         assert_eq!(loaded.unshielded_spends().count(), 1);
         assert_eq!(loaded.dust_batches().count(), 1);
 
@@ -721,14 +660,9 @@ mod tests {
         );
         p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
-        let loaded = PendingReservations::load(
-            dir.path(),
-            "undeployed",
-            "testwallet",
-            INITIAL_PARAMETERS.global_ttl,
-        )
-        .unwrap()
-        .expect("pending.json should exist after save");
+        let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
+            .unwrap()
+            .expect("pending.json should exist after save");
         let got: Vec<_> = loaded
             .shielded_spends()
             .map(|spend| spend.nullifier)

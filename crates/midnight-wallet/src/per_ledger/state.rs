@@ -642,8 +642,7 @@ impl Wallet {
         // pending entries; this is a separate file.
         let pending = match save_dir {
             Some(dir) => {
-                PendingReservations::load(dir, network.as_str(), &wallet_id, parameters.global_ttl)?
-                    .unwrap_or_default()
+                PendingReservations::load(dir, network.as_str(), &wallet_id)?.unwrap_or_default()
             }
             None => PendingReservations::default(),
         };
@@ -2019,14 +2018,9 @@ mod tests {
             Timestamp::MAX,
         );
 
-        let loaded = PendingReservations::load(
-            dir.path(),
-            "undeployed",
-            &wallet.storage_id(),
-            INITIAL_PARAMETERS.global_ttl,
-        )
-        .unwrap()
-        .expect("pending.json should exist after reserve_pending");
+        let loaded = PendingReservations::load(dir.path(), "undeployed", &wallet.storage_id())
+            .unwrap()
+            .expect("pending.json should exist after reserve_pending");
         assert_eq!(loaded.unshielded_spends().count(), 1);
     }
 
@@ -2344,14 +2338,9 @@ mod tests {
         assert!(wallet.pending.is_empty());
         assert_eq!(stored_generations(dir.path()), vec![2]);
         assert!(
-            PendingReservations::load(
-                dir.path(),
-                "undeployed",
-                &wallet.storage_id(),
-                INITIAL_PARAMETERS.global_ttl
-            )
-            .unwrap()
-            .is_none()
+            PendingReservations::load(dir.path(), "undeployed", &wallet.storage_id())
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -2467,14 +2456,9 @@ mod tests {
         // still write the reservation.
         std::fs::remove_file(&blocker).unwrap();
         wallet.commit_resync(noop_commit(&wallet)).unwrap();
-        let saved = PendingReservations::load(
-            &blocker,
-            "undeployed",
-            &wallet.storage_id(),
-            INITIAL_PARAMETERS.global_ttl,
-        )
-        .unwrap()
-        .expect("a no-op commit after a failed pending write must save");
+        let saved = PendingReservations::load(&blocker, "undeployed", &wallet.storage_id())
+            .unwrap()
+            .expect("a no-op commit after a failed pending write must save");
         assert_eq!(saved.unshielded_spends().count(), 1);
     }
 

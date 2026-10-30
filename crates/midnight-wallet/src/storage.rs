@@ -337,10 +337,8 @@ pub(crate) struct StoredPendingDustBatch {
     pub spends_hex: String,
     /// `Timestamp::to_secs()` value.
     pub reserved_at_secs: u64,
-    /// `Timestamp::to_secs()` value, or `None` for a file that stores no
-    /// expiry, which `PendingReservations::from_stored` resolves.
-    #[serde(default)]
-    pub expires_at_secs: Option<u64>,
+    /// `Timestamp::to_secs()` value.
+    pub expires_at_secs: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -348,8 +346,7 @@ pub(crate) struct StoredPendingUnshielded {
     pub intent_hash: String,
     pub output_index: u32,
     pub reserved_at_secs: u64,
-    #[serde(default)]
-    pub expires_at_secs: Option<u64>,
+    pub expires_at_secs: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -357,8 +354,7 @@ pub(crate) struct StoredPendingShielded {
     /// Tagged-serialized `Nullifier`, hex.
     pub nullifier_hex: String,
     pub reserved_at_secs: u64,
-    #[serde(default)]
-    pub expires_at_secs: Option<u64>,
+    pub expires_at_secs: u64,
 }
 
 impl StoredPending {
@@ -441,7 +437,7 @@ mod tests {
                 intent_hash: "abcd".to_string(),
                 output_index: 0,
                 reserved_at_secs: 100,
-                expires_at_secs: Some(200),
+                expires_at_secs: 200,
             }],
             shielded: Vec::new(),
         }
