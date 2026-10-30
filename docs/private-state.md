@@ -106,7 +106,7 @@ mkdir -p "$root" && chmod 700 "$root"
 mv ~/.midnight/private-state/states ~/.midnight/private-state/signing-keys "$root"/
 ```
 
-Snapshot filenames begin with a 020-padded nanosecond timestamp purely for human inspection (a directory listing reads in append-time order). The journal head is derived from the `dependsOn` graph: the head is the snapshot no other snapshot depends on. Filename order is not load-bearing, since an export/import round-trip rewrites timestamps. Snapshots carry the producing tx's `extrinsic_hash` plus a `dependsOn` link to the previous snapshot at that address; `mark_failed` / `rollback_from` walk that graph to cascade-drop dependents. Writes go to a `.tmp` sibling and are `rename`d into place, so a crash never leaves a half-written file.
+Snapshot filenames begin with a 020-padded nanosecond timestamp purely for human inspection (a directory listing reads in append-time order). The journal head is derived from the `dependsOn` graph: the head is the snapshot no other snapshot depends on. Filename order is not load-bearing, since an export/import round-trip rewrites timestamps. Snapshots carry the producing tx's `extrinsic_hash` plus a `dependsOn` link to the previous snapshot at that address; `mark_failed` / `rollback_from` walk that graph to cascade-drop dependents. A write syncs a `.tmp` sibling to disk and then `rename`s it into place, so a crash, or a power loss on a file system that can sync, never leaves a half-written file.
 
 State is stored **plaintext at rest**. Encryption is applied on export, which is the secure-transport surface.
 

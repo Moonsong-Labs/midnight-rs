@@ -27,8 +27,10 @@
 //! filenames with new timestamps. `mark_failed` / `rollback_from` likewise
 //! walk the graph to cascade through dependents.
 //!
-//! Writes go to a `.tmp` sibling and are `rename`d into place, so a crash
-//! never leaves a half-written file. The wallet uses the same discipline.
+//! A write goes through `midnight_owner_only::replace`, which syncs a `.tmp`
+//! sibling to disk and then `rename`s it into place. So a crash, or a power
+//! loss on a file system that can sync, never leaves a half-written file. The
+//! wallet uses the same discipline.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -336,7 +338,18 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             data: state.to_vec(),
         };
         let path = self.new_snapshot_path(address, &ext_hex);
-        self.write_json_atomic(&path, &snapshot)?;
+        // An error tells the caller that no snapshot exists, but a failed
+        // directory sync comes after the rename. The path is new, so remove it.
+        if let Err(err) = self.write_json_atomic(&path, &snapshot) {
+            if let Err(remove) = remove_file_opt(&path) {
+                warn!(
+                    path = %path.display(),
+                    error = %remove,
+                    "a failed append left its snapshot; remove the file before the next call"
+                );
+            }
+            return Err(err);
+        }
         debug!(
             address,
             extrinsic_hash = %ext_hex,
@@ -726,8 +739,8 @@ fn walk_children<'a>(
 /// Cascade-drop a snapshot and every snapshot that transitively depends on
 /// it. Walks the dependency graph (`depends_on` edges) starting from
 /// `start_hash`, collects every reachable extrinsic_hash, then deletes the
-/// corresponding files. Errors with [`PrivateStateError::SnapshotNotFound`]
-/// if `start_hash` is not present.
+/// corresponding files and syncs their directory. Errors with
+/// [`PrivateStateError::SnapshotNotFound`] if `start_hash` is not present.
 fn cascade_drop(
     provider: &FsPrivateStateProvider,
     address: &str,
@@ -769,7 +782,9 @@ fn cascade_drop(
             })?;
         }
     }
-    Ok(())
+    let dir = provider.address_dir(address);
+    midnight_owner_only::sync_dir(&dir)
+        .map_err(|e| PrivateStateError::Io(format!("sync {}: {e}", dir.display())))
 }
 
 /// Walk the per-address journal directories, collecting every snapshot
@@ -1001,14 +1016,9 @@ fn create_private_dir(dir: &Path) -> Result<(), PrivateStateError> {
         .map_err(|e| PrivateStateError::Io(format!("create dir {}: {e}", dir.display())))
 }
 
-/// Write `contents` to a `.tmp` sibling of `path`, then rename it into place
-/// (see the module docs).
+/// [`midnight_owner_only::replace`] (see the module docs).
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), PrivateStateError> {
-    let tmp = path.with_extension("tmp");
-    midnight_owner_only::write(&tmp, contents)
-        .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
-    fs::rename(&tmp, path)
-        .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))
+    midnight_owner_only::replace(path, contents).map_err(|e| PrivateStateError::Io(e.to_string()))
 }
 
 /// `None` when `result` failed with `NotFound`. Any other error becomes
@@ -2020,8 +2030,7 @@ mod tests {
 
     /// A store that an earlier version wrote at the umask keeps its modes
     /// until a write narrows them, because a mode given at create does not
-    /// touch what already exists. This includes a temporary file that a crash
-    /// left before its rename, which the next write of that snapshot reuses.
+    /// touch what already exists.
     #[cfg(unix)]
     #[tokio::test]
     async fn the_next_write_narrows_an_existing_store() {
@@ -2037,9 +2046,6 @@ mod tests {
             .unwrap();
         fs::set_permissions(&p.root, fs::Permissions::from_mode(0o755)).unwrap();
         fs::set_permissions(&snapshot, fs::Permissions::from_mode(0o644)).unwrap();
-        let stale_tmp = snapshot.with_extension("tmp");
-        fs::write(&stale_tmp, b"{}").unwrap();
-        fs::set_permissions(&stale_tmp, fs::Permissions::from_mode(0o644)).unwrap();
 
         p.confirm("0200aa", ext(1), None, ext(9)).await.unwrap();
 

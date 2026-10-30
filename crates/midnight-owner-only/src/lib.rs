@@ -1,23 +1,41 @@
-//! Owner-only directories and files for the on-disk stores of the SDK.
+//! Owner-only directories and durable files for the on-disk stores of the SDK.
 //!
 //! On Unix, a directory gets mode 0700 and a file gets mode 0600. A call also
 //! narrows a path that already exists to that mode. On other platforms, a path
 //! keeps the default permissions.
+//!
+//! [`replace`] writes a file through a temporary sibling, which it syncs to
+//! disk and renames into place before it syncs the directory. After a crash or
+//! a power loss, the path holds the old contents or the new contents.
+//! [`create_dir_all`] syncs the parent of each directory that it creates, so a
+//! new directory persists too.
+//!
+//! On Apple targets, a sync is `F_FULLFSYNC`. When a file system refuses it, as
+//! an SMB share does, the calls use a plain `fsync` instead. A file system that
+//! cannot sync a file or a directory at all refuses the sync. The calls then
+//! skip that sync, and the file system alone decides what persists after a
+//! power loss.
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Creates `dir` and its missing ancestors, readable only by the owner.
 ///
 /// On Unix, each directory that the call creates gets mode 0700, and `dir`
 /// gets mode 0700 also when it exists. An existing ancestor keeps its mode.
-/// On other platforms, this is [`std::fs::create_dir_all`].
+/// The call syncs the parent of each directory that it creates, so the new
+/// directories persist after a power loss. When `dir` exists, the call syncs
+/// nothing. On other platforms, this is [`std::fs::create_dir_all`].
 ///
 /// # Errors
 ///
-/// Returns the error of the create or of the mode change.
+/// Returns the error of the create, of the mode change or of a sync.
 pub fn create_dir_all(dir: &Path) -> io::Result<()> {
+    let missing: Vec<&Path> = dir
+        .ancestors()
+        .take_while(|ancestor| !ancestor.as_os_str().is_empty() && !ancestor.exists())
+        .collect();
     #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -25,27 +43,67 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
     #[cfg(not(unix))]
-    fs::create_dir_all(dir)
+    fs::create_dir_all(dir)?;
+    for created in missing {
+        let parent = parent_dir(created);
+        sync_dir(parent).map_err(|err| at_step(err, "sync", parent))?;
+    }
+    Ok(())
 }
 
-/// Writes `contents` to `path`, in a file readable only by the owner.
+/// Replaces the contents of `path` with `contents`, in a file readable only by
+/// the owner.
 ///
-/// On Unix, the file gets mode 0600, also when it exists. The call replaces
-/// the contents of an existing file. On other platforms, this is
-/// [`std::fs::write`].
+/// The call writes `contents` to a temporary sibling, the name of `path` with
+/// `.tmp` appended, and syncs it to disk. It then renames the sibling to `path`
+/// and syncs the directory. After a crash or a power loss, `path` holds the
+/// old contents or the new contents. On Unix, `path` gets mode 0600. On a file
+/// system that refuses a sync, the call skips it (see the module docs).
 ///
 /// # Errors
 ///
-/// Returns the error of the open, of the mode change or of the write.
-pub fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
+/// Returns the error of the first step that fails, with the step and the path
+/// in its message. The directory sync comes after the rename, so `path` can
+/// hold the new contents when that sync fails.
+pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let tmp = tmp_path(path);
+    write(&tmp, contents).map_err(|err| at_step(err, "write", &tmp))?;
+    fs::rename(&tmp, path).map_err(|err| at_step(err, "rename into", path))?;
+    let dir = parent_dir(path);
+    sync_dir(dir).map_err(|err| at_step(err, "sync", dir))
+}
+
+/// The temporary sibling that [`replace`] writes before its rename.
+fn tmp_path(path: &Path) -> PathBuf {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    tmp.into()
+}
+
+/// The directory that holds `path`, or `.` for a bare file name.
+fn parent_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    }
+}
+
+/// `err` with the failed `step` and its `path` in the message.
+fn at_step(err: io::Error, step: &str, path: &Path) -> io::Error {
+    io::Error::new(err.kind(), format!("{step} {}: {err}", path.display()))
+}
+
+/// Writes `contents` to `path` with mode 0600 on Unix, also when the file
+/// exists, and syncs the file to disk.
+fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    use std::io::Write;
     #[cfg(unix)]
-    {
-        use std::io::Write;
+    let mut file = {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = fs::OpenOptions::new()
+        let file = fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
@@ -54,10 +112,80 @@ pub fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
         // `mode` applies only when the open creates the file. Narrow an
         // existing file before the contents land, or they are briefly readable.
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        file.write_all(contents)
-    }
+        file
+    };
     #[cfg(not(unix))]
-    fs::write(path, contents)
+    let mut file = fs::File::create(path)?;
+    file.write_all(contents)?;
+    sync(&file)
+}
+
+/// Syncs the entries of `dir` to disk, so a create, a rename or a remove in
+/// `dir` persists.
+///
+/// On a file system that refuses the sync of a directory, the call skips it
+/// (see the module docs). On platforms other than Unix, the call does nothing,
+/// because [`fs::File::open`] fails on a directory on Windows.
+///
+/// # Errors
+///
+/// Returns the error of the open or of the sync.
+pub fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    sync(&fs::File::open(dir)?)?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
+}
+
+/// [`fs::File::sync_all`], or `Ok` when the file system refuses the sync (see
+/// the module docs).
+fn sync(file: &fs::File) -> io::Result<()> {
+    let result = file.sync_all();
+    #[cfg(target_vendor = "apple")]
+    let result = match result {
+        Err(err) if err.raw_os_error() == Some(libc::ENOTSUP) => fsync(file),
+        result => result,
+    };
+    match result {
+        Err(err) if sync_refused(&err) => Ok(()),
+        result => result,
+    }
+}
+
+/// `fsync(2)`, which [`fs::File::sync_all`] replaces with `F_FULLFSYNC` on
+/// Apple targets.
+#[cfg(target_vendor = "apple")]
+fn fsync(file: &fs::File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    loop {
+        // SAFETY: `file` owns the descriptor and keeps it open for the call.
+        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(err);
+        }
+    }
+}
+
+/// Whether `err` says that the file system cannot sync the file, rather than
+/// that a sync it supports failed.
+///
+/// Some file systems refuse the sync of a directory with `EINVAL`, or with
+/// `EBADF` for a descriptor that is open only for reading. Others refuse a
+/// sync with `ENOTSUP`, which `std` leaves uncategorized on Apple targets.
+fn sync_refused(err: &io::Error) -> bool {
+    #[cfg(unix)]
+    let refused_code = matches!(err.raw_os_error(), Some(libc::EBADF | libc::ENOTSUP));
+    #[cfg(not(unix))]
+    let refused_code = false;
+    refused_code
+        || matches!(
+            err.kind(),
+            io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+        )
 }
 
 #[cfg(all(test, unix))]
@@ -77,13 +205,25 @@ mod tests {
         let file = dir.join("file");
         fs::create_dir(&dir).unwrap();
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
-        fs::write(&file, b"old").unwrap();
-        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        let stale_tmp = super::tmp_path(&file);
+        fs::write(&stale_tmp, b"old").unwrap();
+        fs::set_permissions(&stale_tmp, fs::Permissions::from_mode(0o644)).unwrap();
 
         super::create_dir_all(&dir).unwrap();
-        super::write(&file, b"new").unwrap();
+        super::replace(&file, b"new").unwrap();
 
         assert_eq!(mode_of(&dir), 0o700);
         assert_eq!(mode_of(&file), 0o600);
+    }
+
+    #[test]
+    fn only_a_refused_sync_is_skipped() {
+        use std::io;
+        for code in [libc::EBADF, libc::EINVAL, libc::ENOTSUP] {
+            let err = io::Error::from_raw_os_error(code);
+            assert!(super::sync_refused(&err), "{err} is a refused sync");
+        }
+        let err = io::Error::from_raw_os_error(libc::EIO);
+        assert!(!super::sync_refused(&err), "{err} is a failed sync");
     }
 }
