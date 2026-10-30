@@ -98,8 +98,8 @@ A one-sided offer needs no mirror half. One party builds a half that gives one t
 let offer = alice.shielded_swap(token_x, dx, token_y, dy).await?;
 // Bob receives dx of X and supplies dy of Y, at segment 0.
 let terms = BTreeMap::from([
-    ((TokenType::Shielded(token_x), 0), dx as i128),
-    ((TokenType::Shielded(token_y), 0), -(dy as i128)),
+    ((TokenType::Shielded(token_x), 0), i128::try_from(dx)?),
+    ((TokenType::Shielded(token_y), 0), -i128::try_from(dy)?),
 ]);
 anyhow::ensure!(imbalances(offer.as_bytes())? == terms, "the offer has other terms");
 let complete = bob.balance_transaction_with_tokens(offer.as_bytes()).await?;
