@@ -268,7 +268,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
 
         let provider = self.contract.provider().as_midnight_provider();
         let address_hex = self.contract.address();
-        let address = crate::address::parse_address(address_hex)?;
+        let address = crate::address::parse_contract_address(address_hex)?;
 
         // Read the current authority at latest (the signed counter must match
         // what the chain will check at submission — not any pinned block).

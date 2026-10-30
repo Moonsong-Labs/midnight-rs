@@ -271,7 +271,8 @@ impl ZkConfigProvider for FsZkConfigProvider {
 /// A path (`&str`, `String`, `&Path`, `&PathBuf`, `PathBuf`) becomes a
 /// [`FsZkConfigProvider`]; an `Arc<P>` of any provider passes through. This lets
 /// `with_zk_config` accept either a compiled-contract directory or a custom
-/// provider, mirroring the crate's `IntoAddress` conversion.
+/// provider, mirroring the crate's [`IntoContractAddress`](crate::IntoContractAddress)
+/// conversion.
 pub trait IntoZkConfig {
     fn into_zk_config(self) -> Arc<dyn ZkConfigProvider>;
 }
