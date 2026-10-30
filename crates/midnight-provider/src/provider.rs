@@ -595,14 +595,14 @@ impl MidnightProvider {
     ///
     /// One call spends and re-creates every tNIGHT UTXO that generates Dust
     /// and that no pending build reserves, and pays its fee from the wallet's
-    /// Dust. A wallet that
-    /// registered its tNIGHT to another wallet's Dust address with
-    /// [`DustRegistration::to`] holds no Dust of its own. It builds the
-    /// deregistration with [`DustlessBuilder::without_dust`], and the other
-    /// wallet pays the fee with [`Self::balance_transaction`]. The Dust that the
-    /// wallet holds stays spendable while it decays. A wallet that holds too
-    /// many tNIGHT UTXOs exceeds a block limit, and the build fails with a
-    /// [`WalletError::Transfer`] that names `BlockLimitExceeded`.
+    /// Dust. A wallet that registered its tNIGHT to another wallet's Dust
+    /// address with [`DustRegistration::to`] holds no Dust of its own. It
+    /// builds the deregistration with [`DustlessBuilder::without_dust`], and
+    /// the other wallet pays the fee with [`Self::balance_transaction`]. The
+    /// Dust that the wallet holds stays spendable while it decays. A wallet
+    /// that holds too many tNIGHT UTXOs that generate Dust exceeds a block
+    /// limit, and the build fails with a [`WalletError::Transfer`] before
+    /// anything reaches the chain.
     /// [`TransferBuilder::prepare_deregister_dust`] gives the full rule, and
     /// what to do about a UTXO that still generates after the deregistration.
     /// To generate Dust again, call [`Self::register_dust`].

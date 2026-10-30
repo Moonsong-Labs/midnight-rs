@@ -857,7 +857,7 @@ impl<'a> TransferBuilder<'a> {
     /// can cover many UTXOs, where a registration covers one. But each UTXO
     /// adds to the bytes that the transaction writes, and a block limits these
     /// bytes. So the build fails for a wallet that holds too many tNIGHT
-    /// UTXOs.
+    /// UTXOs that generate Dust.
     ///
     /// Some UTXOs still generate Dust after the deregistration. A UTXO that a
     /// pending build reserves is not in the funding view. When the fallible
@@ -866,9 +866,17 @@ impl<'a> TransferBuilder<'a> {
     /// for example a transfer of tNIGHT to the wallet's own address. The
     /// outputs of that transfer generate no Dust, because the address has no
     /// delegation. A second deregistration cannot stop the UTXO, because the
-    /// chain refuses a deregistration for an address that is not registered,
-    /// with `DustDeregistrationNotRegistered`. The build cannot see whether
-    /// the address is registered.
+    /// chain refuses a deregistration for an address that is not registered
+    /// (the ledger's `DustDeregistrationNotRegistered`). The node refuses it
+    /// as a `SubmitError::Invalid` (in `midnight-provider`), with a custom code
+    /// that the SDK does not name. The build cannot see whether the address is
+    /// registered.
+    ///
+    /// After a partial success, the wallet keeps the UTXOs of the failed
+    /// segment reserved until `global_ttl` passes, so no build selects them
+    /// before that. A caller that submitted the `.build()` result with
+    /// `MidnightProvider::submit_reserved` can free them sooner: resync the
+    /// wallet, then release the unshielded inputs of that result.
     ///
     /// A deregistration claims no generationless Dust, so Dust pays the fee.
     /// When `pay_fees` is true, the wallet's own Dust pays it. When `pay_fees`
@@ -881,11 +889,10 @@ impl<'a> TransferBuilder<'a> {
     ///
     /// - [`WalletError::Transfer`] when the funding view holds no tNIGHT UTXO:
     ///   the wallet holds none, or pending builds reserve all of them.
-    /// - [`WalletError::Transfer`] that names `BlockLimitExceeded` when the
-    ///   transaction exceeds a block limit, because the wallet holds too many
-    ///   tNIGHT UTXOs. Lower their number first: a transfer of tNIGHT to the
-    ///   wallet's own address merges the UTXOs that it spends into one output,
-    ///   plus change.
+    /// - [`WalletError::Transfer`] when the transaction exceeds a block limit,
+    ///   because the wallet holds too many tNIGHT UTXOs that generate Dust.
+    ///   Lower their number first: a transfer of tNIGHT to the wallet's own
+    ///   address merges the UTXOs that it spends into one output, plus change.
     /// - [`WalletError::InsufficientDust`] when `pay_fees` is true and the
     ///   wallet's Dust cannot pay the fee.
     pub async fn prepare_deregister_dust(
