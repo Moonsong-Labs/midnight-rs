@@ -3,8 +3,8 @@
 //! [`RemoteProofServer`] implements each ledger generation's `ProofProvider`
 //! (see the generation modules) by delegating ZK proving to an HTTP proof
 //! server (e.g. midnightntwrk/proof-server) over its `/check`
-//! and `/prove` endpoints, with retry / exponential backoff for transient
-//! network errors.
+//! and `/prove` endpoints. Each request has a deadline, and the client retries
+//! a transient failure with exponential backoff before that deadline.
 //!
 //! Each ledger's `ProofServerProvider` builds the request bodies: the
 //! tagged-serialized preimage, plus the circuit's IR or keys when the server
@@ -13,7 +13,9 @@
 //! for each request, and returns an untyped error for a failed status, which
 //! the retry loop cannot classify.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use tracing::warn;
 
 /// Failures this client raises itself, typed so the retry loop can tell a
 /// transient outage from a permanent rejection. They travel as `anyhow::Error`
@@ -36,19 +38,48 @@ pub(crate) enum ProofServerError {
 
 /// POST `body` to the proof server's `endpoint` and return the response body.
 ///
-/// A non-2xx status becomes [`ProofServerError::Http`]. A transport failure
-/// passes through as the `reqwest::Error` that [`is_transient`] reads.
+/// `timeout` bounds the whole request, retries included. This function retries
+/// a transient failure (see [`is_transient`]) at most [`MAX_RETRIES`] times,
+/// and only while the backoff ends before the deadline. A non-2xx status
+/// becomes [`ProofServerError::Http`]. A malformed URL or a transport failure,
+/// a timeout included, passes through as a `reqwest::Error`.
 pub(crate) async fn post(
     http: &reqwest::Client,
     base_url: &str,
     endpoint: &'static str,
     body: Vec<u8>,
+    timeout: Duration,
 ) -> Result<Vec<u8>, anyhow::Error> {
-    let resp = http
+    let request = http
         .post(format!("{base_url}{endpoint}"))
         .body(body)
-        .send()
-        .await?;
+        .build()?;
+    let start = Instant::now();
+    let remaining = || timeout.saturating_sub(start.elapsed());
+    let mut delay = INITIAL_BACKOFF;
+    let mut retries = 0;
+    loop {
+        let mut attempt = request.try_clone().expect("a byte body is reusable");
+        *attempt.timeout_mut() = Some(remaining());
+        match send(http, attempt, endpoint).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(err) if retries < MAX_RETRIES && is_transient(&err) && delay < remaining() => {
+                warn!(endpoint, ?err, retry_in = ?delay, "proof server request failed, retrying");
+                tokio::time::sleep(delay).await;
+                delay *= 2;
+                retries += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+async fn send(
+    http: &reqwest::Client,
+    request: reqwest::Request,
+    endpoint: &'static str,
+) -> Result<Vec<u8>, anyhow::Error> {
+    let resp = http.execute(request).await?;
     let status = resp.status();
     if !status.is_success() {
         return Err(ProofServerError::Http {
@@ -66,8 +97,7 @@ pub(crate) async fn post(
 /// Only a server-side outage or a transport failure is. Everything else is
 /// deterministic: a missing key, a malformed request, an unsupported proof
 /// version or a decode failure produces the same result on every attempt, so
-/// retrying it just delays the report by the whole budget and then blames the
-/// network.
+/// retrying it only delays the report.
 ///
 /// This client retries any HTTP 5xx, which is deliberately wider than
 /// midnight-js (it retries 500 and 503 only). A proof server behind a load
@@ -88,12 +118,13 @@ pub(crate) fn is_transient(err: &anyhow::Error) -> bool {
     false
 }
 
-/// Total wall-clock budget for proving (including retries).
-pub(crate) const PROOF_SERVER_TIMEOUT: Duration = Duration::from_secs(30);
-/// Initial backoff delay between retries.
-pub(crate) const INITIAL_BACKOFF: Duration = Duration::from_millis(100);
-/// Cap on the per-retry backoff delay.
-pub(crate) const MAX_BACKOFF: Duration = Duration::from_secs(5);
+// The deadline, the retry count and the backoff are those of midnight-js.
+/// The default deadline of one `/check` or `/prove` request, retries included.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+/// The most retries of one request.
+const MAX_RETRIES: u32 = 3;
+/// The delay before the first retry. Each retry doubles it.
+const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 
 /// Proof backend that delegates proving to a remote HTTP proof server.
 ///
@@ -117,8 +148,10 @@ pub(crate) const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// [`WalletError::Proving`](crate::WalletError::Proving). A caller of `prove`
 /// outside a build must catch the unwind (for example with
 /// `FutureExt::catch_unwind`) to get the message.
+#[derive(Debug)]
 pub struct RemoteProofServer {
     pub(crate) url: String,
+    pub(crate) timeout: Duration,
 }
 
 impl RemoteProofServer {
@@ -126,13 +159,155 @@ impl RemoteProofServer {
     /// e.g. `http://localhost:6300`; the `/check` and `/prove` paths are
     /// appended per request).
     pub fn new(url: String) -> Self {
-        Self { url }
+        Self {
+            url,
+            timeout: DEFAULT_TIMEOUT,
+        }
+    }
+
+    /// Set the deadline of each `/check` or `/prove` request (default: 300 s).
+    ///
+    /// The deadline covers the retries of the request. When a request does not
+    /// succeed before its deadline, the proof fails.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
     use super::*;
+
+    /// A proof server that records the body of each request and then sends
+    /// `answer`, or holds the connection with no answer when `answer` is
+    /// `None`. It returns its URL and the recorded bodies.
+    async fn proof_server(answer: Option<&'static [u8]>) -> (String, Arc<Mutex<Vec<Vec<u8>>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&bodies);
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let recorded = Arc::clone(&recorded);
+                tokio::spawn(async move {
+                    let body = read_request_body(&mut stream).await;
+                    recorded.lock().unwrap().push(body);
+                    match answer {
+                        Some(answer) => stream.write_all(answer).await.unwrap(),
+                        None => std::future::pending().await,
+                    }
+                });
+            }
+        });
+        (url, bodies)
+    }
+
+    /// Read one HTTP request to its end, so that the close after the answer
+    /// does not reset the connection, and return its body.
+    async fn read_request_body(stream: &mut TcpStream) -> Vec<u8> {
+        let mut request = Vec::new();
+        let mut chunk = [0; 4096];
+        loop {
+            let read = stream.read(&mut chunk).await.unwrap();
+            assert_ne!(read, 0, "the client closed before the end of the request");
+            request.extend_from_slice(&chunk[..read]);
+            let Some(head_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let head = String::from_utf8_lossy(&request[..head_end]).to_ascii_lowercase();
+            let body_len: usize = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .map_or(0, |len| len.trim().parse().unwrap());
+            let body = head_end + 4..head_end + 4 + body_len;
+            if request.len() >= body.end {
+                return request[body].to_vec();
+            }
+        }
+    }
+
+    /// A timed-out attempt leaves no time for a retry.
+    #[tokio::test]
+    async fn a_server_that_does_not_answer_fails_the_request_at_its_deadline() {
+        let (url, bodies) = proof_server(None).await;
+        let http = reqwest::Client::new();
+
+        let request = post(
+            &http,
+            &url,
+            "/prove",
+            b"preimage".to_vec(),
+            Duration::from_millis(200),
+        );
+        let err = tokio::time::timeout(Duration::from_secs(10), request)
+            .await
+            .expect("the deadline must end the request")
+            .unwrap_err();
+
+        assert!(
+            err.downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_timeout),
+            "{err:#}"
+        );
+        assert_eq!(bodies.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_5xx_is_retried_with_the_same_body_until_the_retries_run_out() {
+        let (url, bodies) = proof_server(Some(
+            b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        ))
+        .await;
+
+        let err = post(
+            &reqwest::Client::new(),
+            &url,
+            "/prove",
+            b"preimage".to_vec(),
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                err.downcast_ref::<ProofServerError>(),
+                Some(ProofServerError::Http { status: 503, .. })
+            ),
+            "{err:#}"
+        );
+        let attempts = MAX_RETRIES as usize + 1;
+        assert_eq!(
+            *bodies.lock().unwrap(),
+            vec![b"preimage".to_vec(); attempts]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_url_with_no_host_fails_the_request_with_no_panic() {
+        let err = post(
+            &reqwest::Client::new(),
+            "localhost:6300",
+            "/prove",
+            b"preimage".to_vec(),
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            err.downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_builder),
+            "{err:#}"
+        );
+    }
 
     #[test]
     fn a_5xx_is_transient_and_a_4xx_or_decode_failure_is_not() {

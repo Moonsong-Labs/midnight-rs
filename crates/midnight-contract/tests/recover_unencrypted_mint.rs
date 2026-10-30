@@ -71,7 +71,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     // The coin the recipient has to rebuild: the nonce and value the call
     // used, and the token type the contract mints, `tokenType(domain_sep,
     // contract_addr)`.
-    let token_type = midnight_contract::parse_address(contract.address())
+    let token_type = midnight_contract::parse_contract_address(contract.address())
         .expect("contract address")
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
