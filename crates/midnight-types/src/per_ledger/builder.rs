@@ -235,10 +235,8 @@ pub fn fee_speck(context: &BuildContext, tx: &FinalizedTx) -> Result<u128, Walle
 /// same allowance or a larger one. A refusal of the copy is then a refusal of
 /// the proven transaction.
 ///
-/// On ledger 9 the node prices each called verifier key at its real size, and
-/// `cost` at a fixed size. A cell read costs whole 4 KiB blocks, so the two
-/// agree for a key up to 4 KiB, and a larger key only raises the node's cost.
-/// The check then never refuses a transaction that the node accepts.
+/// On ledger 9 `cost` is a lower bound on the node's check, as "Transactions
+/// Outside Their Time to Dismiss" in `docs/dust-and-fees.md` explains.
 fn refuse_outside_time_to_dismiss(
     context: &BuildContext,
     tx: &FinalizedTx,
