@@ -1249,7 +1249,8 @@ impl Wallet {
         self.persist(forgot)
     }
 
-    /// See [`crate::Wallet::watched_coins`].
+    /// The registrations that no replay has claimed yet, ordered by nonce,
+    /// then token type, then value.
     pub fn watched_coins(&self) -> Vec<crate::CoinInfo> {
         // The ledger's map iterates in a deterministic but unspecified order,
         // which callers must not depend on. Sorting gives them one they can.

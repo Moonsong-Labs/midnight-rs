@@ -452,9 +452,7 @@ Every coin the wallet already holds is re-registered before that replay, so a re
 
 That full replay costs more than a resync, so register every coin you know about in one `watch_for_coins([...])` call, and treat this as a recovery step rather than a routine one. Registrations are persisted with the rest of the wallet state, so one made for a coin that has not landed yet survives a restart, and every later resync carries it rather than dropping it.
 
-To check the outcome, look for the coin in `provider.watched_coins()`, or in `wallet.watched_coins()` on a handle. It lists the registrations that no replay claimed, ordered by nonce, then token type, then value. A coin that left that list was claimed. `provider.spendable_shielded_coins()` tells only whether a coin is spendable now. It also leaves out a claimed coin that a build reserved or that the wallet spent.
-
-A coin still in the list after the replay is not on chain yet, or its rebuilt `CoinInfo` is wrong. It can also be a coin that the replay claimed and then saw spent, for example by another wallet with the same seed. Every later replay carries a wrong or spent registration. Drop it with `provider.forget_coin(coin)`. Forgetting drops the registration only, and a coin that the wallet already claimed stays spendable.
+To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. If the coin does not appear there, it is not on chain yet, or its rebuilt `CoinInfo` is wrong. A wrong registration never matches an output, and every later replay carries it. Drop it with `provider.forget_coin(coin)`. Forgetting drops the registration only, and a coin that the wallet already claimed stays spendable.
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
@@ -502,7 +500,6 @@ provider.with_wallet(wallet)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext: register, then replay
   provider.rescan_shielded()             replay the shielded stream (a resync first, to cross a fork)
   provider.forget_coin(coin)             drop a registration that matched nothing
-  provider.watched_coins()               the registrations that no replay claimed
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
       .to(dust_key)                          the Dust goes to another wallet's Dust address
   provider.transfer_unshielded(...).await    builds + submits → PendingTx

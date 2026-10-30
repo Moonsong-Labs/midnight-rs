@@ -153,16 +153,8 @@ pub trait WalletFacade: Send + Sync {
         chain: &dyn ChainView,
     ) -> Result<(), WalletError>;
 
-    /// Drop registrations that matched no on-chain output, as
-    /// [`Self::watched_coins`] lists them.
+    /// Drop registrations that matched no on-chain output.
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError>;
-
-    /// The registrations ([`Self::watch_for_coins`]) that no replay has
-    /// claimed yet.
-    ///
-    /// They are ordered by nonce, then token type, then value. See
-    /// `Wallet::watched_coins` on the implementing wallet.
-    async fn watched_coins(&self) -> Vec<CoinInfo>;
 }
 
 /// A value that `MidnightProvider::with_wallet` attaches as its wallet.
@@ -255,9 +247,5 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
 
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {
         (**self).forget_coins(coins).await
-    }
-
-    async fn watched_coins(&self) -> Vec<CoinInfo> {
-        (**self).watched_coins().await
     }
 }

@@ -426,9 +426,9 @@ impl MidnightProvider {
     /// about in one call rather than calling this per coin, and treat it as a
     /// recovery step, not a routine one. Coins already recovered keep their
     /// place: each replay re-registers what the wallet holds. To check the
-    /// outcome, look for the coin in [`Self::watched_coins`]. A coin that left
-    /// that list was claimed. [`Self::watched_coins`] also tells why a coin
-    /// can stay listed, and when to drop it with [`Self::forget_coin`].
+    /// outcome, look for the coin in [`Self::spendable_shielded_coins`]. If
+    /// the rebuilt coin was wrong, drop the registration with
+    /// [`Self::forget_coin`].
     ///
     /// If the replay fails, retry with [`Self::rescan_shielded`]: the wallet
     /// keeps the registration (see [`WalletFacade::watch_for_coins`]).
@@ -462,7 +462,6 @@ impl MidnightProvider {
     /// A registration whose rebuilt `CoinInfo` matches no on-chain output
     /// rides along on every later replay. This removes one. A coin the wallet
     /// already claimed is untouched, and no replay runs.
-    /// [`Self::watched_coins`] lists the registrations that no replay claimed.
     pub async fn forget_coin(&self, coin: CoinInfo) -> Result<(), ProviderError> {
         self.forget_coins([coin]).await
     }
@@ -475,25 +474,6 @@ impl MidnightProvider {
         let wallet = &self.attached()?.facade;
         wallet.forget_coins(coins.into_iter().collect()).await?;
         Ok(())
-    }
-
-    /// The registrations ([`Self::watch_for_coin`]) that no replay has claimed
-    /// yet.
-    ///
-    /// They are ordered by nonce, then token type, then value. A coin that
-    /// leaves this list after a replay was claimed. A coin still listed after
-    /// a replay is not on chain yet, or its rebuilt `CoinInfo` is wrong. It
-    /// can also be a coin that the replay claimed and then saw spent, for
-    /// example by another wallet with the same seed. Drop a wrong or spent
-    /// coin with [`Self::forget_coin`].
-    ///
-    /// [`Self::spendable_shielded_coins`] tells only whether a coin is
-    /// spendable now. It also leaves out a claimed coin that a build reserved
-    /// or that the wallet spent.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn watched_coins(&self) -> Result<Vec<CoinInfo>, ProviderError> {
-        Ok(self.attached()?.facade.watched_coins().await)
     }
 
     /// Replay the shielded event stream from its first event and rebuild the

@@ -129,7 +129,6 @@ provider
   .resync_wallet().await                            // incremental refresh
   .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext: register, then rescan
   .forget_coin(coin).await                          // drop a registration that matched nothing
-  .watched_coins().await           → the registrations that no replay claimed
   .rescan_shielded().await                          // replay the shielded stream from event zero
                                                     // (a resync first, to cross a fork)
   .builds().await                  → Builds::Ledger8(b) | Builds::Ledger9(b) (resyncs first)
@@ -153,7 +152,6 @@ Arc<LocalWallet>                                    // a handle on the attached 
       sync.wait_until(done).await  // wait until done(&WalletBalance) holds: at the call and after each pass
   .watch_for_coins(coins, &provider).await          // the provider's coin watch, on the handle
   .rescan_shielded(&provider).await                 // the provider's rescan, on the handle
-  .watched_coins().await           → the provider's watched coins, on the handle
 ```
 
 Each node read of the provider, its connect included, ends within 10 s (60 s for a contract state read), and a read with no answer returns `ProviderError::Rpc`.
@@ -170,7 +168,7 @@ A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy wi
 
 Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm.
 
-`watch_for_coin` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The wallet records and replays under one hold of its sync lock. A state in an earlier generation than the chain first crosses the fork with a resync, because it cannot apply the later generation's events. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. A resync carries registrations across for the same reason. `watched_coins` lists the registrations that no replay claimed. `forget_coin` drops one whose rebuilt `CoinInfo` matched no output, which every later replay would otherwise carry. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
+`watch_for_coin` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The wallet records and replays under one hold of its sync lock. A state in an earlier generation than the chain first crosses the fork with a resync, because it cannot apply the later generation's events. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. A resync carries registrations across for the same reason. `forget_coin` drops a registration whose rebuilt `CoinInfo` matched no output, which would otherwise ride along on every replay. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
 
 ## Ledger generations
 

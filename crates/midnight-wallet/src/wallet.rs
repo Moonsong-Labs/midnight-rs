@@ -320,8 +320,8 @@ impl Wallet {
     /// turned out to be wrong.
     ///
     /// A registration whose `CoinInfo` does not match the coin an on-chain
-    /// output commits to never matches anything, so it would otherwise sit in
-    /// [`Self::watched_coins`] and be re-registered by every later replay.
+    /// output commits to never matches anything, so it would otherwise ride
+    /// along on every later replay.
     ///
     /// This drops the registration only. A coin the wallet already claimed is
     /// untouched, and stays spendable: it is held now, not watched for.
@@ -338,19 +338,6 @@ impl Wallet {
         coins: impl IntoIterator<Item = CoinInfo>,
     ) -> Result<(), WalletError> {
         each!(&mut self.state, w => w.forget_coins(coins))
-    }
-
-    /// Coins registered with [`Self::watch_for_coin`] that no replay has
-    /// claimed yet.
-    ///
-    /// They are ordered by nonce, then token type, then value. A coin that
-    /// leaves this set after a replay was claimed. One still here after a
-    /// rescan is not on chain yet, or its rebuilt `CoinInfo` is not the coin
-    /// the on-chain output commits to. It can also be a coin that the replay
-    /// claimed and then saw spent, for example by another wallet with the
-    /// same seed. Drop a wrong or spent coin with [`Self::forget_coin`].
-    pub fn watched_coins(&self) -> Vec<CoinInfo> {
-        each!(&self.state, w => w.watched_coins())
     }
 
     /// Snapshot the inputs of a resync's replay phase. See [`ResyncPlan`].
