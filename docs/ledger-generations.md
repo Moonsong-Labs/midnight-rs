@@ -30,7 +30,7 @@ Most of the API is the same on both generations:
 - the wallet sync (the `WalletBuilder` that `Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase` and `WalletBuilder::new` start) and `LocalWallet`
 - the generated contract bindings (`Contract::deploy`, `circuits()`, `ledger()`), `Contract::call_with`, a deploy's `ShieldedOffer`, and contract maintenance
 
-Its vocabulary lives in `midnight-types`, one type for both generations: `ShieldedTokenType`, `UnshieldedTokenType`, `Nullifier`, `Nonce`, `CoinInfo`, `CoinPublicKey`, `EncryptionPublicKey`, `ShieldedRecipient`, `UserAddress`, `ContractAddress`, `DustNullifier`, `DustPublicKey`, `ChainParameters` and `LedgerVersion`. The provider, wallet and contract crates re-export it. A DApp that uses only this surface runs on either chain with no code for a generation.
+Its vocabulary lives in `midnight-types`, one type for both generations: `ShieldedTokenType`, `UnshieldedTokenType`, `Nullifier`, `Nonce`, `CoinInfo`, `CoinPublicKey`, `EncryptionPublicKey`, `ShieldedRecipient`, `UserAddress`, `ContractAddress`, `DustNullifier`, `DustPublicKey`, `ChainParameters` and `LedgerVersion`. The provider, wallet and contract crates each re-export a part of it. A DApp that uses only this surface runs on either chain with no code for a generation.
 
 The Compact side (the interpreter, the typed state and the generated bindings) reads ledger 9's types on both chains. The two generations share the Impact ops and the state encoding, and `midnight_typed_state::decode_contract_state` converts the state a ledger 8 chain serves.
 
