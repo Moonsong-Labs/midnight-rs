@@ -116,7 +116,6 @@ fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactError
         .is_some_and(|decl| !is_empty_constructor(&decl.constructor));
 
     Ok(ContractInfo {
-        compiler_version: artifact.compiler_version.clone(),
         circuits,
         witnesses,
         ledger,
