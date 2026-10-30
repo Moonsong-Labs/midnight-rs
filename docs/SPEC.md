@@ -340,7 +340,7 @@ settle the result of the wait:
 
 ### Transfer (shielded / unshielded / swap / register dust)
 
-Each of the four provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`). The builder defers all work until awaited or `.build()` is called:
+Each of the four provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`). The builder defers all work until awaited or `.build()` is called. A `ShieldedSwap` has no `.build()`: its `.await` stops before the submit and returns a `DustlessTransaction`.
 
 ```
 provider.transfer_shielded(token_type, amount, recipient)       // bech32 address; no work yet

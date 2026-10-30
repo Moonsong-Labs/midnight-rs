@@ -180,14 +180,14 @@ fn provider_entry_points_return_small_futures() {
             .build(),
     );
     assert_small(
-        "ShieldedSwap::build",
+        "ShieldedSwap::into_future",
         p.shielded_swap(
             ShieldedTokenType(HashOutput([0u8; 32])),
             1,
             ShieldedTokenType(HashOutput([1u8; 32])),
             1,
         )
-        .build(),
+        .into_future(),
     );
     assert_small("DustRegistration::build", p.register_dust(None).build());
 }
