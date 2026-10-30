@@ -46,7 +46,9 @@
 //! the numbers, in `From<LedgerApiError> for u8`. Beside it,
 //! `ledger/src/versions/common/conversions.rs` maps each ledger failure onto
 //! the node enum variant that number names, which is where a qualifier like
-//! `InvalidError` or `MalformedError` comes from.
+//! `InvalidError` or `MalformedError` comes from. For the ledger 9 image in
+//! `devnet/docker-compose.ledger-9.yml`, the same two files are
+//! `ledger/src/ledger_9/types.rs` and `ledger/src/ledger_9/conversions.rs`.
 //!
 //! Codes are not stable across node releases, which was measured rather than
 //! feared. Between the tag we pin and a midnight-node revision four months
