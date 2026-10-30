@@ -24,6 +24,16 @@ pub struct ProofProviders {
 impl ProofProviders {
     /// Prove locally, in this process, on either generation. On ledger 9 it
     /// proves circuits compiled for ZKIR v2 and for ZKIR v3.
+    ///
+    /// The first proof of each circuit size downloads its public parameters
+    /// when the cache does not hold them. The first proof with a built-in
+    /// Zswap or Dust key downloads that key in the same way. The source is
+    /// `MIDNIGHT_PARAM_SOURCE` (default `https://srs.midnight.network/`). The
+    /// cache is the directory that upstream `MidnightDataProvider` picks,
+    /// `MIDNIGHT_PP` first. For offline or container use, fill that cache
+    /// once with network access. Then point `MIDNIGHT_PP` at it. A
+    /// [`RemoteProofServer`](crate::RemoteProofServer) proves on the server
+    /// and downloads none of these files.
     pub fn local() -> Self {
         Self {
             ledger_8: Arc::new(ledger_8::LocalProofServer::new()),

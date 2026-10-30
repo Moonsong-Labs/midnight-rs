@@ -73,7 +73,7 @@ async fn a_wallet_with_no_dust_deploys_and_a_sponsor_pays_the_fee() {
         .await
         .expect("the chain must apply the sponsored deploy");
 
-    let address = midnight_contract::format_address(&dustless.address);
+    let address = midnight_contract::format_contract_address(&dustless.address);
     let state =
         midnight_contract::state::fetch_state(&deployer, &address, Some(in_block.block_hash))
             .await

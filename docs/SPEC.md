@@ -39,7 +39,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
   │     ├── sync.rs              TrackedUtxo, SyncCursors
   │     ├── hd.rs                Seed and its addresses, mnemonic, Role and the BIP-32 role keys
-  │     ├── address.rs           parse_shielded_recipient
+  │     ├── address.rs           parse_shielded_recipient, parse_dust_address
   │     ├── network.rs           Network: the bech32 HRP suffix, typed
   │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap; SyncSource
   │     └── error.rs             WalletError
@@ -85,7 +85,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 | Type | Crate | Role |
 |---|---|---|
-| `MidnightProvider` | provider | Network entry. Holds node URL, the indexer URL that the wallet sync reads, wallet (`Arc<dyn WalletFacade>`), proof backend. |
+| `MidnightProvider` | provider | Network entry. Holds node URL, the attached wallet (`Arc<dyn WalletFacade>`), the proof backends and the optional private-state store. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | The synced state itself. It runs the indexer replays of a sync, a resync and a rescan. The provider reaches it through `WalletFacade`. |
 | `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
@@ -104,7 +104,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 ## Provider ↔ Wallet model
 
-The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every build resyncs the wallet first, and when asked, `LocalWallet::sync_in_background` resyncs it in a background task. A sync reads its indexer and its node from its `SyncSource`, such as the provider. The wallet keeps that indexer for later replays, and the provider answers a resync's pin queries.
+The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every build resyncs the wallet first, and when asked, `LocalWallet::sync_in_background` resyncs it in a background task. A sync replays from the indexer at the `indexer_url` it gets. It asks its `SyncSource`, such as the provider, for the network and the chain pin. The wallet keeps that indexer URL for later replays, and the provider answers a resync's pin queries.
 
 Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three under a mutex of its own, which serializes its resyncs, rescans, coin watches and forgets. Under one hold of that mutex, a rescan of a state in an earlier generation than the chain resyncs first, and a coin watch registers and then rescans. A `Wallet` has no resync of its own: to resync or rescan one outside a provider, wrap it in `LocalWallet`.
 
@@ -270,6 +270,7 @@ contract.circuits().increment_by(5)                      // IncrementByCallBuild
     └─ .send().await   →  PendingCall<T>                 // explicit form: Contract::send_call_with
          ├─ .transaction_hash() / .extrinsic_hash()
          └─ .wait_finalized().await   → CallOutcome<T>   // no SDK deadline; .await bounds it to 60 s
+                                                         // value, hashes, and the logs of the run
 ```
 
 Internally:
@@ -284,7 +285,7 @@ provider.shielded_public_keys()               // the wallet's coin public key, w
   ↓
 interpreter::execute(ir, program, state, args,
                      Env { witnesses, private_state, address, block_time, coin_public_key })
-  → ExecutionResult { state, reads, gather_ops, communication_outputs, result }
+  → ExecutionResult { state, reads, gather_ops, communication_outputs, result, logs }
   ↓
 build verify-ops:
   gather_ops.iter().map(|op| op.clone().translate(|()| reads.next()))
@@ -349,7 +350,7 @@ Each of the four provider methods is a *sync constructor* that returns a builder
 provider.transfer_shielded(token_type, amount, recipient)       // bech32 address; no work yet
         .transfer_unshielded(token_type, amount, recipient)
         .shielded_swap(give_token, give_amount, receive_token, receive_amount)
-        .register_dust(utxo_ctime)
+        .register_dust(utxo_ctime)                              // .to(dust_key) sends the Dust to another wallet
 
   ↓ .await? (or .build().await? for the no-submit escape hatch)
 
@@ -409,7 +410,7 @@ A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the
 | `midnight-ledger` 8.1.2 (+ its `midnight-zswap`, `midnight-onchain-*`) | `RomarQ/midnight-ledger`, branch `rq/midnight-rs-ledger-8` | Ledger 8: transaction types, VM, proving |
 | `midnight-ledger-v9` (+ its companion crates, and the `midnight-transient-crypto` 2.2 that ledger 8 also uses) | `RomarQ/midnight-ledger`, branch `rq/midnight-rs-ledger-9` | Ledger 9, the on-chain runtime the Compact side reads on both chains, and the crypto of both |
 | `midnight-serialize`, `midnight-base-crypto`, `midnight-storage` | one instance for both generations, from the ledger 9 branch | The tagged codec, `HashOutput`, `AlignedValue`, `Sp` |
-| `midnight-node-ledger-helpers`, `midnight-ledger-unsafe-helpers` | `RomarQ/midnight-node`, branch `rq/midnight-rs-toolkit-2.1.0-rc.3` | A `ledger_8` and a `ledger_9` module each: the type surface, and the transaction and wallet builders |
+| `midnight-ledger-unsafe-helpers` (+ the `midnight-node-ledger-helpers` it builds on) | `RomarQ/midnight-node`, branch `rq/midnight-rs-toolkit-2.1.0-rc.3` | A `ledger_8` and a `ledger_9` module: the type surface, and the transaction and wallet builders |
 | `subxt` | crates.io | Substrate RPC (including `midnight_contractState` and `midnight_queryContractState`), extrinsic submission, watch streams, reconnecting client |
 | `tokio-tungstenite` | crates.io | Indexer WebSocket subscriptions |
 
@@ -437,6 +438,7 @@ Ledger 9 ships only as git tags, and upstream's ledger crates and helpers name e
 | Feature | Notes |
 |---|---|
 | State change subscriptions | WebSocket subscription support for contract state updates |
+| Cross-contract calls | Bindings generate for a circuit that calls another contract, but the interpreter refuses the call with `InterpreterError::Unsupported` |
 | Lazy query batching | `query_contract_state` already takes a batch, but each generated `ledger_query()` accessor sends one query of its own |
 | Production proving | `ProofProvider::prove` returns `Transaction`, not `Result`, so a backend signals failure by panicking. The SDK catches that unwind and reports `WalletError::Proving` rather than losing the task, but the trait has no error channel and this is not mainnet-ready |
 | A remote signer | The facade lets a different local wallet stand in, and it asks for no seed. But a build signs inside `prepare_transfer`, so a browser extension or an HSM needs it to return something unsigned plus a separate signing step |

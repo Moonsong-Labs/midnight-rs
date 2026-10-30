@@ -79,7 +79,11 @@ TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 # Codegen test fixtures: tests/fixtures/sources/<name>.compact compiles to
 # tests/fixtures/compiled/<name>/.
-CODEGEN_FIXTURES := gateway many-fields mint-probe pairs results struct-shapes tuple-shapes zerocash
+CODEGEN_FIXTURES := cross-contract gateway many-fields mint-probe pairs results struct-shapes tuple-shapes zerocash
+# Parser test fixtures: crates/compact/analyzed-ir/tests/fixtures/<name>/<name>.compact.
+# The SDK refuses each of these contracts at load, so the codegen tests cannot read them.
+PARSER_FIXTURES := adt-defaults
+PARSER_FIXTURE_DIR := crates/compact/analyzed-ir/tests/fixtures
 
 # Conformance corpus: tests/conformance/fixtures/<name>/<name>.compact. The two
 # executors read different compiler outputs of a fixture: the Rust IR
@@ -110,7 +114,8 @@ NATIVES_TEST := crates/compact/interpreter/src/lib.rs
 # conformance fixture to <output directory>/contract/.
 FIXTURES := $(foreach f,$(CONFORMANCE_FIXTURES),$(CONFORMANCE_DIR)/fixtures/$(f):$(CONFORMANCE_DIR)/fixtures/$(f)/$(f).compact) \
             $(foreach f,$(TEST_FIXTURES),$(TEST_FIXTURE_DIR)/$(f):$(TEST_FIXTURE_DIR)/$(f)/$(f).compact) \
-            $(foreach f,$(CODEGEN_FIXTURES),tests/fixtures/compiled/$(f):tests/fixtures/sources/$(f).compact)
+            $(foreach f,$(CODEGEN_FIXTURES),tests/fixtures/compiled/$(f):tests/fixtures/sources/$(f).compact) \
+            $(foreach f,$(PARSER_FIXTURES),$(PARSER_FIXTURE_DIR)/$(f):$(PARSER_FIXTURE_DIR)/$(f)/$(f).compact)
 # The compiler flag of the fixture in $$dir, which only a ZKIR v3 conformance
 # fixture has. The pattern opens with `(` for bash 3.2, as CONTRACT_ZKIR does.
 FIXTURE_ZKIR = case " $(foreach f,$(CONFORMANCE_ZKIR_V3_FIXTURES),$(CONFORMANCE_DIR)/fixtures/$(f)) " in (*" $$dir "*) echo --feature-zkir-v3 ;; esac
@@ -143,7 +148,7 @@ help:
 	@echo "    test          cargo test --workspace"
 	@echo "    build         cargo build --workspace"
 	@echo "    audit         cargo audit (fails on vulnerabilities; warnings allowed)"
-	@echo "    ci            fmt-check + clippy + doc + check + test + audit (the CI gates)"
+	@echo "    ci            fmt-check + clippy + doc + test + audit (the CI gates)"
 	@echo ""
 	@echo "  Devnet (node, indexer and proof server via $(DEVNET_COMPOSE); DEVNET_LEDGER=9 for ledger 9)"
 	@echo "    dev-up        start the devnet and wait until it is ready"
@@ -209,7 +214,7 @@ build: contracts fixtures
 audit:
 	$(CARGO) audit
 
-ci: fmt-check clippy doc check test audit
+ci: fmt-check clippy doc test audit
 	@echo "OK: local CI gates passed"
 
 # ============================================================
@@ -339,6 +344,7 @@ test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test prove_once_per_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_offer -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_submit -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_target -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test transaction_hash_identity -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test proving_outside_the_wallet_lock -- --show-output
