@@ -910,6 +910,11 @@ fn generationless_fee_availability(
 /// which can trail the chain, and keeps the time of the chain's latest block
 /// as the last block's time. A context that the helpers make for a block, or
 /// with no block, holds an earlier last block time.
+///
+/// The ledger defines `last_block_time` as the time of the block before
+/// `tblock`, so it is never after `tblock` on chain. The wallet's use is a
+/// convention of this SDK: a transaction applied locally against a wallet's
+/// context sees a `last_block_time` after `tblock`.
 pub fn chain_time(block_context: &BlockContext) -> Timestamp {
     block_context.tblock.max(block_context.last_block_time)
 }

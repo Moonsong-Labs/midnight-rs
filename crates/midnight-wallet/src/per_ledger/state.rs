@@ -65,7 +65,8 @@ pub struct Wallet {
     parameters: LedgerParameters,
     /// The context a build runs at: `tblock` is the Dust anchor
     /// ([`dust_anchor`]), and `last_block_time` the time of the chain's latest
-    /// block, which a build counts its TTL from.
+    /// block, which a build counts its TTL from. Both differ from the ledger's
+    /// meaning of the fields; see [`chain_time`].
     block_context: Option<BlockContext>,
 
     /// In-flight reservations: spends built locally but not yet observed
