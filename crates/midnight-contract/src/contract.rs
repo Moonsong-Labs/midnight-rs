@@ -305,13 +305,13 @@ async fn record_and_submit(
 /// holds the snapshot, and the settle takes it once the store confirms or
 /// drops the snapshot.
 ///
-/// The settle acts only on a final verdict, as [`settle_call`] does. A
-/// finality wait that sees the deploy applied confirms the snapshot. A
-/// `NotApplied` from a finality wait, or the node's [`SubmitError::Invalid`],
-/// drops it. A best-block verdict is provisional, so the snapshot stays
-/// `Pending` and `store` keeps it for a later finality wait. After a
-/// best-block `NotApplied`, nothing reads the snapshot unless a reorg applies
-/// the deploy, and then it holds the right private state.
+/// The settle acts only on a final verdict. A finality wait that sees the
+/// deploy applied confirms the snapshot. A `NotApplied` from a finality wait,
+/// or the node's [`SubmitError::Invalid`], drops it. A best-block verdict is
+/// provisional, so the snapshot stays `Pending` and `store` keeps it for a
+/// later finality wait. After a best-block `NotApplied`, nothing reads the
+/// snapshot unless a reorg applies the deploy, and then it holds the right
+/// private state.
 ///
 /// A store that fails logs a warning and keeps the snapshot `Pending`: the
 /// caller still gets the result of the wait, and so the contract's address.

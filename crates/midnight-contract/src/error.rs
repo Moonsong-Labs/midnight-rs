@@ -99,8 +99,8 @@ pub enum ContractError {
     ///
     /// - `Invalid`: the node rejected the transaction, and the rejection is
     ///   final. Mark any pending private-state snapshot failed, then build
-    ///   again. The wallet has the inputs that the call or the deploy reserved
-    ///   back before the error returns.
+    ///   again. The wallet has the inputs that the call reserved back before
+    ///   the error returns.
     /// - `SubmitRpc`, `Dropped`, `NodeError` or `WatchStream`: the fate of the
     ///   transaction is unknown, and it can still land until its TTL passes. A
     ///   `SubmitRpc` comes from the submit call, before any wait. It does not
