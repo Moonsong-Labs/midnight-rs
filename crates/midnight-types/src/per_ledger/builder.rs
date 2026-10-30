@@ -89,8 +89,6 @@ impl PreparedTransfer {
         let expires_at = tx
             .intents()
             .map(|(_, intent)| match &intent.dust_actions {
-                // The chain refuses Dust actions whose `ctime` is older than
-                // the grace period, whatever the intent's TTL.
                 Some(dust) => intent.ttl.min(dust.ctime + dust_grace_period),
                 None => intent.ttl,
             })
@@ -137,7 +135,8 @@ impl PreparedTransfer {
     /// each of them.
     ///
     /// A wallet anchors that block time at its Dust state, so the stamp can
-    /// trail the chain time that [`Self::expires_at`] counts from.
+    /// trail the chain time that the TTL of the intents counts from. See
+    /// [`intent_ttl`].
     pub fn reserved_at(&self) -> Timestamp {
         self.reserved_at
     }
@@ -1055,8 +1054,9 @@ fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> b
 /// 55MB or more.
 ///
 /// The intents expire `ttl` after the chain time of the build, or after the
-/// chain's `global_ttl` for `None`, and [`PreparedTransfer::expires_at`]
-/// reports when. See [`intent_ttl`].
+/// chain's `global_ttl` for `None`. See [`intent_ttl`].
+/// [`PreparedTransfer::expires_at`] reports when the transaction can no
+/// longer land.
 ///
 /// # Errors
 ///
@@ -1126,7 +1126,9 @@ fn fee_ttl(longest: Timestamp, external: &FinalizedTx) -> Timestamp {
 /// The fee intent expires with the earliest intent of `external`, or after
 /// the chain's `global_ttl` when that comes first. The merged transaction
 /// cannot land once one of its intents expires, so the fee's reservation
-/// ends then too.
+/// ends then at the latest. It ends sooner when the `ctime` of its Dust is
+/// older than the chain's `dust_grace_period` before then. See
+/// [`PreparedTransfer::expires_at`].
 ///
 /// `None` when `external` already balances its Dust. There is nothing to
 /// draw then, and an intent with no spends is one the ledger rejects.
