@@ -99,7 +99,9 @@ impl<'a> UnshieldedTransfer<'a> {
     /// build frees the inputs it reserved. So after a submit whose fate is
     /// unknown, such as [`SubmitError::Dropped`](crate::SubmitError::Dropped),
     /// a rebuild from the same inputs is safe from a double spend after
-    /// `ttl`, not after the whole `global_ttl`.
+    /// `ttl`, not after the whole `global_ttl`. A transaction that pays its
+    /// fee with Dust can stop landing sooner, once its Dust `ctime` is older
+    /// than the chain's `dust_grace_period`.
     pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
         self.ttl = Some(ttl);
         self
@@ -183,7 +185,9 @@ impl<'a> ShieldedTransfer<'a> {
     /// build frees the inputs it reserved. So after a submit whose fate is
     /// unknown, such as [`SubmitError::Dropped`](crate::SubmitError::Dropped),
     /// a rebuild from the same inputs is safe from a double spend after
-    /// `ttl`, not after the whole `global_ttl`.
+    /// `ttl`, not after the whole `global_ttl`. A transaction that pays its
+    /// fee with Dust can stop landing sooner, once its Dust `ctime` is older
+    /// than the chain's `dust_grace_period`.
     ///
     /// A Dustless build, [`DustlessBuilder::without_dust`], refuses a TTL with
     /// [`WalletError::TtlWithoutIntent`](midnight_types::WalletError::TtlWithoutIntent):
