@@ -10,9 +10,11 @@
 //! [`create_dir_all`] syncs the parent of each directory that it creates, so a
 //! new directory persists too.
 //!
-//! A file system that cannot sync a file or a directory refuses the sync. The
-//! calls then skip that sync, and the file system alone decides what persists
-//! after a power loss.
+//! On Apple targets, a sync is `F_FULLFSYNC`. When a file system refuses it, as
+//! an SMB share does, the calls use a plain `fsync` instead. A file system that
+//! cannot sync a file or a directory at all refuses the sync. The calls then
+//! skip that sync, and the file system alone decides what persists after a
+//! power loss.
 
 use std::fs;
 use std::io;
@@ -136,11 +138,35 @@ pub fn sync_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// [`fs::File::sync_all`], or `Ok` when the file system refuses the sync.
+/// [`fs::File::sync_all`], or `Ok` when the file system refuses the sync (see
+/// the module docs).
 fn sync(file: &fs::File) -> io::Result<()> {
-    match file.sync_all() {
+    let result = file.sync_all();
+    #[cfg(target_vendor = "apple")]
+    let result = match result {
+        Err(err) if err.raw_os_error() == Some(libc::ENOTSUP) => fsync(file),
+        result => result,
+    };
+    match result {
         Err(err) if sync_refused(&err) => Ok(()),
         result => result,
+    }
+}
+
+/// `fsync(2)`, which [`fs::File::sync_all`] replaces with `F_FULLFSYNC` on
+/// Apple targets.
+#[cfg(target_vendor = "apple")]
+fn fsync(file: &fs::File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    loop {
+        // SAFETY: `file` owns the descriptor and keeps it open for the call.
+        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(err);
+        }
     }
 }
 
@@ -148,9 +174,8 @@ fn sync(file: &fs::File) -> io::Result<()> {
 /// that a sync it supports failed.
 ///
 /// Some file systems refuse the sync of a directory with `EINVAL`, or with
-/// `EBADF` for a descriptor that is open only for reading. On Apple targets,
-/// `F_FULLFSYNC` fails with `ENOTSUP` on a file system without it, such as an
-/// SMB share, and `std` leaves that code uncategorized.
+/// `EBADF` for a descriptor that is open only for reading. Others refuse a
+/// sync with `ENOTSUP`, which `std` leaves uncategorized on Apple targets.
 fn sync_refused(err: &io::Error) -> bool {
     #[cfg(unix)]
     let refused_code = matches!(err.raw_os_error(), Some(libc::EBADF | libc::ENOTSUP));
