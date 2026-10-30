@@ -18,9 +18,10 @@
 //!   `result.spent`, or until their TTL passes.
 //!
 //! Constructors are sync methods on [`MidnightProvider`]: `transfer_unshielded`,
-//! `transfer_shielded`, `register_dust`. They borrow the provider and capture
-//! the operation's inputs; no work happens until the caller awaits or calls
-//! `.build()`.
+//! `transfer_shielded`, their list forms `transfer_unshielded_many` and
+//! `transfer_shielded_many`, `shielded_swap` and `register_dust`. They borrow
+//! the provider and capture the operation's inputs; no work happens until the
+//! caller awaits or calls `.build()`.
 //!
 //! ```rust,no_run
 //! # use midnight_provider::{MidnightProvider, NIGHT, ShieldedTokenType};
@@ -46,36 +47,30 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
 use midnight_types::{
-    DustPublicKey, ShieldedTokenType, TransferKind, TransferRequest, TransferResult,
+    DustPublicKey, Payment, ShieldedTokenType, TransferKind, TransferRequest, TransferResult,
     UnshieldedTokenType,
 };
 
 use crate::{MidnightProvider, PendingTx, ProviderError};
 
-/// Pending unshielded transfer. See [module docs](crate::transfer) for the
-/// `.await` vs `.build()` distinction.
+/// Pending unshielded transfer to one or more recipients. See
+/// [module docs](crate::transfer) for the `.await` vs `.build()` distinction.
 #[derive(Debug)]
 #[must_use = "does nothing until awaited or built"]
 pub struct UnshieldedTransfer<'a> {
     provider: &'a MidnightProvider,
-    token_type: UnshieldedTokenType,
-    amount: u128,
-    recipient: String,
+    payments: Vec<Payment<UnshieldedTokenType>>,
     coin_selection: midnight_types::CoinSelectionStrategy,
 }
 
 impl<'a> UnshieldedTransfer<'a> {
     pub(crate) fn new(
         provider: &'a MidnightProvider,
-        token_type: UnshieldedTokenType,
-        amount: u128,
-        recipient: &str,
+        payments: Vec<Payment<UnshieldedTokenType>>,
     ) -> Self {
         Self {
             provider,
-            token_type,
-            amount,
-            recipient: recipient.to_string(),
+            payments,
             coin_selection: midnight_types::CoinSelectionStrategy::default(),
         }
     }
@@ -99,9 +94,7 @@ impl<'a> UnshieldedTransfer<'a> {
 
     fn into_request(self, pay_fees: bool) -> TransferRequest {
         TransferRequest::new(TransferKind::Unshielded {
-            token_type: self.token_type,
-            amount: self.amount,
-            recipient: self.recipient,
+            payments: self.payments,
             pay_fees,
         })
         .with_coin_selection(self.coin_selection)
@@ -118,30 +111,24 @@ impl<'a> IntoFuture for UnshieldedTransfer<'a> {
     }
 }
 
-/// Pending shielded transfer. See [module docs](crate::transfer) for the
-/// `.await` vs `.build()` distinction.
+/// Pending shielded transfer to one or more recipients. See
+/// [module docs](crate::transfer) for the `.await` vs `.build()` distinction.
 #[derive(Debug)]
 #[must_use = "does nothing until awaited or built"]
 pub struct ShieldedTransfer<'a> {
     provider: &'a MidnightProvider,
-    token_type: ShieldedTokenType,
-    amount: u128,
-    recipient: String,
+    payments: Vec<Payment<ShieldedTokenType>>,
     coin_selection: midnight_types::CoinSelectionStrategy,
 }
 
 impl<'a> ShieldedTransfer<'a> {
     pub(crate) fn new(
         provider: &'a MidnightProvider,
-        token_type: ShieldedTokenType,
-        amount: u128,
-        recipient: &str,
+        payments: Vec<Payment<ShieldedTokenType>>,
     ) -> Self {
         Self {
             provider,
-            token_type,
-            amount,
-            recipient: recipient.to_string(),
+            payments,
             coin_selection: midnight_types::CoinSelectionStrategy::default(),
         }
     }
@@ -164,9 +151,7 @@ impl<'a> ShieldedTransfer<'a> {
 
     fn into_request(self, pay_fees: bool) -> TransferRequest {
         TransferRequest::new(TransferKind::Shielded {
-            token_type: self.token_type,
-            amount: self.amount,
-            recipient: self.recipient,
+            payments: self.payments,
             pay_fees,
         })
         .with_coin_selection(self.coin_selection)

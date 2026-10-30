@@ -85,10 +85,10 @@ pub use midnight_types::address::{parse_dust_address, parse_shielded_recipient};
 pub use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustParameters,
     DustPublicKey, EncryptionPublicKey, HashOutput, InvalidNetworkName, LedgerVersion, NIGHT,
-    Network, NetworkName, Nonce, Nullifier, ReservedInput, ShieldedBalance, ShieldedCoinBalance,
-    ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SpentUtxoKey,
-    SyncCursors, TrackedUtxo, TransferKind, TransferRequest, TransferResult, UnshieldedTokenType,
-    UnshieldedUtxoInfo, WalletBalance, WalletError, chain_pin,
+    Network, NetworkName, Nonce, Nullifier, Payment, ReservedInput, ShieldedBalance,
+    ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin, SpentInputs,
+    SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind, TransferRequest, TransferResult,
+    UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance, WalletError, chain_pin,
 };
 // The API this crate implements, so attaching a wallet needs no dependency on
 // midnight-wallet-facade either.

@@ -238,6 +238,12 @@ Private state is also **threaded** through witness execution, matching midnight-
 
 These are real Midnight chain features that midnight-js exposes and this SDK does not (yet). Listed roughly in order of how often they come up.
 
+### Shielded and unshielded payments in one transfer
+
+The wallet-SDK's `WalletFacade.transferTransaction(outputs, secretKeys, { ttl, payFees })` takes shielded and unshielded outputs together, of any tokens, and builds one transaction that pays one Dust fee.
+
+midnight-rs builds one kind per transfer. [`transfer_shielded_many` and `transfer_unshielded_many`](../crates/midnight-provider/src/provider.rs) each take a list of `Payment`s of one kind, of any tokens. Each builds one transaction that pays one Dust fee. To pay shielded and unshielded recipients in one transaction, build each list with `.without_dust()`. Merge the two transactions with `merge_transactions`. Then pay the fee with `balance_transaction`. A Dustless shielded transfer carries no intent, so the merge has no segment collision. That takes three builds where the wallet SDK takes one. [`wallet.md`](./wallet.md#transfers) shows the steps.
+
 ### Wallet observability
 
 midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams backed by indexer subscriptions, such as `contractStateObservable` and `unshieldedBalancesObservable`. It also has promises that wait for one record, such as `watchForContractState` and `watchForTxData`. midnight-rs has no contract-state or contract-balance stream. `WalletBuilder::sync_with_progress` reports the progress of the sync that builds a wallet as `SyncProgress` events. After that sync, `LocalWallet::sync_in_background` returns a `BackgroundSync`. Its `wait_until` waits until a condition on the balance holds. Its `last_error` gives the error of the last pass. For a transaction that this SDK submits, `PendingTx::wait_best` / `wait_finalized` take the place of `watchForTxData`.

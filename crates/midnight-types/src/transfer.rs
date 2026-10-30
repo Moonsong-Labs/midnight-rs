@@ -1,15 +1,18 @@
 //! The vocabulary of a transfer build: the request that names one
-//! ([`TransferRequest`]), what it spends ([`SpentInputs`]), and its result
-//! ([`TransferResult`]).
+//! ([`TransferRequest`]), the payments it makes ([`Payment`]), what it spends
+//! ([`SpentInputs`]), and its result ([`TransferResult`]).
 //!
 //! The builds themselves are per ledger generation, in
 //! [`crate::ledger_8`] and [`crate::ledger_9`].
+
+use std::collections::BTreeMap;
 
 use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 
 use crate::coin::{
     DustNullifier, DustPublicKey, Nullifier, ShieldedTokenType, UnshieldedTokenType,
 };
+use crate::error::WalletError;
 use crate::ledger_version::LedgerVersion;
 
 /// A proven transaction a build made, and the inputs the build reserved for
@@ -123,29 +126,90 @@ impl SpentInputs {
     }
 }
 
+/// One payment of a transfer: `amount` of `token_type` to `recipient`.
+///
+/// `T` is [`ShieldedTokenType`] for a shielded transfer and
+/// [`UnshieldedTokenType`] for an unshielded one, so a payment cannot go to a
+/// transfer of the other kind.
+///
+/// ```
+/// use midnight_types::{NIGHT, Payment};
+///
+/// let payment = Payment::new(NIGHT, 5, "mn_addr_undeployed1...");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Payment<T> {
+    /// The token the payment sends.
+    pub token_type: T,
+    /// The amount, in the token's smallest unit. A build refuses 0.
+    pub amount: u128,
+    /// The bech32 address of the recipient: `mn_shield-addr_*` for a shielded
+    /// payment, `mn_addr_*` for an unshielded one.
+    pub recipient: String,
+}
+
+impl<T> Payment<T> {
+    /// A payment of `amount` of `token_type` to the bech32 address
+    /// `recipient`.
+    pub fn new(token_type: T, amount: u128, recipient: impl Into<String>) -> Self {
+        Self {
+            token_type,
+            amount,
+            recipient: recipient.into(),
+        }
+    }
+}
+
+/// The sum that `payments` send of each token, which is what a build selects
+/// inputs for and returns change from.
+///
+/// # Errors
+///
+/// [`WalletError::Transfer`] when `payments` is empty, when a payment sends 0,
+/// or when the payments of one token add up to more than `u128::MAX`.
+pub(crate) fn totals_per_token<T: Copy + Ord + std::fmt::Display>(
+    payments: &[Payment<T>],
+) -> Result<BTreeMap<T, u128>, WalletError> {
+    if payments.is_empty() {
+        return Err(WalletError::Transfer(
+            "a transfer needs at least one payment".into(),
+        ));
+    }
+    let mut totals = BTreeMap::new();
+    for (index, payment) in payments.iter().enumerate() {
+        if payment.amount == 0 {
+            return Err(WalletError::Transfer(format!(
+                "payment {index} sends 0; every payment must send more than 0"
+            )));
+        }
+        let total = totals.entry(payment.token_type).or_insert(0u128);
+        *total = total.checked_add(payment.amount).ok_or_else(|| {
+            WalletError::Transfer(format!(
+                "the payments of token {} add up to more than u128::MAX",
+                payment.token_type
+            ))
+        })?;
+    }
+    Ok(totals)
+}
+
 /// One transfer a build can make.
 ///
 /// Data rather than a closure over the builder, so a caller can hand a build
 /// to a wallet it reaches only through a trait.
 #[derive(Debug)]
 pub enum TransferKind {
-    /// A shielded (Zswap) transfer. See
+    /// A shielded (Zswap) transfer that pays each of `payments`. See
     /// `TransferBuilder::prepare_shielded`.
     Shielded {
-        token_type: ShieldedTokenType,
-        amount: u128,
-        /// A bech32 shielded address.
-        recipient: String,
+        payments: Vec<Payment<ShieldedTokenType>>,
         /// False leaves the transaction fee-less, for another wallet to fund.
         pay_fees: bool,
     },
-    /// An unshielded (UTXO) transfer. See
+    /// An unshielded (UTXO) transfer that pays each of `payments`. See
     /// `TransferBuilder::prepare_unshielded`.
     Unshielded {
-        token_type: UnshieldedTokenType,
-        amount: u128,
-        /// A bech32 unshielded address.
-        recipient: String,
+        payments: Vec<Payment<UnshieldedTokenType>>,
         /// False leaves the transaction fee-less, for another wallet to fund.
         pay_fees: bool,
     },
@@ -225,6 +289,40 @@ mod tests {
         );
         assert_eq!(panic_message(Box::new("literal")), "literal");
         assert!(panic_message(Box::new(42u8)).contains("non-string payload"));
+    }
+
+    const A: UnshieldedTokenType = UnshieldedTokenType(HashOutput([1; 32]));
+    const B: UnshieldedTokenType = UnshieldedTokenType(HashOutput([2; 32]));
+
+    fn pay(token_type: UnshieldedTokenType, amount: u128) -> Payment<UnshieldedTokenType> {
+        Payment::new(token_type, amount, "recipient")
+    }
+
+    /// A build selects inputs once per token and returns one change output per
+    /// token, so payments of one token must add up, and other tokens must not
+    /// join their sum.
+    #[test]
+    fn the_payments_of_one_token_add_up_to_one_total() {
+        let totals = totals_per_token(&[pay(A, 3), pay(B, 5), pay(A, 4)]).unwrap();
+        assert_eq!(totals, BTreeMap::from([(A, 7), (B, 5)]));
+    }
+
+    /// Each input passes every other check, so only the refusal it names can
+    /// turn it into an error. A zero payment beside a valid one is refused, not
+    /// dropped. A zero output is an empty coin, and ledger 9 also refuses a
+    /// zero-value UTXO output at submit.
+    #[test]
+    fn a_transfer_refuses_no_payments_a_zero_payment_and_an_overflowing_sum() {
+        for (case, payments) in [
+            ("no payments", vec![]),
+            ("a zero payment", vec![pay(A, 3), pay(B, 0)]),
+            ("an overflowing sum", vec![pay(A, u128::MAX), pay(A, 1)]),
+        ] {
+            assert!(
+                matches!(totals_per_token(&payments), Err(WalletError::Transfer(_))),
+                "{case}"
+            );
+        }
     }
 
     #[test]
