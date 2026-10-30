@@ -125,7 +125,7 @@ let complete = bob.balance_transaction_with_tokens(offer.as_bytes()).await?;
 bob.submit_reserved(complete).await?;
 ```
 
-`balance_transaction_with_tokens` pays every deficit the bytes carry. Use it only on a transaction whose deficit the payer agreed to cover, and use `balance_transaction` for bytes it does not trust. What the payer spends or receives at a fallible segment lands only when that segment succeeds. Its cover at segment 0 and its fee land with the guaranteed phase. So a surplus at a fallible segment does not reach the payer when that segment fails.
+`balance_transaction_with_tokens` pays every deficit the bytes carry. Use it only on a transaction whose deficit the payer agreed to cover, and use `balance_transaction` for bytes it does not trust. Before the call, the payer reads the imbalance of each token at each segment with `midnight_provider::imbalances(bytes)` and checks the terms. For a guaranteed shielded swap, the mirror flow in the next section lets the SDK enforce the terms: `balance_transaction` refuses any deficit that the payer's own half leaves. For a deficit at a fallible segment or an unshielded deficit, the payer's check of `imbalances` is the only check. What the payer spends or receives at a fallible segment lands only when that segment succeeds. Its cover at segment 0 and its fee land with the guaranteed phase. So a surplus at a fallible segment does not reach the payer when that segment fails.
 
 ### Native two-party token swaps
 

@@ -17,11 +17,12 @@ mod shielded_mint {
     );
 }
 
+use std::collections::BTreeMap;
+
 use compact_bindgen::Bytes;
 use midnight_base_crypto::hash::HashOutput;
 use midnight_contract::ShieldedTokenType;
-use midnight_provider::MidnightProvider;
-use midnight_types::LedgerVersion;
+use midnight_provider::{MidnightProvider, TokenType, imbalances};
 use midnight_wallet::Seed;
 
 /// A seed that nothing else in the suite uses, so the maker holds only what
@@ -37,29 +38,6 @@ const MINT_Y: u64 = 1000;
 /// coin of the maker or of the payer carries.
 const DX: u128 = 7;
 const DY: u128 = 5;
-
-/// The net imbalance of `token` over every segment of the proven transaction
-/// `tx_bytes`.
-fn shielded_imbalance(tx_bytes: &[u8], token: ShieldedTokenType) -> i128 {
-    macro_rules! imbalance_in {
-        ($ledger:ident) => {{
-            use midnight_helpers::$ledger as l;
-            let tx: l::FinalizedTransaction<midnight_helpers::DefaultDB> =
-                midnight_helpers::midnight_serialize::tagged_deserialize(&mut &tx_bytes[..])
-                    .expect("deserialize the proven transaction");
-            tx.balance(None)
-                .expect("token balance")
-                .iter()
-                .filter(|((tt, _), _)| matches!(tt, l::TokenType::Shielded(s) if s.0 == token.0))
-                .map(|(_, v)| *v)
-                .sum()
-        }};
-    }
-    match LedgerVersion::of_transaction(tx_bytes).expect("a proven transaction") {
-        LedgerVersion::V8 => imbalance_in!(ledger_8),
-        LedgerVersion::V9 => imbalance_in!(ledger_9),
-    }
-}
 
 #[tokio::test]
 async fn a_payer_completes_a_one_sided_offer_and_takes_what_it_gives() {
@@ -105,7 +83,15 @@ async fn a_payer_completes_a_one_sided_offer_and_takes_what_it_gives() {
         .await
         .expect("build the one-sided offer");
 
-    // --- The payer completes it ---
+    // --- The payer checks the terms, then completes it ---
+    assert_eq!(
+        imbalances(offer.as_bytes()).expect("read the offer's imbalance"),
+        BTreeMap::from([
+            ((TokenType::Shielded(TOKEN_X), 0), -(DX as i128)),
+            ((TokenType::Shielded(token_y), 0), DY as i128),
+        ]),
+        "the offer must ask for DX of X and give DY of Y at segment 0"
+    );
     let complete = payer
         .balance_transaction_with_tokens(offer.as_bytes())
         .await
@@ -113,15 +99,14 @@ async fn a_payer_completes_a_one_sided_offer_and_takes_what_it_gives() {
 
     // The chain refuses only a deficit. A surplus burns, so a payer that
     // dropped its change or left the Y unclaimed would still land.
-    assert_eq!(
-        shielded_imbalance(&complete.tx_bytes, TOKEN_X),
-        0,
-        "the payer must cover the X deficit and take its change back"
-    );
-    assert_eq!(
-        shielded_imbalance(&complete.tx_bytes, token_y),
-        0,
-        "the payer must take the Y surplus"
+    let unbalanced: Vec<_> = imbalances(&complete.tx_bytes)
+        .expect("read the completed imbalance")
+        .into_iter()
+        .filter(|((token, _), value)| matches!(token, TokenType::Shielded(_)) && *value != 0)
+        .collect();
+    assert!(
+        unbalanced.is_empty(),
+        "the payer must cover the X deficit, take its change back and take the Y surplus: {unbalanced:?}"
     );
     assert!(
         !complete.spent.shielded.is_empty() && !complete.spent.dust.is_empty(),

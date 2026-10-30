@@ -1114,6 +1114,19 @@ async fn balance_external_at(
     Err(tracker.into_error())
 }
 
+/// See [`crate::imbalances`].
+pub(crate) fn imbalances(
+    tx_bytes: &[u8],
+) -> Result<BTreeMap<(crate::TokenType, u16), i128>, WalletError> {
+    let tx: FinalizedTx = helpers::midnight_serialize::tagged_deserialize(&mut &tx_bytes[..])
+        .map_err(|e| WalletError::Transfer(format!("deserialize transaction: {e}")))?;
+    let imbalance = tx.balance(None).map_err(transfer_err("balance"))?;
+    Ok(imbalance
+        .into_iter()
+        .map(|((token_type, segment), value)| ((token_type.into_sdk(), segment), value))
+        .collect())
+}
+
 /// The token imbalance of a transaction that a payer balances, by segment.
 ///
 /// A negative value is a deficit that the payer covers from its own coins. A

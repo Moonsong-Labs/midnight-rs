@@ -769,12 +769,15 @@ impl MidnightProvider {
     /// transaction ready to submit.
     ///
     /// This is the wallet SDK facade's `balanceFinalizedTransaction` with its
-    /// default `tokenKindsToBalance: 'all'`. It completes a one-sided offer: party 1 gives `X` and asks for `Y` in an
-    /// unbalanced transaction (see [`Self::shielded_swap`]), and the payer
-    /// that calls this supplies `Y`, receives `X` and pays the fees:
+    /// default `tokenKindsToBalance: 'all'`. It completes a one-sided offer:
+    /// party 1 gives `X` and asks for `Y` in an unbalanced transaction (see
+    /// [`Self::shielded_swap`]), and the payer that calls this supplies `Y`,
+    /// receives `X` and pays the fees. The payer first reads the
+    /// [`imbalances`](crate::imbalances) of the offer to check its terms:
     ///
     /// ```rust,no_run
-    /// # use midnight_provider::{MidnightProvider, ShieldedTokenType};
+    /// # use std::collections::BTreeMap;
+    /// # use midnight_provider::{MidnightProvider, ShieldedTokenType, TokenType, imbalances};
     /// # async fn f(
     /// #     maker: MidnightProvider,
     /// #     payer: MidnightProvider,
@@ -784,6 +787,11 @@ impl MidnightProvider {
     /// #     dy: u128,
     /// # ) -> anyhow::Result<()> {
     /// let offer = maker.shielded_swap(token_x, dx, token_y, dy).await?;
+    /// let terms = BTreeMap::from([
+    ///     ((TokenType::Shielded(token_x), 0), i128::try_from(dx)?),
+    ///     ((TokenType::Shielded(token_y), 0), -i128::try_from(dy)?),
+    /// ]);
+    /// anyhow::ensure!(imbalances(offer.as_bytes())? == terms, "the offer has other terms");
     /// let complete = payer.balance_transaction_with_tokens(offer.as_bytes()).await?;
     /// payer.submit_reserved(complete).await?;
     /// # Ok(())
@@ -801,12 +809,19 @@ impl MidnightProvider {
     /// The external transaction's proofs stay as they are.
     ///
     /// This pays **every** deficit that the transaction carries. Call it only
-    /// on a transaction whose deficit you agreed to cover, and use
-    /// [`Self::balance_transaction`] for bytes you do not trust. What the
-    /// wallet spends or receives at a fallible segment lands only when that
-    /// segment succeeds. Its cover at segment 0 and its fee land with the
-    /// guaranteed phase. So a surplus at a fallible segment does not reach
-    /// the wallet when that segment fails.
+    /// on a transaction whose deficit you agreed to cover, and check its
+    /// [`imbalances`](crate::imbalances) first, as above. Use
+    /// [`Self::balance_transaction`] for bytes you do not trust. For a
+    /// guaranteed shielded swap, the SDK can enforce the terms: the payer
+    /// builds its own half (`payer.shielded_swap(token_y, dy, token_x, dx)`),
+    /// merges the two halves with [`Self::merge_transactions`] and pays the
+    /// fee with [`Self::balance_transaction`], which refuses any deficit that
+    /// the payer's half leaves.
+    ///
+    /// What the wallet spends or receives at a fallible segment lands only
+    /// when that segment succeeds. Its cover at segment 0 and its fee land
+    /// with the guaranteed phase. So a surplus at a fallible segment does not
+    /// reach the wallet when that segment fails.
     ///
     /// The wallet selects the coins, UTXOs and Dust and reserves them as one
     /// transition, so two calls on one provider cannot draw the same inputs.

@@ -30,6 +30,7 @@ mod balance;
 mod coin;
 mod error;
 mod hash;
+mod imbalance;
 mod ledger_version;
 mod network;
 mod parameters;
@@ -43,10 +44,11 @@ pub use balance::{
 pub use coin::{
     CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustPublicKey, EncryptionPublicKey,
     NIGHT, Nonce, Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient,
-    ShieldedTokenType, UnshieldedTokenType,
+    ShieldedTokenType, TokenType, UnshieldedTokenType,
 };
 pub use error::{WalletError, refuse_repeated_nullifiers};
 pub use hash::{BlockHash, ExtrinsicHash};
+pub use imbalance::imbalances;
 pub use ledger_version::{LedgerVersion, UnknownLedger};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::{InvalidNetworkName, Network, NetworkName};

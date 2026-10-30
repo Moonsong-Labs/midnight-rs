@@ -11,6 +11,7 @@ pub mod convert;
 #[path = "per_ledger/inputs.rs"]
 mod inputs;
 
+pub(crate) use builder::imbalances;
 pub use builder::{
     BuildInputs, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external,
     balance_external_tokens, fee_speck, prepare_no_validate,

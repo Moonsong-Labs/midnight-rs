@@ -92,13 +92,21 @@ let funded = sponsor.balance_transaction(&merged).await?;
 sponsor.submit_reserved(funded).await?;
 ```
 
-A one-sided offer needs no mirror half. One party builds a half that gives one token and asks for another. A payer completes it with `balance_transaction_with_tokens`: the payer supplies the token the half asks for, receives the token it gives, and pays the Dust fee. `balance_transaction` pays only the fee and refuses a token deficit, so use the second call only on a transaction whose deficit you agreed to cover:
+A one-sided offer needs no mirror half. One party builds a half that gives one token and asks for another. A payer completes it with `balance_transaction_with_tokens`: the payer supplies the token the half asks for, receives the token it gives, and pays the Dust fee. `balance_transaction` pays only the fee and refuses a token deficit. The second call pays every deficit that the bytes carry, so the payer first reads them with `imbalances` (from `midnight_core::provider`) and checks the terms:
 
 ```rust,ignore
 let offer = alice.shielded_swap(token_x, dx, token_y, dy).await?;
+// Bob receives dx of X and supplies dy of Y, at segment 0.
+let terms = BTreeMap::from([
+    ((TokenType::Shielded(token_x), 0), dx as i128),
+    ((TokenType::Shielded(token_y), 0), -(dy as i128)),
+]);
+anyhow::ensure!(imbalances(offer.as_bytes())? == terms, "the offer has other terms");
 let complete = bob.balance_transaction_with_tokens(offer.as_bytes()).await?;
 bob.submit_reserved(complete).await?;
 ```
+
+For a guaranteed shielded swap, the two-party flow above lets the SDK enforce the terms: `balance_transaction` refuses any deficit that the payer's own half leaves.
 
 A party with no Dust builds a transfer or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A contract call built this way, or with `.build()`, records no private state. So it fails with `ContractError::UnrecordedPrivateState` when its witnesses change the private state, before it reserves Dust or makes a proof. A sponsor pays its Dust fee with `balance_transaction` and submits it with `submit_reserved`, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
 
