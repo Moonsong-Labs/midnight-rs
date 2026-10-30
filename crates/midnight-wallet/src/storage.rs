@@ -293,8 +293,9 @@ pub(crate) fn save_snapshot(
     // Atomic commit: from this point on, the wallet sees the new state.
     write_atomic(&dir, METADATA_FILE, meta_json.as_bytes())?;
 
-    // Best-effort: remove the previous generation's binary files. Failure
-    // here is non-fatal (the next save will retry or overwrite).
+    // Best-effort: a failed removal, or a save that fails after the metadata
+    // rename, leaves the previous generation on disk, and no later save
+    // removes it.
     if let Some(prev) = previous_generation {
         let _ = std::fs::remove_file(dir.join(zswap_file(prev)));
         let _ = std::fs::remove_file(dir.join(dust_wallet_file(prev)));
