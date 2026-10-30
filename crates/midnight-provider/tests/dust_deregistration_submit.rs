@@ -42,6 +42,7 @@ fn unused_seeds() -> (String, String) {
 struct Reading {
     night_utxos: usize,
     generating: usize,
+    dust_utxos: usize,
     spendable_speck: u128,
 }
 
@@ -60,15 +61,12 @@ async fn fund(funder: &MidnightProvider, address: &str) {
 async fn read(provider: &MidnightProvider) -> Reading {
     let utxos = provider.unshielded_utxos().await.expect("unshielded UTXOs");
     let night: Vec<_> = utxos.iter().filter(|u| u.is_night()).collect();
+    let dust = provider.balance().await.expect("balance").dust;
     Reading {
         night_utxos: night.len(),
         generating: night.iter().filter(|u| u.is_registered_for_dust()).count(),
-        spendable_speck: provider
-            .balance()
-            .await
-            .expect("balance")
-            .dust
-            .spendable_speck,
+        dust_utxos: dust.spendable_utxos,
+        spendable_speck: dust.spendable_speck,
     }
 }
 
@@ -201,7 +199,7 @@ async fn another_wallet_pays_for_the_deregistration() {
     wait_for(
         &hot,
         "the hot wallet must get the Dust of the registration",
-        |r| r.spendable_speck > 0,
+        |r| r.dust_utxos > 0,
     )
     .await;
 
