@@ -252,7 +252,7 @@ impl<'a> IntoFuture for ShieldedSwap<'a> {
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move { self.build().await.map(DustlessTransaction::reserved) })
+        Box::pin(async move { self.build().await.map(DustlessTransaction::from_build) })
     }
 }
 
@@ -274,9 +274,8 @@ pub trait DustlessBuilder: Sized {
     /// [`MidnightProvider::balance_transaction`] (one payer) or
     /// [`MidnightProvider::merge_transactions`], then submits.
     ///
-    /// The [`DustlessTransaction::spent`] of a transfer names the inputs that
-    /// the build reserved, for a release when the fee payer never submits.
-    /// That of a generated contract call is empty.
+    /// The [`DustlessTransaction::spent`] names the inputs that the build
+    /// reserved, for a release when the fee payer never submits.
     fn without_dust(self) -> impl Future<Output = Result<DustlessTransaction, Self::Error>> + Send;
 }
 
@@ -287,7 +286,7 @@ impl<'a> DustlessBuilder for ShieldedTransfer<'a> {
         provider
             .build_then_prove(self.into_request(false))
             .await
-            .map(DustlessTransaction::reserved)
+            .map(DustlessTransaction::from_build)
     }
 }
 
@@ -298,7 +297,7 @@ impl<'a> DustlessBuilder for UnshieldedTransfer<'a> {
         provider
             .build_then_prove(self.into_request(false))
             .await
-            .map(DustlessTransaction::reserved)
+            .map(DustlessTransaction::from_build)
     }
 }
 
@@ -328,18 +327,12 @@ impl std::fmt::Debug for DustlessTransaction {
 }
 
 impl DustlessTransaction {
-    /// Wrap already-proven, Dustless transaction bytes that do not name their
-    /// reserved inputs. Do not use it to wrap arbitrary bytes.
+    /// Wrap the [`TransferResult`] of a build that pays no Dust fee, and keep
+    /// the inputs that the build reserved in [`Self::spent`].
     ///
-    /// [`Self::spent`] of the result is empty.
-    pub fn from_proven_bytes(tx_bytes: Vec<u8>) -> Self {
-        DustlessTransaction {
-            tx_bytes,
-            spent: SpentInputs::default(),
-        }
-    }
-
-    fn reserved(result: TransferResult) -> Self {
+    /// A build that pays its own fee gives a transaction that is valid alone.
+    /// Submit that result with [`MidnightProvider::submit_reserved`] instead.
+    pub fn from_build(result: TransferResult) -> Self {
         DustlessTransaction {
             tx_bytes: result.tx_bytes,
             spent: result.spent,
@@ -377,10 +370,6 @@ impl DustlessTransaction {
     /// root, and for a fixed hour on ledger 8. Until then, the fee payer can
     /// still submit the transaction. A later build can then select the
     /// released inputs, and the chain rejects one of the two transactions.
-    ///
-    /// Empty for [`Self::from_proven_bytes`], and so for the `.without_dust()`
-    /// of a generated contract call. The inputs of such a call stay reserved
-    /// until a sync sees the chain spend them, or until their TTL passes.
     pub fn spent(&self) -> &SpentInputs {
         &self.spent
     }

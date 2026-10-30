@@ -686,8 +686,8 @@ impl MidnightProvider {
     /// the generated `circuits().<circuit>().build().await`) with a
     /// counterparty's already-proven transaction before submitting.
     ///
-    /// Each input is a tagged-serialized proven transaction (the byte output of
-    /// any build path). The result is the merged transaction, ready for
+    /// Each input is a tagged-serialized proven transaction (the `tx_bytes` of
+    /// any build result). The result is the merged transaction, ready for
     /// [`Self::submit`] / [`Self::prepare`]. Merging combines the transactions'
     /// intents and Zswap offers and sums their binding randomness; it does NOT
     /// rebalance, so every input must already balance its own tokens.
@@ -807,9 +807,9 @@ impl MidnightProvider {
     /// Submit a transaction that this provider's wallet built, and carry the
     /// reservation of its build on the returned handle.
     ///
-    /// Use it for the [`TransferResult`] of a `.build()` on a transfer, of
-    /// [`Self::balance_transaction`], or of a deploy. The inputs in
-    /// `result.spent` then go back to the wallet in two cases:
+    /// Use it for the [`TransferResult`] of a `.build()` on a transfer or a
+    /// contract call, of [`Self::balance_transaction`], or of a deploy. The
+    /// inputs in `result.spent` then go back to the wallet in two cases:
     ///
     /// - The prepare fails: the connect, the metadata read, or the encoding of
     ///   the extrinsic. The transaction never left this process, whatever the

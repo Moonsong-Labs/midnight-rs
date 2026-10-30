@@ -70,7 +70,7 @@ pending.wait_finalized().await         → TxInBlock
 
 The "prove" and "balance" steps live together inside `build` because they're interleaved: `speculative_spend` iterates between balancing and (mock-)proving until the Dust fee is right. For **your own** transaction they stay fused: there is no standalone `proveTx` you call separately.
 
-What you *can* now do is stop before submission and get the proven bytes back: `.build()` on a transfer, or `contract.circuits().<circuit>().build().await` (equivalently `Contract::build_call_with`) for a contract call, returns a proven `Vec<u8>` without submitting. That is the hook the multi-party flows in the next section build on, and it closes most of the "you can't separate building from submitting" gap this section used to describe.
+What you *can* now do is stop before submission and get the proven bytes back: `.build()` on a transfer, or `contract.circuits().<circuit>().build().await` (equivalently `Contract::build_call_with`) for a contract call, returns a `TransferResult` without submitting: the proven bytes and the inputs that the build reserved. That is the hook the multi-party flows in the next section build on, and it closes most of the "you can't separate building from submitting" gap this section used to describe.
 
 Both the one-shot path (`provider.transfer_*.await`) and `Contract::deploy(...).await` collapse the whole pipeline into one.
 
@@ -86,7 +86,7 @@ Several parties can contribute to one transaction (atomic swaps, or "one wallet 
 
 ```rust,ignore
 let mine = contract.circuits().withdraw(coin).build().await?;   // proven, not submitted
-let merged = provider.merge_transactions(&[mine, counterparty_bytes])?;
+let merged = provider.merge_transactions(&[mine.tx_bytes, counterparty_bytes])?;
 provider.submit(&merged).await?;
 ```
 
@@ -100,7 +100,7 @@ One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only
 
 **midnight-rs:** the same work is split across two calls, matching the two roles:
 
-- [`transfer_shielded(token, amount, recipient).without_dust()`](../crates/midnight-provider/src/transfer.rs), the Party-1 side. Any builder with fees turned off: a proven, token-balanced but **Dustless** transaction (no Dust). Dust is the general fee token, so `.without_dust()` is not shielded-specific: it is one method on the `DustlessBuilder` trait that yields a `DustlessTransaction`. It is implemented on the shielded-transfer builder, the unshielded-transfer builder, and generated contract-call builders (`contract.circuits().foo().without_dust()`). A `DustlessTransaction` has no submit path (it is not valid alone); hand its bytes to the payer. The `DustlessTransaction` of a transfer also names the inputs that its build reserved, in `spent()`. When the payer never submits, `MidnightProvider::release(tx.spent())` hands them back, as `revert(tx)` does on the midnight-js wallet facade. The `spent()` of a contract call's `DustlessTransaction` is empty. A contract call's `.without_dust()` and `.build()` refuse a call whose witnesses change the private state, with `ContractError::UnrecordedPrivateState`, because they record no snapshot. midnight-js returns the next private state from a build-only call (`createUnprovenCallTx` gives `private.nextPrivateState`), and midnight-rs refuses for now.
+- [`transfer_shielded(token, amount, recipient).without_dust()`](../crates/midnight-provider/src/transfer.rs), the Party-1 side. Any builder with fees turned off: a proven, token-balanced but **Dustless** transaction (no Dust). Dust is the general fee token, so `.without_dust()` is not shielded-specific: it is one method on the `DustlessBuilder` trait that yields a `DustlessTransaction`. It is implemented on the shielded-transfer builder, the unshielded-transfer builder, and generated contract-call builders (`contract.circuits().foo().without_dust()`). A `DustlessTransaction` has no submit path (it is not valid alone); hand its bytes to the payer. A `DustlessTransaction` also names the inputs that its build reserved, in `spent()`. When the payer never submits, `MidnightProvider::release(tx.spent())` hands them back, as `revert(tx)` does on the midnight-js wallet facade. A contract call's `.without_dust()` and `.build()` refuse a call whose witnesses change the private state, with `ContractError::UnrecordedPrivateState`, because they record no snapshot. midnight-js returns the next private state from a build-only call (`createUnprovenCallTx` gives `private.nextPrivateState`), and midnight-rs refuses for now.
 - [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet. It returns a `TransferResult`: the completed transaction, the Dust it reserved, and the fee of the completed transaction. Submit it with `submit_reserved`, which hands the Dust back when the node never gets the transaction or rejects it. It draws Dust for the fee estimate and prices each round with a mock proof, until the Dust covers the (growing) fee. It then proves the fee intent once and merges it in. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
 
 ```rust,ignore

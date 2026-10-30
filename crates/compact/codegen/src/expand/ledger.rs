@@ -1097,8 +1097,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         // The call builder: `.await` (via `IntoFuture`) submits and returns the
         // circuit's result; `.send().await` returns the pending call;
-        // `.build().await` returns the proven bytes; `.simulate().await`
-        // returns the value and the post-call ledger.
+        // `.build().await` returns the proven transaction and its reserved
+        // inputs; `.simulate().await` returns the value and the post-call ledger.
         call_items.push(quote! {
             #[doc = #call_doc]
             #[must_use = "does nothing until awaited, sent, built or simulated"]
@@ -1112,27 +1112,31 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 P: midnight_contract::AsMidnightProvider,
                 Wp: midnight_contract::runtime::WitnessProvider,
             {
-                /// Build and prove the call transaction and return its bytes,
-                /// **without** submitting. Combine it with other transactions via
-                /// `MidnightProvider::merge_transactions`, then submit yourself.
+                /// Build and prove the call transaction **without** submitting it.
+                /// Combine its `tx_bytes` with other transactions via
+                /// `MidnightProvider::merge_transactions`, or submit it with
+                /// `MidnightProvider::submit_reserved`.
                 ///
                 /// The build records no private-state snapshot. So it fails with
                 /// `ContractError::UnrecordedPrivateState` when the witnesses change the
                 /// private state, after the local run and before the build reserves an
                 /// input or makes a proof. Submit such a call with `.await` or `.send()`.
                 ///
-                /// The build reserves the wallet inputs that the transaction spends. The
-                /// bytes do not name them, so they stay reserved until a sync sees the chain
-                /// spend them, or until their TTL passes.
+                /// The build reserves the wallet inputs that the transaction spends, and
+                /// the result names them in `spent`. When the transaction will not land,
+                /// pass them to `MidnightProvider::release`. Otherwise they stay reserved
+                /// until a sync sees the chain spend them, or until their TTL passes.
                 /// See `midnight_contract::Contract::build_call_with`.
                 pub async fn build(
                     self,
-                ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
+                ) -> ::core::result::Result<
+                    midnight_contract::TransferResult,
+                    midnight_contract::ContractError,
+                > {
                     // Boxed for the same reason `without_dust` below is.
                     ::std::boxed::Box::pin(async move {
                         #open
-                        let __bytes = __circuits.contract.build_call_with(#call_args, true).await?;
-                        ::core::result::Result::Ok(__bytes)
+                        __circuits.contract.build_call_with(#call_args, true).await
                     })
                     .await
                 }
@@ -1208,9 +1212,9 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// As with `build`, it fails with `ContractError::UnrecordedPrivateState`
                 /// when the witnesses change the private state, before the build reserves
                 /// an input or makes a proof. Submit such a call with `.await` or `.send()`.
-                /// As with `build`, the inputs that the build reserves stay reserved until
-                /// a sync sees the chain spend them, or until their TTL passes. The
-                /// `DustlessTransaction` does not name them, so its `spent()` is empty.
+                /// As with `build`, the build reserves the wallet inputs that the
+                /// transaction spends. `DustlessTransaction::spent` names them, for
+                /// `MidnightProvider::release` when the fee payer never submits.
                 fn without_dust(
                     self,
                 ) -> impl ::core::future::Future<
@@ -1221,8 +1225,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 > + ::core::marker::Send {
                     ::std::boxed::Box::pin(async move {
                         #open
-                        let __bytes = __circuits.contract.build_call_with(#call_args, false).await?;
-                        ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_proven_bytes(__bytes))
+                        let __result = __circuits.contract.build_call_with(#call_args, false).await?;
+                        ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_build(__result))
                     })
                 }
             }
