@@ -115,21 +115,10 @@ pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactE
         .ledger()
         .is_some_and(|decl| !is_empty_constructor(&decl.constructor));
 
-    let contracts: Vec<String> = artifact
-        .contract_types
-        .iter()
-        .filter_map(|t| match t {
-            ir::Type::Contract { name, .. } => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
-
     Ok(ContractInfo {
         compiler_version: artifact.compiler_version.clone(),
-        runtime_version: artifact.runtime_version.clone(),
         circuits,
         witnesses,
-        contracts,
         ledger,
         has_constructor,
         helpers,
@@ -600,7 +589,10 @@ mod tests {
         assert_eq!(info.circuits.len(), 6);
         assert_eq!(info.ledger.len(), 10);
         let threshold = info.ledger.iter().find(|f| f.name == "threshold").unwrap();
-        assert_eq!(threshold.index_usize(), Some(0));
+        assert!(matches!(
+            threshold.index,
+            crate::types::FieldIndex::Single(0)
+        ));
         assert_eq!(threshold.storage, crate::types::StorageKind::Cell);
         let egress = info
             .ledger

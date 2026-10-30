@@ -1,0 +1,20 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// A call to a circuit of another contract. The analyzed IR declares the
+// contract type in `contract-types` and writes the call as `contract-call`.
+
+contract Calculator {
+  circuit get_square(x: Field): Field;
+  circuit get_cube(x: Field): Field;
+}
+
+ledger calc: Calculator;
+
+constructor(c: Calculator) {
+  calc = disclose(c);
+}
+
+export circuit calculate_square(i: Field): Field {
+  return calc.get_square(disclose(i));
+}

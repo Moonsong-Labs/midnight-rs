@@ -15,9 +15,9 @@ use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{ContractAddress, TransferResult};
 
 use crate::ShieldedOffer;
-use crate::address::format_address;
+use crate::address::format_contract_address;
 use crate::error::ContractError;
-use crate::state::fetch_state_from_node;
+use crate::state::fetch_state;
 
 /// A deploy, built and proven, before its submit.
 #[derive(Debug)]
@@ -34,7 +34,7 @@ pub struct DeployResult {
 impl DeployResult {
     /// The contract address as a hex string.
     pub fn address_hex(&self) -> String {
-        format_address(&self.address)
+        format_contract_address(&self.address)
     }
 }
 
@@ -107,7 +107,7 @@ pub(crate) async fn deployed_state(
     let mut last_error = None;
     let read = async {
         loop {
-            match fetch_state_from_node(provider, address, Some(at)).await {
+            match fetch_state(provider, address, Some(at)).await {
                 Err(ContractError::Provider(error)) => last_error = Some(error),
                 definitive => return definitive,
             }
