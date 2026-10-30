@@ -178,8 +178,16 @@ pub struct TransferRequest {
     /// How to order the coins and UTXOs the build draws on.
     pub coin_selection: CoinSelectionStrategy,
     /// How long the transaction stays valid after the chain time of the
-    /// build. `None` gives the chain's `global_ttl`. See
-    /// `TransferBuilder::with_ttl`.
+    /// build. `None` gives the chain's `global_ttl`, the longest TTL the chain
+    /// accepts. A shorter TTL bounds how long a transaction that never
+    /// confirms can still land, and how long the wallet holds its inputs.
+    ///
+    /// The build fails with
+    /// [`WalletError::TtlOutOfRange`](crate::WalletError::TtlOutOfRange) when
+    /// `ttl` is under one second or longer than `global_ttl`. It fails with
+    /// [`WalletError::TtlWithoutIntent`](crate::WalletError::TtlWithoutIntent)
+    /// for a Dustless shielded transfer or a swap half, which carry no intent
+    /// to hold a TTL.
     pub ttl: Option<std::time::Duration>,
 }
 
@@ -198,13 +206,6 @@ impl TransferRequest {
     /// `TransferBuilder::with_coin_selection`.
     pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
         self.coin_selection = strategy;
-        self
-    }
-
-    /// Make the transaction expire `ttl` after the chain time of the build.
-    /// See `TransferBuilder::with_ttl`.
-    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
-        self.ttl = Some(ttl);
         self
     }
 }

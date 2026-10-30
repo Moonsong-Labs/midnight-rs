@@ -366,22 +366,6 @@ impl<'a> TransferBuilder<'a> {
         }
     }
 
-    /// Make the transaction expire `ttl` after the chain time of the build.
-    ///
-    /// The default is the chain's `global_ttl`, the longest TTL the chain
-    /// accepts. A shorter TTL bounds how long a transaction that never
-    /// confirms can still land, and how long the wallet holds its inputs.
-    /// See [`intent_ttl`].
-    ///
-    /// The build fails with [`WalletError::TtlOutOfRange`] when `ttl` is under
-    /// one second or longer than `global_ttl`. It fails with
-    /// [`WalletError::TtlWithoutIntent`] for a Dustless shielded transfer or a
-    /// swap half, which carry no intent to hold a TTL.
-    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
-        self.ttl = Some(ttl);
-        self
-    }
-
     /// Order the coins and UTXOs this build draws on.
     ///
     /// [`CoinSelectionStrategy::LargestFirst`], the default, spends the fewest

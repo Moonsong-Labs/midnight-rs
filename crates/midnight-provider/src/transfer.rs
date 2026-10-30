@@ -92,7 +92,7 @@ impl<'a> UnshieldedTransfer<'a> {
     }
 
     /// Make the transaction expire `ttl` after the chain time of the build.
-    /// See [`TransferBuilder::with_ttl`](midnight_types::ledger_9::TransferBuilder::with_ttl).
+    /// See [`TransferRequest::ttl`](crate::TransferRequest::ttl).
     /// Defaults to the chain's `global_ttl`, the longest TTL the chain accepts.
     ///
     /// Once the TTL passes, the transaction can no longer land, and the next
@@ -176,7 +176,7 @@ impl<'a> ShieldedTransfer<'a> {
     }
 
     /// Make the transaction expire `ttl` after the chain time of the build.
-    /// See [`TransferBuilder::with_ttl`](midnight_types::ledger_9::TransferBuilder::with_ttl).
+    /// See [`TransferRequest::ttl`](crate::TransferRequest::ttl).
     /// Defaults to the chain's `global_ttl`, the longest TTL the chain accepts.
     ///
     /// Once the TTL passes, the transaction can no longer land, and the next
