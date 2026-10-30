@@ -1030,9 +1030,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
              Returns a call builder. `.await` it to submit the call, wait for finality \
              and get the circuit's result. `.send().await` submits the call and returns \
              a `PendingCall` before the chain's verdict. `.build().await` builds and \
-             proves the transaction and returns its bytes *without* a submit, to merge \
-             with other transactions. `.simulate().await` runs the circuit with no \
-             proof, fee or transaction.",
+             proves the transaction *without* a submit, to merge with other \
+             transactions. It returns a `TransferResult` that names the inputs that the \
+             build reserved. `.simulate().await` runs the circuit with no proof, fee or \
+             transaction.",
             circuit.name
         );
         let call_doc = format!(
@@ -1040,9 +1041,9 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
              `.await` submits the call, waits for finality and returns the circuit's \
              result. [`send`](Self::send) submits the call and returns a `PendingCall` \
              before the chain's verdict. [`build`](Self::build) returns the proven \
-             transaction bytes without a submit. [`simulate`](Self::simulate) runs the \
-             circuit and returns its value, the ledger after it and its events, with no \
-             proof, fee or transaction.",
+             transaction and the inputs that its build reserved, without a submit. \
+             [`simulate`](Self::simulate) runs the circuit and returns its value, the \
+             ledger after it and its events, with no proof, fee or transaction.",
             circuit.name
         );
 
