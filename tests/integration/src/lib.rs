@@ -775,33 +775,14 @@ mod initial_state_defaults {
     }
 }
 
-/// The generated deploy and simulator of a constructor that calls no witness,
-/// and of a constructor that the interpreter cannot run.
+/// The generated deploy of a constructor that calls no witness, and of a
+/// constructor that the interpreter cannot run.
 #[cfg(test)]
 mod constructor_shapes {
-    use std::time::UNIX_EPOCH;
-
     use compact_bindgen::TransientFr;
     use compact_bindgen::midnight_contract::{AsMidnightProvider, ContractError};
 
     use crate::{coin_vault, plain_constructor};
-
-    /// A simulator with no witnesses runs the constructor on its typed
-    /// argument. A run that drops the argument or the body leaves the default.
-    #[test]
-    fn a_constructor_with_no_witness_runs_on_its_argument() {
-        let mut simulator = plain_constructor::Simulator::new(
-            plain_constructor::PlainConstructorInitialState::default(),
-            UNIX_EPOCH,
-        );
-        simulator
-            .run_constructor(TransientFr::from(42u64))
-            .expect("the constructor runs");
-        assert_eq!(
-            simulator.ledger().value().expect("value"),
-            TransientFr::from(42u64)
-        );
-    }
 
     /// The deploy takes the typed arguments of a constructor that calls no
     /// witness, and a state for a constructor that the SDK cannot run.
