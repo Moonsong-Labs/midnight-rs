@@ -9,10 +9,13 @@ use crate::{LedgerVersion, TokenType, WalletError};
 /// Each entry maps a token and a segment to what the segment puts in of the
 /// token, less what it takes out. A negative value is a deficit, which a
 /// payer covers from its own coins. A positive value is a surplus, which a
-/// payer takes as an output. A token that a segment moves and balances reads
-/// 0, and a token that it does not move has no entry. The Dust entry, at
-/// segment 0, is what the transaction's Dust spends and Dust registrations
-/// offer for its fee, and the fee itself is not in it.
+/// payer takes as an output. A missing entry means that the segment balances
+/// the token, or does not move it. A Zswap offer carries no zero delta, so a
+/// shielded token that an offer balances has no entry. An entry can also
+/// read 0, for example for an unshielded token that a segment moves and
+/// balances. The Dust entry, at segment 0, is what the transaction's Dust
+/// spends and Dust registrations offer for its fee, and the fee itself is not
+/// in it.
 ///
 /// `MidnightProvider::balance_transaction_with_tokens` in `midnight-provider`
 /// pays every deficit that a transaction carries. A payer reads this first,
