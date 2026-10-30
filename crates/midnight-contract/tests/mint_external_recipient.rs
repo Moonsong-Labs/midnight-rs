@@ -71,7 +71,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     eprintln!("mint call submitted");
 
     // Expected custom shielded token type = tokenType(domain_sep, contract_addr).
-    let expected_tt = midnight_contract::parse_address(contract.address())
+    let expected_tt = midnight_contract::parse_contract_address(contract.address())
         .expect("contract address")
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 

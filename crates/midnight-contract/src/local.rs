@@ -12,9 +12,10 @@ use crate::runtime::{NoWitnesses, Value, WitnessProvider};
 
 /// Run a pure circuit in process and return its value.
 ///
-/// `circuit` must have its `pure` flag set. `program` holds the circuits,
-/// witnesses and natives that its body calls. `args` are the circuit's
-/// arguments as (name, value) pairs, keyed by the argument's source name.
+/// The value is `Value::Void` for a circuit that returns `Void`. `circuit`
+/// must have its `pure` flag set. `program` holds the circuits, witnesses and
+/// natives that its body calls. `args` are the circuit's arguments as (name,
+/// value) pairs, keyed by the argument's source name.
 ///
 /// # Errors
 ///
@@ -28,7 +29,7 @@ pub fn run_pure(
     circuit: &compact_codegen::ir::Circuit,
     program: &Program<'_>,
     args: &[(&str, Value)],
-) -> Result<Option<Value>, ContractError> {
+) -> Result<Value, ContractError> {
     assert!(
         circuit.pure,
         "run_pure needs a pure circuit, got `{}`",
@@ -132,6 +133,7 @@ impl<Wp> Runner<Wp> {
 impl<Wp: WitnessProvider> Runner<Wp> {
     /// Run `circuit` and return its value.
     ///
+    /// The value is `Value::Void` for a circuit that returns `Void`.
     /// `program` holds the circuits, witnesses and natives that its body
     /// calls. `args` are the circuit's arguments as (name, value) pairs, keyed
     /// by the argument's source name. On success, the runner keeps the
@@ -148,7 +150,7 @@ impl<Wp: WitnessProvider> Runner<Wp> {
         circuit: &compact_codegen::ir::Circuit,
         program: &Program<'_>,
         args: &[(&str, Value)],
-    ) -> Result<Option<Value>, ContractError> {
+    ) -> Result<Value, ContractError> {
         // The witnesses write the buffer as they run, so a call that fails
         // after a witness must not reach `self.private_state`.
         let mut private_state = self.private_state.clone();

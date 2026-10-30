@@ -48,7 +48,7 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
 use midnight_types::{
-    ShieldedTokenType, SpentInputs, TransferKind, TransferRequest, TransferResult,
+    DustPublicKey, ShieldedTokenType, SpentInputs, TransferKind, TransferRequest, TransferResult,
     UnshieldedTokenType,
 };
 
@@ -56,6 +56,7 @@ use crate::{MidnightProvider, PendingTx, ProviderError};
 
 /// Pending unshielded transfer. See [module docs](crate::transfer) for the
 /// `.await` vs `.build()` distinction.
+#[derive(Debug)]
 #[must_use = "does nothing until awaited or built"]
 pub struct UnshieldedTransfer<'a> {
     provider: &'a MidnightProvider,
@@ -121,6 +122,7 @@ impl<'a> IntoFuture for UnshieldedTransfer<'a> {
 
 /// Pending shielded transfer. See [module docs](crate::transfer) for the
 /// `.await` vs `.build()` distinction.
+#[derive(Debug)]
 #[must_use = "does nothing until awaited or built"]
 pub struct ShieldedTransfer<'a> {
     provider: &'a MidnightProvider,
@@ -188,6 +190,7 @@ impl<'a> IntoFuture for ShieldedTransfer<'a> {
 /// half is inherently unbalanced and fee-less, so it is never submittable on
 /// its own (there is no `pay_fees` path and no `.without_dust()` step). See
 /// [`MidnightProvider::shielded_swap`] for the full two-party flow.
+#[derive(Debug)]
 #[must_use = "does nothing until awaited or built"]
 pub struct ShieldedSwap<'a> {
     provider: &'a MidnightProvider,
@@ -315,6 +318,14 @@ pub struct DustlessTransaction {
     spent: SpentInputs,
 }
 
+impl std::fmt::Debug for DustlessTransaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DustlessTransaction")
+            .field("tx_bytes", &format_args!("{} bytes", self.tx_bytes.len()))
+            .finish()
+    }
+}
+
 impl DustlessTransaction {
     /// Wrap already-proven, Dustless transaction bytes that do not name their
     /// reserved inputs. Do not use it to wrap arbitrary bytes.
@@ -382,10 +393,12 @@ impl DustlessTransaction {
 
 /// Pending dust-address registration. See [module docs](crate::transfer) for
 /// the `.await` vs `.build()` distinction.
+#[derive(Debug)]
 #[must_use = "does nothing until awaited or built"]
 pub struct DustRegistration<'a> {
     provider: &'a MidnightProvider,
     utxo_ctime: Option<u64>,
+    target: Option<DustPublicKey>,
 }
 
 impl<'a> DustRegistration<'a> {
@@ -393,7 +406,25 @@ impl<'a> DustRegistration<'a> {
         Self {
             provider,
             utxo_ctime,
+            target: None,
         }
+    }
+
+    /// Send the Dust of the registered tNIGHT to `target`, another wallet's
+    /// Dust public key. That wallet can then pay the fees of this wallet's
+    /// transactions with [`MidnightProvider::balance_transaction`]. Read
+    /// `target` from the Dust address of that wallet with
+    /// [`parse_dust_address`](midnight_types::address::parse_dust_address).
+    ///
+    /// The registration sets the Dust public key of the whole NIGHT address.
+    /// A later registration replaces it, so a registration without `.to()`
+    /// points the NIGHT address back to this wallet's own key. tNIGHT that
+    /// reaches the address generates Dust for the key that the last
+    /// registration set. tNIGHT that already generates Dust keeps its key
+    /// until the wallet spends it.
+    pub fn to(mut self, target: DustPublicKey) -> Self {
+        self.target = Some(target);
+        self
     }
 
     /// Build the registration transaction without submitting. Spends and
@@ -406,6 +437,7 @@ impl<'a> DustRegistration<'a> {
     fn into_request(self) -> TransferRequest {
         TransferKind::DustRegistration {
             utxo_ctime: self.utxo_ctime,
+            target: self.target,
         }
         .into()
     }

@@ -20,7 +20,8 @@
 //! the wallet as an `Arc<dyn WalletFacade>`.
 //!
 //! For callers that only need an address (no synced state), use
-//! [`Seed::unshielded_address`] and [`Seed::shielded_address`].
+//! [`Seed::unshielded_address`], [`Seed::shielded_address`] and
+//! [`Seed::dust_address`].
 //!
 //! # Indexer trust model
 //!
@@ -80,14 +81,14 @@ mod wallet;
 
 // The vocabulary this crate's own signatures name, so a consumer of the
 // implementation needs no second dependency for it.
-pub use midnight_types::address::parse_shielded_recipient;
+pub use midnight_types::address::{parse_dust_address, parse_shielded_recipient};
 pub use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustParameters,
-    EncryptionPublicKey, HashOutput, InvalidNetworkName, LedgerVersion, NIGHT, Network,
-    NetworkName, Nonce, Nullifier, ReservedInput, ShieldedBalance, ShieldedCoinBalance,
+    DustPublicKey, EncryptionPublicKey, HashOutput, InvalidNetworkName, LedgerVersion, NIGHT,
+    Network, NetworkName, Nonce, Nullifier, ReservedInput, ShieldedBalance, ShieldedCoinBalance,
     ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SpentUtxoKey,
     SyncCursors, TrackedUtxo, TransferKind, TransferRequest, TransferResult, UnshieldedTokenType,
-    UnshieldedUtxoInfo, WalletBalance, WalletError, chain_pin, panic_message,
+    UnshieldedUtxoInfo, WalletBalance, WalletError, chain_pin,
 };
 // The API this crate implements, so attaching a wallet needs no dependency on
 // midnight-wallet-facade either.

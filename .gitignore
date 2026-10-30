@@ -19,6 +19,8 @@ tests/conformance/fixtures/*/compiled.tmp/
 tests/conformance/expected/
 crates/midnight-contract/tests/fixtures/*/compiler/
 crates/midnight-contract/tests/fixtures/*/compiled.tmp/
+crates/compact/analyzed-ir/tests/fixtures/*/compiler/
+crates/compact/analyzed-ir/tests/fixtures/*/compiled.tmp/
 tests/fixtures/compiled/
 
 # The runtime tarball that `make vendor-compact-runtime` builds from
