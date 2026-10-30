@@ -555,8 +555,8 @@ mod tests {
         let e = load_str(src).expect_err("another compiler is refused");
         assert!(
             matches!(
-                e.downcast_ref::<crate::CodegenError>(),
-                Some(crate::CodegenError::UnsupportedCompilerVersion { found }) if found == "0.99.0"
+                e.downcast_ref::<crate::types::CompilerVersionError>(),
+                Some(crate::types::CompilerVersionError::Unsupported { found }) if found == "0.99.0"
             ),
             "{e}"
         );

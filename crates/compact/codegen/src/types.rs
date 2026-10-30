@@ -1,4 +1,4 @@
-use crate::error::CodegenError;
+use std::fmt;
 
 /// The `major.minor` of the compactc at `COMPACT_REV` in the root `Makefile`,
 /// the only compiler whose `analyzed-ir.sexp` this generator reads. The
@@ -14,22 +14,65 @@ use crate::error::CodegenError;
 /// regenerated devnet contracts.
 pub const SUPPORTED_COMPILER_FAMILY: &str = "0.35";
 
+/// A `compiler-version` that [`check_compiler_version`] refuses.
+///
+/// [`crate::artifact::load_str`] returns it, and the proc macro surfaces it as
+/// a compile error.
+#[derive(Debug)]
+pub enum CompilerVersionError {
+    /// The version is outside [`SUPPORTED_COMPILER_FAMILY`].
+    Unsupported {
+        /// The version string found in the file.
+        found: String,
+    },
+    /// The version does not start with numeric `major.minor` components.
+    Malformed {
+        /// The version string found in the file.
+        found: String,
+    },
+}
+
+impl fmt::Display for CompilerVersionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompilerVersionError::Unsupported { found } => {
+                let family = SUPPORTED_COMPILER_FAMILY;
+                write!(
+                    f,
+                    "unsupported compiler-version `{found}` (supported: {family}.x); \
+                     recompile the contract with compactc {family}.x (see \"Compile a contract\" \
+                     in the midnight-rs README), or use a midnight-rs release that supports \
+                     compactc {found}"
+                )
+            }
+            CompilerVersionError::Malformed { found } => {
+                write!(
+                    f,
+                    "malformed compiler-version `{found}`: expected a `major.minor[.patch]` version"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for CompilerVersionError {}
+
 /// Check the `compiler-version` of an artifact, `found`, against
 /// [`SUPPORTED_COMPILER_FAMILY`].
 ///
 /// # Errors
 ///
-/// [`CodegenError::MalformedCompilerVersion`] when `found` does not start with
-/// a numeric `major.minor`, and [`CodegenError::UnsupportedCompilerVersion`]
-/// when it is of another family.
-pub fn check_compiler_version(found: &str) -> Result<(), CodegenError> {
-    let family = version_family(found).ok_or_else(|| CodegenError::MalformedCompilerVersion {
+/// [`CompilerVersionError::Malformed`] when `found` does not start with a
+/// numeric `major.minor`, and [`CompilerVersionError::Unsupported`] when it
+/// is of another family.
+pub fn check_compiler_version(found: &str) -> Result<(), CompilerVersionError> {
+    let family = version_family(found).ok_or_else(|| CompilerVersionError::Malformed {
         found: found.to_string(),
     })?;
     if family == SUPPORTED_COMPILER_FAMILY {
         Ok(())
     } else {
-        Err(CodegenError::UnsupportedCompilerVersion {
+        Err(CompilerVersionError::Unsupported {
             found: found.to_string(),
         })
     }
