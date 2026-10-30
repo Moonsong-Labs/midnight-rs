@@ -109,8 +109,8 @@ fn collect_types(
                     tokens.push(emit_struct_aligned(&ident, fields));
                     tokens.push(emit_struct_try_from_value_slice(&ident, fields));
                     tokens.push(emit_struct_into_aligned_value(&ident, fields));
-                    if is_zswap_coin_public_key(name, fields) {
-                        tokens.push(emit_coin_public_key_from(&ident));
+                    if let Some(sdk) = sdk_counterpart(name, fields) {
+                        tokens.push(emit_from_sdk(&ident, &sdk));
                     }
                 }
             }
@@ -160,17 +160,27 @@ fn rust_fields(fields: &[(String, Type)]) -> Vec<(&str, String)> {
         .collect()
 }
 
-/// Returns true if this struct is the standard library's `ZswapCoinPublicKey`:
-/// a single field `bytes: Bytes<32>`.
-fn is_zswap_coin_public_key(name: &str, fields: &[(String, Type)]) -> bool {
-    name == "ZswapCoinPublicKey" && matches!(fields, [(field, Type::Bytes(32))] if field == "bytes")
+/// The SDK type that converts into this struct, when the struct is the
+/// standard library's `ZswapCoinPublicKey` or `UserAddress`.
+///
+/// `ContractAddress` has the same single field `bytes: Bytes<32>`, so only the
+/// name tells the three apart.
+fn sdk_counterpart(name: &str, fields: &[(String, Type)]) -> Option<TokenStream> {
+    if !matches!(fields, [(field, Type::Bytes(32))] if field == "bytes") {
+        return None;
+    }
+    match name {
+        "ZswapCoinPublicKey" => Some(quote! { midnight_contract::CoinPublicKey }),
+        "UserAddress" => Some(quote! { midnight_contract::UserAddress }),
+        _ => None,
+    }
 }
 
-fn emit_coin_public_key_from(ident: &Ident) -> TokenStream {
+fn emit_from_sdk(ident: &Ident, sdk: &TokenStream) -> TokenStream {
     quote! {
-        impl From<midnight_contract::CoinPublicKey> for #ident {
-            fn from(key: midnight_contract::CoinPublicKey) -> Self {
-                Self { bytes: Bytes(key.0.0) }
+        impl From<#sdk> for #ident {
+            fn from(value: #sdk) -> Self {
+                Self { bytes: Bytes(value.0.0) }
             }
         }
     }

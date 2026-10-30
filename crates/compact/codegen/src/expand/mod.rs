@@ -417,25 +417,27 @@ mod tests {
         );
     }
 
-    /// `ContractAddress` has the same shape as the standard library's coin key,
-    /// so only the name keeps a coin key from converting into a contract address.
+    /// `ContractAddress` has the same shape as `ZswapCoinPublicKey` and
+    /// `UserAddress`. Only the struct name keeps it from a wrong SDK conversion.
     #[test]
-    fn only_the_coin_key_struct_converts_from_the_sdk_coin_key() {
+    fn a_same_shape_struct_gets_no_wrong_sdk_conversion() {
         let info =
             load_fixture("../../../tests/fixtures/compiled/mint-probe/compiler/analyzed-ir.sexp");
         let generated = generated_source(&info, "MintProbe");
 
         assert!(generated.contains("pub struct ContractAddress"));
-        assert_eq!(
-            generated
-                .matches("impl From<midnight_contract::CoinPublicKey> for")
-                .count(),
-            1
-        );
         assert!(
             generated
                 .contains("impl From<midnight_contract::CoinPublicKey> for ZswapCoinPublicKey")
         );
+        for sdk in ["CoinPublicKey", "UserAddress"] {
+            assert!(
+                !generated.contains(&format!(
+                    "impl From<midnight_contract::{sdk}> for ContractAddress"
+                )),
+                "ContractAddress must not convert from midnight_contract::{sdk}"
+            );
+        }
     }
 
     #[test]

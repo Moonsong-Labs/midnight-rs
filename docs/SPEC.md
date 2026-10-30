@@ -39,7 +39,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
   │     ├── sync.rs              TrackedUtxo, SyncCursors
   │     ├── hd.rs                Seed and its addresses, mnemonic, Role and the BIP-32 role keys
-  │     ├── address.rs           parse_shielded_recipient, parse_dust_address
+  │     ├── address.rs           parse_shielded_recipient, parse_unshielded_address, parse_dust_address
   │     ├── network.rs           Network: the bech32 HRP suffix, typed
   │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap; SyncSource
   │     └── error.rs             WalletError
