@@ -100,12 +100,14 @@ balance.dust.spendable_utxos;     // usize: the Dust UTXOs no pending build rese
 for utxo in &balance.unshielded {
     utxo.token_type;              // UnshieldedTokenType
     utxo.value;                   // u128 — for NIGHT, in STAR
+    utxo.spendable;               // bool: false while a pending build reserves it
 }
 
 // Shielded: token_type is opaque (do NOT assume the zero id means NIGHT)
 for coin in &balance.shielded.coins {
     coin.token_type;              // ShieldedTokenType
     coin.value;                   // u128 — atomic units of *that* shielded token
+    coin.spendable;               // bool: false while a pending build reserves it
 }
 ```
 

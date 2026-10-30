@@ -32,4 +32,4 @@ midnight-wallet = { workspace = true }
 # `test-util`: the shared mock indexer server (`testutil`).
 midnight-indexer-client = { workspace = true, features = ["test-util"] }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }

@@ -74,8 +74,8 @@ pub enum ContractError {
     #[error("state fetch failed: {0}")]
     StateFetch(String),
 
-    #[error("invalid address: {0}")]
-    InvalidAddress(String),
+    #[error("invalid contract address: {0}")]
+    InvalidContractAddress(String),
 
     /// The SDK submitted a circuit-call transaction, or tried to, and got no verdict.
     ///
