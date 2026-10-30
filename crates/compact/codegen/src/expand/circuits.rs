@@ -1,7 +1,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::ir::{Argument, Type, Witness};
+use crate::ir::{Type, Witness};
 use crate::types::Circuit;
 
 use super::circuit_calls::{
@@ -15,27 +15,19 @@ pub(crate) fn emit_circuit_types(circuits: &[Circuit], witnesses: &[Witness]) ->
     let mut items = Vec::new();
 
     for circuit in circuits {
-        items.push(emit_call_struct(
+        items.push(emit_return_type(
+            "circuit",
             &circuit.name,
-            circuit.arguments(),
-            circuit.pure(),
-            circuit.proof(),
+            circuit.result_type(),
         ));
-        items.push(emit_return_type(&circuit.name, circuit.result_type()));
     }
 
     for witness in witnesses {
-        items.push(emit_call_struct(
+        items.push(emit_return_type(
+            "witness",
             witness.name.name(),
-            &witness.arguments,
-            false,
-            false,
+            &witness.result_type,
         ));
-        items.push(emit_return_type(witness.name.name(), &witness.result_type));
-    }
-
-    if !circuits.is_empty() || !witnesses.is_empty() {
-        items.push(emit_calls_enum(circuits, witnesses));
     }
 
     if !witnesses.is_empty() {
@@ -295,74 +287,18 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     }
 }
 
-/// The name of the struct that holds the arguments of the circuit or witness
-/// `name`.
-fn call_struct_ident(name: &str) -> Ident {
-    format_ident!("{}Call", to_pascal_case(name))
-}
-
 /// The name of the alias for the result type of the circuit or witness `name`.
 pub(super) fn return_type_ident(name: &str) -> Ident {
     format_ident!("{}Return", to_pascal_case(name))
 }
 
-fn emit_call_struct(name: &str, arguments: &[Argument], pure: bool, proof: bool) -> TokenStream {
-    let type_name = call_struct_ident(name);
-
-    let fields: Vec<_> = arguments
-        .iter()
-        .map(|arg| {
-            let field_name = make_ident(arg.name.name());
-            let field_type = type_to_tokens(&arg.ty);
-            quote! { pub #field_name: #field_type }
-        })
-        .collect();
-
-    let doc = format!("Arguments for the `{name}` circuit.");
-
-    quote! {
-        #[doc = #doc]
-        #[derive(Debug, Clone)]
-        pub struct #type_name {
-            #(#fields),*
-        }
-
-        impl #type_name {
-            pub const NAME: &str = #name;
-            pub const PURE: bool = #pure;
-            pub const PROOF: bool = #proof;
-        }
-    }
-}
-
-fn emit_return_type(name: &str, result_type: &Type) -> TokenStream {
+fn emit_return_type(kind: &str, name: &str, result_type: &Type) -> TokenStream {
     let type_name = return_type_ident(name);
     let rust_type = type_to_tokens(result_type);
-    let doc = format!("Return type of the `{name}` circuit.");
+    let doc = format!("Return type of the `{name}` {kind}.");
 
     quote! {
         #[doc = #doc]
         pub type #type_name = #rust_type;
-    }
-}
-
-fn emit_calls_enum(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
-    let variants: Vec<_> = circuits
-        .iter()
-        .map(|c| c.name.as_str())
-        .chain(witnesses.iter().map(|w| w.name.name()))
-        .map(|name| {
-            let variant = format_ident!("{}", to_pascal_case(name));
-            let call_type = call_struct_ident(name);
-            quote! { #variant(#call_type) }
-        })
-        .collect();
-
-    quote! {
-        /// All circuit/witness calls for this contract.
-        #[derive(Debug, Clone)]
-        pub enum Calls {
-            #(#variants),*
-        }
     }
 }

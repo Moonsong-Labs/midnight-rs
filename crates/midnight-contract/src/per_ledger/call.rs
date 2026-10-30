@@ -26,7 +26,7 @@ use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::TransferResult;
 
 use super::types::PreparedInput;
-use crate::address::format_address;
+use crate::address::format_contract_address;
 use crate::call::ShieldedInputs;
 use crate::change::{change_due, total_by_key};
 use crate::error::ContractError;
@@ -198,8 +198,11 @@ pub(crate) async fn call_transaction(
 
     // 3. Make the circuit's proving keys resolvable, and prove with the
     //    resolver that finds them.
-    let key_location =
-        crate::resolver::register(&format_address(&contract_address), circuit_name, &zk_config)?;
+    let key_location = crate::resolver::register(
+        &format_contract_address(&contract_address),
+        circuit_name,
+        &zk_config,
+    )?;
     context.update_resolver(super::resolver::shared()).await;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();

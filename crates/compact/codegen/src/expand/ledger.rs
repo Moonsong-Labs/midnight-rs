@@ -140,13 +140,13 @@ pub(crate) fn emit_ledger_wrapper(
             }
 
             /// Create a handle for an already-deployed contract at the given
-            /// address: a hex string or a typed `ContractAddress`.
+            /// contract address: a hex string or a typed `ContractAddress`.
             ///
             /// This is synchronous, no network calls are made. Call `.build()`
             /// on the returned builder to get the `Contract<P>` handle.
             pub fn at<P>(
                 provider: P,
-                address: impl midnight_contract::IntoAddress,
+                address: impl midnight_contract::IntoContractAddress,
             ) -> ConnectBuilder<P>
             where
                 P: midnight_contract::AsMidnightProvider,
@@ -774,9 +774,9 @@ pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> To
         impl<P: lazy::StateQueryProvider> #struct_name<P> {
             /// Create a new lazy query handle for the given contract address:
             /// a hex string or a typed `ContractAddress`.
-            pub fn new(provider: P, address: impl midnight_contract::IntoAddress, at_block_hash: Option<midnight_contract::BlockHash>) -> Self {
+            pub fn new(provider: P, address: impl midnight_contract::IntoContractAddress, at_block_hash: Option<midnight_contract::BlockHash>) -> Self {
                 Self {
-                    address: midnight_contract::IntoAddress::into_address_string(address),
+                    address: midnight_contract::IntoContractAddress::into_contract_address_string(address),
                     provider,
                     at_block_hash,
                 }
@@ -1041,8 +1041,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
              result. [`send`](Self::send) submits the call and returns a `PendingCall` \
              before the chain's verdict. [`build`](Self::build) returns the proven \
              transaction bytes without a submit. [`simulate`](Self::simulate) runs the \
-             circuit and returns its value and the ledger after it, with no proof, fee \
-             or transaction.",
+             circuit and returns its value, the ledger after it and its events, with no \
+             proof, fee or transaction.",
             circuit.name
         );
 
@@ -1065,6 +1065,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 extrinsic_hash: __outcome.extrinsic_hash,
                 transaction_hash: __outcome.transaction_hash,
                 block_hash: __outcome.block_hash,
+                logs: __outcome.logs,
             })
         };
 
@@ -1159,7 +1160,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
                 /// Run the call locally, with no proof, fee or transaction.
                 ///
-                /// It returns the circuit's value and the ledger after the call.
+                /// It returns the circuit's value, the ledger after the call and the
+                /// events that the circuit emitted.
                 /// It reads the state and the block time at the node's best block, or at
                 /// the `at_block` pin of the handle, and runs the circuit there. The
                 /// provider needs a wallet only for a circuit that calls `ownPublicKey()`.
@@ -1180,6 +1182,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                             value: __decode(__simulated.value)?,
                             ledger: #ledger_name::new(__simulated.ledger),
                             block_hash: __simulated.block_hash,
+                            logs: __simulated.logs,
                         })
                     })
                     .await
@@ -1543,7 +1546,7 @@ pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
     if super::circuit_calls::is_void_type(circuit.result_type()) {
         let decode = quote! {
             fn __decode(
-                _: ::core::option::Option<midnight_contract::runtime::Value>,
+                _: midnight_contract::runtime::Value,
             ) -> ::core::result::Result<(), midnight_contract::ContractError> {
                 ::core::result::Result::Ok(())
             }
@@ -1551,7 +1554,6 @@ pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
         return (quote! { () }, decode);
     }
 
-    let circuit_name_str = &circuit.name;
     let value_ty = type_to_tokens(circuit.result_type());
     let conversion = super::circuit_calls::value_to_type_conversion(
         circuit.result_type(),
@@ -1559,14 +1561,8 @@ pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
     );
     let decode = quote! {
         fn __decode(
-            __value: ::core::option::Option<midnight_contract::runtime::Value>,
+            __val: midnight_contract::runtime::Value,
         ) -> ::core::result::Result<#value_ty, midnight_contract::ContractError> {
-            let __val = __value.ok_or_else(|| {
-                midnight_contract::runtime::InterpreterError::TypeError(::std::format!(
-                    "circuit `{}` returned no value but its signature is non-void",
-                    #circuit_name_str
-                ))
-            })?;
             // The conversion evaluates to Result<_, InterpreterError>,
             // which `From`-converts into ContractError.
             ::core::result::Result::Ok((#conversion)?)

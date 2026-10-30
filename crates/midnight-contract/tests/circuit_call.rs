@@ -223,7 +223,7 @@ fn witness_context_threads_private_state() {
         },
     )
     .unwrap();
-    assert!(matches!(r1.result, Some(Value::Integer(0))));
+    assert!(matches!(r1.result, Value::Integer(0)));
     // The witness's private value must be recorded as a private transcript
     // output, or proving a witness-using circuit fails with "ran out of private
     // transcript outputs". One witness call -> one output.
@@ -242,7 +242,7 @@ fn witness_context_threads_private_state() {
         },
     )
     .unwrap();
-    assert!(matches!(r2.result, Some(Value::Integer(1))));
+    assert!(matches!(r2.result, Value::Integer(1)));
     assert_eq!(r2.private_transcript_outputs.len(), 1);
 
     // Two increments → 2.
@@ -394,11 +394,12 @@ fn the_recipient_argument_type_carries_its_nested_layout() {
     let info = mint_probe_info();
     let mint = common::exported_circuit(&info, "mint");
 
-    let arg_types = compact_codegen::arg_types::circuit_arg_types(mint.arguments());
-    let (_, recipient) = arg_types
+    let recipient = &mint
+        .arguments()
         .iter()
-        .find(|(n, _)| n == "recipient")
-        .expect("mint takes a recipient argument");
+        .find(|a| a.name.name() == "recipient")
+        .expect("mint takes a recipient argument")
+        .ty;
 
     let Type::Struct { name, fields } = recipient else {
         panic!("recipient must be a struct type, got {recipient:?}")
@@ -546,7 +547,7 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
     .expect("kernel.self() circuit executes");
 
     match result.result {
-        Some(Value::AlignedValue(av)) => assert_eq!(
+        Value::AlignedValue(av) => assert_eq!(
             ContractAddress::try_from(&*av.value).expect("one address atom"),
             address,
             "kernel.self() must return the supplied address"
