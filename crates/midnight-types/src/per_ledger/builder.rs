@@ -26,8 +26,8 @@ use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
 use crate::transfer::panic_message;
 use crate::{
-    Network, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
-    TransferResult, WalletError,
+    DustPublicKey, Network, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind,
+    TransferRequest, TransferResult, WalletError,
 };
 
 type UnprovenTx = helpers::UnprovenTransaction<DefaultDB>;
@@ -406,8 +406,8 @@ impl<'a> TransferBuilder<'a> {
                     )
                     .await
             }
-            TransferKind::DustRegistration { utxo_ctime } => {
-                builder.prepare_register_dust(utxo_ctime).await
+            TransferKind::DustRegistration { utxo_ctime, target } => {
+                builder.prepare_register_dust(utxo_ctime, target).await
             }
         }
     }
@@ -699,9 +699,19 @@ impl<'a> TransferBuilder<'a> {
     /// `utxo_ctime` is a fallback creation timestamp (seconds since epoch),
     /// used only for UTXOs whose own creation time the indexer did not report.
     /// If `None`, those UTXOs fall back to `now - 1 hour`.
+    ///
+    /// `target` is the Dust public key that gets the Dust of the registered
+    /// tNIGHT, for example the key of another wallet that pays fees. `None`
+    /// names this wallet's own key. The registration sets the Dust public key
+    /// of the whole NIGHT address. A later registration replaces it, also when
+    /// its `target` is `None`. tNIGHT that reaches the address after a
+    /// registration generates Dust for the key that the last registration set.
+    /// tNIGHT that already generates Dust keeps its key until the wallet spends
+    /// it.
     pub async fn prepare_register_dust(
         self,
         utxo_ctime: Option<u64>,
+        target: Option<DustPublicKey>,
     ) -> Result<PreparedTransfer, WalletError> {
         let seed = self.state.seed().into_ledger();
 
@@ -802,9 +812,13 @@ impl<'a> TransferBuilder<'a> {
             None,
         );
         tx_info.add_intent(Segment::Fallible.into(), Box::new(intent));
+        let dust_address = match target {
+            Some(target) => target.into_ledger(),
+            None => DustWallet::<DefaultDB>::default(seed.clone(), None).public_key,
+        };
         tx_info.add_dust_registration(DustRegistrationBuilder {
             wallet: UnshieldedWallet::default(seed.clone()),
-            dust_address: Some(DustWallet::<DefaultDB>::default(seed.clone(), None).public_key),
+            dust_address: Some(dust_address),
             allow_fee_payment,
         });
         tx_info.use_mock_proofs_for_fees(true);
@@ -1336,7 +1350,10 @@ fn resign_offer(
 /// the 32-byte serialized encryption public key.
 const SHIELDED_ADDRESS_DATA_LEN: usize = 64;
 
-fn parse_wallet_address(s: &str, network: &Network) -> Result<WalletAddress, WalletError> {
+pub(crate) fn parse_wallet_address(
+    s: &str,
+    network: &Network,
+) -> Result<WalletAddress, WalletError> {
     let addr = WalletAddress::from_str(s)
         .map_err(|e| WalletError::InvalidAddress(format!("bech32 decode: {e}")))?;
     check_address_network(&addr, network)?;

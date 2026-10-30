@@ -15,7 +15,7 @@ pub use builder::{
     BuildInputs, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external, fee_speck,
     prepare_no_validate,
 };
-pub(crate) use builder::{parse_unshielded_recipient, shielded_destination};
+pub(crate) use builder::{parse_unshielded_recipient, parse_wallet_address, shielded_destination};
 pub use inputs::{PreparedInput, prepare_shielded_inputs};
 
 /// The generation this module builds for.

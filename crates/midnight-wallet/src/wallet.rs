@@ -251,6 +251,13 @@ impl Wallet {
         self.seed.shielded_address(self.network())
     }
 
+    /// The wallet's Dust address, e.g. `mn_dust_undeployed1...`. Another
+    /// wallet can register its tNIGHT to it, so that this wallet gets the
+    /// Dust that tNIGHT generates. See [`Seed::dust_address`].
+    pub fn dust_address(&self) -> String {
+        self.seed.dust_address(self.network())
+    }
+
     /// The unshielded UTXOs this wallet tracks.
     pub fn unshielded_utxos(&self) -> &[TrackedUtxo] {
         each!(&self.state, w => w.unshielded_utxos())

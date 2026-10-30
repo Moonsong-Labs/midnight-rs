@@ -48,7 +48,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
 
     // The minted token is derived from the contract's own address, so it can
     // only be named once the contract exists.
-    let colour = midnight_contract::parse_address(contract.address())
+    let colour = midnight_contract::parse_contract_address(contract.address())
         .expect("contract address")
         .custom_unshielded_token_type(midnight_base_crypto::hash::HashOutput(DOMAIN_SEP));
 

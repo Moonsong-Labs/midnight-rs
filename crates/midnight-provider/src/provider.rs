@@ -89,6 +89,17 @@ pub struct MidnightProvider {
     conn: Arc<RwLock<Option<NodeConnection>>>,
 }
 
+impl std::fmt::Debug for MidnightProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MidnightProvider")
+            .field("node_url", &self.node_url)
+            .field("wallet_attached", &self.wallet.is_some())
+            .field("proof_provider", &self.proof_provider)
+            .field("private_state_attached", &self.private_state.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl MidnightProvider {
     /// Create a provider from the node's WebSocket URL.
     ///
@@ -566,7 +577,8 @@ impl MidnightProvider {
     /// One call registers one tNIGHT UTXO and pays its own fee from that
     /// UTXO. Call it again until [`DustBalance::unregistered_night_utxos`]
     /// is 0. [`TransferBuilder::prepare_register_dust`] gives the full rule
-    /// and the meaning of `utxo_ctime`.
+    /// and the meaning of `utxo_ctime`. The Dust goes to this wallet's own
+    /// Dust address, or to another wallet's with [`DustRegistration::to`].
     ///
     /// [`DustBalance::unregistered_night_utxos`]: midnight_types::DustBalance::unregistered_night_utxos
     /// [`TransferBuilder::prepare_register_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_register_dust
@@ -718,7 +730,7 @@ impl MidnightProvider {
     /// this provider's wallet, returning the completed transaction ready to
     /// submit.
     ///
-    /// This is the "one party pays fees" flow (midnight-js `balanceTransaction`):
+    /// This is the "one party pays fees" flow (midnight-js `balanceTx`):
     /// the caller (fee payer) covers the Dust fees for a transaction someone
     /// else already built and proved, without holding their keys. Purely
     /// additive, the external transaction's proofs are untouched; a separately
@@ -1396,7 +1408,7 @@ impl HeldInputs {
 ///
 /// Under a Tokio runtime the release runs as a task of its own, so a drop of
 /// this future cannot cut it short. With no runtime, it runs inline.
-async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
+pub(crate) async fn hand_back(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) {
     if spent.is_empty() {
         return;
     }

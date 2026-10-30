@@ -10,7 +10,8 @@ use helpers::{Deserializable, Serializable};
 use crate::hd::{Seed, SeedBytes};
 use crate::{
     ChainParameters, CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustParameters,
-    EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, UnshieldedTokenType, UserAddress,
+    DustPublicKey, EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, UnshieldedTokenType,
+    UserAddress,
 };
 
 /// An SDK value that has a counterpart in this generation.
@@ -111,6 +112,28 @@ impl IntoSdk for helpers::DustNullifier {
     type Sdk = DustNullifier;
     fn into_sdk(self) -> Self::Sdk {
         DustNullifier(
+            self.0
+                .as_le_bytes()
+                .try_into()
+                .expect("a field element is 32 bytes"),
+        )
+    }
+}
+
+impl IntoLedger for DustPublicKey {
+    type Ledger = helpers::DustPublicKey;
+    fn into_ledger(self) -> Self::Ledger {
+        helpers::DustPublicKey(
+            helpers::Fr::from_le_bytes(&self.0)
+                .expect("every generation takes the field elements the SDK's key holds"),
+        )
+    }
+}
+
+impl IntoSdk for helpers::DustPublicKey {
+    type Sdk = DustPublicKey;
+    fn into_sdk(self) -> Self::Sdk {
+        DustPublicKey(
             self.0
                 .as_le_bytes()
                 .try_into()
