@@ -50,15 +50,24 @@ pub struct ContractInfo {
     pub circuits: Vec<Circuit>,
     pub witnesses: Vec<crate::ir::Witness>,
     pub ledger: Vec<LedgerField>,
-    /// Whether the contract's constructor takes arguments or has a body.
-    /// False for `(constructor () (tuple))`, the form the compiler emits for a
-    /// contract that declares no constructor, and for a contract with no
-    /// ledger.
-    pub has_constructor: bool,
+    /// The contract's constructor, lowered to a circuit with a unit result.
+    ///
+    /// `None` when the contract has no ledger, and for `(constructor ()
+    /// (tuple))`, the form the compiler emits for a contract that declares no
+    /// constructor. `Some(Err(_))` names the construct of the constructor that
+    /// the interpreter cannot run.
+    pub constructor: Option<Result<crate::ir::Circuit, String>>,
     pub helpers: Vec<crate::ir::Circuit>,
     /// Native declarations. A witness-class native also appends to the
     /// private transcript, so the interpreter needs them to route a call.
     pub natives: Vec<crate::ir::Native>,
+}
+
+impl ContractInfo {
+    /// The constructor, when the contract has one that the interpreter can run.
+    pub(crate) fn runnable_constructor(&self) -> Option<&crate::ir::Circuit> {
+        self.constructor.as_ref()?.as_ref().ok()
+    }
 }
 
 /// One field in a contract's on-chain state, read from a ledger binding of

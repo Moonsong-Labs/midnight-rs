@@ -365,10 +365,10 @@ struct ExecContext<'a> {
     /// call order. Surfaced as `ExecutionResult::private_transcript_outputs`.
     private_transcript_outputs: Vec<AlignedValue>,
     /// Coins the circuit asked to create via `createZswapOutput`, in call
-    /// order. Surfaced on `ExecutionResult` for the call/deploy path.
+    /// order. Surfaced on `ExecutionResult` for the call path.
     zswap_outputs: Vec<CircuitZswapOutput>,
     /// Coins the circuit asked to spend via `createZswapInput`, in call order.
-    /// Surfaced on `ExecutionResult` for the call/deploy path.
+    /// Surfaced on `ExecutionResult` for the call path.
     zswap_inputs: Vec<CircuitZswapInput>,
     /// The events of the `log` ops, in emission order. Surfaced as
     /// `ExecutionResult::logs`.
@@ -1281,7 +1281,7 @@ fn eval_witness_call(
     // `WitnessNative` variant forces a decision. `createZswapOutput` records
     // no ledger effect of its own (the mint/spend/receive effects are separate
     // ledger ops); it marks "attach a Zswap output for this coin here", so we
-    // capture its `(coin, recipient)` args for the call/deploy path to build
+    // capture its `(coin, recipient)` args for the call path to build
     // the corresponding `Output` in the transaction's Zswap offer.
     if let Some(native) = WitnessNative::from_name(name) {
         match native {
@@ -1301,7 +1301,7 @@ fn eval_witness_call(
             // The spend counterpart of `createZswapOutput`: like it, records
             // no ledger effect of its own (the spend/nullifier effects are
             // separate ledger ops), so we capture the coin arg for the
-            // call/deploy path to build the `Input` / `Transient` in the
+            // call path to build the `Input` / `Transient` in the
             // transaction's Zswap offer.
             WitnessNative::CreateZswapInput => {
                 return match values.into_iter().next() {
@@ -2942,7 +2942,7 @@ mod tests {
     #[test]
     fn create_zswap_input_is_captured() {
         // `createZswapInput(coin)` records no ledger effect; the interpreter
-        // captures its coin arg into `zswap_inputs` for the call/deploy path to
+        // captures its coin arg into `zswap_inputs` for the call path to
         // build the `Input` / `Transient`. Here the coin is passed as a
         // struct-encoded `QualifiedShieldedCoinInfo` value.
         let natives = vec![ir::Native {

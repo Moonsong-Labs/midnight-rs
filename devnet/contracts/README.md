@@ -10,6 +10,7 @@ This directory holds only contract assets. It is not a Rust crate. It sits outsi
 | [`counter`](counter) | [`example-counter`](../../examples/counter), [`example-contract-maintenance`](../../examples/contract-maintenance), [`example-combine-and-sponsor`](../../examples/combine-and-sponsor), and the counter tests of `midnight-contract` and `midnight-typed-state` |
 | [`counter-zkir-v3`](counter-zkir-v3) | the `zkir_v3_local_proving` devnet test of `midnight-contract`: the `counter` source, compiled for ZKIR v3, which only a ledger 9 chain verifies |
 | [`events`](events) | the `emit_event` devnet test of `midnight-contract`: a circuit that emits a `Misc` event between two ledger operations |
+| [`owned-counter`](owned-counter) | the `deploy_constructor` devnet test of `midnight-contract`: a constructor that takes an argument and calls a witness, which makes the deployer the owner |
 | [`receive-shielded`](receive-shielded) | the `receive_shielded_coin` devnet test of `midnight-contract`: a `deposit` circuit that receives a shielded coin from the caller |
 | [`secret-counter`](secret-counter) | [`example-private-state`](../../examples/private-state), and the `Simulator` tests of `tests/integration`: a stateful `witness next_secret()` that keeps its value in per-contract private state |
 | [`shielded-mint`](shielded-mint) | [`example-shielded-mint`](../../examples/shielded-mint), [`example-shielded-swap`](../../examples/shielded-swap), and the `mint_external_recipient`, `recover_unencrypted_mint` and `receive_shielded_coin` devnet tests of `midnight-contract` |
@@ -39,7 +40,6 @@ mod counter {
 }
 
 let contract = counter::Contract::deploy(&provider)
-    .with_initial_state(counter::LedgerInitialState::default())
     .with_zk_config(counter::ZK_CONFIG_DIR)
     .await?;
 ```

@@ -29,7 +29,6 @@
 //!     let provider = provider.with_wallet(wallet);
 //!
 //!     let contract = counter::Contract::deploy(&provider)
-//!         .with_initial_state(counter::LedgerInitialState::default())
 //!         .with_zk_config(counter::ZK_CONFIG_DIR)
 //!         .await?;
 //!     let returned = contract.circuits().increment().await?.value;

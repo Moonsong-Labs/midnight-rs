@@ -99,16 +99,23 @@ pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactE
             .collect::<Result<Vec<_>, _>>()?,
         None => Vec::new(),
     };
-    let has_constructor = artifact
+    // A constructor that the interpreter cannot run still loads: a deploy then
+    // sets the contract's state with `with_initial_state`.
+    let constructor = artifact
         .ledger()
-        .is_some_and(|decl| !is_empty_constructor(&decl.constructor));
+        .map(|decl| &decl.constructor)
+        .filter(|c| !is_empty_constructor(c))
+        .map(|c| {
+            let lowered = lower_constructor(c);
+            check_circuit(&lowered).map(|()| lowered).map_err(|e| e.0)
+        });
 
     Ok(ContractInfo {
         compiler_version: artifact.compiler_version.clone(),
         circuits,
         witnesses,
         ledger,
-        has_constructor,
+        constructor,
         helpers,
         natives,
     })
@@ -116,6 +123,21 @@ pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactE
 
 fn is_empty_constructor(c: &ir::Constructor) -> bool {
     c.arguments.is_empty() && matches!(&c.body, ir::Expr::Tuple(elements) if elements.is_empty())
+}
+
+/// The constructor as a circuit with a unit result, so that the interpreter
+/// runs it as it runs a circuit. The name `constructor` is a Compact keyword,
+/// so no circuit, witness or native of the artifact has it.
+fn lower_constructor(c: &ir::Constructor) -> ir::Circuit {
+    ir::Circuit {
+        name: ir::Ident("constructor".to_string()),
+        exported: false,
+        pure: false,
+        proof: false,
+        arguments: c.arguments.clone(),
+        result_type: ir::Type::unit(),
+        body: c.body.clone(),
+    }
 }
 
 struct Context<'a> {
@@ -527,6 +549,29 @@ mod tests {
                 .contains("ledger field `slot` of an unknown type"),
             "the error names the field: {e}"
         );
+    }
+
+    /// A constructor that the interpreter cannot run must not stop the
+    /// bindings, because a deploy can still set the state with
+    /// `with_initial_state`. A lowering with no check loads it as runnable.
+    #[test]
+    fn a_constructor_that_the_interpreter_cannot_run_loads_with_the_reason() {
+        let src = r#"(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
+          (runtime-version "0.18.107") (exports) (contract-types)
+          (public-ledger-declaration
+            (public-ledger-array
+              (%vault.0 (0) (exported #t) (__compact_Cell (tbytes 32))))
+            (constructor ()
+              (public-ledger %vault.0 (update-with-coin-check 0 1) (0) writeCoin (ttuple)
+                (instructions (ins (cached #t) (n 1)))))))"#;
+        let info = load_str(src).expect("an unrunnable constructor loads");
+        match info.constructor {
+            Some(Err(reason)) => assert!(
+                reason.contains("update-with-coin-check"),
+                "the reason names the class: {reason}"
+            ),
+            other => panic!("expected an unrunnable constructor, got {other:?}"),
+        }
     }
 
     #[test]

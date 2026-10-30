@@ -14,6 +14,7 @@ use super::types::{
 pub(crate) fn emit_data_types(
     fields: &[LedgerField],
     circuits: &[Circuit],
+    constructor: Option<&crate::ir::Circuit>,
     witnesses: &[Witness],
     emitted: &mut HashMap<String, Type>,
 ) -> TokenStream {
@@ -43,6 +44,11 @@ pub(crate) fn emit_data_types(
             collect_types(&arg.ty, emitted, &mut tokens, true);
         }
         collect_types(circuit.result_type(), emitted, &mut tokens, true);
+    }
+
+    // The generated `with_constructor_args` takes these types.
+    for arg in constructor.iter().flat_map(|c| &c.arguments) {
+        collect_types(&arg.ty, emitted, &mut tokens, true);
     }
 
     // Collect from witness arguments and results.

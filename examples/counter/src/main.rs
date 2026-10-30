@@ -42,7 +42,6 @@ async fn main() -> anyhow::Result<()> {
     // 1. Deploy the contract; observe Best then Finalized inclusion.
     println!("1. Deploying counter contract...");
     let pending = counter::Contract::deploy(&provider)
-        .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(counter::ZK_CONFIG_DIR)
         .send()
         .await?;

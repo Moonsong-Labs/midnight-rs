@@ -182,7 +182,7 @@ impl<Wp> std::fmt::Debug for Runner<Wp> {
     }
 }
 
-fn block_timestamp(time: SystemTime) -> Timestamp {
+pub(crate) fn block_timestamp(time: SystemTime) -> Timestamp {
     let since_epoch = time
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| panic!("the block time {time:?} is before the Unix epoch"));

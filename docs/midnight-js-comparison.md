@@ -234,6 +234,23 @@ midnight-rs: the `midnight-private-state` crate has a `PrivateStateProvider` tra
 
 Private state is also **threaded** through witness execution, matching midnight-js. `WitnessProvider::call_witness(ctx, name, args)` takes a `&mut WitnessContext` carrying the mutable private state (the analogue of midnight-js's `(ctx, ...args) => [newPS, result]`). When a `PrivateStateProvider` is attached, a circuit call loads the contract's state before execution and threads it through the witnesses. It records the state after the call as a `Pending` snapshot before the submit. It then settles the snapshot by the chain's verdict (see [`private-state.md`](./private-state.md)). So stateful-witness contracts work across calls without the caller managing storage. Private state is keyed by contract address: a Compact contract has exactly one private-state type shared by all its witnesses, so there is one blob per contract (the caller packs every private variable into it), rather than midnight-js's separate per-app `privateStateId`.
 
+## Deploy and the constructor
+
+Both SDKs run the contract's Compact constructor locally when they deploy, and deploy the state that it leaves. midnight-js runs `contractExec.initialize(initialPrivateState, ...args)` from `deployContract` (`packages/contracts/src/unproven-deploy-tx.ts`). midnight-rs runs the constructor's analyzed IR with the interpreter, from the generated `Contract::deploy`. Both run it at the zero contract address, with the wallet's coin public key for `ownPublicKey()` and the wall-clock time.
+
+| midnight-js `deployContract` option | midnight-rs generated `DeployBuilder` |
+| --- | --- |
+| `args` | `with_constructor_args(..)`, typed from the constructor's parameters. It exists only for a constructor with parameters. |
+| `initialPrivateState` | `with_initial_private_state(state)`, after `with_witnesses(&w)`. They exist only for a contract with witnesses. |
+| `privateStateId` | none: the journal keys the private state by the contract address (see [Per-contract private state](#per-contract-private-state)) |
+| none | `with_initial_state(state)`: deploy `state` as it is and skip the constructor |
+
+The differences:
+
+- midnight-js stores the private state with `privateStateProvider.set` after the deploy finalizes, and only when the caller gives a `privateStateId`. midnight-rs records it as a `Pending` snapshot before the submit, and `wait_finalized` confirms it when the chain applied the deploy. midnight-rs refuses a private state that it cannot record, when no store is attached. midnight-js refuses an `initialPrivateState` without a `privateStateId` before it builds anything. When the caller gives neither, midnight-js stores no private state, also when the constructor's witnesses leave one.
+- midnight-js drops the ledger effects of the constructor, and puts the constructor's Zswap outputs into the guaranteed offer of the deploy (`zswapStateToOffer`). midnight-rs refuses a constructor with a ledger effect, a Zswap input or a Zswap output, with `ContractError::ConstructorEffect`, before any proof. A deploy carries no transcript, so the ledger takes none of the ledger effects. The ledger can take a Zswap output for a user key in the offer of the deploy. midnight-rs does not carry a constructor's Zswap output into that offer.
+- compact-js gives the contract a maintenance authority with one key from a sampled signing key. midnight-rs keeps the empty committee unless the caller sets one with `with_maintenance_authority`.
+
 ## Feature gaps
 
 These are real Midnight chain features that midnight-js exposes and this SDK does not (yet). Listed roughly in order of how often they come up.

@@ -90,7 +90,6 @@ async fn main() -> anyhow::Result<()> {
     // --- A deploys the counter (A is genesis-funded with Dust) ---
     println!("1. A deploys the counter...");
     let contract = counter::Contract::deploy(&provider_a)
-        .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(counter::ZK_CONFIG_DIR)
         .await?;
     let address = contract.address().to_string();

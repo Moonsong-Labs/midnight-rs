@@ -1,0 +1,27 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// A constructor that takes an argument and calls no witness, and circuits that
+// spend or create a shielded coin with no ledger effect.
+
+export ledger value: Field;
+
+constructor(v: Field) {
+  value = disclose(v);
+}
+
+export circuit give(amount: Uint<64>): [] {
+  createZswapOutput(
+    ShieldedCoinInfo { nonce: pad(32, "nonce"), color: pad(32, "color"), value: amount },
+    left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey())
+  );
+}
+
+export circuit take(): [] {
+  createZswapInput(QualifiedShieldedCoinInfo {
+    nonce: pad(32, "nonce"),
+    color: pad(32, "color"),
+    value: 1,
+    mt_index: 0
+  });
+}

@@ -18,7 +18,7 @@ A Compact contract has exactly one `PS` (private state) type per address: a stru
 
 ## The journal
 
-Rather than a single mutable slot per address, this SDK stores private state as an append-only **journal** of [`Snapshot`](../crates/midnight-private-state/src/lib.rs)s, one per submitted transaction whose witnesses actually modified the private state (a call whose post-buffer matches the baseline is a no-op and no snapshot is recorded). Each snapshot is keyed by the producing tx's `extrinsic_hash` and, once the chain finalizes that tx, by the block it landed in (`block_hash` + `block_height`). Snapshots have a small lifecycle:
+Rather than a single mutable slot per address, this SDK stores private state as an append-only **journal** of [`Snapshot`](../crates/midnight-private-state/src/lib.rs)s, one per submitted transaction whose witnesses actually modified the private state (a call whose post-buffer matches the baseline is a no-op and no snapshot is recorded). A deploy that has a private state records the first snapshot of the new contract (see [Threading through a deploy](#threading-through-a-deploy)). Each snapshot is keyed by the producing tx's `extrinsic_hash` and, once the chain finalizes that tx, by the block it landed in (`block_hash` + `block_height`). Snapshots have a small lifecycle:
 
 | Status      | Meaning                                                                                                                                                                                                |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -133,6 +133,22 @@ The build-only calls of a call builder, `.build()` and `.without_dust()`, go thr
 
 The generated witness adapter writes the buffer only when the `serde_json` encoding of the state changes, and an empty buffer counts as the encoding of `Default`. So a call whose witnesses only read the state records no snapshot. A `PrivateState` with a `HashMap` can encode in another key order with no change of value, which reads as a change. Prefer an ordered map, such as a `BTreeMap`.
 
+### Threading through a deploy
+
+A deploy records the private state of the new contract as its first snapshot. The generated `with_initial_private_state` sets the private state that the constructor's witnesses start from, and the deploy records the private state that they leave. With `with_initial_state`, which skips the constructor, the deploy records the initial private state as it is. `DeployBuilder::send`, which the `.await` of the builder also runs, does steps 1 to 4:
+
+1. **Run.** The constructor runs locally, before any proof. Its witnesses read and update the buffer, as in a call.
+2. **Check the store.** An empty private state records nothing, so a deploy whose constructor leaves the private state alone needs no store. A private state that is not empty, with no store attached, fails with `ContractError::Construction` before any proof.
+3. **Prepare.** After the build and the proof, `provider.prepare_reserved(result)` gives the extrinsic hash. The deploy gives the contract a new address, from a random nonce, so the journal at that address is empty.
+4. **Append pending, then submit.** The deploy writes the private state as a `Pending` snapshot under the address and the extrinsic hash, with no `depends_on`. A failed append gives `ContractError::PendingSnapshotFailed`, hands the inputs of the build back, and submits nothing. A failed submit gives `ContractError::SubmissionWait` and keeps the snapshot `Pending`, because the node can still hold the deploy.
+5. **Settle.** Only a final verdict settles the snapshot. `PendingDeploy::wait_finalized` confirms the snapshot when the chain applied the deploy. A best-block wait leaves the snapshot `Pending`. That is `PendingDeploy::wait_best`, and the best-block wait of `into_contract`, which the `.await` of the builder runs. To get a `Confirmed` snapshot, call `wait_finalized` before `into_contract`.
+
+   The deploy drops its snapshot with `mark_failed` only on a final verdict. That is a `wait_finalized` that sees the deploy not applied, or a wait that reads `SubmitError::Invalid`. A best-block `NotApplied` is provisional, so the snapshot stays `Pending`. Nothing reads a snapshot at the address of a contract that does not exist. If a reorg applies the deploy, the snapshot holds the right private state.
+
+   A store that fails to settle the snapshot logs a warning, and the snapshot stays `Pending`. The wait still returns its result, so the caller keeps the address of a contract that exists.
+
+The first call on the contract starts from the deploy's snapshot, `Pending` or `Confirmed`. The SDK drops a deploy's snapshot only in a wait of its `PendingDeploy`. So after `into_contract` returns, the SDK keeps the deploy's snapshot, and the hazard of a `Pending` snapshot in [Limitations](#limitations-and-future-work) does not apply to it.
+
 ### Fallible-phase verdict
 
 The SDK reads the `Midnight` pallet's outcome events for the extrinsic and exposes them as `TxInBlock::verdict`:
@@ -155,6 +171,8 @@ The journal model naturally supports two recovery flavors:
 If the process stops after the pending append and before the submit, the snapshot is on disk for a tx that never reached the node. The next call treats it as the head. Reconcile it: when the TTL passes and the chain holds no such tx, call `mark_failed` on it. If the process stops during the submit, the fate of the tx is unknown, as after a `SubmitError::SubmitRpc`.
 
 If the process is interrupted between the pending append and `wait_finalized`, the pending snapshot is on disk. The next run treats it as the current head; once the chain catches up, manual `confirm` (or, when wired, automatic confirmation via finality detection) promotes it. If the tx actually failed, `mark_failed` drops it. midnight-js has the same hazard and documents it as a known limitation; this SDK does the same.
+
+A deploy has the same hazard, with less risk. If the process stops after the append and before the submit, the snapshot is at an address where no contract exists, and nothing reads it. If the process stops after the submit, the deploy can still land with its snapshot `Pending`, and the first call on the contract starts from it. A failed deploy submit gives `ContractError::SubmissionWait`. It carries the extrinsic hash of the snapshot, but not the address. `export_private_states` shows the address of the snapshot.
 
 ## Limitations and future work
 

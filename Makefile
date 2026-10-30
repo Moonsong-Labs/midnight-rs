@@ -63,7 +63,7 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 # Examples that run against the devnet with no extra env.
 # wallet-sync gets its devnet env from a dedicated target.
 EXAMPLES  := counter private-state contract-maintenance shielded-transfer combine-and-sponsor shielded-swap
-CONTRACTS := call-context counter counter-zkir-v3 events receive-shielded secret-counter shielded-mint unshielded-payout
+CONTRACTS := call-context counter counter-zkir-v3 events owned-counter receive-shielded secret-counter shielded-mint unshielded-payout
 # The contracts that compile for ZKIR v3. Only a ledger 9 chain verifies their keys.
 ZKIR_V3_CONTRACTS := counter-zkir-v3
 # The compiler flag of contract $$c, which only a ZKIR v3 contract has. The
@@ -79,7 +79,8 @@ TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 # Codegen test fixtures: tests/fixtures/sources/<name>.compact compiles to
 # tests/fixtures/compiled/<name>/.
-CODEGEN_FIXTURES := cross-contract gateway many-fields mint-probe pairs results struct-shapes tuple-shapes zerocash
+CODEGEN_FIXTURES := coin-vault cross-contract gateway many-fields mint-probe pairs plain-constructor results \
+                    struct-shapes tuple-shapes zerocash
 # Parser test fixtures: crates/compact/analyzed-ir/tests/fixtures/<name>/<name>.compact.
 # The SDK refuses each of these contracts at load, so the codegen tests cannot read them.
 PARSER_FIXTURES := adt-defaults
@@ -352,6 +353,7 @@ test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test call_context -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test simulate_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test build_only_private_state -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test deploy_constructor -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test emit_event -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test zkir_v3_local_proving -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test remote_proving -- --show-output
