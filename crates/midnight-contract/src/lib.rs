@@ -76,8 +76,8 @@ pub use midnight_provider::{
 // Dustless (fee-less) build support, so generated contract-call builders can
 // offer `.without_dust()` producing a sponsorable transaction.
 pub use midnight_provider::{DustlessBuilder, DustlessTransaction};
-// The result of a build-only call: the proven transaction and the inputs that
-// its build reserved.
+// The result of a build, so callers and generated code name it without a
+// dependency on `midnight-types`.
 pub use midnight_types::TransferResult;
 
 // Shielded recipients, their keys, and the shielded offer of a deploy.
