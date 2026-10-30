@@ -577,7 +577,8 @@ impl MidnightProvider {
     /// One call registers one tNIGHT UTXO and pays its own fee from that
     /// UTXO. Call it again until [`DustBalance::unregistered_night_utxos`]
     /// is 0. [`TransferBuilder::prepare_register_dust`] gives the full rule
-    /// and the meaning of `utxo_ctime`.
+    /// and the meaning of `utxo_ctime`. The Dust goes to this wallet's own
+    /// Dust address, or to another wallet's with [`DustRegistration::to`].
     ///
     /// [`DustBalance::unregistered_night_utxos`]: midnight_types::DustBalance::unregistered_night_utxos
     /// [`TransferBuilder::prepare_register_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_register_dust
@@ -729,7 +730,7 @@ impl MidnightProvider {
     /// this provider's wallet, returning the completed transaction ready to
     /// submit.
     ///
-    /// This is the "one party pays fees" flow (midnight-js `balanceTransaction`):
+    /// This is the "one party pays fees" flow (midnight-js `balanceTx`):
     /// the caller (fee payer) covers the Dust fees for a transaction someone
     /// else already built and proved, without holding their keys. Purely
     /// additive, the external transaction's proofs are untouched; a separately

@@ -19,8 +19,8 @@ use midnight_provider::{
     TxInBlock,
 };
 
-/// A circuit call that landed on chain: the circuit's own result, plus the
-/// identity of the transaction that carried it.
+/// A circuit call that landed on chain: the circuit's own result and events,
+/// plus the identity of the transaction that carried it.
 ///
 /// The identity is what lets a caller log the call, link to it in an explorer,
 /// or reconcile it against their own records. Deploys have always exposed this
@@ -37,27 +37,33 @@ pub struct CallOutcome<T> {
     pub transaction_hash: TransactionHash,
     /// Hash of the block it landed in.
     pub block_hash: BlockHash,
+    /// The events that the circuit emitted, in emission order. They come from
+    /// the local run of the call, and the chain logs the same events. See
+    /// [`ExecutionResult::logs`](crate::runtime::ExecutionResult::logs).
+    pub logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
 }
 
 impl<T> CallOutcome<T> {
-    /// Replace the circuit result, keeping the transaction identity.
+    /// Replace the circuit result, keeping the transaction identity and the
+    /// events.
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> CallOutcome<U> {
         CallOutcome {
             value: f(self.value),
             extrinsic_hash: self.extrinsic_hash,
             transaction_hash: self.transaction_hash,
             block_hash: self.block_hash,
+            logs: self.logs,
         }
     }
 }
 
 /// The result of a circuit call that ran with no proof, fee or transaction.
 ///
-/// It holds the circuit's value and the ledger after the call, from a run on
-/// the contract's state at one block. [`Contract::simulate_with`] and the
-/// `simulate` method of a generated call builder return it. The result is
-/// true for the block that the run read. A later block can change the outcome
-/// of the real call.
+/// It holds the circuit's value, the ledger after the call and the events that
+/// the circuit emitted, from a run on the contract's state at one block.
+/// [`Contract::simulate_with`] and the `simulate` method of a generated call
+/// builder return it. The result is true for the block that the run read. A
+/// later block can change the outcome of the real call.
 #[derive(Debug, Clone)]
 pub struct Simulated<T, L> {
     /// The circuit's return value.
@@ -66,6 +72,9 @@ pub struct Simulated<T, L> {
     pub ledger: L,
     /// The block whose state and time the run read.
     pub block_hash: BlockHash,
+    /// The events that the circuit emitted, in emission order. See
+    /// [`ExecutionResult::logs`](crate::runtime::ExecutionResult::logs).
+    pub logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
 }
 
 /// A circuit call that ran locally, before the build of its transaction
@@ -368,6 +377,7 @@ const DEFAULT_TX_FINALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct PendingCall<T> {
     pending: PendingTx,
     value: T,
+    logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
     address: String,
     /// The store that holds the call's `Pending` snapshot, or `None` when the
     /// call recorded none.
@@ -418,6 +428,7 @@ impl<T> PendingCall<T> {
         let Self {
             pending,
             value,
+            logs,
             address,
             snapshot_store,
         } = self;
@@ -448,6 +459,7 @@ impl<T> PendingCall<T> {
             extrinsic_hash,
             transaction_hash: in_block.transaction_hash,
             block_hash: in_block.block_hash,
+            logs,
         })
     }
 }
@@ -1318,7 +1330,8 @@ impl<P> Contract<P> {
 
     /// Run a circuit call locally, with no proof, fee or transaction.
     ///
-    /// It returns the circuit's value and the contract state after the call.
+    /// It returns the circuit's value, the contract state after the call and
+    /// the events that the circuit emitted.
     /// It does the work of a call before the build. It reads the state and
     /// the block time at the node's best block (or at the `at_block` pin), and
     /// runs the circuit IR locally at that time. The witnesses start from the
@@ -1400,6 +1413,7 @@ impl<P> Contract<P> {
             value: run.result,
             ledger: run.state,
             block_hash: state.hash,
+            logs: run.logs,
         })
     }
 
@@ -1759,8 +1773,10 @@ impl<P> Contract<P> {
 
         // Each step is boxed; see the frame-size note on
         // `MidnightProvider::resync_wallet`.
-        let ran = Box::pin(self.run_for_build(circuit, program, args, witnesses, store.as_deref()))
-            .await?;
+        let mut ran =
+            Box::pin(self.run_for_build(circuit, program, args, witnesses, store.as_deref()))
+                .await?;
+        let logs = std::mem::take(&mut ran.exec_result.logs);
         let (built, result) = Box::pin(self.build_call(
             ran,
             circuit,
@@ -1807,6 +1823,7 @@ impl<P> Contract<P> {
         Ok(PendingCall {
             pending,
             value,
+            logs,
             address: self.address.clone(),
             snapshot_store,
         })

@@ -46,7 +46,8 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
 use midnight_types::{
-    ShieldedTokenType, TransferKind, TransferRequest, TransferResult, UnshieldedTokenType,
+    DustPublicKey, ShieldedTokenType, TransferKind, TransferRequest, TransferResult,
+    UnshieldedTokenType,
 };
 
 use crate::{MidnightProvider, PendingTx, ProviderError};
@@ -340,6 +341,7 @@ impl DustlessTransaction {
 pub struct DustRegistration<'a> {
     provider: &'a MidnightProvider,
     utxo_ctime: Option<u64>,
+    target: Option<DustPublicKey>,
 }
 
 impl<'a> DustRegistration<'a> {
@@ -347,7 +349,25 @@ impl<'a> DustRegistration<'a> {
         Self {
             provider,
             utxo_ctime,
+            target: None,
         }
+    }
+
+    /// Send the Dust of the registered tNIGHT to `target`, another wallet's
+    /// Dust public key. That wallet can then pay the fees of this wallet's
+    /// transactions with [`MidnightProvider::balance_transaction`]. Read
+    /// `target` from the Dust address of that wallet with
+    /// [`parse_dust_address`](midnight_types::address::parse_dust_address).
+    ///
+    /// The registration sets the Dust public key of the whole NIGHT address.
+    /// A later registration replaces it, so a registration without `.to()`
+    /// points the NIGHT address back to this wallet's own key. tNIGHT that
+    /// reaches the address generates Dust for the key that the last
+    /// registration set. tNIGHT that already generates Dust keeps its key
+    /// until the wallet spends it.
+    pub fn to(mut self, target: DustPublicKey) -> Self {
+        self.target = Some(target);
+        self
     }
 
     /// Build the registration transaction without submitting. Spends and
@@ -360,6 +380,7 @@ impl<'a> DustRegistration<'a> {
     fn into_request(self) -> TransferRequest {
         TransferKind::DustRegistration {
             utxo_ctime: self.utxo_ctime,
+            target: self.target,
         }
         .into()
     }

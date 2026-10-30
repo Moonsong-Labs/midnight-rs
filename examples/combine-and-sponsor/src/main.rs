@@ -18,7 +18,7 @@
 //! - `provider.merge_transactions(&[..])` (↔ midnight-js `Transaction.merge`) —
 //!   combine proven transactions into one that lands atomically.
 //! - `provider.balance_transaction(bytes)` (↔ midnight-js
-//!   `walletProvider.balanceTransaction`) — pay another party's Dust fees.
+//!   `walletProvider.balanceTx`): pay another party's Dust fees.
 //!   `provider.submit_reserved(result)` submits it, and hands the fee Dust
 //!   back when the node never gets the transaction or rejects it.
 //!
@@ -27,11 +27,9 @@
 //! self-fund here anyway — which is exactly what sponsoring is for).
 //!
 //! ```bash
-//! docker compose -f devnet/docker-compose.yml up -d   # from the repo root
-//! while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
-//! while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
+//! make dev-up   # from the repo root: starts the devnet and waits for a block
 //! make run-combine-and-sponsor   # from the repo root
-//! docker compose -f devnet/docker-compose.yml down
+//! make dev-down   # from the repo root
 //! ```
 
 use std::sync::Arc;

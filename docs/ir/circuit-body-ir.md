@@ -18,7 +18,7 @@ The artifact holds the whole program, not only the circuit bodies. It has the ex
 
 Codegen also lowers the contract's constructor to an `ir::Circuit` with a unit result, and a deploy runs it to make the state that it deploys.
 
-In both cases, the interpreter (`crates/compact/interpreter/src/lib.rs`) executes `ir::Circuit` values. It runs a circuit body against the current contract state, calls host witnesses, and returns an `ExecutionResult` (reads, gather ops, communication outputs, result). From that result, `midnight-contract` builds the public transcript (an Impact `Op` program, see [impact-onchain-vm.md](impact-onchain-vm.md)) and the `ProofPreimage`. ZKIR and the prover key then make the proof (see [zkir.md](zkir.md)).
+In both cases, the interpreter (`crates/compact/interpreter/src/lib.rs`) executes `ir::Circuit` values. It runs a circuit body against the current contract state, calls host witnesses, and returns an `ExecutionResult` (reads, gather ops, communication outputs, result, logs). From that result, `midnight-contract` builds the public transcript (an Impact `Op` program, see [impact-onchain-vm.md](impact-onchain-vm.md)) and the `ProofPreimage`. ZKIR and the prover key then make the proof (see [zkir.md](zkir.md)).
 
 The artifact also carries the typed schema, and the bindings embed it. The schema holds the circuit and witness signatures and the ledger field layout. The layout tells which field is a `Map<K,V>`, its key and value types, which field is a `Counter`, and so on. The SDK uses the schema to encode keys and arguments and to decode results. Neither ZKIR nor the runtime `StateValue` tree carries Compact-level types.
 

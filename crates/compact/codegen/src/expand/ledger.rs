@@ -1277,8 +1277,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
              result. [`send`](Self::send) submits the call and returns a `PendingCall` \
              before the chain's verdict. [`build`](Self::build) returns the proven \
              transaction bytes without a submit. [`simulate`](Self::simulate) runs the \
-             circuit and returns its value and the ledger after it, with no proof, fee \
-             or transaction.",
+             circuit and returns its value, the ledger after it and its events, with no \
+             proof, fee or transaction.",
             circuit.name
         );
 
@@ -1301,6 +1301,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 extrinsic_hash: __outcome.extrinsic_hash,
                 transaction_hash: __outcome.transaction_hash,
                 block_hash: __outcome.block_hash,
+                logs: __outcome.logs,
             })
         };
 
@@ -1395,7 +1396,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
                 /// Run the call locally, with no proof, fee or transaction.
                 ///
-                /// It returns the circuit's value and the ledger after the call.
+                /// It returns the circuit's value, the ledger after the call and the
+                /// events that the circuit emitted.
                 /// It reads the state and the block time at the node's best block, or at
                 /// the `at_block` pin of the handle, and runs the circuit there. The
                 /// provider needs a wallet only for a circuit that calls `ownPublicKey()`.
@@ -1416,6 +1418,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                             value: __decode(__simulated.value)?,
                             ledger: #ledger_name::new(__simulated.ledger),
                             block_hash: __simulated.block_hash,
+                            logs: __simulated.logs,
                         })
                     })
                     .await

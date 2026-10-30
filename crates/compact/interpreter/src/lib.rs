@@ -11,7 +11,7 @@ use midnight_coin_structure::coin::PublicKey as CoinPublicKey;
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_onchain_runtime::context::{CallContext, QueryContext};
 use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
-use midnight_onchain_runtime::ops::{Key, Op};
+use midnight_onchain_runtime::ops::{Key, Op, VersionedLogItem};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{
     AlignedValue, ContractState, InMemoryDB, MerkleTree, StateValue, StorageArray, StorageHashMap,
@@ -268,6 +268,7 @@ pub fn execute(
         private_transcript_outputs: Vec::new(),
         zswap_outputs: Vec::new(),
         zswap_inputs: Vec::new(),
+        logs: Vec::new(),
         witnesses: Some(witnesses),
         private_state,
         program,
@@ -298,6 +299,7 @@ pub fn execute(
         private_transcript_outputs: ctx.private_transcript_outputs,
         zswap_outputs: ctx.zswap_outputs,
         zswap_inputs: ctx.zswap_inputs,
+        logs: ctx.logs,
     })
 }
 
@@ -368,6 +370,9 @@ struct ExecContext<'a> {
     /// Coins the circuit asked to spend via `createZswapInput`, in call order.
     /// Surfaced on `ExecutionResult` for the call path.
     zswap_inputs: Vec<CircuitZswapInput>,
+    /// The events of the `log` ops, in emission order. Surfaced as
+    /// `ExecutionResult::logs`.
+    logs: Vec<VersionedLogItem<InMemoryDB>>,
     witnesses: Option<&'a dyn WitnessProvider>,
     /// Mutable private-state buffer threaded through witness calls.
     private_state: &'a mut Vec<u8>,
@@ -1819,14 +1824,13 @@ fn exec_ledger_query(
     let res = qc
         .query::<ResultModeGather>(&ops, None, cost_model)
         .map_err(|e| InterpreterError::LedgerQueryFailed(format!("{e:?}")))?;
-    let reads: Vec<AlignedValue> = res
-        .events
-        .into_iter()
-        .filter_map(|e| match e {
-            GatherEvent::Read(av) => Some(av),
-            GatherEvent::Log(_) => None,
-        })
-        .collect();
+    let mut reads: Vec<AlignedValue> = Vec::new();
+    for event in res.events {
+        match event {
+            GatherEvent::Read(av) => reads.push(av),
+            GatherEvent::Log(item) => ctx.logs.push(item),
+        }
+    }
     ctx.state = ContractState {
         data: res.context.state,
         ..ctx.state.clone()
@@ -3408,6 +3412,7 @@ mod tests {
             private_transcript_outputs: Vec::new(),
             zswap_outputs: Vec::new(),
             zswap_inputs: Vec::new(),
+            logs: Vec::new(),
             witnesses: None,
             private_state,
             program,
