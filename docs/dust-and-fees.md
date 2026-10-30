@@ -79,7 +79,7 @@ Normal transactions pay fees by calling `set_funding_seeds()` on the
 which calls `DustWallet::speculative_spend()` to produce ZK proofs with valid
 Merkle paths from both trees.
 
-A build reports the fee it quotes as [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs). The rustdoc of that field names the check that the node applies at submit and the quote skips.
+A build reports the fee it quotes as [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs). The quote skips the time-to-dismiss check, which the node applies at submit. A build that pays a fee applies that check itself, before it returns: see [Transactions Outside Their Time to Dismiss](#transactions-outside-their-time-to-dismiss).
 
 #### What this requires
 
@@ -240,6 +240,32 @@ Read the wallet's `DustBalance` (`provider.balance().await?.dust`) to find the n
 - When `unregistered_night_utxos` is above 0 and `night_generates_dust` is false, no tNIGHT generates Dust. Register one tNIGHT UTXO with `register_dust` (see [Dust Registration](#dust-registration)). A registration has no funding wallets, so its shortfall reads an `available` of 0. It pays only from the generationless Dust of the tNIGHT it spends, and that Dust grows with the age of the UTXO. So when the registration itself falls short, wait, then register again.
 - When the wallet holds no tNIGHT, no Dust accrues. The wallet must receive tNIGHT first.
 - Otherwise, Dust accrues with time, so build again later.
+
+## Transactions Outside Their Time to Dismiss
+
+The node refuses a transaction when validating the whole transaction and applying its guaranteed part take more time than its size allows. The allowance is `time_to_dismiss_per_byte` for each byte, and never less than `min_time_to_dismiss`. The ledger names this refusal `FeeCalculation(OutsideTimeToDismiss)`.
+
+A build that pays a fee applies the ledger's own check before it returns, and fails with [`WalletError::OutsideTimeToDismiss`](../crates/midnight-types/src/error.rs). Nothing reaches the node, and a build through `MidnightProvider` leaves nothing reserved. The error gives three numbers:
+
+- `time_to_dismiss`: the time that the transaction takes.
+- `allowed_time_to_dismiss`: the most time that its size allows.
+- `size`: its size in bytes.
+
+The build checks the candidate whose fee converges, before the real proof, and checks the proven transaction again. `balance_transaction` checks the merged transaction. With a `LocalWallet`, it also checks a transaction that already pays its own fee and comes back unchanged. The build skips the check for a Dustless build (`.without_dust()`), because the sponsor's merge adds Dust spends that change its time and its size.
+
+The check never refuses a transaction that the node accepts. On ledger 8 the node runs the same check. On ledger 9 the node prices each verifier key that the transaction calls at its real size, and the check prices it as one 4 KiB block. So on ledger 9, a transaction at the limit that calls a key larger than 4 KiB can pass the check, and the node then refuses it.
+
+The time grows with each intent, each Dust spend that pays the fee, each unshielded input, and each NIGHT output in the guaranteed offer. A NIGHT input in the guaranteed offer costs more than an input of another token. Shielded inputs and outputs, contract calls, Dust registrations and the signatures of a maintenance update add to the time too.
+
+The cost model in the ledger parameters sets the cost of each part. So the costs can be different on each network, and so can the part that costs the most. With 2 µs for each byte and a floor of 15 ms, as in the initial parameters, a transaction under 7.5 KB gets the floor whatever its size. Below that size, each part that a transaction leaves out reduces its time and keeps its allowance the same.
+
+Input selection and Dust selection do not account for this rule. To recover from a refused transfer:
+
+- Send a smaller amount, so that the default `CoinSelectionStrategy::LargestFirst` selects fewer inputs. Send the rest in another transfer.
+- Create fewer NIGHT outputs in one transaction.
+- Keep the `LargestFirst` ordering. `SmallestFirst` selects the most inputs, so it makes the time longer.
+
+`balance_transaction` adds the sponsor's fee intent and its Dust spends to the time of the transaction that it balances. When it refuses, the party that built that transaction must build a smaller one.
 
 ## Wallet Sync Phases
 

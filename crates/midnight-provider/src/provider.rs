@@ -750,6 +750,13 @@ impl MidnightProvider {
     /// it with [`Self::submit_reserved`], which hands the Dust back when the
     /// node never gets the transaction or rejects it. A transaction that
     /// already pays its own fee comes back unchanged, with nothing reserved.
+    ///
+    /// The provider applies the ledger's time-to-dismiss check to the merged
+    /// result after the proof. A `LocalWallet` applies it in `prepare_fees`
+    /// too: before the proof, and to a transaction that comes back unchanged.
+    /// When the check refuses the result, the call fails with
+    /// [`WalletError::OutsideTimeToDismiss`](midnight_types::WalletError::OutsideTimeToDismiss)
+    /// and leaves no Dust reserved.
     pub async fn balance_transaction(
         &self,
         tx_bytes: &[u8],

@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 
+use midnight_helpers::base_crypto::cost_model::CostDuration;
+
 use crate::{LedgerVersion, Network, ShieldedTokenType, UnknownLedger, UnshieldedTokenType};
 
 /// Errors that can occur with wallet operations.
@@ -125,6 +127,32 @@ pub enum WalletError {
         ///
         /// A Dust registration has no funding wallets, so it reads 0.
         available: u128,
+    },
+
+    /// The node would refuse the transaction, because it takes more time to
+    /// dismiss than its size allows.
+    ///
+    /// The ledger names this rule `FeeCalculation(OutsideTimeToDismiss)`. A
+    /// build that pays a fee applies the ledger's own check before it
+    /// returns, so nothing reaches the node. See [Transactions outside their
+    /// time to dismiss] in `docs/dust-and-fees.md` for the rule, the parts of
+    /// a transaction that add to its time, and the steps to recover.
+    ///
+    /// [Transactions outside their time to dismiss]: https://github.com/Moonsong-Labs/midnight-rs/blob/main/docs/dust-and-fees.md#transactions-outside-their-time-to-dismiss
+    #[error(
+        "the node would refuse this transaction: it takes {time_to_dismiss:?} to dismiss, \
+         and its size of {size} bytes allows at most {allowed_time_to_dismiss:?}"
+    )]
+    OutsideTimeToDismiss {
+        /// The time to validate the transaction and apply its guaranteed part.
+        time_to_dismiss: CostDuration,
+        /// The most time that the size of the transaction allows.
+        allowed_time_to_dismiss: CostDuration,
+        /// The size of the transaction in bytes, which sets the allowance.
+        ///
+        /// A refusal before the real proof reads it from a copy with
+        /// placeholder proofs, which is the same size or a few bytes larger.
+        size: u64,
     },
 
     /// The wallet holds too little of a shielded token for the transfer.

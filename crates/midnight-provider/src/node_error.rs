@@ -46,7 +46,9 @@
 //! the numbers, in `From<LedgerApiError> for u8`. Beside it,
 //! `ledger/src/versions/common/conversions.rs` maps each ledger failure onto
 //! the node enum variant that number names, which is where a qualifier like
-//! `InvalidError` or `MalformedError` comes from.
+//! `InvalidError` or `MalformedError` comes from. For the ledger 9 image in
+//! `devnet/docker-compose.ledger-9.yml`, the same two files are
+//! `ledger/src/ledger_9/types.rs` and `ledger/src/ledger_9/conversions.rs`.
 //!
 //! Codes are not stable across node releases, which was measured rather than
 //! feared. Between the tag we pin and a midnight-node revision four months
@@ -69,7 +71,7 @@ static CODES: &[(u8, &str)] = &[
     // This one is version-bound, and it is the reason the module says a name
     // is a reading aid. The node of the ledger 8 devnet image emits it. The
     // later node of the ledger 9 image retires the assignment and gives 168
-    // no meaning. Every other entry has the same code in both.
+    // no meaning. Every other entry except 231 has the same code in both.
     (168, "MalformedError::FeeCalculation"),
     // Transferring a pre-allocated dev token with chain-side restrictions
     // (`midnight-wallet` integration tests).
@@ -81,6 +83,10 @@ static CODES: &[(u8, &str)] = &[
     (195, "InvalidError::InputNotInUtxos"),
     // Two wallets on one seed drawing the same Dust note.
     (196, "InvalidError::DustDoubleSpend"),
+    // A sponsored transfer whose fee intent drew two Dust spends, which put
+    // it outside its time to dismiss (ledger 9 devnet image). The node of the
+    // ledger 8 image does not assign 231, and reports this refusal as 168.
+    (231, "FeeCalculationErrorCode::OutsideTimeToDismiss"),
 ];
 
 /// The name midnight-node gives `code`, or `None` when this build has never

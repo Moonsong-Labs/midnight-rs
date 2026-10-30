@@ -2,10 +2,7 @@
 //! wallet meets before it registers.
 //!
 //! A registration can build cleanly and still be refused, so this test
-//! submits and waits for the verdict. That is the only way the size and
-//! dismissal-cost rule shows up: a registration spending two unshielded
-//! inputs builds cleanly and is refused with
-//! `FeeCalculation(OutsideTimeToDismiss)`, custom error 168.
+//! submits it and waits for the verdict.
 //!
 //! Needs a devnet, and a genesis wallet with tNIGHT and dust to fund the
 //! fresh address this drives.
@@ -32,7 +29,8 @@ fn unused_seed() -> String {
 /// typed shortfall for each build it cannot fund, and then registers one UTXO.
 ///
 /// A wallet with several unregistered UTXOs is the case that fails when a
-/// registration spends every one of them: it builds, and the node refuses it.
+/// registration spends every one of them, because the registration is then
+/// outside its time to dismiss.
 /// The shortfall steps stay in this fn, because a second fn would fund from the
 /// same funder seed and race it.
 #[tokio::test]

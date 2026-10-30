@@ -32,13 +32,10 @@ pub struct TransferResult {
     /// returns and what the indexer later reports as `paidFees` for an
     /// accepted, included transaction.
     ///
-    /// The `false` skips the time-to-dismiss check, and the node applies that
-    /// check at submit. It rejects a transaction, as
-    /// `FeeCalculation(OutsideTimeToDismiss)`, when validating the whole
-    /// transaction and applying its guaranteed part take more time than its
-    /// size allows. The allowance is `time_to_dismiss_per_byte` per byte, and
-    /// never less than `min_time_to_dismiss`. The check never changes the
-    /// fee, but a quote does not mean that the node accepts the transaction.
+    /// The `false` skips the time-to-dismiss check, which the node applies at
+    /// submit and which never changes the fee. A build that pays a fee applies
+    /// that check before it returns. See
+    /// [`WalletError::OutsideTimeToDismiss`](crate::WalletError::OutsideTimeToDismiss).
     pub fee_speck: u128,
 }
 
