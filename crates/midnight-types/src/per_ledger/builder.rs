@@ -959,9 +959,11 @@ pub async fn prepare_no_validate(
 
 /// The first segment [`fee_segment`] offers a fee intent.
 ///
-/// A build puts its own intents at the low segments, and a later merge may
-/// need those, so the fee starts high. Dust balances across segments, so
-/// which one it lands on does not matter for the fee itself.
+/// A deploy, a maintenance update and a transfer put their intent at segment
+/// 1, and a call puts its intent at any segment above 1. So the fee starts
+/// clear of segment 1, and [`fee_segment`] skips each segment that the
+/// transaction already uses. Dust balances across segments, so which one it
+/// lands on does not matter for the fee itself.
 const DUST_FEE_SEGMENT: u16 = 0xFEED;
 
 /// The first segment from [`DUST_FEE_SEGMENT`] up that `external` leaves

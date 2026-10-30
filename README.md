@@ -94,6 +94,8 @@ sponsor.submit_reserved(funded).await?;
 
 A party with no Dust builds a transfer or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A contract call built this way, or with `.build()`, records no private state. So it fails with `ContractError::UnrecordedPrivateState` when its witnesses change the private state, before it reserves Dust or makes a proof. A sponsor pays its Dust fee with `balance_transaction` and submits it with `submit_reserved`, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
 
+Fee-less calls to different contracts merge too, and one sponsored transaction carries them all. Their guaranteed parts apply together or not at all, and each call's fallible part can fail alone. See [Merging proven transactions](docs/midnight-js-comparison.md#merging-proven-transactions) for the segment rules.
+
 ## Compile a contract
 
 The SDK reads `compiler/analyzed-ir.sexp`. Only a fork of the Compact compiler ([`RomarQ/compact`](https://github.com/RomarQ/compact)) writes this file, when it runs with `--analyzed-ir`. The command below runs the public image of the fork at `COMPACT_REV`, the commit that the [`Makefile`](Makefile) names.
