@@ -5,8 +5,9 @@
 //!
 //! The trait is synchronous: the ledger's `ExternalResolver` requires a
 //! `Send + Sync` key-loading future, which an `async fn` trait method (via
-//! `async-trait`) does not produce. The call path wraps provider lookups in
-//! `spawn_blocking`, so a blocking implementation never stalls the runtime.
+//! `async-trait`) does not produce. The deploy and the call path wrap
+//! provider lookups in `spawn_blocking`, so a blocking implementation never
+//! stalls the runtime.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -321,6 +322,18 @@ impl IntoZkConfig for &PathBuf {
 impl IntoZkConfig for PathBuf {
     fn into_zk_config(self) -> Arc<dyn ZkConfigProvider> {
         Arc::new(FsZkConfigProvider::new(self))
+    }
+}
+
+/// Run `read` on `zk_config` on a thread that may block.
+pub(crate) async fn read_blocking<T: Send + 'static>(
+    zk_config: &Arc<dyn ZkConfigProvider>,
+    read: impl FnOnce(&dyn ZkConfigProvider) -> T + Send + 'static,
+) -> T {
+    let zk_config = Arc::clone(zk_config);
+    match tokio::task::spawn_blocking(move || read(zk_config.as_ref())).await {
+        Ok(value) => value,
+        Err(err) => std::panic::resume_unwind(err.into_panic()),
     }
 }
 

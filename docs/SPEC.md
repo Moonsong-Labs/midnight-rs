@@ -213,7 +213,8 @@ Contract::deploy(&provider)                              // DeployBuilder<'_, P>
 Internally:
 
 ```
-with_zk_config(initial_state, zk_config)      // load *.verifier files into state.operations
+with_zk_config(initial_state, zk_config)      // load *.verifier files into state.operations,
+                                              // on a blocking thread
   ↓
 deploy_funded(state, provider, shielded_offer)
   ├─ provider.builds().await                  // resync wallet, pick its generation's Builds
@@ -276,6 +277,12 @@ read the state and the block time at one block (per call):
   state_at_block(address, at_block)           // the at_block pin, else best_block_hash();
                                               // the state through midnight_contractState,
                                               // the time from Timestamp::Now, in whole seconds
+  ↓
+zk_config.verifier_key(circuit)               // on a blocking thread
+  ├─ check it against the circuit's operation in the state, before any proof:
+  │    no operation → VerifierKeyMismatch { reason: Missing }, no key → Keyless,
+  │    another key → Mismatched
+  └─ resolver::register(address, circuit, key, zk_config) → the key location
   ↓
 provider.shielded_public_keys()               // the wallet's coin public key, which ownPublicKey() returns
   ↓

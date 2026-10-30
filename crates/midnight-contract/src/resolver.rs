@@ -17,7 +17,6 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use sha2::{Digest, Sha256};
 
-use crate::error::ContractError;
 use crate::zk_config::{ZkArtifacts, ZkConfigError, ZkConfigProvider};
 
 type Registry = HashMap<[u8; 32], Vec<Weak<dyn ZkConfigProvider>>>;
@@ -25,16 +24,15 @@ type Registry = HashMap<[u8; 32], Vec<Weak<dyn ZkConfigProvider>>>;
 static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(Mutex::default);
 
 /// Register `zk_config` as the source of `circuit`'s keys, and return the key
-/// location that resolves to them.
+/// location that resolves to them. `verifier_key` is the circuit's verifier
+/// key as `zk_config` serves it.
 pub(crate) fn register(
     address_hex: &str,
     circuit: &str,
+    verifier_key: &[u8],
     zk_config: &Arc<dyn ZkConfigProvider>,
-) -> Result<String, ContractError> {
-    let verifier_key = zk_config
-        .verifier_key(circuit)
-        .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))?;
-    let hash: [u8; 32] = Sha256::digest(&verifier_key).into();
+) -> String {
+    let hash: [u8; 32] = Sha256::digest(verifier_key).into();
     let mut registry = REGISTRY.lock().expect("resolver registry poisoned");
     registry.retain(|_, configs| {
         configs.retain(|config| config.strong_count() > 0);
@@ -45,10 +43,7 @@ pub(crate) fn register(
     if !configs.iter().any(|config| config.ptr_eq(&zk_config)) {
         configs.push(zk_config);
     }
-    Ok(format!(
-        "contract:{address_hex}/{circuit}?vk={}",
-        hex::encode(hash)
-    ))
+    format!("contract:{address_hex}/{circuit}?vk={}", hex::encode(hash))
 }
 
 /// The artifacts `location` names, or `None` when it names no live
@@ -118,8 +113,8 @@ mod tests {
     fn a_location_resolves_to_the_keys_of_the_contract_that_registered_it() {
         let first = config(b"first verifier key");
         let second = config(b"second verifier key");
-        let at_first = register("aa", "increment", &first).unwrap();
-        let at_second = register("bb", "increment", &second).unwrap();
+        let at_first = register("aa", "increment", b"first verifier key", &first);
+        let at_second = register("bb", "increment", b"second verifier key", &second);
 
         let found = resolve(&at_first).unwrap().expect("registered");
         assert_eq!(found.verifier_key, b"first verifier key");
@@ -131,7 +126,7 @@ mod tests {
     #[test]
     fn a_dropped_zk_config_stops_resolving() {
         let config = config(b"short-lived verifier key");
-        let location = register("cc", "increment", &config).unwrap();
+        let location = register("cc", "increment", b"short-lived verifier key", &config);
         drop(config);
         assert!(resolve(&location).unwrap().is_none());
     }
@@ -142,8 +137,8 @@ mod tests {
     fn a_location_resolves_while_any_zk_config_under_it_lives() {
         let kept = config(b"shared verifier key");
         let dropped = config(b"shared verifier key");
-        let location = register("dd", "increment", &kept).unwrap();
-        register("dd", "increment", &dropped).unwrap();
+        let location = register("dd", "increment", b"shared verifier key", &kept);
+        register("dd", "increment", b"shared verifier key", &dropped);
         drop(dropped);
 
         let found = resolve(&location).unwrap().expect("still registered");
@@ -155,8 +150,8 @@ mod tests {
     #[test]
     fn registering_one_zk_config_again_adds_no_entry() {
         let config = config(b"re-registered verifier key");
-        register("ee", "increment", &config).unwrap();
-        let location = register("ee", "increment", &config).unwrap();
+        register("ee", "increment", b"re-registered verifier key", &config);
+        let location = register("ee", "increment", b"re-registered verifier key", &config);
 
         let (_, hash) = parse(&location).unwrap();
         let entries = REGISTRY.lock().unwrap()[&hash].len();

@@ -83,8 +83,8 @@ struct RanCall {
     state: crate::state::StateAtBlock,
     /// The contract's address.
     address: midnight_types::ContractAddress,
-    /// The source of the keys that the build proves with.
-    zk_config: Arc<dyn ZkConfigProvider>,
+    /// The location of the circuit's keys that the build proves with.
+    key_location: String,
     /// The result of the run.
     exec_result: crate::runtime::ExecutionResult,
     /// The private state of the run.
@@ -632,8 +632,7 @@ where
             )
         })?;
 
-        state =
-            populate_verifier_keys(state, zk_config.as_ref(), self.declared_circuits.as_deref())?;
+        state = populate_verifier_keys(state, &zk_config, self.declared_circuits).await?;
 
         // Stamp the maintenance authority committee into the deployed state, if
         // requested. No signing key is stored — members sign ops externally.
@@ -1200,11 +1199,17 @@ impl<P> Contract<P> {
     ///   address does not parse.
     /// - [`ContractError::Construction`] when the contract declares witnesses
     ///   and the provider has no private-state store, or when the handle has
-    ///   no zk config. Both checks come before any query to the node.
+    ///   no zk config. Both checks come before any query to the node. It is
+    ///   also the error when the zk config cannot read the circuit's verifier
+    ///   key. That read comes after the state query and before the circuit
+    ///   runs.
     /// - [`ContractError::NotFound`] when the node has no contract at the
     ///   address.
     /// - [`ContractError::StateFetch`] when the node's contract state does not
     ///   decode.
+    /// - [`ContractError::VerifierKeyMismatch`] when the contract state does
+    ///   not hold the circuit's local verifier key. The call reserves no input
+    ///   and makes no proof.
     /// - [`ContractError::PrivateState`] when the store cannot read the
     ///   journal head.
     /// - [`ContractError::Interpreter`] when the circuit or a witness fails,
@@ -1264,8 +1269,15 @@ impl<P> Contract<P> {
         let store = self.provider.as_midnight_provider().private_state();
         require_private_state_for_witnesses(self.declares_witnesses, store.is_some())?;
 
-        let ran = Box::pin(self.run_for_build(circuit, program, args, witnesses, store.as_deref()))
-            .await?;
+        let ran = Box::pin(self.run_for_build(
+            circuit,
+            program,
+            circuit_name,
+            args,
+            witnesses,
+            store.as_deref(),
+        ))
+        .await?;
         if private_state_persist(&ran.private_state.baseline, &ran.private_state.after)
             == PrivateStatePersist::Persist
         {
@@ -1312,11 +1324,14 @@ impl<P> Contract<P> {
     ///
     /// `ownPublicKey()` returns the coin public key of the wallet. The run
     /// reserves no input and makes no proof, so a failed `assert` costs no
-    /// resync and no proof.
+    /// resync and no proof. Before the run, it checks the circuit's local
+    /// verifier key against the state, and registers the zk config for the
+    /// proof.
     async fn run_for_build(
         &self,
         circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
+        circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
         store: Option<&dyn PrivateStateProvider>,
@@ -1326,8 +1341,21 @@ impl<P> Contract<P> {
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
         let address = crate::address::parse_contract_address(&self.address)?;
-        let zk_config = self.zk_config.clone().ok_or_else(missing_zk_config)?;
+        let zk_config = self.zk_config.as_ref().ok_or_else(missing_zk_config)?;
         let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
+        let circuit_id = circuit_name.to_owned();
+        let verifier_key = crate::zk_config::read_blocking(zk_config, move |zk_config| {
+            zk_config.verifier_key(&circuit_id)
+        })
+        .await
+        .map_err(|e| ContractError::Construction(format!("verifier key {circuit_name}: {e}")))?;
+        crate::state::check_verifier_key(&state.view, circuit_name, &verifier_key)?;
+        let key_location = crate::resolver::register(
+            &crate::address::format_contract_address(&address),
+            circuit_name,
+            &verifier_key,
+            zk_config,
+        );
         let (baseline, depends_on) = self.witness_baseline(store).await?;
         let (coin_public_key, _) = provider.shielded_public_keys().await?;
 
@@ -1346,7 +1374,7 @@ impl<P> Contract<P> {
         Ok(RanCall {
             state,
             address,
-            zk_config,
+            key_location,
             exec_result,
             private_state: PrivateStateChange {
                 baseline,
@@ -1384,7 +1412,7 @@ impl<P> Contract<P> {
             circuit_name,
             ran.address,
             self.provider.as_midnight_provider(),
-            ran.zk_config,
+            ran.key_location,
             coin_encryption_keys,
             shielded,
             pay_fees,
@@ -1473,6 +1501,9 @@ impl<P> Contract<P> {
     ///   address.
     /// - [`ContractError::StateFetch`] when the node's contract state does not
     ///   decode.
+    /// - [`ContractError::VerifierKeyMismatch`] when the contract state does
+    ///   not hold the circuit's local verifier key. The call reserves no input
+    ///   and makes no proof.
     /// - [`ContractError::PrivateState`] when the store cannot read the
     ///   journal head.
     /// - [`ContractError::Interpreter`] when the circuit or a witness fails,
@@ -1526,9 +1557,15 @@ impl<P> Contract<P> {
 
         // Each step is boxed; see the frame-size note on
         // `MidnightProvider::resync_wallet`.
-        let mut ran =
-            Box::pin(self.run_for_build(circuit, program, args, witnesses, store.as_deref()))
-                .await?;
+        let mut ran = Box::pin(self.run_for_build(
+            circuit,
+            program,
+            circuit_name,
+            args,
+            witnesses,
+            store.as_deref(),
+        ))
+        .await?;
         let logs = std::mem::take(&mut ran.exec_result.logs);
         let (built, result) = Box::pin(self.build_call(
             ran,
