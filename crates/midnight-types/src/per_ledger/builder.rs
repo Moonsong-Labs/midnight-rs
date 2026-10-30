@@ -1712,13 +1712,15 @@ mod tests {
     /// The chain refuses Dust actions once the block time passes their
     /// `ctime` plus the grace period. A build that pays with Dust cannot land
     /// after that, whatever its TTL. A Dustless build waits for a sponsor,
-    /// whose Dust brings a later `ctime`, so only its TTL ends it.
+    /// whose Dust brings a later `ctime`, so only its TTL ends it. The window
+    /// counts from the `ctime`, the Dust anchor, not from the later chain time.
     #[test]
     fn a_build_that_pays_with_dust_expires_with_its_dust_window() {
         use helpers::SeedableRng;
-        let context = context_at(1_000, 1_000);
+        let anchor = 1_000;
+        let context = context_at(anchor, anchor + 1_000);
         let prepared = |tx| prepared_on(&context, tx);
-        let ctime = Timestamp::from_secs(1_000);
+        let ctime = Timestamp::from_secs(anchor);
         let window_end =
             ctime + context.with_ledger_state(|ls| ls.parameters.dust.dust_grace_period);
         let paying_with_dust = |ttl: Timestamp| {
