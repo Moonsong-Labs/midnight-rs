@@ -24,7 +24,7 @@ use helpers::{
 
 use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
-use crate::transfer::{at_payment, panic_message, totals_per_token};
+use crate::transfer::{panic_message, totals_per_token};
 use crate::{
     DustPublicKey, Network, Payment, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind,
     TransferRequest, TransferResult, WalletError,
@@ -427,9 +427,8 @@ impl<'a> TransferBuilder<'a> {
     /// [`WalletError::Transfer`] when `payments` is empty, when a payment sends
     /// 0, or when the payments of one token add up to more than `u128::MAX`.
     /// [`WalletError::InvalidAddress`] for a recipient that is not a shielded
-    /// address. Its message names the index of the payment.
-    /// [`WalletError::AddressNetworkMismatch`] for a recipient of another
-    /// network. It names the network of the address, not the payment.
+    /// address. [`WalletError::AddressNetworkMismatch`] for a recipient of
+    /// another network.
     /// [`WalletError::InsufficientShielded`] when the wallet holds less of a
     /// token than its payments add up to.
     pub async fn prepare_shielded(
@@ -440,10 +439,9 @@ impl<'a> TransferBuilder<'a> {
         let totals = totals_per_token(payments)?;
         let mut outputs: Vec<Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>> =
             Vec::with_capacity(payments.len());
-        for (index, payment) in payments.iter().enumerate() {
+        for payment in payments {
             outputs.push(Box::new(OutputInfo {
-                destination: shielded_destination(&payment.recipient, self.state.network())
-                    .map_err(at_payment(index))?,
+                destination: shielded_destination(&payment.recipient, self.state.network())?,
                 token_type: payment.token_type.into_ledger(),
                 value: payment.amount,
             }));
@@ -607,9 +605,8 @@ impl<'a> TransferBuilder<'a> {
     /// [`WalletError::Transfer`] when `payments` is empty, when a payment sends
     /// 0, or when the payments of one token add up to more than `u128::MAX`.
     /// [`WalletError::InvalidAddress`] for a recipient that is not an
-    /// unshielded address. Its message names the index of the payment.
-    /// [`WalletError::AddressNetworkMismatch`] for a recipient of another
-    /// network. It names the network of the address, not the payment.
+    /// unshielded address. [`WalletError::AddressNetworkMismatch`] for a
+    /// recipient of another network.
     /// [`WalletError::InsufficientUnshielded`] when the wallet holds less of a
     /// token than its payments add up to.
     pub async fn prepare_unshielded(
@@ -622,11 +619,10 @@ impl<'a> TransferBuilder<'a> {
 
         let mut outputs: Vec<Box<dyn helpers::BuildUtxoOutput<DefaultDB, BuildContext>>> =
             Vec::with_capacity(payments.len());
-        for (index, payment) in payments.iter().enumerate() {
+        for payment in payments {
             outputs.push(Box::new(UtxoOutputInfo {
                 value: payment.amount,
-                owner: parse_unshielded_recipient(&payment.recipient, self.state.network())
-                    .map_err(at_payment(index))?,
+                owner: parse_unshielded_recipient(&payment.recipient, self.state.network())?,
                 token_type: payment.token_type.into_ledger(),
             }));
         }

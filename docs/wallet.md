@@ -430,7 +430,7 @@ let pending = provider.submit_reserved(funded).await?;
 
 A Dustless shielded transfer carries no intent, so the merge has no segment collision. The fee goes in an intent of its own.
 
-A build refuses an empty list, a payment of 0, and payments of one token that add up to more than `u128::MAX`. It returns `WalletError::Transfer` before it reserves an input. For a recipient that is not an address of the right kind, it returns `WalletError::InvalidAddress`, and the message names the index of the payment.
+A build refuses an empty list, a payment of 0, and payments of one token that add up to more than `u128::MAX`. It returns `WalletError::Transfer` before it reserves an input. For a recipient that is not an address of the right kind, it returns `WalletError::InvalidAddress`, and for an address of another network, `WalletError::AddressNetworkMismatch`.
 
 Each builder:
 

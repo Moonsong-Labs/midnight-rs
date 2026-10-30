@@ -549,9 +549,9 @@ impl MidnightProvider {
     ///   sends 0, or when the payments of one token add up to more than
     ///   `u128::MAX`.
     /// - [`WalletError::InvalidAddress`] for a recipient that is not a
-    ///   shielded address. Its message names the index of the payment.
+    ///   shielded address.
     /// - [`WalletError::AddressNetworkMismatch`] for a recipient of another
-    ///   network. It names the network of the address, not the payment.
+    ///   network.
     /// - [`WalletError::InsufficientShielded`] when the wallet holds less of a
     ///   token than its payments add up to.
     ///
@@ -664,9 +664,9 @@ impl MidnightProvider {
     ///   sends 0, or when the payments of one token add up to more than
     ///   `u128::MAX`.
     /// - [`WalletError::InvalidAddress`] for a recipient that is not an
-    ///   unshielded address. Its message names the index of the payment.
+    ///   unshielded address.
     /// - [`WalletError::AddressNetworkMismatch`] for a recipient of another
-    ///   network. It names the network of the address, not the payment.
+    ///   network.
     /// - [`WalletError::InsufficientUnshielded`] when the wallet holds less of
     ///   a token than its payments add up to.
     ///
