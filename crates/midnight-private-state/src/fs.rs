@@ -27,10 +27,9 @@
 //! filenames with new timestamps. `mark_failed` / `rollback_from` likewise
 //! walk the graph to cascade through dependents.
 //!
-//! A write goes through `midnight_owner_only::replace`, which syncs a `.tmp`
-//! sibling to disk and then `rename`s it into place. So a crash, or a power
-//! loss on a file system that can sync, never leaves a half-written file. The
-//! wallet uses the same discipline.
+//! Each write goes through `midnight_owner_only::replace`, so a crash or a
+//! power loss never leaves a half-written file. The wallet uses the same
+//! discipline.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
