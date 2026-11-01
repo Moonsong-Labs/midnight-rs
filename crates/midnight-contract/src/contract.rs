@@ -83,8 +83,11 @@ struct RanCall {
     state: crate::state::StateAtBlock,
     /// The contract's address.
     address: midnight_types::ContractAddress,
-    /// The location of the circuit's keys that the build proves with.
-    key_location: String,
+    /// The source of the keys that the build proves with.
+    zk_config: Arc<dyn ZkConfigProvider>,
+    /// The circuit's verifier key as `zk_config` served it, which the run
+    /// checked against the contract state.
+    verifier_key: Vec<u8>,
     /// The result of the run.
     exec_result: crate::runtime::ExecutionResult,
     /// The private state of the run.
@@ -1325,8 +1328,7 @@ impl<P> Contract<P> {
     /// `ownPublicKey()` returns the coin public key of the wallet. The run
     /// reserves no input and makes no proof, so a failed `assert` costs no
     /// resync and no proof. Before the run, it checks the circuit's local
-    /// verifier key against the state, and registers the zk config for the
-    /// proof.
+    /// verifier key against the state.
     async fn run_for_build(
         &self,
         circuit: &compact_codegen::ir::Circuit,
@@ -1341,21 +1343,15 @@ impl<P> Contract<P> {
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
         let address = crate::address::parse_contract_address(&self.address)?;
-        let zk_config = self.zk_config.as_ref().ok_or_else(missing_zk_config)?;
+        let zk_config = self.zk_config.clone().ok_or_else(missing_zk_config)?;
         let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
         let circuit_id = circuit_name.to_owned();
-        let verifier_key = crate::zk_config::read_blocking(zk_config, move |zk_config| {
+        let verifier_key = crate::zk_config::read_blocking(&zk_config, move |zk_config| {
             zk_config.verifier_key(&circuit_id)
         })
         .await
         .map_err(|e| ContractError::Construction(format!("verifier key {circuit_name}: {e}")))?;
         crate::state::check_verifier_key(&state.view, circuit_name, &verifier_key)?;
-        let key_location = crate::resolver::register(
-            &crate::address::format_contract_address(&address),
-            circuit_name,
-            &verifier_key,
-            zk_config,
-        );
         let (baseline, depends_on) = self.witness_baseline(store).await?;
         let (coin_public_key, _) = provider.shielded_public_keys().await?;
 
@@ -1374,7 +1370,8 @@ impl<P> Contract<P> {
         Ok(RanCall {
             state,
             address,
-            key_location,
+            zk_config,
+            verifier_key,
             exec_result,
             private_state: PrivateStateChange {
                 baseline,
@@ -1412,7 +1409,8 @@ impl<P> Contract<P> {
             circuit_name,
             ran.address,
             self.provider.as_midnight_provider(),
-            ran.key_location,
+            ran.zk_config,
+            &ran.verifier_key,
             coin_encryption_keys,
             shielded,
             pay_fees,

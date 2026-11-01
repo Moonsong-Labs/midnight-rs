@@ -279,10 +279,9 @@ read the state and the block time at one block (per call):
                                               // the time from Timestamp::Now, in whole seconds
   ↓
 zk_config.verifier_key(circuit)               // on a blocking thread
-  ├─ check it against the circuit's operation in the state, before any proof:
-  │    no operation → VerifierKeyMismatch { reason: Missing }, no key → Keyless,
-  │    another key → Mismatched
-  └─ resolver::register(address, circuit, key, zk_config) → the key location
+  └─ check it against the circuit's operation in the state, before any proof:
+       no operation → VerifierKeyMismatch { reason: Missing }, no key → Keyless,
+       another key → Mismatched
   ↓
 provider.shielded_public_keys()               // the wallet's coin public key, which ownPublicKey() returns
   ↓
@@ -305,6 +304,8 @@ partition_transcripts([PreTranscript { context, program: verify_ops, comm_comm: 
   → (guaranteed_transcripts, fallible_transcripts)
   ↓
 cross InMemoryDB → DefaultDB boundary (serialize round-trip into the generation's types)
+  ↓
+resolver::register(address, circuit, key, zk_config) → the key location   // the key the check passed
   ↓
 CallAction holding typed transcripts + AlignedValue inputs/outputs
   ↓

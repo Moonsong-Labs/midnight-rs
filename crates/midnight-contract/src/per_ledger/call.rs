@@ -26,6 +26,7 @@ use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::TransferResult;
 
 use super::types::PreparedInput;
+use crate::address::format_contract_address;
 use crate::call::ShieldedInputs;
 use crate::change::{change_due, total_by_key};
 use crate::error::ContractError;
@@ -101,8 +102,9 @@ pub(crate) fn partition(
 ///
 /// `state` is the contract's state as the Compact side reads it, and
 /// `state_bytes` the encoding the chain served it in. `block_time` is the
-/// time the interpreter ran the circuit at. `key_location` names the
-/// circuit's keys in the shared resolver.
+/// time the interpreter ran the circuit at. `verifier_key` is the circuit's
+/// verifier key as `zk_config` serves it, which the caller checked against
+/// `state`.
 #[expect(
     clippy::too_many_arguments,
     reason = "the neutral call path hands over what the interpreter ran with, one value each"
@@ -117,7 +119,8 @@ pub(crate) async fn call_transaction(
     block_time: Timestamp,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
-    key_location: String,
+    zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
+    verifier_key: &[u8],
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     pay_fees: bool,
@@ -188,8 +191,14 @@ pub(crate) async fn call_transaction(
     let guaranteed_payouts = payouts_of(guaranteed.as_ref());
     let fallible_payouts = payouts_of(fallible.as_ref());
 
-    // 3. Prove with the resolver that finds the circuit's keys at
-    //    `key_location`.
+    // 3. Make the circuit's proving keys resolvable, and prove with the
+    //    resolver that finds them.
+    let key_location = crate::resolver::register(
+        &format_contract_address(&contract_address),
+        circuit_name,
+        verifier_key,
+        &zk_config,
+    );
     context.update_resolver(super::resolver::shared()).await;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
