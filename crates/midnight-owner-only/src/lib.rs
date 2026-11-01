@@ -39,11 +39,7 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
             .create(dir)?;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
         for created in missing {
-            let parent = created
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or(Path::new("."));
-            sync_dir(parent)?;
+            sync_dir(parent_dir(created))?;
         }
         Ok(())
     }
@@ -57,17 +53,17 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
 /// The call writes `contents` to a hidden temporary file in the directory of
 /// `path`, named `.<file name>.<random suffix>`. Then
 /// [`AtomicWriteFile::commit`] syncs that file and renames it to `path`. On
-/// Unix, the commit then syncs the directory. After a crash or a power loss,
+/// Unix, the call then syncs the directory. After a crash or a power loss,
 /// `path` holds the old contents or the new contents. A crash, or a commit
 /// that fails before the rename, can leave the temporary file. On Unix, the
 /// file gets mode 0600, also when `path` exists with another mode.
 ///
 /// # Errors
 ///
-/// Returns the error of the open, of the write or of the commit. A file system
-/// that cannot sync a file or a directory fails the commit. The directory sync
-/// comes after the rename, so `path` can hold the new contents when the commit
-/// fails.
+/// Returns the error of the open, of the write, of the commit or of the
+/// directory sync. A file system that cannot sync a file or a directory fails
+/// the call. The directory sync comes after the rename, so `path` can hold the
+/// new contents when the call fails.
 pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
     #[cfg(unix)]
     let mut file = {
@@ -81,7 +77,12 @@ pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
     #[cfg(not(unix))]
     let mut file = AtomicWriteFile::open(path)?;
     file.write_all(contents)?;
-    file.commit()
+    file.commit()?;
+    // Sync again: the commit syncs the directory with fsync(2), which does not
+    // flush the drive cache on Apple. `sync_all` does, with F_FULLFSYNC.
+    #[cfg(target_vendor = "apple")]
+    sync_dir(parent_dir(path))?;
+    Ok(())
 }
 
 /// Syncs the entries of `dir` to disk, so a create, a rename or a removal in
@@ -99,6 +100,15 @@ pub fn sync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     let _ = dir;
     Ok(())
+}
+
+/// The directory that holds `path`, as `open` resolves it: an empty parent is
+/// the current directory.
+#[cfg(unix)]
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
 }
 
 #[cfg(all(test, unix))]
