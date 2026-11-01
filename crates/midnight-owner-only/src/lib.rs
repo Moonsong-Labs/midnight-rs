@@ -75,6 +75,7 @@ pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
         AtomicWriteFile::options()
             .mode(0o600)
             .preserve_mode(false)
+            .try_preserve_owner(false)
             .open(path)?
     };
     #[cfg(not(unix))]
