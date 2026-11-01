@@ -4,9 +4,9 @@
 //! narrows a path that already exists to that mode. On other platforms, a path
 //! keeps the default permissions.
 //!
-//! The calls also sync their changes to disk. After a crash or a power loss, a
-//! file that [`replace`] wrote holds the old contents or the new contents, and
-//! a directory that [`create_dir_all`] created exists.
+//! On Unix, the calls also sync their changes to disk. After a crash or a power
+//! loss, a file that [`replace`] wrote holds the old contents or the new
+//! contents, and a directory that [`create_dir_all`] created exists.
 
 use std::fs;
 use std::io::{self, Write};
@@ -56,11 +56,11 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
 ///
 /// The call writes `contents` to a hidden temporary file in the directory of
 /// `path`, named `.<file name>.<random suffix>`. Then
-/// [`AtomicWriteFile::commit`] syncs that file, renames it to `path` and syncs
-/// the directory. After a crash or a power loss, `path` holds the old contents
-/// or the new contents. A crash, or a commit that fails before the rename, can
-/// leave the temporary file. On Unix, the file gets mode 0600, also when
-/// `path` exists with another mode.
+/// [`AtomicWriteFile::commit`] syncs that file and renames it to `path`. On
+/// Unix, the commit then syncs the directory. After a crash or a power loss,
+/// `path` holds the old contents or the new contents. A crash, or a commit
+/// that fails before the rename, can leave the temporary file. On Unix, the
+/// file gets mode 0600, also when `path` exists with another mode.
 ///
 /// # Errors
 ///
