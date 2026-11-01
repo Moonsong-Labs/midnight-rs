@@ -1,12 +1,14 @@
 //! Owner-only directories and durable files for the on-disk stores of the SDK.
 //!
-//! On Unix, a directory gets mode 0700 and a file gets mode 0600. A call also
-//! narrows a path that already exists to that mode. On other platforms, a path
-//! keeps the default permissions.
+//! On Unix, a directory gets mode 0700, and a file gets mode 0600 masked by
+//! the umask. A call also narrows a path that already exists to that mode. On
+//! other platforms, a path keeps the default permissions.
 //!
-//! On Unix, the calls also sync their changes to disk. After a crash or a power
-//! loss, a file that [`replace`] wrote holds the old contents or the new
-//! contents, and a directory that [`create_dir_all`] created exists.
+//! [`replace`] syncs the file to disk before it renames the file into place,
+//! on every platform. So after a crash or a power loss, the file holds the old
+//! contents or the new contents. On Unix, the calls also sync each directory
+//! that they change, so the rename and each directory that [`create_dir_all`]
+//! creates persist after a power loss.
 
 use std::fs;
 use std::io::{self, Write};
@@ -55,8 +57,9 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
 /// [`AtomicWriteFile::commit`] syncs that file and renames it to `path`. On
 /// Unix, the call then syncs the directory. After a crash or a power loss,
 /// `path` holds the old contents or the new contents. A crash, or a commit
-/// that fails before the rename, can leave the temporary file. On Unix, the
-/// file gets mode 0600, also when `path` exists with another mode.
+/// that fails at or before the rename, can leave the temporary file. On Unix,
+/// the file gets mode 0600 masked by the umask, also when `path` exists with
+/// another mode.
 ///
 /// # Errors
 ///
