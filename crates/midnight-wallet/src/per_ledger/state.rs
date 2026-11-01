@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::helpers;
-use helpers::coin_structure::transfer::SenderEvidence;
 use helpers::midnight_serialize::tagged_deserialize;
 use helpers::mn_ledger::events::EventDetails;
 use helpers::mn_ledger::semantics::ZswapLocalStateExt;
@@ -1151,16 +1150,11 @@ impl Wallet {
             || Some(last_tx_id) != self.last_tx_id
             || last_block_height > self.last_block_height;
         let parameters_changed = parameters != self.parameters;
-        // Captured before the overwrite for the same reason the pending set
-        // is merged rather than replaced: a registration added after this
-        // resync's plan was snapshotted is not in the replayed state.
-        let registrations = self.watched_coins();
 
         self.dust_wallet = dust_wallet;
         self.dust_event_id = dust_event_id;
         self.zswap_state = zswap_state;
         self.zswap_event_id = zswap_event_id;
-        self.carry_registrations(registrations);
         self.unshielded_utxos = unshielded_utxos;
         self.last_tx_id = Some(last_tx_id);
         self.last_block_height = last_block_height;
@@ -1249,34 +1243,12 @@ impl Wallet {
         self.persist(forgot)
     }
 
-    /// See [`crate::Wallet::watched_coins`].
-    pub fn watched_coins(&self) -> Vec<crate::CoinInfo> {
-        // The ledger's map iterates in a deterministic but unspecified order,
-        // which callers must not depend on. Sorting gives them one they can.
-        let mut coins: Vec<crate::CoinInfo> = self
-            .registered_coins()
-            .into_iter()
-            .map(IntoSdk::into_sdk)
-            .collect();
-        coins.sort_unstable();
-        coins
-    }
-
     fn registered_coins(&self) -> Vec<helpers::CoinInfo> {
         self.zswap_state
             .pending_outputs
             .iter()
             .map(|(_commitment, coin)| *coin)
             .collect()
-    }
-
-    /// Whether the wallet's claimed coin set holds `coin`, which it keys by
-    /// the nullifier this wallet's secret key derives for it.
-    fn holds_coin(&self, coin: &helpers::CoinInfo) -> bool {
-        let nullifier = coin.nullifier(&SenderEvidence::User(std::borrow::Cow::Borrowed(
-            &self.secret_keys.coin_secret_key,
-        )));
-        self.zswap_state.coins.contains_key(&nullifier)
     }
 
     /// Every coin a state rebuilt from scratch must be told about before the
@@ -1309,22 +1281,6 @@ impl Wallet {
             .collect()
     }
 
-    /// Put registrations back after a replayed `zswap_state` replaced the one
-    /// that held them, skipping any coin the new state already holds.
-    ///
-    /// Every path that replaces `zswap_state` takes its input from a replay
-    /// that started before the caller could register anything, so without
-    /// this a registration made during the replay would be dropped with no
-    /// error.
-    pub(crate) fn carry_registrations(&mut self, registrations: Vec<crate::CoinInfo>) {
-        let coin_public_key = self.secret_keys.coin_public_key();
-        for coin in registrations.into_iter().map(IntoLedger::into_ledger) {
-            if !self.holds_coin(&coin) {
-                self.zswap_state = self.zswap_state.watch_for(&coin_public_key, &coin);
-            }
-        }
-    }
-
     /// Snapshot the inputs of a shielded rescan's replay phase. See
     /// [`ShieldedRescanPlan`] for the intended plan → run → commit flow.
     pub fn shielded_rescan_plan(&self) -> ShieldedRescanPlan {
@@ -1354,10 +1310,8 @@ impl Wallet {
             zswap_state,
             zswap_event_id,
         } = commit;
-        let registrations = self.watched_coins();
         self.zswap_state = zswap_state;
         self.zswap_event_id = zswap_event_id;
-        self.carry_registrations(registrations);
         self.persist(true)
     }
 }
@@ -2005,29 +1959,10 @@ mod tests {
                 .contains_key(&commitment_of(&wallet, &coin)),
             "registration must key on the commitment a replay meets on chain"
         );
-        assert_eq!(wallet.watched_coins(), vec![coin]);
     }
 
-    /// The order the ledger's map iterates in is deterministic but
-    /// unspecified, so the accessor sorts. Callers that compare or display
-    /// the list need an order they can rely on.
-    #[test]
-    fn watched_coins_returns_a_stable_order() {
-        let mut wallet = test_wallet(None);
-        let coins = [
-            unreachable_coin(9, 42),
-            unreachable_coin(1, 7),
-            unreachable_coin(5, 100),
-        ];
-        wallet.watch_for_coins(coins).unwrap();
-
-        let mut expected = coins;
-        expected.sort_unstable();
-        assert_eq!(wallet.watched_coins(), expected.to_vec());
-    }
-
-    /// A registration that matches no on-chain output would otherwise sit in
-    /// the watched set and ride along on every later replay.
+    /// A registration that matches no on-chain output would otherwise ride
+    /// along on every later replay.
     #[test]
     fn forget_coin_drops_a_registration() {
         let mut wallet = test_wallet(None);
@@ -2037,8 +1972,7 @@ mod tests {
 
         wallet.forget_coin(wrong).unwrap();
 
-        assert_eq!(wallet.watched_coins(), vec![right]);
-        assert!(!wallet.coins_to_register().contains(&wrong.into_ledger()));
+        assert_eq!(wallet.registered_coins(), vec![right.into_ledger()]);
     }
 
     /// Forgetting is about registrations, not coins. A claimed coin has no
@@ -2135,13 +2069,14 @@ mod tests {
         assert_eq!(stored_generations(dir.path()), vec![1]);
     }
 
-    /// A rescan's replay starts before the caller can register anything, so a
-    /// registration made while it runs is missing from the state it commits.
+    /// A rescan's plan seeds the replay with every registration, so one
+    /// missing from the state it commits was consumed: the replay claimed the
+    /// coin, and here also saw it spent. Putting the registration back would
+    /// make every later replay watch for a coin that is gone.
     #[test]
-    fn commit_shielded_rescan_carries_a_registration_made_during_the_replay() {
+    fn commit_shielded_rescan_keeps_no_registration_its_replay_consumed() {
         let mut wallet = test_wallet(None);
-        let coin = unreachable_coin(9, 42);
-        wallet.watch_for_coin(coin).unwrap();
+        wallet.watch_for_coin(unreachable_coin(9, 42)).unwrap();
 
         wallet
             .commit_shielded_rescan(ShieldedRescanCommit {
@@ -2150,7 +2085,7 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(wallet.watched_coins(), vec![coin]);
+        assert!(wallet.registered_coins().is_empty());
     }
 
     /// Storage generations present on disk, identified by the `zswap-N.bin`
@@ -2509,7 +2444,7 @@ mod tests {
             assert_eq!(claimed[0].value, 42);
             assert_eq!(claimed[0].nonce, [9u8; 32]);
             assert!(
-                wallet.watched_coins().is_empty(),
+                wallet.registered_coins().is_empty(),
                 "a claimed registration is consumed"
             );
 
@@ -2589,41 +2524,20 @@ mod tests {
         }
     }
 
-    /// A resync's plan is snapshotted before its replay and committed after,
-    /// so a registration made in between is not in the state it commits.
-    /// Dropping it would leave the caller with a coin nothing can claim and
-    /// no record that it was ever registered.
+    /// A resync's replay starts from the plan's registrations, so one missing
+    /// from the state it commits was consumed: the replay claimed the coin,
+    /// and here also saw it spent. Putting the registration back would make
+    /// every later replay watch for a coin that is gone.
     #[test]
-    fn commit_resync_carries_a_registration_made_during_the_replay() {
+    fn commit_resync_keeps_no_registration_its_replay_consumed() {
         let mut wallet = test_wallet(None);
-        let commit = noop_commit(&wallet);
+        wallet.watch_for_coin(unreachable_coin(9, 42)).unwrap();
 
-        let coin = unreachable_coin(9, 42);
-        wallet.watch_for_coin(coin).unwrap();
-        wallet.commit_resync(commit).unwrap();
-
-        assert_eq!(wallet.watched_coins(), vec![coin]);
-    }
-
-    /// A registration the replay claimed is not carried back: the coin is
-    /// held now, and a stale pending output would make `watched_coins` report
-    /// a coin the wallet already has.
-    #[test]
-    fn commit_resync_drops_a_registration_its_replay_claimed() {
-        let mut wallet = test_wallet(None);
-        let coin = unreachable_coin(9, 42);
-        wallet.watch_for_coin(coin).unwrap();
-
-        // The replay met the output and claimed it, so the committed state
-        // holds the coin and no longer carries the registration.
         let mut commit = noop_commit(&wallet);
-        commit.zswap_state = ZswapLocalState::new()
-            .insert_coin(&wallet.secret_keys, coin.into_ledger())
-            .expect("insert claimed coin");
+        commit.zswap_state = ZswapLocalState::new();
         wallet.commit_resync(commit).unwrap();
 
-        assert_eq!(wallet.spendable_shielded_coins().len(), 1);
-        assert!(wallet.watched_coins().is_empty());
+        assert!(wallet.registered_coins().is_empty());
     }
 
     /// Mock-WebSocket-server test for a replay's resume, driven through the
