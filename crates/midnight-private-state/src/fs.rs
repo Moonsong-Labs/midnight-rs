@@ -1018,7 +1018,8 @@ fn create_private_dir(dir: &Path) -> Result<(), PrivateStateError> {
 
 /// [`midnight_owner_only::replace`] (see the module docs).
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), PrivateStateError> {
-    midnight_owner_only::replace(path, contents).map_err(|e| PrivateStateError::Io(e.to_string()))
+    midnight_owner_only::replace(path, contents)
+        .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", path.display())))
 }
 
 /// `None` when `result` failed with `NotFound`. Any other error becomes
