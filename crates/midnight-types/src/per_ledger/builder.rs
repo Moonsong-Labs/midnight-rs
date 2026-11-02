@@ -957,16 +957,6 @@ fn ttl_after(
     Ok(chain_time + helpers::Duration::from_secs(secs))
 }
 
-/// The block time of `context`, which Dust spends declare as their `ctime`,
-/// and the TTL of the build's intents. See [`intent_ttl`].
-fn now_and_ttl(
-    context: &BuildContext,
-    ttl: Option<std::time::Duration>,
-) -> Result<(Timestamp, Timestamp), WalletError> {
-    let now = context.latest_block_context().tblock;
-    Ok((now, intent_ttl(context, ttl)?))
-}
-
 /// Refuse `ttl` when the transaction that `tx_info` describes will have no
 /// intent to carry it: it has none of its own, and it pays no fee, which
 /// would add one.
@@ -988,7 +978,8 @@ async fn assemble_unproven(
     ttl: Option<std::time::Duration>,
 ) -> Result<(UnprovenTx, Timestamp, Timestamp), WalletError> {
     refuse_ttl_without_intent(tx_info, ttl)?;
-    let (now, ttl) = now_and_ttl(&tx_info.context, ttl)?;
+    let now = tx_info.context.latest_block_context().tblock;
+    let ttl = intent_ttl(&tx_info.context, ttl)?;
 
     let guaranteed_offer = tx_info
         .guaranteed_offer
