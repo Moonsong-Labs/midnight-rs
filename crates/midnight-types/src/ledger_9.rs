@@ -13,7 +13,7 @@ mod inputs;
 
 pub use builder::{
     BuildInputs, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external, chain_time,
-    fee_speck, intent_ttl, prepare_no_validate,
+    fee_speck, longest_ttl, prepare_no_validate,
 };
 pub(crate) use builder::{parse_wallet_address, shielded_destination};
 pub use inputs::{PreparedInput, prepare_shielded_inputs};

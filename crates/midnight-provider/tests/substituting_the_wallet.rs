@@ -133,7 +133,6 @@ macro_rules! stub_builds {
                     midnight_helpers::DefaultDB,
                     midnight_helpers::$ledger::BuildContext,
                 >,
-                _ttl: Option<std::time::Duration>,
             ) -> Result<midnight_wallet_facade::$ledger::ReservedBuild, WalletError> {
                 Err(WalletError::Transfer("stub wallet funds nothing".into()))
             }
@@ -142,7 +141,6 @@ macro_rules! stub_builds {
                 &self,
                 _context: &Arc<midnight_helpers::$ledger::BuildContext>,
                 _nullifiers: Vec<Nullifier>,
-                _ttl: Option<std::time::Duration>,
                 _rng: &mut midnight_helpers::StdRng,
             ) -> Result<(Vec<midnight_types::$ledger::PreparedInput>, SpentInputs), WalletError>
             {
@@ -211,7 +209,6 @@ async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
         .prepare_shielded_inputs(
             &context,
             &[coin.clone(), coin],
-            None,
             &mut midnight_helpers::StdRng::seed_from_u64(0),
         )
         .await;

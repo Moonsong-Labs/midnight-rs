@@ -145,7 +145,6 @@ pub(crate) async fn maintenance_funded(
     build_with_mock_fee_proofs(
         builds,
         single_action_tx_info(builds, context, AttachMaintenance { update }),
-        None,
     )
     .await
 }

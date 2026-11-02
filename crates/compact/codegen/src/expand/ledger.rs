@@ -206,13 +206,6 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_deploy_timeout(timeout))
             }
 
-            /// Make the deploy transaction expire `ttl` after the chain time of the
-            /// build. Defaults to the chain's `global_ttl`. See
-            /// [`midnight_contract::DeployBuilder::with_ttl`].
-            pub fn with_ttl(self, ttl: std::time::Duration) -> Self {
-                Self(self.0.with_ttl(ttl))
-            }
-
             /// Submit the deploy transaction and return a `PendingDeploy` handle.
             ///
             /// Use [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`]
@@ -1059,7 +1052,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // typed result. `__circuits` is destructured from `self` at the call
         // site below; `ir`, `program` and `__args` come from the shared `setup`.
         let call_args = quote! {
-            ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), __ttl
+            ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)
         };
         let ret_type = quote! {
             ::core::result::Result<midnight_contract::CallOutcome<#value_ty>, midnight_contract::ContractError>
@@ -1088,7 +1081,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let field_idents = quote! { #(, #ident_list)* };
         let setup = circuit_setup(ledger_name, circuit);
         let open = quote! {
-            let #call_ty { circuits: __circuits, __ttl #field_idents } = self;
+            let #call_ty { circuits: __circuits #field_idents } = self;
             #setup
         };
 
@@ -1098,7 +1091,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         constructors.push(quote! {
             #[doc = #doc]
             pub fn #method_name(&mut self #params) -> #call_ty<'_, 'a, P, Wp> {
-                #call_ty { circuits: self, __ttl: ::core::option::Option::None #field_idents }
+                #call_ty { circuits: self #field_idents }
             }
         });
 
@@ -1110,26 +1103,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             #[doc = #call_doc]
             #[must_use = "does nothing until awaited, sent, built or simulated"]
             pub struct #call_ty<'c, 'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
-                circuits: &'c mut Circuits<'a, P, Wp>,
-                // Named apart from the circuit's arguments, which share the struct.
-                __ttl: ::core::option::Option<::std::time::Duration>
+                circuits: &'c mut Circuits<'a, P, Wp>
                 #params
-            }
-
-            impl<'c, 'a, P, Wp> #call_ty<'c, 'a, P, Wp> {
-                /// Make the call's transaction expire `ttl` after the chain time of the
-                /// build. Defaults to the chain's `global_ttl`, the longest TTL the chain
-                /// accepts. The fee intent expires with it.
-                ///
-                /// Once the TTL passes, a call whose fate is unknown can no longer land,
-                /// and the wallet frees the inputs that its build reserved. A build fails
-                /// with `WalletError::TtlOutOfRange`, inside `ContractError::Provider`,
-                /// when `ttl` is under one second or longer than `global_ttl`. See
-                /// `midnight_contract::Contract::call_with`.
-                pub fn with_ttl(mut self, ttl: ::std::time::Duration) -> Self {
-                    self.__ttl = ::core::option::Option::Some(ttl);
-                    self
-                }
             }
 
             impl<'c, 'a, P, Wp> #call_ty<'c, 'a, P, Wp>

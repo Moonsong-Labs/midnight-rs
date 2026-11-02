@@ -46,21 +46,18 @@ impl DeployResult {
 /// transaction with the inputs its build reserved. A
 /// `shielded_offer` rides in the same transaction, as
 /// [`DeployBuilder::with_shielded_offer`](crate::DeployBuilder::with_shielded_offer)
-/// describes. The transaction expires `ttl` after the chain time of the
-/// build, or after the chain's `global_ttl` for `None`, as
-/// [`DeployBuilder::with_ttl`](crate::DeployBuilder::with_ttl) describes.
+/// describes.
 ///
 /// # Errors
 ///
 /// Returns [`ContractError::ShieldedOfferShortfall`] when the offer's outputs
 /// pay more of a token than its coins hold, and [`ContractError::Provider`]
-/// when the chain refuses `ttl`, the wallet cannot spend a coin of the offer,
-/// the fee balancing fails, or proving fails.
+/// when the wallet cannot spend a coin of the offer, the fee balancing fails,
+/// or proving fails.
 pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     provider: &midnight_provider::MidnightProvider,
     shielded_offer: Option<ShieldedOffer>,
-    ttl: Option<Duration>,
 ) -> Result<DeployResult, ContractError> {
     let offer = shielded_offer.as_ref();
     // Each arm is boxed so this frame holds one generation's future, not both.
@@ -70,7 +67,6 @@ pub async fn deploy_funded(
                 &builds,
                 initial_state,
                 offer,
-                ttl,
             ))
             .await
         }
@@ -79,7 +75,6 @@ pub async fn deploy_funded(
                 &builds,
                 initial_state,
                 offer,
-                ttl,
             ))
             .await
         }

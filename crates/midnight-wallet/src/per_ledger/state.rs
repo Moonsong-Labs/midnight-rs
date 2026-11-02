@@ -2209,9 +2209,8 @@ mod tests {
             "no Dust event moved the anchor"
         );
         assert_eq!(
-            super::super::types::intent_ttl(&context, Some(std::time::Duration::from_secs(300)))
-                .unwrap(),
-            anchor + helpers::Duration::from_secs(900)
+            chain_time(&context.latest_block_context()),
+            anchor + helpers::Duration::from_secs(600)
         );
     }
 

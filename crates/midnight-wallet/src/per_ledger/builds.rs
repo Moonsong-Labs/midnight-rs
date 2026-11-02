@@ -11,7 +11,7 @@ use super::helpers::{
 };
 use super::types::convert::IntoLedger;
 use super::types::{
-    PreparedInput, PreparedTransfer, TransferBuilder, balance_external, intent_ttl,
+    PreparedInput, PreparedTransfer, TransferBuilder, balance_external, longest_ttl,
     prepare_no_validate, prepare_shielded_inputs,
 };
 use crate::LocalWallet;
@@ -68,12 +68,11 @@ impl WalletBuilds for LocalWallet {
     async fn prepare_funded(
         &self,
         mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-        ttl: Option<std::time::Duration>,
     ) -> Result<ReservedBuild, WalletError> {
         let mut guard = self.inner().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
         fund_from(wallet, &mut tx_info)?;
-        let prepared = prepare_no_validate(tx_info, ttl).await?;
+        let prepared = prepare_no_validate(tx_info).await?;
         Ok(reserve(wallet, prepared))
     }
 
@@ -81,7 +80,6 @@ impl WalletBuilds for LocalWallet {
         &self,
         context: &Arc<BuildContext>,
         nullifiers: Vec<Nullifier>,
-        ttl: Option<std::time::Duration>,
         rng: &mut StdRng,
     ) -> Result<(Vec<PreparedInput>, SpentInputs), WalletError> {
         // Nothing to spend, so nothing to hold the wallet or rewrite the
@@ -103,7 +101,6 @@ impl WalletBuilds for LocalWallet {
             });
         }
 
-        let expires_at = intent_ttl(context, ttl)?;
         let prepared = prepare_shielded_inputs(context, wallet.seed(), &ledger_nullifiers, rng)?;
         let reserved_at = context.latest_block_context().tblock;
         wallet.reserve_pending(
@@ -111,7 +108,7 @@ impl WalletBuilds for LocalWallet {
             Vec::new(),
             ledger_nullifiers,
             reserved_at,
-            expires_at,
+            longest_ttl(context),
         );
         Ok((
             prepared,

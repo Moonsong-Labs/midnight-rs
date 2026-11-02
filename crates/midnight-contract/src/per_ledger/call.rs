@@ -102,9 +102,7 @@ pub(crate) fn partition(
 ///
 /// `state` is the contract's state as the Compact side reads it, and
 /// `state_bytes` the encoding the chain served it in. `block_time` is the
-/// time the interpreter ran the circuit at. The transaction expires `ttl`
-/// after the chain time of the build, or after the chain's `global_ttl` for
-/// `None`.
+/// time the interpreter ran the circuit at.
 #[expect(
     clippy::too_many_arguments,
     reason = "the neutral call path hands over what the interpreter ran with, one value each"
@@ -122,7 +120,6 @@ pub(crate) async fn call_transaction(
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
-    ttl: Option<std::time::Duration>,
     pay_fees: bool,
 ) -> Result<TransferResult, ContractError> {
     let helper_addr: ContractAddress = contract_address.into_ledger();
@@ -387,12 +384,7 @@ pub(crate) async fn call_transaction(
     // Runs after the funding view is in the context: reserving before it
     // would hide these coins from it.
     let (prepared, held) = builds
-        .prepare_shielded_inputs(
-            &build_context,
-            &shielded.coins,
-            ttl,
-            &mut tx_info.rng.split(),
-        )
+        .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
         .await?;
     let circuit_offers = CircuitOffers {
         offers,
@@ -408,7 +400,6 @@ pub(crate) async fn call_transaction(
             circuit_offers,
             prepared,
             (change_cpk, change_epk),
-            ttl,
             pay_fees,
         ))
         .await?;
@@ -461,14 +452,13 @@ impl SegmentOffers {
 /// call.
 ///
 /// Any surplus goes back to the wallet as change. When `pay_fees`, the call
-/// also pays its own fee, in an intent that expires with the call's.
+/// also pays its own fee.
 async fn attach_and_prove(
     builds: &Builds<'_>,
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     circuit_offers: CircuitOffers,
     prepared: Vec<PreparedInput>,
     (change_cpk, change_epk): (helpers::CoinPublicKey, helpers::EncryptionPublicKey),
-    ttl: Option<std::time::Duration>,
     pay_fees: bool,
 ) -> Result<TransferResult, ContractError> {
     let CircuitOffers {
@@ -520,7 +510,7 @@ async fn attach_and_prove(
     // its own intent segment, which leaves the circuit proof untouched. A
     // transaction with no user circuit can take
     // `super::deploy::build_with_mock_fee_proofs` instead.
-    let unpaid = prove_without_fee(tx_info, ttl).await?;
+    let unpaid = prove_without_fee(tx_info).await?;
     if !pay_fees {
         return Ok(unpaid);
     }
@@ -532,17 +522,14 @@ async fn attach_and_prove(
 }
 
 /// Build and prove `tx_info` with no fee, and serialize and price the result.
-/// Its intents expire `ttl` after the chain time of the build, or after the
-/// chain's `global_ttl` for `None`.
 ///
 /// `tx_info` must carry no funding seed. The build then draws no Dust, so it
 /// leaves nothing to reserve, and the result names no input.
 /// `Builds::balance_transaction` reserves the Dust that it draws for the fee.
 pub(super) async fn prove_without_fee(
     tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-    ttl: Option<std::time::Duration>,
 ) -> Result<TransferResult, ContractError> {
-    let prepared = super::types::prepare_no_validate(tx_info, ttl)
+    let prepared = super::types::prepare_no_validate(tx_info)
         .await
         .map_err(ProviderError::Wallet)?;
     Ok(prepared.prove().await.map_err(ProviderError::Wallet)?)

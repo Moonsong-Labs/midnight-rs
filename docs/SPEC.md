@@ -134,7 +134,7 @@ provider
   .builds().await                  → Builds::Ledger8(b) | Builds::Ledger9(b) (resyncs first)
       b.build_context().await      → Arc<BuildContext> (evicts expired pending)
       b.execution_context().await  → the half a circuit runs against, with no funding view
-      b.add_funding(&ctx) / b.build_funded(tx_info, ttl) / b.prepare_shielded_inputs(..)
+      b.add_funding(&ctx) / b.build_funded(tx_info) / b.prepare_shielded_inputs(..)
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
   .prepare_reserved(result).await  → PreparedTx that holds the reservation of the build
@@ -201,7 +201,6 @@ Contract::deploy(&provider)                              // DeployBuilder<'_, P>
   .with_initial_state(LedgerInitialState::default())
   .with_zk_config("compiled")
   [.with_deploy_timeout(...)]
-  [.with_ttl(...)]                                       // default: the chain's global_ttl
 
   .await                                                 // IntoFuture: send + into_contract
     │
@@ -216,12 +215,12 @@ Internally:
 ```
 with_zk_config(initial_state, zk_config)      // load *.verifier files into state.operations
   ↓
-deploy_funded(state, provider, shielded_offer, ttl)
+deploy_funded(state, provider, shielded_offer)
   ├─ provider.builds().await                  // resync wallet, pick its generation's Builds
   ├─ builds.execution_context().await         // build that generation's context
   ├─ builds.proof_provider()                  // that generation's prover (ProofProviders)
   ├─ build deploy intent (state re-encoded for the generation)
-  ├─ no offer: builds.build_funded(tx_info, ttl).await  → DeployResult { address, transaction }
+  ├─ no offer: builds.build_funded(tx_info).await  → DeployResult { address, transaction }
   │   ├─ one transition: add the funding view, balance the fee with mock
   │   │  proofs (speculative_spend loop), record what it drew
   │   └─ prove the balanced tx once, for real, with the wallet free
