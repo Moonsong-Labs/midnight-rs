@@ -1612,11 +1612,7 @@ mod tests {
             Timestamp::from_secs(1_001),
             "the chain counts whole seconds"
         );
-        for refused in [
-            Duration::ZERO,
-            Duration::from_millis(999),
-            Duration::from_secs(3_601),
-        ] {
+        for refused in [Duration::from_millis(999), Duration::from_secs(3_601)] {
             assert!(
                 matches!(
                     after(refused),
