@@ -20,8 +20,10 @@ CARGO ?= cargo
 #    them builds them again.
 # 3. Run `make check-natives`, and update COMPACT_NATIVES with what it reports.
 # 4. For a new compiler `major.minor`, change SUPPORTED_COMPILER_FAMILY in
-#    crates/compact/codegen/src/types.rs and the version in
-#    crates/compact/bindgen-macro/tests/ui/fail/version-mismatch.stderr.
+#    crates/compact/codegen/src/types.rs, the version in
+#    crates/compact/bindgen-macro/tests/ui/fail/version-mismatch.stderr, and
+#    the compiler-version in
+#    crates/compact/bindgen-macro/tests/ui/fixtures/unknown-type.sexp.
 # 5. Replace the old commit in README.md, docs/compact-natives.md and
 #    crates/midnight-contract/tests/fixtures/README.md.
 COMPACT_REV    := fa2181fbc6dac2135defdb4f55ce10d8332185d5
