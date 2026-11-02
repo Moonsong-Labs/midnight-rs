@@ -126,10 +126,7 @@ impl PreparedTransfer {
 
     /// The block time of the build context that this build selected against.
     /// Reserve its inputs with this stamp, which [`Self::spent_inputs`] gives
-    /// each of them.
-    ///
-    /// A wallet anchors that block time at its Dust state, so the stamp can
-    /// trail the chain time that [`Self::expires_at`] counts from.
+    /// each of them. It can trail the [`chain_time`] of the context.
     pub fn reserved_at(&self) -> Timestamp {
         self.reserved_at
     }
