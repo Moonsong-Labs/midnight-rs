@@ -3321,7 +3321,6 @@ dependencies = [
 name = "midnight-owner-only"
 version = "0.1.0"
 dependencies = [
- "atomic-write-file",
  "tempfile",
 ]
 

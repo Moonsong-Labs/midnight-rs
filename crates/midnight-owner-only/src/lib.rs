@@ -1,19 +1,16 @@
-//! Owner-only directories and durable files for the on-disk stores of the SDK.
+//! Owner-only directories and files for the on-disk stores of the SDK.
 //!
-//! On Unix, a directory gets mode 0700, and a file gets mode 0600 masked by
-//! the umask. A call also narrows a path that already exists to that mode. On
-//! other platforms, a path keeps the default permissions.
+//! On Unix, a directory gets mode 0700 and a file gets mode 0600. A call also
+//! narrows a path that already exists to that mode. On other platforms, a path
+//! keeps the default permissions.
 //!
-//! [`replace`] syncs the file to disk before it renames the file into place,
-//! on every platform. So after a crash or a power loss, the file holds the old
-//! contents or the new contents. On Unix, [`replace`] also syncs the directory
-//! after the rename.
+//! [`write()`] syncs the file to disk, and [`sync_dir`] syncs a directory. A
+//! store that writes a temporary sibling, renames it into place and then syncs
+//! the directory keeps the old contents or the new contents after a power loss.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::Path;
-
-use atomic_write_file::AtomicWriteFile;
 
 /// Creates `dir` and its missing ancestors, readable only by the owner.
 ///
@@ -38,43 +35,40 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)
 }
 
-/// Replaces the contents of `path` with `contents`, in a file readable only by
-/// the owner.
+/// Writes `contents` to `path`, in a file readable only by the owner, and
+/// syncs the file to disk.
 ///
-/// The call writes `contents` to a hidden temporary file in the directory of
-/// `path`, named `.<file name>.<random suffix>`. Then
-/// [`AtomicWriteFile::commit`] syncs that file and renames it to `path`. On
-/// Unix, the commit then syncs the directory. After a crash or a power loss,
-/// `path` holds the old contents or the new contents. A crash, or a commit
-/// that fails at or before the rename, can leave the temporary file. On Unix,
-/// the file gets mode 0600 masked by the umask, also when `path` exists with
-/// another mode.
+/// On Unix, the file gets mode 0600, also when it exists. The call replaces
+/// the contents of an existing file.
 ///
 /// # Errors
 ///
-/// Returns the error of the open, of the write or of the commit. A file system
-/// that cannot sync a file or a directory fails the call. The commit syncs the
-/// directory after the rename, so `path` can hold the new contents when the
-/// call fails.
-pub fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
+/// Returns the error of the open, of the mode change, of the write or of the
+/// sync.
+pub fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    use std::io::Write;
     #[cfg(unix)]
     let mut file = {
-        use atomic_write_file::unix::OpenOptionsExt as _;
-        use std::os::unix::fs::OpenOptionsExt as _;
-        AtomicWriteFile::options()
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
             .mode(0o600)
-            .preserve_mode(false)
-            .try_preserve_owner(false)
-            .open(path)?
+            .open(path)?;
+        // `mode` applies only when the open creates the file. Narrow an
+        // existing file before the contents land, or they are briefly readable.
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        file
     };
     #[cfg(not(unix))]
-    let mut file = AtomicWriteFile::open(path)?;
+    let mut file = fs::File::create(path)?;
     file.write_all(contents)?;
-    file.commit()
+    file.sync_all()
 }
 
-/// Syncs the entries of `dir` to disk, so a create, a rename or a removal in
-/// `dir` persists after a power loss.
+/// Syncs the entries of `dir` to disk, so a rename or a removal in `dir`
+/// persists after a power loss.
 ///
 /// On platforms other than Unix, the call does nothing, because
 /// [`fs::File::open`] fails on a directory on Windows.
@@ -111,7 +105,7 @@ mod tests {
         fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
 
         super::create_dir_all(&dir).unwrap();
-        super::replace(&file, b"new").unwrap();
+        super::write(&file, b"new").unwrap();
 
         assert_eq!(mode_of(&dir), 0o700);
         assert_eq!(mode_of(&file), 0o600);

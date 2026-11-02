@@ -164,9 +164,13 @@ fn create_private_dir(dir: &Path) -> Result<(), WalletError> {
 }
 
 fn write_atomic(dir: &Path, filename: &str, contents: &[u8]) -> Result<(), WalletError> {
-    let path = dir.join(filename);
-    midnight_owner_only::replace(&path, contents)
-        .map_err(|e| WalletError::Storage(format!("write {}: {e}", path.display())))
+    let tmp = dir.join(format!("{filename}.tmp"));
+    midnight_owner_only::write(&tmp, contents)
+        .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
+    std::fs::rename(&tmp, dir.join(filename))
+        .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))?;
+    midnight_owner_only::sync_dir(dir)
+        .map_err(|e| WalletError::Storage(format!("sync {}: {e}", dir.display())))
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, WalletError> {
