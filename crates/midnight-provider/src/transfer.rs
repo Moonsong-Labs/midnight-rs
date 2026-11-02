@@ -176,14 +176,7 @@ impl<'a> ShieldedTransfer<'a> {
     }
 
     /// Make the transaction expire `ttl` after the chain time of the build.
-    /// See [`TransferRequest::ttl`](crate::TransferRequest::ttl).
-    /// Defaults to the chain's `global_ttl`, the longest TTL the chain accepts.
-    ///
-    /// Once the TTL passes, the transaction can no longer land, and the next
-    /// build frees the inputs it reserved. So after a submit whose fate is
-    /// unknown, such as [`SubmitError::Dropped`](crate::SubmitError::Dropped),
-    /// a rebuild from the same inputs is safe from a double spend after
-    /// `ttl`, not after the whole `global_ttl`.
+    /// See [`UnshieldedTransfer::with_ttl`].
     ///
     /// A Dustless build, [`DustlessBuilder::without_dust`], refuses a TTL with
     /// [`WalletError::TtlWithoutIntent`](midnight_types::WalletError::TtlWithoutIntent):
