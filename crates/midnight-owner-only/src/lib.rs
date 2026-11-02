@@ -6,9 +6,8 @@
 //!
 //! [`replace`] syncs the file to disk before it renames the file into place,
 //! on every platform. So after a crash or a power loss, the file holds the old
-//! contents or the new contents. On Unix, the calls also sync each directory
-//! that they change, so the rename and each directory that [`create_dir_all`]
-//! creates persist after a power loss.
+//! contents or the new contents. On Unix, [`replace`] also syncs the directory
+//! after the rename, so the rename persists after a power loss.
 
 use std::fs;
 use std::io::{self, Write};
@@ -20,30 +19,20 @@ use atomic_write_file::AtomicWriteFile;
 ///
 /// On Unix, each directory that the call creates gets mode 0700, and `dir`
 /// gets mode 0700 also when it exists. An existing ancestor keeps its mode.
-/// The call syncs the parent of each directory that it creates, so the new
-/// directories persist after a power loss. On other platforms, this is
-/// [`std::fs::create_dir_all`].
+/// On other platforms, this is [`std::fs::create_dir_all`].
 ///
 /// # Errors
 ///
-/// Returns the error of the create, of the mode change or of a sync.
+/// Returns the error of the create or of the mode change.
 pub fn create_dir_all(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        let missing: Vec<&Path> = dir
-            .ancestors()
-            .take_while(|ancestor| !ancestor.as_os_str().is_empty() && !ancestor.exists())
-            .collect();
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
-        for created in missing {
-            sync_dir(parent_dir(created))?;
-        }
-        Ok(())
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
     }
     #[cfg(not(unix))]
     fs::create_dir_all(dir)
@@ -108,7 +97,7 @@ pub fn sync_dir(dir: &Path) -> io::Result<()> {
 
 /// The directory that holds `path`, as `open` resolves it: an empty parent is
 /// the current directory.
-#[cfg(unix)]
+#[cfg(target_vendor = "apple")]
 fn parent_dir(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
