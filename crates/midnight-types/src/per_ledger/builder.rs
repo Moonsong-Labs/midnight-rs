@@ -83,15 +83,9 @@ impl PreparedTransfer {
         // Read both from the context and the transaction this build made
         // rather than take them as arguments, so they cannot disagree.
         let reserved_at = tx_info.context.latest_block_context().tblock;
-        let dust_grace_period = tx_info
-            .context
-            .with_ledger_state(|ls| ls.parameters.dust.dust_grace_period);
         let expires_at = tx
             .intents()
-            .map(|(_, intent)| match &intent.dust_actions {
-                Some(dust) => intent.ttl.min(dust.ctime + dust_grace_period),
-                None => intent.ttl,
-            })
+            .map(|(_, intent)| intent.ttl)
             .min()
             .unwrap_or_else(|| longest_ttl(&tx_info.context));
         Self {
@@ -135,20 +129,16 @@ impl PreparedTransfer {
     /// each of them.
     ///
     /// A wallet anchors that block time at its Dust state, so the stamp can
-    /// trail the chain time that the TTL of the intents counts from. See
-    /// [`intent_ttl`].
+    /// trail the chain time that [`Self::expires_at`] counts from.
     pub fn reserved_at(&self) -> Timestamp {
         self.reserved_at
     }
 
     /// The chain time after which this build's transaction can no longer
-    /// land. Reserve its inputs until then.
+    /// land: the earliest TTL of its intents. Reserve its inputs until then.
     ///
-    /// That is the earliest TTL of its intents. An intent that pays with Dust
-    /// can end sooner: the chain refuses its Dust actions once their `ctime`
-    /// is older than the Dust grace period. A transaction with no intent
-    /// carries no TTL, and it gets the chain's `global_ttl` after the chain
-    /// time of the build.
+    /// A transaction with no intent carries no TTL, and it gets the chain's
+    /// `global_ttl` after the chain time of the build.
     pub fn expires_at(&self) -> Timestamp {
         self.expires_at
     }
@@ -1054,9 +1044,8 @@ fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> b
 /// 55MB or more.
 ///
 /// The intents expire `ttl` after the chain time of the build, or after the
-/// chain's `global_ttl` for `None`. See [`intent_ttl`].
-/// [`PreparedTransfer::expires_at`] reports when the transaction can no
-/// longer land.
+/// chain's `global_ttl` for `None`, and [`PreparedTransfer::expires_at`]
+/// reports when. See [`intent_ttl`].
 ///
 /// # Errors
 ///
@@ -1126,9 +1115,7 @@ fn fee_ttl(longest: Timestamp, external: &FinalizedTx) -> Timestamp {
 /// The fee intent expires with the earliest intent of `external`, or after
 /// the chain's `global_ttl` when that comes first. The merged transaction
 /// cannot land once one of its intents expires, so the fee's reservation
-/// ends then at the latest. It ends sooner when the `ctime` of its Dust is
-/// older than the chain's `dust_grace_period` before then. See
-/// [`PreparedTransfer::expires_at`].
+/// ends then too.
 ///
 /// `None` when `external` already balances its Dust. There is nothing to
 /// draw then, and an intent with no spends is one the ledger rejects.
@@ -1685,22 +1672,19 @@ mod tests {
         assert!(refuse_ttl_without_intent(&tx_info, ttl).is_ok());
     }
 
-    /// The build of `tx` on `context`.
-    fn prepared_on(context: &Arc<BuildContext>, tx: UnprovenTx) -> PreparedTransfer {
-        let tx_info = StandardTransactionInfo::new_from_context(
-            context.clone(),
-            Arc::new(helpers::LocalProofServer::default()),
-            None,
-        );
-        PreparedTransfer::new(tx_info, tx, Vec::new())
-    }
-
     /// A reservation must end when its transaction can no longer land, which
     /// is at the earliest TTL of its intents.
     #[test]
     fn a_build_expires_with_its_earliest_intent() {
         let context = context_at(1_000, 1_000);
-        let prepared = |tx| prepared_on(&context, tx);
+        let prepared = |tx| {
+            let tx_info = StandardTransactionInfo::new_from_context(
+                context.clone(),
+                Arc::new(helpers::LocalProofServer::default()),
+                None,
+            );
+            PreparedTransfer::new(tx_info, tx, Vec::new())
+        };
 
         assert_eq!(
             prepared(unproven_expiring_at(&[4_000, 3_000])).expires_at(),
@@ -1709,41 +1693,6 @@ mod tests {
         assert_eq!(
             prepared(unproven_expiring_at(&[])).expires_at(),
             Timestamp::from_secs(1_000) + global_ttl_of(&context)
-        );
-    }
-
-    /// The chain refuses Dust actions once the block time passes their
-    /// `ctime` plus the grace period. A build that pays with Dust cannot land
-    /// after that, whatever its TTL. A Dustless build waits for a sponsor,
-    /// whose Dust brings a later `ctime`, so only its TTL ends it. The window
-    /// counts from the `ctime`, the Dust anchor, not from the later chain time.
-    #[test]
-    fn a_build_that_pays_with_dust_expires_with_its_dust_window() {
-        use helpers::SeedableRng;
-        let anchor = 1_000;
-        let context = context_at(anchor, anchor + 1_000);
-        let prepared = |tx| prepared_on(&context, tx);
-        let ctime = Timestamp::from_secs(anchor);
-        let window_end =
-            ctime + context.with_ledger_state(|ls| ls.parameters.dust.dust_grace_period);
-        let paying_with_dust = |ttl: Timestamp| {
-            let mut intent: helpers::UnprovenIntent<DefaultDB> =
-                Intent::empty(&mut StdRng::seed_from_u64(7), ttl);
-            intent.dust_actions = Some(Sp::new(DustActions {
-                spends: Vec::new().into(),
-                registrations: Vec::new().into(),
-                ctime,
-            }));
-            Transaction::from_intents("undeployed", HashMapStorage::new().insert(1, intent))
-        };
-        let late = window_end + helpers::Duration::from_secs(60);
-
-        assert_eq!(prepared(paying_with_dust(late)).expires_at(), window_end);
-        let early = window_end - helpers::Duration::from_secs(60);
-        assert_eq!(prepared(paying_with_dust(early)).expires_at(), early);
-        assert_eq!(
-            prepared(unproven_expiring_at(&[late.to_secs()])).expires_at(),
-            late
         );
     }
 

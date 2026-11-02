@@ -18,9 +18,9 @@
 //! - **Release**: [`PendingReservations::release`], for a build known to be
 //!   dead.
 //! - **TTL eviction**: once the chain time passes an entry's `expires_at`,
-//!   the transaction it was made for can no longer land, and the entry is
-//!   dropped. This is the backstop for transactions that neither confirm nor
-//!   get released.
+//!   the TTL of the transaction it was made for, that transaction can no
+//!   longer land, and the entry is dropped. This is the backstop for
+//!   transactions that neither confirm nor get released.
 //!
 //! Pending state is persisted to its own file (`pending.json`) so that a
 //! process restart between submit and confirmation does not lose track of
@@ -54,8 +54,7 @@ pub(crate) struct PendingDustBatch {
     pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
     /// The block time of the build, which a release names.
     pub reserved_at: Timestamp,
-    /// The time after which the transaction can no longer land, for TTL
-    /// eviction.
+    /// The TTL of the transaction, for TTL eviction.
     pub expires_at: Timestamp,
 }
 
@@ -185,7 +184,7 @@ impl PendingReservations {
     ///
     /// Reserving on build is what stops a later build re-selecting the same
     /// inputs, but a transaction that is rejected at submit, or simply
-    /// abandoned, would otherwise hold them until the reservation expires. Callers that
+    /// abandoned, would otherwise hold them until its TTL elapses. Callers that
     /// know the transaction is dead hand back what the build reported spending.
     ///
     /// Matching mirrors [`Self::clear_confirmed`]: an unshielded entry goes by
@@ -238,8 +237,8 @@ impl PendingReservations {
 /// Whether a reservation that expires at `expires_at` can still let its
 /// transaction land at the chain time `now`.
 ///
-/// Past `expires_at`, the transaction it was made for can no longer land, so
-/// its inputs are free again.
+/// Past `expires_at`, the TTL of the transaction it was made for, that
+/// transaction is dead, so its inputs are free again.
 pub(crate) fn within_ttl(expires_at: Timestamp, now: Timestamp) -> bool {
     expires_at >= now
 }
@@ -420,7 +419,7 @@ mod tests {
 
     /// A transaction built for one generation cannot land on a chain that
     /// runs another, so its reservations are dead. Loading them would hide
-    /// their inputs until they expire, and would decode another generation's
+    /// their inputs until their TTL, and would decode another generation's
     /// Dust spends with this one's types.
     #[test]
     fn reservations_of_another_generation_are_dropped_at_load() {

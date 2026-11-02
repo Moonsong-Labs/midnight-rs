@@ -106,10 +106,8 @@ impl<'a> Builds<'a> {
     /// this provider's wallet, and only this provider can hand it back.
     ///
     /// The intents expire `ttl` after the chain time of the build, or after
-    /// the chain's `global_ttl` for `None`. The wallet holds the inputs until
-    /// then, or until the `ctime` of the fee Dust is older than the chain's
-    /// `dust_grace_period` when that comes first. See
-    /// [`WalletBuilds::prepare_funded`].
+    /// the chain's `global_ttl` for `None`, and the wallet holds the inputs
+    /// until then. See [`WalletBuilds::prepare_funded`].
     pub async fn build_funded(
         &self,
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
@@ -228,7 +226,7 @@ impl<'a> Builds<'a> {
     /// reaches the prover only through a wallet that says it reserved the
     /// inputs first. A proof that fails hands them back, because the
     /// reservation outlives the decision that made it and would otherwise
-    /// strand them until their reservation expires. For a sponsored fee, the proof
+    /// strand them until their TTL elapses. For a sponsored fee, the proof
     /// includes the merge into the external transaction and its price.
     async fn prove_reserved(
         &self,
