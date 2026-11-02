@@ -1650,10 +1650,11 @@ mod tests {
     }
 
     /// A reservation must end when its transaction can no longer land, which
-    /// is at the earliest TTL of its intents.
+    /// is at the earliest TTL of its intents. With no intent, it gets the
+    /// longest TTL from the chain time, not from the Dust anchor.
     #[test]
     fn a_build_expires_with_its_earliest_intent() {
-        let context = context_at(1_000, 1_000);
+        let context = context_at(1_000, 2_000);
         let prepared = |tx| {
             let tx_info = StandardTransactionInfo::new_from_context(
                 context.clone(),
@@ -1669,7 +1670,7 @@ mod tests {
         );
         assert_eq!(
             prepared(unproven_expiring_at(&[])).expires_at(),
-            Timestamp::from_secs(1_000) + global_ttl_of(&context)
+            Timestamp::from_secs(2_000) + global_ttl_of(&context)
         );
     }
 
