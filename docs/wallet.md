@@ -406,8 +406,6 @@ let pending = provider
 
 `transfer_shielded`, `transfer_unshielded` and `register_dust` take it. The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the build with `WalletError::TtlOutOfRange`, before it spends or proves anything. A Dustless shielded transfer (`.without_dust()`) is a Zswap offer with no intent, so it cannot carry a TTL, and its build fails with `WalletError::TtlWithoutIntent`. A shielded swap half has no `with_ttl` for the same reason.
 
-A shorter TTL bounds two waits: how long a transaction whose fate is unknown can still land, and how long the wallet holds its inputs (see [Pending reservations](#pending-reservations)).
-
 To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder instead of awaiting it:
 
 ```rust
@@ -482,7 +480,7 @@ In-flight spends that have been built but not yet confirmed on-chain are tracked
 - **Prevent double-spending across builds.** Input selection skips reserved coins.
 - **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL passed, as a backstop for transactions that never confirm.
 
-Each reservation holds the TTL of its transaction, the earliest TTL of the transaction's intents. The wallet drops the reservation once the time of the chain's latest block passes it, because the transaction can no longer land. The TTL is the chain's `global_ttl` after the build by default, and `.with_ttl(duration)` on a builder makes it shorter (see [Transfers](#transfers)).
+Each reservation expires at the earliest TTL of its transaction's intents (see [Transfers](#transfers)). The wallet drops the reservation once the time of the chain's latest block passes that TTL, because the transaction can no longer land.
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
