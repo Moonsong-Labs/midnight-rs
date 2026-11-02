@@ -1944,10 +1944,11 @@ mod tests {
         // A resync between the two halves moves the wallet's chain view. The
         // funding pass must carry it over, or the build witnesses a Dust root
         // the context's `ctime` does not resolve to.
+        let tblock = Timestamp::from_secs(1_234);
         wallet.block_context = Some(helpers::make_block_context(
-            Timestamp::from_secs(1_234),
+            tblock,
             Default::default(),
-            Timestamp::from_secs(1_300),
+            tblock,
         ));
         wallet.add_funding(&ctx).expect("add funding");
 
