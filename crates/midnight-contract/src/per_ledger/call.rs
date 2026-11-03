@@ -109,7 +109,9 @@ pub(crate) fn partition(
 ///
 /// `state` is the contract's state as the Compact side reads it, and
 /// `state_bytes` the encoding the chain served it in. `block_time` is the
-/// time the interpreter ran the circuit at.
+/// time the interpreter ran the circuit at. `verifier_key` is the circuit's
+/// verifier key as `zk_config` serves it, which the caller checked against
+/// `state`.
 #[expect(
     clippy::too_many_arguments,
     reason = "the neutral call path hands over what the interpreter ran with, one value each"
@@ -125,6 +127,7 @@ pub(crate) async fn call_transaction(
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
+    verifier_key: &[u8],
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     pay_fees: bool,
@@ -200,16 +203,17 @@ pub(crate) async fn call_transaction(
     let key_location = crate::resolver::register(
         &format_contract_address(&contract_address),
         circuit_name,
+        verifier_key,
         &zk_config,
-    )?;
+    );
     context.update_resolver(super::resolver::shared()).await;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
-    let op = match state_db.operations.get(&entry_point) {
-        Some(op) => (*op).clone(),
-        None => helpers::contract_operation_new(None, None)
-            .map_err(|e| ContractError::Construction(format!("empty operation: {e}")))?,
-    };
+    let op = state_db
+        .operations
+        .get(&entry_point)
+        .map(|op| (*op).clone())
+        .expect("the verifier key check before the run refuses a circuit with no operation");
 
     // 4. The circuit's input and output. Witness private values become the
     //    prototype's private transcript outputs (the ZKIR's private inputs).

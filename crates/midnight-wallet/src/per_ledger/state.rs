@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::helpers;
-use helpers::coin_structure::transfer::SenderEvidence;
 use helpers::midnight_serialize::tagged_deserialize;
 use helpers::mn_ledger::events::EventDetails;
 use helpers::mn_ledger::semantics::ZswapLocalStateExt;
@@ -18,6 +17,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use super::pending::{PendingReservations, within_ttl};
+use super::types::chain_time;
 use super::types::convert::{IntoLedger, IntoSdk};
 use crate::chain_pin::ChainPin;
 use crate::replay::{
@@ -62,6 +62,10 @@ pub struct Wallet {
 
     // Chain parameters (from latest block via indexer HTTP)
     parameters: LedgerParameters,
+    /// The context a build runs at: `tblock` is the Dust anchor
+    /// ([`dust_anchor`]), and `last_block_time` the time of the chain's latest
+    /// block, which a build counts its TTL from. Both differ from the ledger's
+    /// meaning of the fields; see [`chain_time`].
     block_context: Option<BlockContext>,
 
     /// In-flight reservations: spends built locally but not yet observed
@@ -160,11 +164,16 @@ fn make_dust_checkpoint(
 /// The `tblock` that a wallet anchors its block context at, after a replay
 /// whose last Dust event carried `last_dust_block_time`.
 ///
-/// `tblock` sets both the proof's `DustActions.ctime` and the intent's
-/// `ttl = tblock + global_ttl`. The chain checks two things:
+/// `tblock` sets the proof's `DustActions.ctime`. A build counts the TTL of
+/// its intents from `chain_now`, which the block context keeps beside the
+/// anchor as its `last_block_time`. The chain checks two things of `ctime`:
 ///
-/// 1. `root_history.get(ctime)` matches the wallet's Dust root.
-/// 2. `ttl >= chain.current_tblock` when it applies the transaction.
+/// 1. `root_history.get(ctime)` matches the wallet's Dust root. The chain
+///    keeps `root_history` only for `global_ttl`: each block drops the
+///    entries before `tblock - global_ttl`, so an older `ctime` resolves to no
+///    root.
+/// 2. `ctime + dust_grace_period >= chain.current_tblock` when it applies the
+///    transaction.
 ///
 /// Check 1 wants the most recent time that the chain resolves to the wallet's
 /// root: `last_dust_block_time + 1s`. The root history changes only on a Dust
@@ -617,7 +626,7 @@ impl Wallet {
         let block_context = Some(helpers::make_block_context(
             tblock,
             Default::default(),
-            tblock,
+            block_timestamp,
         ));
 
         info!(
@@ -667,13 +676,11 @@ impl Wallet {
             .pending
             .clear_confirmed(&spent_unshielded, &dust_nullifiers);
 
-        // Any pending entry whose TTL window has elapsed against the chain's
-        // current view can no longer produce a valid transaction; drop them
-        // so they don't pollute subsequent build contexts.
+        // Any pending entry whose TTL has passed against the chain's current
+        // view can no longer produce a valid transaction; drop them so they
+        // don't pollute subsequent build contexts.
         if let Some(ref bc) = state.block_context {
-            state
-                .pending
-                .evict_expired(bc.tblock, state.parameters.global_ttl);
+            state.pending.evict_expired(chain_time(bc));
         }
 
         if let Some(dir) = save_dir {
@@ -695,18 +702,21 @@ impl Wallet {
     /// Dust and unshielded reservations live in `Wallet::pending` until either:
     /// - event replay (a sync or a resync) observes the corresponding
     ///   confirmed spends and clears them,
-    /// - or their TTL window elapses (evicted at [`Wallet::build_context_inner`]
-    ///   time).
+    /// - or the chain time passes `expires_at` (evicted at
+    ///   [`Wallet::build_context_inner`] time).
     ///
     /// `shielded_spends` (Zswap coin nullifiers pinned by a contract call) are
     /// cleared by TTL only: once the spend confirms, resync drops the coin from
     /// `zswap_state`, so filtering it out becomes a no-op regardless.
     ///
-    /// `reserved_at` should be the chain time (typically the same anchor used
-    /// to build the transaction); TTL eviction compares against the chain's
-    /// `block_context.tblock`. Confirmed-state files never persist these
-    /// reservations, they live in `pending.json` only and are dropped from
-    /// disk once `Wallet::pending` becomes empty.
+    /// `reserved_at` should be the block time of the build context (typically
+    /// [`PreparedTransfer::reserved_at`](super::types::PreparedTransfer::reserved_at)),
+    /// which a release names. `expires_at` should be the TTL of the
+    /// transaction ([`PreparedTransfer::expires_at`](super::types::PreparedTransfer::expires_at)):
+    /// TTL eviction compares it against the chain time of `block_context`.
+    /// Confirmed-state files never persist these reservations, they live in
+    /// `pending.json` only and are dropped from disk once `Wallet::pending`
+    /// becomes empty.
     ///
     /// When the wallet was synced with a storage directory, the updated
     /// pending set is persisted to `pending.json` immediately so a crash
@@ -719,12 +729,14 @@ impl Wallet {
         unshielded_spends: Vec<SpentUtxoKey>,
         shielded_spends: Vec<helpers::Nullifier>,
         reserved_at: Timestamp,
+        expires_at: Timestamp,
     ) {
         self.pending.reserve(
             dust_batches,
             unshielded_spends,
             shielded_spends,
             reserved_at,
+            expires_at,
         );
         self.persist_pending();
     }
@@ -768,15 +780,17 @@ impl Wallet {
         }
     }
 
-    /// Whether a reservation made at `reserved_at` still holds its inputs.
+    /// Whether a reservation that expires at `expires_at` still holds its
+    /// inputs.
     ///
-    /// A reservation outside [`within_ttl`] at `block_context.tblock` does not,
-    /// because [`Self::add_funding`] evicts it before a build selects. With no
-    /// block context, every reservation holds, as no eviction runs.
-    fn reservation_holds(&self, reserved_at: Timestamp) -> bool {
+    /// A reservation outside [`within_ttl`] at the chain time of
+    /// `block_context` does not, because [`Self::add_funding`] evicts it before
+    /// a build selects. With no block context, every reservation holds, as no
+    /// eviction runs.
+    fn reservation_holds(&self, expires_at: Timestamp) -> bool {
         self.block_context
             .as_ref()
-            .is_none_or(|bc| within_ttl(reserved_at, bc.tblock, self.parameters.global_ttl))
+            .is_none_or(|bc| within_ttl(expires_at, chain_time(bc)))
     }
 
     /// Nullifiers of the shielded coins that a reservation holds; see
@@ -784,7 +798,7 @@ impl Wallet {
     pub(crate) fn reserved_shielded_nullifiers(&self) -> impl Iterator<Item = &helpers::Nullifier> {
         self.pending
             .shielded_spends()
-            .filter(|spend| self.reservation_holds(spend.reserved_at))
+            .filter(|spend| self.reservation_holds(spend.expires_at))
             .map(|spend| &spend.nullifier)
     }
 
@@ -793,7 +807,7 @@ impl Wallet {
     pub(crate) fn reserved_unshielded_keys(&self) -> impl Iterator<Item = &SpentUtxoKey> {
         self.pending
             .unshielded_spends()
-            .filter(|spend| self.reservation_holds(spend.reserved_at))
+            .filter(|spend| self.reservation_holds(spend.expires_at))
             .map(|spend| &spend.key)
     }
 
@@ -802,7 +816,7 @@ impl Wallet {
     pub(crate) fn reserved_dust_nullifiers(&self) -> impl Iterator<Item = &DustNullifier> {
         self.pending
             .dust_batches()
-            .filter(|batch| self.reservation_holds(batch.reserved_at))
+            .filter(|batch| self.reservation_holds(batch.expires_at))
             .flat_map(|batch| batch.spends.iter().map(|spend| &spend.old_nullifier))
     }
 
@@ -852,8 +866,8 @@ impl Wallet {
     ///
     /// Performs no I/O. The caller keeps the wallet synced (typically via
     /// `MidnightProvider::resync_wallet`) and refreshes [`Self::block_context`]
-    /// first, since the embedded `block_context.tblock` drives proof root
-    /// lookup and transaction TTL.
+    /// first, since the embedded block context drives proof root lookup and
+    /// transaction TTL.
     pub fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
         // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
         let ledger_state = LedgerState::with_genesis_settings(
@@ -887,8 +901,8 @@ impl Wallet {
     /// leave the dust state newer than the `ctime` a build reads.
     ///
     /// The only mutation is TTL eviction of expired `pending` entries against
-    /// `block_context.tblock`: entries whose `reserved_at + global_ttl` window
-    /// has elapsed cannot produce a valid transaction, and would block the
+    /// the chain time of `block_context`: entries whose `expires_at` has
+    /// passed cannot produce a valid transaction, and would block the
     /// underlying UTXOs forever otherwise.
     pub fn add_funding(&mut self, ctx: &LedgerContext<DefaultDB>) -> Result<(), WalletError> {
         // One funding view per context. Funding twice would merge a fresh UTXO
@@ -912,8 +926,7 @@ impl Wallet {
         // only place that doesn't require the caller to restart the process
         // to free up UTXOs reserved by transactions that never confirmed.
         if let Some(bc) = self.block_context.as_ref() {
-            self.pending
-                .evict_expired(bc.tblock, self.parameters.global_ttl);
+            self.pending.evict_expired(chain_time(bc));
         }
 
         // Re-anchor the context on the chain view this funding snapshot came
@@ -1151,16 +1164,11 @@ impl Wallet {
             || Some(last_tx_id) != self.last_tx_id
             || last_block_height > self.last_block_height;
         let parameters_changed = parameters != self.parameters;
-        // Captured before the overwrite for the same reason the pending set
-        // is merged rather than replaced: a registration added after this
-        // resync's plan was snapshotted is not in the replayed state.
-        let registrations = self.watched_coins();
 
         self.dust_wallet = dust_wallet;
         self.dust_event_id = dust_event_id;
         self.zswap_state = zswap_state;
         self.zswap_event_id = zswap_event_id;
-        self.carry_registrations(registrations);
         self.unshielded_utxos = unshielded_utxos;
         self.last_tx_id = Some(last_tx_id);
         self.last_block_height = last_block_height;
@@ -1179,7 +1187,7 @@ impl Wallet {
         self.block_context = Some(helpers::make_block_context(
             tblock,
             Default::default(),
-            tblock,
+            chain_tblock,
         ));
 
         // Reservations whose spends this replay just observed confirmed are
@@ -1249,34 +1257,12 @@ impl Wallet {
         self.persist(forgot)
     }
 
-    /// See [`crate::Wallet::watched_coins`].
-    pub fn watched_coins(&self) -> Vec<crate::CoinInfo> {
-        // The ledger's map iterates in a deterministic but unspecified order,
-        // which callers must not depend on. Sorting gives them one they can.
-        let mut coins: Vec<crate::CoinInfo> = self
-            .registered_coins()
-            .into_iter()
-            .map(IntoSdk::into_sdk)
-            .collect();
-        coins.sort_unstable();
-        coins
-    }
-
     fn registered_coins(&self) -> Vec<helpers::CoinInfo> {
         self.zswap_state
             .pending_outputs
             .iter()
             .map(|(_commitment, coin)| *coin)
             .collect()
-    }
-
-    /// Whether the wallet's claimed coin set holds `coin`, which it keys by
-    /// the nullifier this wallet's secret key derives for it.
-    fn holds_coin(&self, coin: &helpers::CoinInfo) -> bool {
-        let nullifier = coin.nullifier(&SenderEvidence::User(std::borrow::Cow::Borrowed(
-            &self.secret_keys.coin_secret_key,
-        )));
-        self.zswap_state.coins.contains_key(&nullifier)
     }
 
     /// Every coin a state rebuilt from scratch must be told about before the
@@ -1309,22 +1295,6 @@ impl Wallet {
             .collect()
     }
 
-    /// Put registrations back after a replayed `zswap_state` replaced the one
-    /// that held them, skipping any coin the new state already holds.
-    ///
-    /// Every path that replaces `zswap_state` takes its input from a replay
-    /// that started before the caller could register anything, so without
-    /// this a registration made during the replay would be dropped with no
-    /// error.
-    pub(crate) fn carry_registrations(&mut self, registrations: Vec<crate::CoinInfo>) {
-        let coin_public_key = self.secret_keys.coin_public_key();
-        for coin in registrations.into_iter().map(IntoLedger::into_ledger) {
-            if !self.holds_coin(&coin) {
-                self.zswap_state = self.zswap_state.watch_for(&coin_public_key, &coin);
-            }
-        }
-    }
-
     /// Snapshot the inputs of a shielded rescan's replay phase. See
     /// [`ShieldedRescanPlan`] for the intended plan → run → commit flow.
     pub fn shielded_rescan_plan(&self) -> ShieldedRescanPlan {
@@ -1354,10 +1324,8 @@ impl Wallet {
             zswap_state,
             zswap_event_id,
         } = commit;
-        let registrations = self.watched_coins();
         self.zswap_state = zswap_state;
         self.zswap_event_id = zswap_event_id;
-        self.carry_registrations(registrations);
         self.persist(true)
     }
 }
@@ -1711,6 +1679,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
 
         let err = match wallet.build_context_inner() {
@@ -1737,20 +1706,41 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
         assert!(wallet.build_context_inner().is_ok());
     }
 
     /// A build evicts an expired reservation before it selects, so the
-    /// balance read must not count one as reserved either.
+    /// balance read must not count one as reserved either. Expiry is in chain
+    /// time, which runs ahead of the Dust anchor: a reservation that expired
+    /// between the two is dead, and one that expires at the chain time is not
+    /// yet.
     #[test]
     fn reserved_dust_nullifiers_skip_an_expired_reservation() {
         let mut wallet = test_wallet(None);
-        let now = Timestamp::from_secs(100_000);
-        wallet.block_context = Some(helpers::make_block_context(now, Default::default(), now));
-        let expired = now - wallet.parameters.global_ttl - helpers::Duration::from_secs(1);
-        wallet.reserve_pending(vec![dust_batch(&[1])], Vec::new(), Vec::new(), expired);
-        wallet.reserve_pending(vec![dust_batch(&[2])], Vec::new(), Vec::new(), now);
+        let anchor = Timestamp::from_secs(100_000);
+        let chain_now = anchor + helpers::Duration::from_secs(600);
+        wallet.block_context = Some(helpers::make_block_context(
+            anchor,
+            Default::default(),
+            chain_now,
+        ));
+        let between = anchor + helpers::Duration::from_secs(300);
+        wallet.reserve_pending(
+            vec![dust_batch(&[1])],
+            Vec::new(),
+            Vec::new(),
+            anchor,
+            between,
+        );
+        wallet.reserve_pending(
+            vec![dust_batch(&[2])],
+            Vec::new(),
+            Vec::new(),
+            anchor,
+            chain_now,
+        );
 
         let reserved: Vec<DustNullifier> = wallet.reserved_dust_nullifiers().copied().collect();
         assert_eq!(reserved, vec![DustNullifier(Fr::from(2u64))]);
@@ -1763,7 +1753,8 @@ mod tests {
         let mut wallet = test_wallet(None);
         let now = Timestamp::from_secs(100_000);
         wallet.block_context = Some(helpers::make_block_context(now, Default::default(), now));
-        let expired = now - wallet.parameters.global_ttl - helpers::Duration::from_secs(1);
+        let reserved_at = now - helpers::Duration::from_secs(60);
+        let expired = now - helpers::Duration::from_secs(1);
         let expired_coin = insert_shielded_coin(&mut wallet, 1, 100);
         let live_coin = insert_shielded_coin(&mut wallet, 2, 200);
         let expired_utxo = tracked_night_utxo();
@@ -1777,12 +1768,14 @@ mod tests {
             Vec::new(),
             vec![expired_utxo.spent_key()],
             vec![expired_coin],
+            reserved_at,
             expired,
         );
         wallet.reserve_pending(
             Vec::new(),
             vec![live_utxo.spent_key()],
             vec![live_coin],
+            reserved_at,
             now,
         );
 
@@ -1835,6 +1828,7 @@ mod tests {
             Vec::new(),
             vec![nullifier],
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
         assert!(wallet.spendable_shielded_coins().is_empty());
 
@@ -1914,6 +1908,7 @@ mod tests {
             vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
 
         let ctx = wallet.execution_context().expect("execution context");
@@ -1977,6 +1972,7 @@ mod tests {
             vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
 
         let loaded = PendingReservations::load(dir.path(), "undeployed", &wallet.storage_id())
@@ -2005,29 +2001,10 @@ mod tests {
                 .contains_key(&commitment_of(&wallet, &coin)),
             "registration must key on the commitment a replay meets on chain"
         );
-        assert_eq!(wallet.watched_coins(), vec![coin]);
     }
 
-    /// The order the ledger's map iterates in is deterministic but
-    /// unspecified, so the accessor sorts. Callers that compare or display
-    /// the list need an order they can rely on.
-    #[test]
-    fn watched_coins_returns_a_stable_order() {
-        let mut wallet = test_wallet(None);
-        let coins = [
-            unreachable_coin(9, 42),
-            unreachable_coin(1, 7),
-            unreachable_coin(5, 100),
-        ];
-        wallet.watch_for_coins(coins).unwrap();
-
-        let mut expected = coins;
-        expected.sort_unstable();
-        assert_eq!(wallet.watched_coins(), expected.to_vec());
-    }
-
-    /// A registration that matches no on-chain output would otherwise sit in
-    /// the watched set and ride along on every later replay.
+    /// A registration that matches no on-chain output would otherwise ride
+    /// along on every later replay.
     #[test]
     fn forget_coin_drops_a_registration() {
         let mut wallet = test_wallet(None);
@@ -2037,8 +2014,7 @@ mod tests {
 
         wallet.forget_coin(wrong).unwrap();
 
-        assert_eq!(wallet.watched_coins(), vec![right]);
-        assert!(!wallet.coins_to_register().contains(&wrong.into_ledger()));
+        assert_eq!(wallet.registered_coins(), vec![right.into_ledger()]);
     }
 
     /// Forgetting is about registrations, not coins. A claimed coin has no
@@ -2135,13 +2111,14 @@ mod tests {
         assert_eq!(stored_generations(dir.path()), vec![1]);
     }
 
-    /// A rescan's replay starts before the caller can register anything, so a
-    /// registration made while it runs is missing from the state it commits.
+    /// A rescan's plan seeds the replay with every registration, so one
+    /// missing from the state it commits was consumed: the replay claimed the
+    /// coin, and here also saw it spent. Putting the registration back would
+    /// make every later replay watch for a coin that is gone.
     #[test]
-    fn commit_shielded_rescan_carries_a_registration_made_during_the_replay() {
+    fn commit_shielded_rescan_keeps_no_registration_its_replay_consumed() {
         let mut wallet = test_wallet(None);
-        let coin = unreachable_coin(9, 42);
-        wallet.watch_for_coin(coin).unwrap();
+        wallet.watch_for_coin(unreachable_coin(9, 42)).unwrap();
 
         wallet
             .commit_shielded_rescan(ShieldedRescanCommit {
@@ -2150,7 +2127,7 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(wallet.watched_coins(), vec![coin]);
+        assert!(wallet.registered_coins().is_empty());
     }
 
     /// Storage generations present on disk, identified by the `zswap-N.bin`
@@ -2210,6 +2187,34 @@ mod tests {
         (dir, wallet)
     }
 
+    /// A resync that keeps the Dust anchor must still move the chain time
+    /// that a build counts its TTL from. A TTL from the anchor reaches the
+    /// chain already expired when it is shorter than the anchor's lag.
+    #[test]
+    fn a_resync_keeps_the_chain_time_beside_the_dust_anchor() {
+        let mut wallet = test_wallet(None);
+        let anchor = Timestamp::from_secs(1_000);
+        wallet.block_context = Some(helpers::make_block_context(
+            anchor,
+            Default::default(),
+            anchor,
+        ));
+        let mut commit = noop_commit(&wallet);
+        commit.chain_tblock = anchor + helpers::Duration::from_secs(600);
+        wallet.commit_resync(commit).unwrap();
+
+        let context = wallet.execution_context().unwrap();
+        assert_eq!(
+            context.latest_block_context().tblock,
+            anchor,
+            "no Dust event moved the anchor"
+        );
+        assert_eq!(
+            chain_time(&context.latest_block_context()),
+            anchor + helpers::Duration::from_secs(600)
+        );
+    }
+
     #[test]
     fn noop_resync_commit_skips_persistence() {
         // Seam for the resync commit path: resync runs before every build,
@@ -2260,6 +2265,7 @@ mod tests {
             vec![key.clone()],
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
 
         let mut commit = noop_commit(&wallet);
@@ -2324,6 +2330,7 @@ mod tests {
             vec![confirmed.clone()],
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
 
         // Snapshot the replay inputs (the plan itself must not mutate).
@@ -2336,6 +2343,7 @@ mod tests {
             vec![late.clone()],
             Vec::new(),
             Timestamp::from_secs(101),
+            Timestamp::MAX,
         );
 
         // The replay observed only the first reservation's spend.
@@ -2369,6 +2377,7 @@ mod tests {
             vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
+            Timestamp::MAX,
         );
 
         assert_eq!(wallet.pending.unshielded_spends().count(), 1);
@@ -2509,7 +2518,7 @@ mod tests {
             assert_eq!(claimed[0].value, 42);
             assert_eq!(claimed[0].nonce, [9u8; 32]);
             assert!(
-                wallet.watched_coins().is_empty(),
+                wallet.registered_coins().is_empty(),
                 "a claimed registration is consumed"
             );
 
@@ -2589,41 +2598,20 @@ mod tests {
         }
     }
 
-    /// A resync's plan is snapshotted before its replay and committed after,
-    /// so a registration made in between is not in the state it commits.
-    /// Dropping it would leave the caller with a coin nothing can claim and
-    /// no record that it was ever registered.
+    /// A resync's replay starts from the plan's registrations, so one missing
+    /// from the state it commits was consumed: the replay claimed the coin,
+    /// and here also saw it spent. Putting the registration back would make
+    /// every later replay watch for a coin that is gone.
     #[test]
-    fn commit_resync_carries_a_registration_made_during_the_replay() {
+    fn commit_resync_keeps_no_registration_its_replay_consumed() {
         let mut wallet = test_wallet(None);
-        let commit = noop_commit(&wallet);
+        wallet.watch_for_coin(unreachable_coin(9, 42)).unwrap();
 
-        let coin = unreachable_coin(9, 42);
-        wallet.watch_for_coin(coin).unwrap();
-        wallet.commit_resync(commit).unwrap();
-
-        assert_eq!(wallet.watched_coins(), vec![coin]);
-    }
-
-    /// A registration the replay claimed is not carried back: the coin is
-    /// held now, and a stale pending output would make `watched_coins` report
-    /// a coin the wallet already has.
-    #[test]
-    fn commit_resync_drops_a_registration_its_replay_claimed() {
-        let mut wallet = test_wallet(None);
-        let coin = unreachable_coin(9, 42);
-        wallet.watch_for_coin(coin).unwrap();
-
-        // The replay met the output and claimed it, so the committed state
-        // holds the coin and no longer carries the registration.
         let mut commit = noop_commit(&wallet);
-        commit.zswap_state = ZswapLocalState::new()
-            .insert_coin(&wallet.secret_keys, coin.into_ledger())
-            .expect("insert claimed coin");
+        commit.zswap_state = ZswapLocalState::new();
         wallet.commit_resync(commit).unwrap();
 
-        assert_eq!(wallet.spendable_shielded_coins().len(), 1);
-        assert!(wallet.watched_coins().is_empty());
+        assert!(wallet.registered_coins().is_empty());
     }
 
     /// Mock-WebSocket-server test for a replay's resume, driven through the

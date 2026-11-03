@@ -113,6 +113,7 @@ pub(crate) async fn call_transaction(
     contract_address: midnight_types::ContractAddress,
     provider: &midnight_provider::MidnightProvider,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
+    verifier_key: &[u8],
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     // When false, skip Dust funding: the call is built proven but fee-less, for
@@ -134,6 +135,7 @@ pub(crate) async fn call_transaction(
                 circuit_name,
                 contract_address,
                 zk_config,
+                verifier_key,
                 coin_encryption_keys,
                 shielded,
                 pay_fees,
@@ -152,6 +154,7 @@ pub(crate) async fn call_transaction(
                 circuit_name,
                 contract_address,
                 zk_config,
+                verifier_key,
                 coin_encryption_keys,
                 shielded,
                 pay_fees,
