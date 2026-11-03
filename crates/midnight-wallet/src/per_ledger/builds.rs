@@ -11,8 +11,8 @@ use super::helpers::{
 };
 use super::types::convert::IntoLedger;
 use super::types::{
-    PreparedInput, PreparedTransfer, TransferBuilder, balance_external, prepare_no_validate,
-    prepare_shielded_inputs,
+    PreparedInput, PreparedTransfer, TransferBuilder, balance_external, longest_ttl,
+    prepare_no_validate, prepare_shielded_inputs,
 };
 use crate::LocalWallet;
 
@@ -23,6 +23,7 @@ fn reserve(wallet: &mut super::Wallet, prepared: PreparedTransfer) -> ReservedBu
         prepared.spent_unshielded_inputs().to_vec(),
         prepared.spent_shielded_inputs().to_vec(),
         prepared.reserved_at(),
+        prepared.expires_at(),
     );
     ReservedBuild::reserved(prepared)
 }
@@ -102,7 +103,13 @@ impl WalletBuilds for LocalWallet {
 
         let prepared = prepare_shielded_inputs(context, wallet.seed(), &ledger_nullifiers, rng)?;
         let reserved_at = context.latest_block_context().tblock;
-        wallet.reserve_pending(Vec::new(), Vec::new(), ledger_nullifiers, reserved_at);
+        wallet.reserve_pending(
+            Vec::new(),
+            Vec::new(),
+            ledger_nullifiers,
+            reserved_at,
+            longest_ttl(context),
+        );
         Ok((
             prepared,
             SpentInputs::from_shielded(nullifiers, reserved_at),

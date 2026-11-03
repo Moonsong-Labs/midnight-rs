@@ -214,6 +214,8 @@ This lets a browser app or a no-filesystem environment ship the same SDK as a se
 
 **midnight-rs** abstracts them behind its own `ZkConfigProvider` trait, which `with_zk_config` takes. A path gives the default `FsZkConfigProvider`, which reads the `keys/` and `zkir/` subdirectories of that path. To serve the artifacts from an embedded bundle, memory or a remote service, implement the trait and pass an `Arc` of it.
 
+Before a call runs its circuit, midnight-rs compares the circuit's local verifier key with the key in the contract state. It refuses a difference with `ContractError::VerifierKeyMismatch`, before any proof. midnight-js checks every circuit when `findDeployedContract` connects. It throws `ContractTypeError` for a ledger 9 artifact, and `VerifierKeyMismatchError` or `BlankVerifierKeySlotError` for a ledger 8 artifact. For a ledger 8 artifact, `submitCallTx` also compares the called circuit's key before the circuit runs. For a ledger 9 artifact, `submitCallTx` refuses a missing operation or an operation with no verifier key before the proof. It does not compare the keys.
+
 ## Contract maintenance / governance
 
 The chain supports three governance operations on a deployed contract:

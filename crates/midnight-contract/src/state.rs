@@ -6,11 +6,14 @@
 //! The other helpers in this module are `pub(crate)` plumbing for the deploy,
 //! call and maintenance paths.
 
+use std::sync::Arc;
+
 use midnight_base_crypto::time::Timestamp;
+use midnight_onchain_runtime::state::EntryPointBuf;
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::BlockHash;
 
-use crate::error::ContractError;
+use crate::error::{ContractError, KeyMismatch};
 
 /// Fetch a contract's state through a provider and deserialize it.
 ///
@@ -87,12 +90,16 @@ pub(crate) async fn state_at_block(
 /// [`verifier_keys`].
 ///
 /// [`ZkConfigProvider`]: crate::zk_config::ZkConfigProvider
-pub(crate) fn populate_verifier_keys(
+pub(crate) async fn populate_verifier_keys(
     mut state: ContractState<InMemoryDB>,
-    zk_config: &dyn crate::zk_config::ZkConfigProvider,
-    declared: Option<&[String]>,
+    zk_config: &Arc<dyn crate::zk_config::ZkConfigProvider>,
+    declared: Option<Vec<String>>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
-    for (circuit, key) in verifier_keys(zk_config, declared)? {
+    let keys = crate::zk_config::read_blocking(zk_config, move |zk_config| {
+        verifier_keys(zk_config, declared.as_deref())
+    })
+    .await?;
+    for (circuit, key) in keys {
         // The Compact side's view is ledger 9's state, whose operation holds
         // either key version.
         let op = crate::ledger_9::state::operation(&circuit, &key)?;
@@ -192,6 +199,46 @@ pub(crate) fn verifier_keys(
         .collect()
 }
 
+/// Check that `state` holds `verifier_key`, the bytes of `circuit`'s compiled
+/// `*.verifier` artifact, as a key of the circuit's operation.
+///
+/// An operation can hold a key of each version. A proof verifies against the
+/// key of its own version, and the tag of the bytes names that version, so
+/// the local key passes when it equals either key.
+pub(crate) fn check_verifier_key(
+    state: &ContractState<InMemoryDB>,
+    circuit: &str,
+    verifier_key: &[u8],
+) -> Result<(), ContractError> {
+    let mismatch = |reason| ContractError::VerifierKeyMismatch {
+        circuit: circuit.to_owned(),
+        reason,
+    };
+    let entry_point: EntryPointBuf = circuit.as_bytes().into();
+    let op = state
+        .operations
+        .get(&entry_point)
+        .ok_or_else(|| mismatch(KeyMismatch::Missing))?;
+    if op.v2.is_none() && op.v3.is_none() {
+        return Err(mismatch(KeyMismatch::Keyless));
+    }
+    let what = format!("verifier key {circuit}");
+    let v2 = op
+        .v2
+        .as_ref()
+        .map(|key| crate::call::tagged_bytes(key, &what))
+        .transpose()?;
+    let v3 = op
+        .v3
+        .as_ref()
+        .map(|key| crate::call::tagged_bytes(key, &what))
+        .transpose()?;
+    if ![v2, v3].iter().flatten().any(|key| key == verifier_key) {
+        return Err(mismatch(KeyMismatch::Mismatched));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +246,75 @@ mod tests {
     fn counter_compiled_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../devnet/contracts/counter/compiled")
+    }
+
+    fn verifier_key_file(contract: &str, circuit: &str) -> Vec<u8> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../../devnet/contracts/{contract}/compiled/keys/{circuit}.verifier"
+            )),
+        )
+        .unwrap()
+    }
+
+    fn mismatch(result: Result<(), ContractError>) -> KeyMismatch {
+        match result {
+            Err(ContractError::VerifierKeyMismatch { reason, .. }) => reason,
+            other => panic!("expected a verifier key mismatch, got {other:?}"),
+        }
+    }
+
+    /// The deploy writes each key in the encoding that the chain stores. A
+    /// check that compares another encoding refuses every call of a deployed
+    /// contract.
+    #[tokio::test]
+    async fn the_check_passes_only_the_key_that_the_contract_holds() {
+        let zk_config: Arc<dyn crate::zk_config::ZkConfigProvider> = Arc::new(
+            crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir()),
+        );
+        let mut state = populate_verifier_keys(ContractState::default(), &zk_config, None)
+            .await
+            .unwrap();
+        let increment = verifier_key_file("counter", "increment");
+        let increment_by = verifier_key_file("counter", "increment_by");
+
+        check_verifier_key(&state, "increment", &increment).unwrap();
+        assert_eq!(
+            mismatch(check_verifier_key(&state, "increment", &increment_by)),
+            KeyMismatch::Mismatched
+        );
+        assert_eq!(
+            mismatch(check_verifier_key(&state, "decrement", &increment)),
+            KeyMismatch::Missing
+        );
+
+        state.operations = state.operations.insert(
+            b"increment"[..].into(),
+            midnight_onchain_runtime::state::ContractOperation::new(None, None),
+        );
+        assert_eq!(
+            mismatch(check_verifier_key(&state, "increment", &increment)),
+            KeyMismatch::Keyless
+        );
+    }
+
+    /// A maintenance update can add a key of the other version beside the
+    /// first one. A check that reads one of the two slots only refuses the key
+    /// in the other.
+    #[test]
+    fn a_key_of_either_version_passes_on_an_operation_that_holds_both() {
+        let v6 = verifier_key_file("counter", "increment");
+        let v7 = verifier_key_file("counter-zkir-v3", "increment");
+        let mut op = crate::ledger_9::state::operation("increment", &v6).unwrap();
+        op.v3 = crate::ledger_9::state::operation("increment", &v7)
+            .unwrap()
+            .v3;
+        let mut state = ContractState::<InMemoryDB>::default();
+        state.operations = state.operations.insert(b"increment"[..].into(), op);
+
+        for key in [v6, v7] {
+            check_verifier_key(&state, "increment", &key).unwrap();
+        }
     }
 
     #[test]
