@@ -868,10 +868,9 @@ impl<'a> TransferBuilder<'a> {
     /// each one again with the same value. It leaves the other tNIGHT UTXOs
     /// unspent, so they keep their age, from which the generationless Dust of a
     /// later registration grows. When no UTXO in the funding view generates
-    /// Dust, the transaction spends one tNIGHT UTXO, because the address can
-    /// still be registered, for example when pending builds reserve every
-    /// UTXO that generates. The Dust that the UTXOs generated stays spendable,
-    /// and it decays to zero at the rate it grew.
+    /// Dust, the transaction carries the deregistration with no unshielded
+    /// offer. The Dust that the UTXOs generated stays spendable, and it decays
+    /// to zero at the rate it grew.
     ///
     /// The first UTXO goes in the guaranteed offer and the others in the
     /// fallible offer. A fallible input adds only a signature check to the
@@ -909,8 +908,6 @@ impl<'a> TransferBuilder<'a> {
     ///
     /// # Errors
     ///
-    /// - [`WalletError::Transfer`] when the funding view holds no tNIGHT UTXO:
-    ///   the wallet holds none, or pending builds reserve all of them.
     /// - [`WalletError::Transfer`] when the transaction exceeds a block limit,
     ///   because the wallet holds too many tNIGHT UTXOs that generate Dust.
     ///   Lower their number first: a transfer of tNIGHT to the wallet's own
@@ -940,26 +937,20 @@ impl<'a> TransferBuilder<'a> {
             .filter(|u| u.is_night() && unreserved.contains(&u.spent_key()))
             .collect();
         let spent = deregistration_inputs(&night);
-        let Some((first, rest)) = spent.split_first() else {
-            return Err(WalletError::Transfer(
-                "no tNIGHT UTXOs to deregister: the wallet holds none, or pending builds \
-                 reserve all of them"
-                    .into(),
-            ));
-        };
-
-        let intent = IntentInfo {
-            guaranteed_unshielded_offer: Some(respend(std::slice::from_ref(first), &seed)),
-            fallible_unshielded_offer: (!rest.is_empty()).then(|| respend(rest, &seed)),
-            actions: vec![],
-        };
 
         let mut tx_info = StandardTransactionInfo::new_from_context(
             self.context.clone(),
             self.proof_provider.clone(),
             None,
         );
-        tx_info.add_intent(Segment::Fallible.into(), Box::new(intent));
+        if let Some((first, rest)) = spent.split_first() {
+            let intent = IntentInfo {
+                guaranteed_unshielded_offer: Some(respend(std::slice::from_ref(first), &seed)),
+                fallible_unshielded_offer: (!rest.is_empty()).then(|| respend(rest, &seed)),
+                actions: vec![],
+            };
+            tx_info.add_intent(Segment::Fallible.into(), Box::new(intent));
+        }
         tx_info.add_dust_registration(DustRegistrationBuilder {
             wallet: UnshieldedWallet::default(seed.clone()),
             dust_address: None,
@@ -979,22 +970,16 @@ impl<'a> TransferBuilder<'a> {
     }
 }
 
-/// The tNIGHT UTXOs a deregistration spends: each one that generates Dust, or
-/// one UTXO when none does.
+/// The tNIGHT UTXOs a deregistration spends: each one that generates Dust.
 ///
 /// A spend of a UTXO that generates no Dust stops nothing, and the output that
 /// replaces it starts with no age.
 fn deregistration_inputs<'a>(night_utxos: &[&'a TrackedUtxo]) -> Vec<&'a TrackedUtxo> {
-    let generating: Vec<&TrackedUtxo> = night_utxos
+    night_utxos
         .iter()
         .copied()
         .filter(|u| u.is_registered_for_dust())
-        .collect();
-    if generating.is_empty() {
-        night_utxos.iter().copied().take(1).collect()
-    } else {
-        generating
-    }
+        .collect()
 }
 
 /// An unshielded offer that spends `utxos` and pays each one back to `owner`
@@ -1933,13 +1918,6 @@ mod tests {
             .map(|u| u.value)
             .collect();
         assert_eq!(spent, [1, 3]);
-    }
-
-    #[test]
-    fn a_deregistration_with_no_generating_utxo_spends_one() {
-        let a = night_utxo(1, Some(100), false);
-        let b = night_utxo(2, Some(100), false);
-        assert_eq!(deregistration_inputs(&[&a, &b]).len(), 1);
     }
 
     #[test]
