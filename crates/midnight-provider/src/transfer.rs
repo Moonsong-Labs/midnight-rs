@@ -374,6 +374,9 @@ impl DustlessTransaction {
     }
 
     /// Consume this, returning the proven transaction bytes.
+    ///
+    /// It drops the record of the reservation, so clone [`Self::spent`] first
+    /// when the fee payer may never submit.
     pub fn into_bytes(self) -> Vec<u8> {
         self.tx_bytes
     }
