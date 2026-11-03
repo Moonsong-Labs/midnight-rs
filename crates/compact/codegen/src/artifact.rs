@@ -578,14 +578,17 @@ mod tests {
     /// `with_initial_state`. A lowering with no check loads it as runnable.
     #[test]
     fn a_constructor_that_the_interpreter_cannot_run_loads_with_the_reason() {
-        let src = r#"(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
+        let family = crate::types::SUPPORTED_COMPILER_FAMILY;
+        let src = &format!(
+            r#"(analyzed-ir (compiler-version "{family}.0") (language-version "0.25.107")
           (runtime-version "0.18.107") (exports) (contract-types)
           (public-ledger-declaration
             (public-ledger-array
               (%vault.0 (0) (exported #t) (__compact_Cell (tbytes 32))))
             (constructor ()
               (public-ledger %vault.0 (update-with-coin-check 0 1) (0) writeCoin (ttuple)
-                (instructions (ins (cached #t) (n 1)))))))"#;
+                (instructions (ins (cached #t) (n 1)))))))"#
+        );
         let info = load_str(src).expect("an unrunnable constructor loads");
         match info.constructor {
             Some(Err(reason)) => assert!(
