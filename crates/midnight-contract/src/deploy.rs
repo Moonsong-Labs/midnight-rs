@@ -90,11 +90,14 @@ pub async fn deploy_funded(
 /// data. The ledger, on both generations, refuses such a deploy with
 /// `IncorrectChargedState`.
 fn recharged(state: &ContractState<InMemoryDB>) -> ContractState<InMemoryDB> {
-    ContractState::new(
-        (*state.data.get()).clone(),
-        state.operations.clone(),
-        state.maintenance_authority.clone(),
-    )
+    ContractState {
+        balance: state.balance.clone(),
+        ..ContractState::new(
+            (*state.data.get()).clone(),
+            state.operations.clone(),
+            state.maintenance_authority.clone(),
+        )
+    }
 }
 
 /// The pause before the next read of a deployed contract after a read fails.
