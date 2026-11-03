@@ -7,6 +7,10 @@
 //! Counting proofs needs a real prover: mock proving is not available for user
 //! circuits (upstream `MockProver::check` rejects non-builtin circuits).
 //!
+//! A call with the artifacts of another compile of the contract must make no
+//! proof. Its local verifier key is different from the deployed key, so the
+//! call must refuse before the build.
+//!
 //! The same prover then fails on purpose. A call, a deploy and a maintenance
 //! update must each return the failure typed, as `WalletError::Proving` inside
 //! `ContractError::Provider`, so that a caller can match it.
@@ -23,7 +27,7 @@ mod counter {
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use midnight_contract::ContractError;
+use midnight_contract::{ContractError, KeyMismatch};
 use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{MidnightProvider, ProviderError, WalletError};
 
@@ -157,6 +161,33 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         round_after,
         round_before + 1,
         "the call should have advanced the counter"
+    );
+
+    // The same source, compiled for ZKIR v3, gives a v7 verifier key, and the
+    // deploy above stored the v6 key.
+    counter_proofs.reset();
+    let other_compile = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../devnet/contracts/counter-zkir-v3/compiled");
+    let refused = counter::Contract::at(&provider, contract.address())
+        .with_zk_config(other_compile)
+        .build()
+        .circuits()
+        .increment()
+        .await;
+    match refused {
+        Err(ContractError::VerifierKeyMismatch {
+            reason: KeyMismatch::Mismatched,
+            ..
+        }) => {}
+        other => panic!("expected a verifier key mismatch, got {other:?}"),
+    }
+    assert_eq!(
+        (
+            counter_proofs.circuit_proofs(),
+            counter_proofs.dust_only_proofs()
+        ),
+        (0, 0),
+        "a call refused for its verifier key must make no proof"
     );
 
     // No failed build submits, so the dev seed sees no spend. The call fails

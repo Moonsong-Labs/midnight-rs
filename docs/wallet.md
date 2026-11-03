@@ -393,6 +393,19 @@ let pending = provider
 4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
 5. Submits the proven bytes to the node and returns a `PendingTx`.
 
+Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the chain's latest block that the resync read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships), and `Wallet::parameters().global_ttl` gives the value of the connected chain. To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
+
+```rust
+use std::time::Duration;
+
+let pending = provider
+    .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
+    .with_ttl(Duration::from_secs(300))
+    .await?;
+```
+
+`transfer_shielded`, `transfer_unshielded` and `register_dust` take it. The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the build with `WalletError::TtlOutOfRange`, before it spends or proves anything. A Dustless shielded transfer (`.without_dust()`) is a Zswap offer with no intent, so it cannot carry a TTL, and its build fails with `WalletError::TtlWithoutIntent`. A shielded swap half has no `with_ttl` for the same reason.
+
 To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder instead of awaiting it:
 
 ```rust
@@ -425,6 +438,8 @@ Both waits return `Ok` only when the chain applied the transaction. When the tra
 
 When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch variants come from the submit: after `NotSubmitted` the tx never left the process, and after `SubmitRpc` the node can still hold it.
 
+When the fate is unknown, a transaction can still land until its TTL passes. After that, a rebuild from the same inputs is safe from a double spend, and the wallet frees the inputs at its next build. Build with `.with_ttl(duration)` (see [Transfers](#transfers)) to make that wait shorter than `global_ttl`.
+
 ## Recovering a coin the wallet cannot discover
 
 A shielded coin reaches its owner through the discovery ciphertext on its output. That channel fails when the party that built the transaction attached no ciphertext, or sealed it to a key the owner does not hold. The coin still exists, the owner's coin public key still owns it, and it stays spendable, as long as the owner can rebuild its `CoinInfo` (nonce, token type, value) from somewhere else. A contract that evolves one public nonce per mint is such a case: the owner reads the nonce from chain state.
@@ -456,14 +471,16 @@ To check the outcome, look for the coin in `provider.spendable_shielded_coins()`
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-`provider.rescan_shielded()` runs the replay alone. A handle (`Arc<LocalWallet>`) has the same two methods: `watch_for_coins(coins, &provider)` and `rescan_shielded(&provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them. When the wallet's state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync. `Wallet::watched_coins` lists the registrations that no replay claimed, ordered by nonce, then token type, then value.
+`provider.rescan_shielded()` runs the replay alone. A handle (`Arc<LocalWallet>`) has the same two methods: `watch_for_coins(coins, &provider)` and `rescan_shielded(&provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them. When the wallet's state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync.
 
 ## Pending reservations
 
 In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`, persisted as `pending.json` next to the wallet state. They serve two purposes:
 
 - **Prevent double-spending across builds.** Input selection skips reserved coins.
-- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL window elapsed, as a backstop for transactions that never confirm. Transaction TTL defaults to one hour.
+- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL passed, as a backstop for transactions that never confirm.
+
+Each reservation expires at the earliest TTL of the intents that its build made (see [Transfers](#transfers)). The wallet drops the reservation once the time of the chain's latest block passes that TTL, because the transaction can no longer land.
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
