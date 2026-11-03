@@ -94,7 +94,7 @@ provider.submit(&merged).await?;
 
 Two `.without_dust()` calls to different contracts merge into one transaction, and one `balance_transaction` pays for both. The guaranteed parts of both calls apply together or not at all. The guaranteed phase also checks that every fallible Zswap offer can apply, so a fallible Zswap offer that cannot apply fails the whole transaction. Each call's fallible part is in its own segment. It fails alone when its fallible transcript or its fallible unshielded offer fails, and the other call's fallible part still applies. The chain then records `PartialSuccess`, and the wait fails with `ProviderError::NotApplied`.
 
-midnight-js `withContractScopedTransaction` runs several calls to one contract in sequence, and midnight-rs has no such scope, so merge calls to different contracts only. For two calls to the same contract, the node can refuse the merged transaction with `CausalityConstraintViolation`, or a call can fail with `ReadMismatch`.
+midnight-js `withContractScopedTransaction` runs several calls to one contract in sequence. midnight-rs has no such scope, so merge calls to different contracts only. For two calls to the same contract, the node can refuse the merged transaction with `CausalityConstraintViolation`, or a call can fail with `ReadMismatch`.
 
 One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only a whole transaction carries the binding randomness the merge needs, and proving discards the per-input randomness a loose offer would require. So the artifacts exchanged are always full transactions, not offers.
 
