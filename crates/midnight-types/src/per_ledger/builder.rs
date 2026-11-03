@@ -594,7 +594,7 @@ impl<'a> TransferBuilder<'a> {
         }
         tx_info.use_mock_proofs_for_fees(true);
 
-        let mut prepared = prepare_with_ttl(tx_info, self.ttl, pay_fees).await?;
+        let mut prepared = prepare_with_ttl(tx_info, self.ttl).await?;
         prepared.set_spent_shielded_inputs(spent_shielded_inputs);
         Ok(prepared)
     }
@@ -689,7 +689,7 @@ impl<'a> TransferBuilder<'a> {
         }
         tx_info.use_mock_proofs_for_fees(true);
 
-        let mut prepared = prepare_with_ttl(tx_info, self.ttl, pay_fees).await?;
+        let mut prepared = prepare_with_ttl(tx_info, self.ttl).await?;
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
         Ok(prepared)
     }
@@ -851,7 +851,7 @@ impl<'a> TransferBuilder<'a> {
         let spent_unshielded_inputs: Vec<SpentUtxoKey> =
             night_utxos.iter().map(|u| u.spent_key()).collect();
 
-        let mut prepared = prepare_with_ttl(tx_info, self.ttl, true).await?;
+        let mut prepared = prepare_with_ttl(tx_info, self.ttl).await?;
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
         Ok(prepared)
     }
@@ -973,7 +973,7 @@ impl<'a> TransferBuilder<'a> {
         let spent_unshielded_inputs: Vec<SpentUtxoKey> =
             spent.iter().map(|u| u.spent_key()).collect();
 
-        let mut prepared = prepare_with_ttl(tx_info, self.ttl, pay_fees).await?;
+        let mut prepared = prepare_with_ttl(tx_info, self.ttl).await?;
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
         Ok(prepared)
     }
@@ -1129,13 +1129,17 @@ fn ttl_after(
 }
 
 /// Refuse `ttl` when the transaction that `tx_info` describes will have no
-/// intent to carry it: it has none of its own, and it pays no fee, which
-/// would add one.
+/// intent to carry it: it has none of its own, and it neither pays a fee nor
+/// carries a Dust registration, either of which adds one.
 fn refuse_ttl_without_intent(
     tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>,
     ttl: Option<std::time::Duration>,
 ) -> Result<(), WalletError> {
-    if ttl.is_some() && tx_info.intents.is_empty() && !pays_own_fee(tx_info) {
+    if ttl.is_some()
+        && tx_info.intents.is_empty()
+        && !pays_own_fee(tx_info)
+        && tx_info.dust_registrations.is_empty()
+    {
         return Err(WalletError::TtlWithoutIntent);
     }
     Ok(())
@@ -1185,19 +1189,23 @@ async fn assemble_unproven(
     Ok((tx, now, ttl))
 }
 
-/// Whether `tx_info` draws Dust for its own fee: it names a funding seed or
-/// registers a Dust address.
+/// Whether `tx_info` draws Dust for its own fee: it names a funding seed, or
+/// a Dust registration that names a Dust address. A deregistration names no
+/// Dust address, so it pays from a funding seed, or another wallet pays.
 fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> bool {
-    !tx_info.funding_seeds.is_empty() || !tx_info.dust_registrations.is_empty()
+    !tx_info.funding_seeds.is_empty()
+        || tx_info
+            .dust_registrations
+            .iter()
+            .any(|registration| registration.dust_address.is_some())
 }
 
 /// Select the inputs and balance the fee, and stop before proving.
 ///
-/// `pay_fees` says whether the build draws Dust for its own fee, from the
-/// funding seeds of `tx_info` or from the fee allowance of its Dust
-/// registrations. When it is false, the transaction carries no Dust spends,
-/// and another wallet pays its fee with [`balance_external`]. The Dust
-/// registrations of `tx_info` go into the transaction in both cases.
+/// The build pays its own fee when `tx_info` names a funding seed or
+/// registers a Dust address. Otherwise the transaction carries no Dust
+/// spends, and another wallet pays its fee with [`balance_external`]. The
+/// Dust registrations of `tx_info` go into the transaction in both cases.
 ///
 /// Everything here reads the build context rather than the wallet, so a caller
 /// holding a wallet can prepare, record what the build will spend, release the
@@ -1205,8 +1213,8 @@ fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> b
 /// step, so keeping it out of that span is what stops one build blocking every
 /// other consumer.
 ///
-/// Requires mock fee proofs when `pay_fees` is true. Balancing without them
-/// has to prove each round, which is the cost preparing exists to avoid.
+/// Requires mock fee proofs when the build funds itself. Balancing without
+/// them has to prove each round, which is the cost preparing exists to avoid.
 ///
 /// The build skips the helpers' final `well_formed()` check, as midnight-js
 /// does. The chain validates the transaction against its own `root_history`.
@@ -1214,9 +1222,8 @@ fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> b
 /// 55MB or more.
 pub async fn prepare_no_validate(
     tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-    pay_fees: bool,
 ) -> Result<PreparedTransfer, WalletError> {
-    prepare_with_ttl(tx_info, None, pay_fees).await
+    prepare_with_ttl(tx_info, None).await
 }
 
 /// [`prepare_no_validate`], with the intent TTL that [`intent_ttl`] gives for
@@ -1224,21 +1231,18 @@ pub async fn prepare_no_validate(
 async fn prepare_with_ttl(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     ttl: Option<std::time::Duration>,
-    pay_fees: bool,
 ) -> Result<PreparedTransfer, WalletError> {
     let (mut tx, now, ttl) = assemble_unproven(&mut tx_info, ttl).await?;
 
-    let (tx, dust_batches) = if !pay_fees {
-        if !tx_info.dust_registrations.is_empty() {
-            apply_dust(
-                &tx_info,
-                &mut tx,
-                &[],
-                tx_info.rng.clone().split(),
-                ttl,
-                now,
-            );
-        }
+    let (tx, dust_batches) = if !pays_own_fee(&tx_info) {
+        apply_dust(
+            &tx_info,
+            &mut tx,
+            &[],
+            tx_info.rng.clone().split(),
+            ttl,
+            now,
+        );
         (tx, Vec::new())
     } else if tx_info.mock_proofs_for_fees {
         balance_fees_with_mocks(&mut tx_info, tx, now, ttl)?

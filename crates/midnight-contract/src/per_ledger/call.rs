@@ -533,7 +533,7 @@ async fn attach_and_prove(
 pub(super) async fn prove_without_fee(
     tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
 ) -> Result<TransferResult, ContractError> {
-    let prepared = super::types::prepare_no_validate(tx_info, false)
+    let prepared = super::types::prepare_no_validate(tx_info)
         .await
         .map_err(ProviderError::Wallet)?;
     Ok(prepared.prove().await.map_err(ProviderError::Wallet)?)
