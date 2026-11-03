@@ -446,11 +446,22 @@ impl<'a> IntoFuture for DustRegistration<'a> {
 #[must_use = "does nothing until awaited or built"]
 pub struct DustDeregistration<'a> {
     provider: &'a MidnightProvider,
+    ttl: Option<std::time::Duration>,
 }
 
 impl<'a> DustDeregistration<'a> {
     pub(crate) fn new(provider: &'a MidnightProvider) -> Self {
-        Self { provider }
+        Self {
+            provider,
+            ttl: None,
+        }
+    }
+
+    /// Make the transaction expire `ttl` after the chain time of the build.
+    /// See [`UnshieldedTransfer::with_ttl`].
+    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
     }
 
     /// Build the deregistration transaction without submitting. Spends and
@@ -462,7 +473,9 @@ impl<'a> DustDeregistration<'a> {
     }
 
     fn into_request(self, pay_fees: bool) -> TransferRequest {
-        TransferKind::DustDeregistration { pay_fees }.into()
+        let mut request = TransferRequest::from(TransferKind::DustDeregistration { pay_fees });
+        request.ttl = self.ttl;
+        request
     }
 }
 
