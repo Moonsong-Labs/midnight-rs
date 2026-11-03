@@ -705,11 +705,14 @@ impl MidnightProvider {
     /// cleanly.
     ///
     /// Merge calls to different contracts. Their guaranteed parts apply
-    /// together or not at all, and each call's fallible part can fail alone,
-    /// which the chain records as [`crate::Verdict::PartialSuccess`]. For two
-    /// calls to the same contract, the node can refuse the whole merged
-    /// transaction. When it accepts the transaction, a call can still fail,
-    /// because each call ran on the state from before the merge.
+    /// together or not at all. The guaranteed phase also checks that every
+    /// fallible Zswap offer can apply, so a fallible Zswap offer that cannot
+    /// apply fails the whole transaction. A call's fallible part fails alone
+    /// only when its fallible transcript or its fallible unshielded offer
+    /// fails, which the chain records as [`crate::Verdict::PartialSuccess`].
+    /// For two calls to the same contract, the node can refuse the whole
+    /// merged transaction. When it accepts the transaction, a call can still
+    /// fail, because each call ran on the state from before the merge.
     ///
     /// Errors ([`ProviderError::Transaction`]) when given no transactions, when
     /// a byte string fails to deserialize, when the transactions are of
