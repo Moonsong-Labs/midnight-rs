@@ -859,61 +859,31 @@ impl<'a> TransferBuilder<'a> {
     /// Build a Dust deregistration transaction, which stops the wallet's
     /// tNIGHT from generating Dust.
     ///
-    /// The deregistration removes the link from the wallet's unshielded
-    /// address to its Dust address, so tNIGHT that arrives later generates no
-    /// Dust. The ledger stops the generation of a tNIGHT UTXO that the wallet
-    /// holds only when a transaction spends it. So the transaction also spends
-    /// every tNIGHT UTXO in the funding view of the build context that
-    /// generates Dust ([`TrackedUtxo::is_registered_for_dust`]), and creates
-    /// each one again with the same value. It leaves the other tNIGHT UTXOs
-    /// unspent, so they keep their age, from which the generationless Dust of a
-    /// later registration grows. When no UTXO in the funding view generates
-    /// Dust, the transaction carries the deregistration with no unshielded
-    /// offer. The Dust that the UTXOs generated stays spendable, and it decays
-    /// to zero at the rate it grew.
+    /// The ledger stops the generation of a tNIGHT UTXO only when a
+    /// transaction spends it. So the transaction spends every tNIGHT UTXO in
+    /// the funding view of the build context that generates Dust
+    /// ([`TrackedUtxo::is_registered_for_dust`]), and creates each one again
+    /// with the same value. The first UTXO goes in the guaranteed offer and
+    /// the others in the fallible offer. When no UTXO generates, the
+    /// transaction carries the deregistration with no unshielded offer.
     ///
-    /// The first UTXO goes in the guaranteed offer and the others in the
-    /// fallible offer. A fallible input adds only a signature check to the
-    /// cost that the ledger compares with the time to dismiss, so one call
-    /// can cover many UTXOs, where a registration covers one. But each UTXO
-    /// adds to the bytes that the transaction writes, and a block limits these
-    /// bytes. So the build fails for a wallet that holds too many tNIGHT
-    /// UTXOs that generate Dust.
+    /// A deregistration claims no generationless Dust. When `pay_fees` is
+    /// true, the wallet's own Dust pays the fee. When `pay_fees` is false, the
+    /// build draws no Dust, and another wallet pays the fee with
+    /// `MidnightProvider::balance_transaction` (in `midnight-provider`).
     ///
-    /// Some UTXOs still generate Dust after the deregistration. A UTXO that a
-    /// pending build reserves is not in the funding view. When the fallible
-    /// segment fails on chain, the deregistration stays, and the UTXOs of that
-    /// segment stay unspent. Any transaction that spends such a UTXO stops it,
-    /// for example a transfer of tNIGHT to the wallet's own address. The
-    /// outputs of that transfer generate no Dust, because the address has no
-    /// delegation. A second deregistration cannot stop the UTXO, because the
-    /// chain refuses a deregistration for an address that is not registered
-    /// (the ledger's `DustDeregistrationNotRegistered`). The node refuses it
-    /// as a `SubmitError::Invalid` (in `midnight-provider`), with a custom code
-    /// that the SDK does not name. The build cannot see whether the address is
-    /// registered.
-    ///
-    /// After a partial success, the wallet keeps the UTXOs of the failed
-    /// segment reserved until `global_ttl` passes, so no build selects them
-    /// before that. A caller that submitted the `.build()` result with
-    /// `MidnightProvider::submit_reserved` can free them sooner: resync the
-    /// wallet, then release the unshielded inputs of that result.
-    ///
-    /// A deregistration claims no generationless Dust, so Dust pays the fee.
-    /// When `pay_fees` is true, the wallet's own Dust pays it. When `pay_fees`
-    /// is false, the build draws no Dust, and another wallet pays the fee with
-    /// `MidnightProvider::balance_transaction` (in `midnight-provider`). A
-    /// wallet that registered its tNIGHT to the Dust address of another wallet
-    /// holds no Dust of its own, so it deregisters this way.
+    /// [Dust deregistration] in `docs/dust-and-fees.md` gives the rules for a
+    /// UTXO that still generates afterwards, for a partial success, and for
+    /// the block limit.
     ///
     /// # Errors
     ///
     /// - [`WalletError::Transfer`] when the transaction exceeds a block limit,
     ///   because the wallet holds too many tNIGHT UTXOs that generate Dust.
-    ///   Lower their number first: a transfer of tNIGHT to the wallet's own
-    ///   address merges the UTXOs that it spends into one output, plus change.
     /// - [`WalletError::InsufficientDust`] when `pay_fees` is true and the
     ///   wallet's Dust cannot pay the fee.
+    ///
+    /// [Dust deregistration]: https://github.com/Moonsong-Labs/midnight-rs/blob/main/docs/dust-and-fees.md#dust-deregistration
     pub async fn prepare_deregister_dust(
         self,
         pay_fees: bool,

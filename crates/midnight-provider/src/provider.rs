@@ -594,22 +594,21 @@ impl MidnightProvider {
     /// reservation semantics and the `.await` vs `.build()` distinction.
     ///
     /// One call spends and re-creates every tNIGHT UTXO that generates Dust
-    /// and that no pending build reserves, and pays its fee from the wallet's
-    /// Dust. A wallet that registered its tNIGHT to another wallet's Dust
-    /// address with [`DustRegistration::to`] holds no Dust of its own. It
-    /// builds the deregistration with [`DustlessBuilder::without_dust`], and
-    /// the other wallet pays the fee with [`Self::balance_transaction`]. The
-    /// Dust that the wallet holds stays spendable while it decays. A wallet
-    /// that holds too many tNIGHT UTXOs that generate Dust exceeds a block
-    /// limit, and the build fails with a [`WalletError::Transfer`] before
-    /// anything reaches the chain.
-    /// [`TransferBuilder::prepare_deregister_dust`] gives the full rule, and
-    /// what to do about a UTXO that still generates after the deregistration.
-    /// To generate Dust again, call [`Self::register_dust`].
+    /// and that no pending build reserves. The wallet's Dust pays the fee. A
+    /// wallet that registered its tNIGHT to another wallet's Dust address with
+    /// [`DustRegistration::to`] holds no Dust of its own. It builds with
+    /// [`DustlessBuilder::without_dust`], and the other wallet pays the fee
+    /// with [`Self::balance_transaction`].
+    ///
+    /// The build fails with a [`WalletError::Transfer`] when the transaction
+    /// exceeds a block limit, and with a [`WalletError::InsufficientDust`]
+    /// when the wallet's Dust cannot pay the fee. [Dust deregistration] in
+    /// `docs/dust-and-fees.md` gives the full rules.
     ///
     /// [`WalletError::Transfer`]: midnight_types::WalletError::Transfer
-    /// [`TransferBuilder::prepare_deregister_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_deregister_dust
+    /// [`WalletError::InsufficientDust`]: midnight_types::WalletError::InsufficientDust
     /// [`DustlessBuilder::without_dust`]: crate::DustlessBuilder::without_dust
+    /// [Dust deregistration]: https://github.com/Moonsong-Labs/midnight-rs/blob/main/docs/dust-and-fees.md#dust-deregistration
     pub fn deregister_dust(&self) -> DustDeregistration<'_> {
         DustDeregistration::new(self)
     }

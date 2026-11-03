@@ -366,14 +366,14 @@ The cold wallet gets no Dust of its own. Its registrations still pay their own f
 
 ### Dust deregistration
 
-`deregister_dust` stops the wallet's tNIGHT from generating Dust. One call removes the registration of the wallet's address, so tNIGHT that arrives later generates no Dust. The ledger stops the generation of a UTXO only when a transaction spends it. So the same transaction spends every tNIGHT UTXO that generates Dust and that no pending build reserves, and creates each one again with the same value. It leaves the other tNIGHT UTXOs unspent, so they keep their age for a later registration. The rustdoc of [`deregister_dust`](../crates/midnight-provider/src/provider.rs) gives the full rule.
+`deregister_dust` stops the wallet's tNIGHT from generating Dust. The wallet's Dust pays the fee:
 
 ```rust
 let pending = provider.deregister_dust().await?;
 pending.wait_finalized().await?;
 ```
 
-A deregistration claims no generationless Dust, so the wallet's Dust pays its fee. A wallet with no Dust gets `WalletError::InsufficientDust`. A wallet that registered its tNIGHT to another Dust address has no Dust of its own. It builds the deregistration with `.without_dust()`, and the wallet that gets its Dust pays the fee with `balance_transaction`:
+A wallet that registered its tNIGHT to another Dust address has no Dust of its own. It builds the deregistration with `.without_dust()`, and the wallet that gets its Dust pays the fee with `balance_transaction`:
 
 ```rust
 use midnight_core::provider::DustlessBuilder;
@@ -383,9 +383,7 @@ let funded = hot.balance_transaction(dustless.as_bytes()).await?;
 hot.submit_reserved(funded).await?.wait_finalized().await?;
 ```
 
-A wallet that holds too many tNIGHT UTXOs that generate Dust exceeds a block limit and gets a `WalletError::Transfer` before anything reaches the chain. Lower the number of tNIGHT UTXOs first: a transfer of tNIGHT to the wallet's own address merges the UTXOs that it spends into one output, plus change.
-
-The Dust that the wallet holds stays spendable, and it decays to zero at the rate it grew. When the transaction spent every tNIGHT UTXO that generates, a resync after it reads `DustBalance::night_generates_dust` as false, and `DustBalance::unregistered_night_utxos` counts every tNIGHT UTXO. When `night_generates_dust` stays true, a UTXO still generates, for example the change of a pending transfer that landed before the deregistration. Any transaction that spends that UTXO stops it, for example a transfer of tNIGHT to the wallet's own address. Its outputs generate no Dust, because the address has no registration. Do not call `deregister_dust` again. The chain refuses it (the ledger's `DustDeregistrationNotRegistered`), and the refusal arrives as `SubmitError::Invalid` with a node custom code that the SDK does not name. To generate Dust again, call `register_dust`.
+[Dust Deregistration](dust-and-fees.md#dust-deregistration) gives the rules: what the transaction spends, the tNIGHT that still generates Dust after it, a partial success, and the block limit.
 
 See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation rate, and how fees are balanced.
 
