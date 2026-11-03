@@ -148,7 +148,7 @@ pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> Path
     base.join(network).join(wallet_id)
 }
 
-/// [`midnight_owner_only::create_dir_all`] for the wallet's storage directory.
+/// Creates the wallet's storage directory and its missing ancestors.
 ///
 /// The tree holds the key that spends the wallet's Dust, in
 /// `dust_wallet-N.bin`. It also holds the wallet's UTXO set, spend history and
@@ -159,18 +159,68 @@ pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> Path
 /// or another tool created keeps its mode, so the set of wallet ids under a
 /// network may stay listable.
 fn create_private_dir(dir: &Path) -> Result<(), WalletError> {
-    midnight_owner_only::create_dir_all(dir)
+    create_owner_only_dir(dir)
         .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))
 }
 
 fn write_atomic(dir: &Path, filename: &str, contents: &[u8]) -> Result<(), WalletError> {
     let tmp = dir.join(format!("{filename}.tmp"));
-    midnight_owner_only::write(&tmp, contents)
+    write_owner_only(&tmp, contents)
         .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
     std::fs::rename(&tmp, dir.join(filename))
         .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))?;
-    midnight_owner_only::sync_dir(dir)
-        .map_err(|e| WalletError::Storage(format!("sync {}: {e}", dir.display())))
+    sync_dir(dir).map_err(|e| WalletError::Storage(format!("sync {}: {e}", dir.display())))
+}
+
+/// On Unix, each directory that the call creates gets mode 0700, and `dir`
+/// gets mode 0700 also when it exists.
+fn create_owner_only_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir)
+}
+
+/// Writes `contents` to `path` and syncs the file to disk. On Unix, the file
+/// gets mode 0600, also when it exists.
+fn write_owner_only(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        // `mode` applies only when the open creates the file. Narrow an
+        // existing file before the contents land, or they are briefly readable.
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        file
+    };
+    #[cfg(not(unix))]
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(contents)?;
+    file.sync_all()
+}
+
+/// Syncs the entries of `dir` to disk, so a rename or a removal in `dir`
+/// persists after a power loss. Other platforms skip it, because
+/// `File::open` fails on a directory on Windows.
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, WalletError> {
