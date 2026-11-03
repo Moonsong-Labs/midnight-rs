@@ -168,7 +168,9 @@ fn write_atomic(dir: &Path, filename: &str, contents: &[u8]) -> Result<(), Walle
     midnight_owner_only::write(&tmp, contents)
         .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
     std::fs::rename(&tmp, dir.join(filename))
-        .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))
+        .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))?;
+    midnight_owner_only::sync_dir(dir)
+        .map_err(|e| WalletError::Storage(format!("sync {}: {e}", dir.display())))
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, WalletError> {
@@ -296,8 +298,9 @@ pub(crate) fn save_snapshot(
     // Atomic commit: from this point on, the wallet sees the new state.
     write_atomic(&dir, METADATA_FILE, meta_json.as_bytes())?;
 
-    // Best-effort: remove the previous generation's binary files. Failure
-    // here is non-fatal (the next save will retry or overwrite).
+    // Best-effort: a failed removal, or a save that fails after the metadata
+    // rename, leaves the previous generation on disk, and no later save
+    // removes it.
     if let Some(prev) = previous_generation {
         let _ = std::fs::remove_file(dir.join(zswap_file(prev)));
         let _ = std::fs::remove_file(dir.join(dust_wallet_file(prev)));

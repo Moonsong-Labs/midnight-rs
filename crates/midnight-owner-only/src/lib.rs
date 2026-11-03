@@ -3,6 +3,10 @@
 //! On Unix, a directory gets mode 0700 and a file gets mode 0600. A call also
 //! narrows a path that already exists to that mode. On other platforms, a path
 //! keeps the default permissions.
+//!
+//! [`write()`] syncs the file to disk, and [`sync_dir`] syncs a directory. A
+//! store that writes a temporary sibling, renames it into place and then syncs
+//! the directory keeps the old contents or the new contents after a power loss.
 
 use std::fs;
 use std::io;
@@ -31,21 +35,22 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)
 }
 
-/// Writes `contents` to `path`, in a file readable only by the owner.
+/// Writes `contents` to `path`, in a file readable only by the owner, and
+/// syncs the file to disk.
 ///
 /// On Unix, the file gets mode 0600, also when it exists. The call replaces
-/// the contents of an existing file. On other platforms, this is
-/// [`std::fs::write`].
+/// the contents of an existing file.
 ///
 /// # Errors
 ///
-/// Returns the error of the open, of the mode change or of the write.
+/// Returns the error of the open, of the mode change, of the write or of the
+/// sync.
 pub fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    use std::io::Write;
     #[cfg(unix)]
-    {
-        use std::io::Write;
+    let mut file = {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = fs::OpenOptions::new()
+        let file = fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
@@ -54,10 +59,29 @@ pub fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
         // `mode` applies only when the open creates the file. Narrow an
         // existing file before the contents land, or they are briefly readable.
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        file.write_all(contents)
-    }
+        file
+    };
     #[cfg(not(unix))]
-    fs::write(path, contents)
+    let mut file = fs::File::create(path)?;
+    file.write_all(contents)?;
+    file.sync_all()
+}
+
+/// Syncs the entries of `dir` to disk, so a rename or a removal in `dir`
+/// persists after a power loss.
+///
+/// On platforms other than Unix, the call does nothing, because
+/// [`fs::File::open`] fails on a directory on Windows.
+///
+/// # Errors
+///
+/// Returns the error of the open or of the sync.
+pub fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    fs::File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 #[cfg(all(test, unix))]
