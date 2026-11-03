@@ -288,8 +288,53 @@ pub enum ContractError {
         address: String,
     },
 
+    /// The contract state holds no verifier key equal to the circuit's local
+    /// key, so the node refuses the proof of a call.
+    ///
+    /// A call checks the key after it reads the state, before the circuit
+    /// runs. The call reserves no input and makes no proof. `reason` says what
+    /// the state holds for the circuit.
+    ///
+    /// The check reads the state at the call's block: the `at_block` pin, else
+    /// the best block. The node verifies the proof against the state at the
+    /// block that includes the call. So a maintenance update between the two
+    /// blocks can make the node refuse a call that passed the check.
+    #[error("the local verifier key of circuit `{circuit}` does not match the contract: {reason}")]
+    VerifierKeyMismatch {
+        /// The circuit that the call names.
+        circuit: String,
+        /// What the contract state holds for the circuit.
+        reason: KeyMismatch,
+    },
+
     #[error("maintenance error: {0}")]
     Maintenance(String),
+}
+
+/// What a contract state holds for a circuit whose local verifier key it does
+/// not hold. See [`ContractError::VerifierKeyMismatch`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyMismatch {
+    /// The contract has no operation for the circuit. The contract does not
+    /// define the circuit, or a maintenance update removed it.
+    Missing,
+    /// The contract's operation for the circuit holds no verifier key, so no
+    /// call of the circuit verifies until a maintenance update inserts one.
+    Keyless,
+    /// The contract holds a different verifier key for the circuit. The local
+    /// artifacts come from another compile of the contract, or a maintenance
+    /// update changed the key.
+    Mismatched,
+}
+
+impl std::fmt::Display for KeyMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Missing => "the contract has no operation for the circuit",
+            Self::Keyless => "the contract's operation for the circuit holds no verifier key",
+            Self::Mismatched => "the contract holds a different verifier key for the circuit",
+        })
+    }
 }
 
 impl From<ProviderError> for ContractError {

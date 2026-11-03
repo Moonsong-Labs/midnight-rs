@@ -92,8 +92,8 @@ pub struct SpentInputs {
 pub struct ReservedInput<T> {
     /// The input: a nullifier, or the key of an unshielded UTXO.
     pub input: T,
-    /// The chain time the build read when it selected the input, which is
-    /// what the reservation is stamped with.
+    /// The block time of the build context when the build selected the
+    /// input, which is what the reservation is stamped with.
     pub reserved_at: Timestamp,
 }
 
@@ -169,22 +169,36 @@ pub enum TransferKind {
     },
 }
 
-/// One build, as data: what to make, and how to choose the inputs that make
-/// it.
+/// One build, as data: what to make, how to choose the inputs that make it,
+/// and how long the transaction stays valid.
 #[derive(Debug)]
 pub struct TransferRequest {
     /// The transfer to build.
     pub kind: TransferKind,
     /// How to order the coins and UTXOs the build draws on.
     pub coin_selection: CoinSelectionStrategy,
+    /// How long the transaction stays valid after the chain time of the
+    /// build. `None` gives the chain's `global_ttl`, the longest TTL the chain
+    /// accepts. A shorter TTL bounds how long a transaction that never
+    /// confirms can still land, and how long the wallet holds its inputs.
+    ///
+    /// The build fails with
+    /// [`WalletError::TtlOutOfRange`](crate::WalletError::TtlOutOfRange) when
+    /// `ttl` is under one second or longer than `global_ttl`. It fails with
+    /// [`WalletError::TtlWithoutIntent`](crate::WalletError::TtlWithoutIntent)
+    /// for a Dustless shielded transfer or a swap half, which carry no intent
+    /// to hold a TTL.
+    pub ttl: Option<std::time::Duration>,
 }
 
 impl TransferRequest {
-    /// A request that orders its inputs the default way.
+    /// A request that orders its inputs the default way, and whose
+    /// transaction stays valid for the chain's `global_ttl`.
     pub fn new(kind: TransferKind) -> Self {
         Self {
             kind,
             coin_selection: CoinSelectionStrategy::default(),
+            ttl: None,
         }
     }
 

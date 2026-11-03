@@ -176,6 +176,29 @@ pub enum WalletError {
         input: String,
     },
 
+    /// A build asked for a transaction TTL that the chain refuses.
+    ///
+    /// The chain counts a TTL in whole seconds, so a build drops a fraction
+    /// of a second. A TTL must be at least one second, and at most the
+    /// chain's `global_ttl`. The build stops before it spends or proves
+    /// anything.
+    #[error("a transaction TTL of {requested:?} is outside 1s..={global_ttl:?}")]
+    TtlOutOfRange {
+        /// The TTL the build asked for.
+        requested: std::time::Duration,
+        /// The longest TTL the chain accepts, its `global_ttl`.
+        global_ttl: std::time::Duration,
+    },
+
+    /// A build asked for a transaction TTL, and its transaction has no intent
+    /// to carry one.
+    ///
+    /// Only an intent holds a TTL. A Dustless shielded transfer is a Zswap
+    /// offer alone, so the fee intent that its sponsor adds sets when it
+    /// expires. Build it with no TTL.
+    #[error("the transaction has no intent to carry a TTL")]
+    TtlWithoutIntent,
+
     /// ZK proving failed.
     ///
     /// The ledger's `ProofProvider::prove` returns a bare transaction with no
