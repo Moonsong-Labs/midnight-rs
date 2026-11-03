@@ -96,7 +96,7 @@ Under the store root, one directory per contract address, one file per snapshot:
 
 `forget_all`, `clear_signing_keys`, `export_private_states` and `export_signing_keys` act on the store of one wallet. They do not touch the store of another wallet under the same base.
 
-On Unix, the store creates its directories with mode 0700 and its files with mode 0600, so no other local user can read the private state or the signing keys. Each write first narrows the store root to 0700. The root then also bars other users from a file that an earlier version wrote at the process umask. Other platforms keep their default permissions.
+On Unix, the store creates its directories with mode 0700 and its files with mode 0600, so no other local user can read the private state or the signing keys. An existing directory keeps its mode. Other platforms keep their default permissions.
 
 A store from before the per-wallet layout sits directly under the base, as `<base>/states/` and `<base>/signing-keys/`. No store reads it, and `with_default_dir` logs a warning when it finds one. The SDK does not move it, because nothing tells which wallet wrote it. To keep that private state, move both directories into the store root of the wallet that wrote them, before that wallet writes to its new store:
 

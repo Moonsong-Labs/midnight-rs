@@ -15,9 +15,7 @@
 //!       <sha256(address)>.json   { address, data: base64 }
 //! ```
 //!
-//! On Unix, the store creates its directories 0700 and its files 0600. Each
-//! write first narrows the store root to 0700, so the root also bars other
-//! users from a file that an earlier version wrote at the process umask.
+//! On Unix, the store creates its directories 0700 and its files 0600.
 //!
 //! Snapshot filenames are prefixed with a 020-padded unix-nanos timestamp
 //! mostly for human inspection (sorting a directory listing gives an
@@ -119,9 +117,8 @@ impl FsPrivateStateProvider {
     /// A store rooted at `root`.
     ///
     /// The root belongs to one wallet. Every caller that opens it reads every
-    /// journal and signing key under it. On Unix, each write sets `root`
-    /// itself to mode 0700, so give the store a directory of its own. Use
-    /// [`Self::for_wallet`] to give each wallet its own root under one base.
+    /// journal and signing key under it. Use [`Self::for_wallet`] to give each
+    /// wallet its own root under one base.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
@@ -239,20 +236,12 @@ impl FsPrivateStateProvider {
         Ok(None)
     }
 
-    /// Create the store root owner-only, or narrow it when it exists. Every
-    /// writer calls this first, because the root is the barrier for older,
-    /// wider files under it (see the module docs).
-    fn narrow_root(&self) -> Result<(), PrivateStateError> {
-        create_private_dir(&self.root)
-    }
-
     /// Write the plaintext address to `<address dir>/address.txt` if it isn't
     /// already there, so an export can recover the address from a hashed
     /// directory. If the marker exists but its content doesn't match
     /// `address`, error out rather than silently let the wrong-address record
     /// propagate into export payloads.
     fn ensure_address_marker(&self, address: &str) -> Result<(), PrivateStateError> {
-        self.narrow_root()?;
         let dir = self.address_dir(address);
         create_private_dir(&dir)?;
         let marker = dir.join(ADDRESS_MARKER);
@@ -282,7 +271,6 @@ impl FsPrivateStateProvider {
         path: &Path,
         value: &T,
     ) -> Result<(), PrivateStateError> {
-        self.narrow_root()?;
         let dir = path
             .parent()
             .ok_or_else(|| PrivateStateError::Io("path has no parent directory".into()))?;
@@ -1011,7 +999,12 @@ fn read_json_dir<T: DeserializeOwned>(dir: &Path) -> Result<Vec<(PathBuf, T)>, P
 }
 
 fn create_private_dir(dir: &Path) -> Result<(), PrivateStateError> {
-    create_owner_only_dir(dir)
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+        .create(dir)
         .map_err(|e| PrivateStateError::Io(format!("create dir {}: {e}", dir.display())))
 }
 
@@ -1019,7 +1012,7 @@ fn create_private_dir(dir: &Path) -> Result<(), PrivateStateError> {
 /// sync the directory (see the module docs).
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), PrivateStateError> {
     let tmp = path.with_extension("tmp");
-    write_owner_only(&tmp, contents)
+    create_owner_only_file(&tmp, contents)
         .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
     fs::rename(&tmp, path)
         .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))?;
@@ -1029,42 +1022,23 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), PrivateStateError> {
     sync_dir(dir).map_err(|e| PrivateStateError::Io(format!("sync {}: {e}", dir.display())))
 }
 
-/// On Unix, each directory that the call creates gets mode 0700, and `dir`
-/// gets mode 0700 also when it exists.
-fn create_owner_only_dir(dir: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-    }
-    #[cfg(not(unix))]
-    fs::create_dir_all(dir)
-}
-
-/// Writes `contents` to `path` and syncs the file to disk. On Unix, the file
-/// gets mode 0600, also when it exists.
-fn write_owner_only(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+/// Writes `contents` to a new file at `path` and syncs it to disk. On Unix, the
+/// file gets mode 0600.
+///
+/// The call removes an existing file at `path`, and the create fails if one
+/// appears again. So the contents never go into a file or a symbolic link that
+/// another user put there.
+fn create_owner_only_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
-    let mut file = {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        // `mode` applies only when the open creates the file. Narrow an
-        // existing file before the contents land, or they are briefly readable.
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        file
-    };
-    #[cfg(not(unix))]
-    let mut file = fs::File::create(path)?;
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
     file.write_all(contents)?;
     file.sync_all()
 }
@@ -2087,32 +2061,18 @@ mod tests {
         }
     }
 
-    /// A store that an earlier version wrote at the umask keeps its modes
-    /// until a write narrows them, because a mode given at create does not
-    /// touch what already exists. This includes a temporary file that a crash
-    /// left before its rename, which the next write of that snapshot reuses.
     #[cfg(unix)]
     #[tokio::test]
-    async fn the_next_write_narrows_an_existing_store() {
-        use std::os::unix::fs::PermissionsExt;
+    async fn a_write_does_not_follow_a_planted_link() {
         let base = tempfile::TempDir::new().unwrap();
         let p = FsPrivateStateProvider::for_wallet(base.path(), "wallet-a");
-        p.append_pending("0200aa", ext(1), None, b"s1")
-            .await
-            .unwrap();
-        let snapshot = p
-            .find_snapshot_path("0200aa", &hex::encode(ext(1)))
-            .unwrap()
-            .unwrap();
-        fs::set_permissions(&p.root, fs::Permissions::from_mode(0o755)).unwrap();
-        fs::set_permissions(&snapshot, fs::Permissions::from_mode(0o644)).unwrap();
-        let stale_tmp = snapshot.with_extension("tmp");
-        fs::write(&stale_tmp, b"{}").unwrap();
-        fs::set_permissions(&stale_tmp, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::create_dir_all(p.keys_dir()).unwrap();
+        let target = base.path().join("target");
+        fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, p.key_path("0200aa").with_extension("tmp")).unwrap();
 
-        p.confirm("0200aa", ext(1), None, ext(9)).await.unwrap();
+        p.set_signing_key("0200aa", b"k").await.unwrap();
 
-        assert_eq!(mode_of(&p.root), 0o700);
-        assert_eq!(mode_of(&snapshot), 0o600);
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
     }
 }

@@ -148,66 +148,50 @@ pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> Path
     base.join(network).join(wallet_id)
 }
 
-/// Creates the wallet's storage directory and its missing ancestors.
+/// Creates the wallet's storage directory and its missing ancestors. On Unix,
+/// each directory that the call creates gets mode 0700, and an existing
+/// directory keeps its mode.
 ///
 /// The tree holds the key that spends the wallet's Dust, in
 /// `dust_wallet-N.bin`. It also holds the wallet's UTXO set, spend history and
 /// reserved nullifiers, a full picture of the wallet's activity. No other local
 /// user has a reason to read either.
-///
-/// Only the wallet's own directory is narrowed. An ancestor an earlier version
-/// or another tool created keeps its mode, so the set of wallet ids under a
-/// network may stay listable.
 fn create_private_dir(dir: &Path) -> Result<(), WalletError> {
-    create_owner_only_dir(dir)
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+        .create(dir)
         .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))
 }
 
 fn write_atomic(dir: &Path, filename: &str, contents: &[u8]) -> Result<(), WalletError> {
     let tmp = dir.join(format!("{filename}.tmp"));
-    write_owner_only(&tmp, contents)
+    create_owner_only_file(&tmp, contents)
         .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
     std::fs::rename(&tmp, dir.join(filename))
         .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))?;
     sync_dir(dir).map_err(|e| WalletError::Storage(format!("sync {}: {e}", dir.display())))
 }
 
-/// On Unix, each directory that the call creates gets mode 0700, and `dir`
-/// gets mode 0700 also when it exists.
-fn create_owner_only_dir(dir: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-    }
-    #[cfg(not(unix))]
-    std::fs::create_dir_all(dir)
-}
-
-/// Writes `contents` to `path` and syncs the file to disk. On Unix, the file
-/// gets mode 0600, also when it exists.
-fn write_owner_only(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+/// Writes `contents` to a new file at `path` and syncs it to disk. On Unix, the
+/// file gets mode 0600.
+///
+/// The call removes an existing file at `path`, and the create fails if one
+/// appears again. So the contents never go into a file or a symbolic link that
+/// another user put there.
+fn create_owner_only_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
-    let mut file = {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        // `mode` applies only when the open creates the file. Narrow an
-        // existing file before the contents land, or they are briefly readable.
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        file
-    };
-    #[cfg(not(unix))]
-    let mut file = std::fs::File::create(path)?;
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
     file.write_all(contents)?;
     file.sync_all()
 }
@@ -608,21 +592,17 @@ mod tests {
         );
     }
 
-    /// A directory or file from an earlier version carries the old mode, and
-    /// creating with a mode does not touch what already exists.
     #[test]
-    fn existing_permissions_are_narrowed() {
+    fn a_save_does_not_follow_a_planted_link() {
         let base = tempfile::TempDir::new().unwrap();
         let dir = snapshot_path(base.path(), "undeployed", "testwallet");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let path = dir.join(PENDING_FILE);
-        std::fs::write(&path, b"{}").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let target = base.path().join("target");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, dir.join(format!("{PENDING_FILE}.tmp"))).unwrap();
 
         save_pending(base.path(), "undeployed", "testwallet", &some_pending()).unwrap();
 
-        assert_eq!(mode_of(&dir), 0o700);
-        assert_eq!(mode_of(&path), 0o600);
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
     }
 }
