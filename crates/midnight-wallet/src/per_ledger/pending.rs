@@ -52,7 +52,7 @@ use crate::{ReservedInput, SpentUtxoKey, WalletError};
 pub(crate) struct PendingDustBatch {
     /// The spends as built. Tagged-serializable so they can be persisted.
     pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
-    /// The block time of the build, which a release names.
+    /// The chain time of the build context, which a release names.
     pub reserved_at: Timestamp,
     /// The TTL of the transaction, for TTL eviction.
     pub expires_at: Timestamp,
@@ -191,17 +191,19 @@ impl PendingReservations {
     /// its exact key, a shielded entry by its nullifier, and a dust batch when
     /// it spends a named nullifier.
     ///
-    /// Each named input also carries its own `reserved_at`, and an entry goes
-    /// only when its stamp matches, so a build hands back only what it
-    /// reserved. Two builds cannot hold one input at the same `reserved_at`,
-    /// because the first one's reservation takes that input out of the second
-    /// one's selection. Without the timestamp a late release drops whatever
-    /// entry now holds the input, and a third build then selects an input the
-    /// second one is still spending.
+    /// Each named input also carries its own `reserved_at`, the chain time of
+    /// its build context. An entry goes only when its stamp matches, so a
+    /// build hands back only what it reserved. A later build takes a reserved
+    /// input only after a release or a TTL eviction frees it. After an
+    /// eviction, the later build carries a later stamp: the eviction needs the
+    /// chain time past the TTL, and a TTL is never before the chain time of
+    /// its build. Without the timestamp a late release drops whatever entry
+    /// now holds the input, and a third build then selects an input the second
+    /// one is still spending.
     ///
-    /// Release each reservation once. `reserved_at` is a block timestamp, so a
-    /// second release of the same inputs can drop an entry another build made
-    /// in that same block after the first release freed them.
+    /// Release each reservation once. Two builds at one chain time share a
+    /// stamp, so a second release of the same inputs can drop an entry another
+    /// build made at that chain time after the first release freed them.
     pub(crate) fn release(
         &mut self,
         dust: &[ReservedInput<DustNullifier>],

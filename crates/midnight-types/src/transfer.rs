@@ -92,7 +92,7 @@ pub struct SpentInputs {
 pub struct ReservedInput<T> {
     /// The input: a nullifier, or the key of an unshielded UTXO.
     pub input: T,
-    /// The block time of the build context when the build selected the
+    /// The chain time of the build context when the build selected the
     /// input, which is what the reservation is stamped with.
     pub reserved_at: Timestamp,
 }
