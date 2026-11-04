@@ -188,8 +188,8 @@ fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersi
 /// [`TxInBlock`] when the chain applied it, and an error when it did not.
 ///
 /// `store` holds the call's pending snapshot under `extrinsic_hash`, or is
-/// `None` when the call recorded none. [`settle_snapshot`] settles it before
-/// the error returns. A wait that fails with a
+/// `None` when the call recorded none. [`settle_snapshot`] settles it. A wait
+/// that fails with a
 /// [`SubmitError`](midnight_provider::SubmitError), the only other failure of
 /// [`PendingTx::wait_finalized`], returns [`ContractError::SubmissionWait`] and
 /// keeps the snapshot for the caller to reconcile (see that variant).
@@ -501,7 +501,7 @@ pub struct DeployBuilder<'a, P> {
     provider: P,
     initial_state: Option<ContractState<InMemoryDB>>,
     constructor: Option<Constructor>,
-    constructor_args: Vec<(String, crate::runtime::Value)>,
+    constructor_args: Vec<(&'a str, crate::runtime::Value)>,
     witnesses: Box<dyn crate::runtime::WitnessProvider + 'a>,
     initial_private_state: Vec<u8>,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
@@ -574,7 +574,7 @@ impl<'a, P> DeployBuilder<'a, P> {
 
     /// Set the arguments of the constructor, as (source name, value) pairs.
     /// The generated `with_constructor_args` takes them typed.
-    pub fn with_constructor_args(mut self, args: Vec<(String, crate::runtime::Value)>) -> Self {
+    pub fn with_constructor_args(mut self, args: Vec<(&'a str, crate::runtime::Value)>) -> Self {
         self.constructor_args = args;
         self
     }

@@ -141,7 +141,6 @@ async fn a_deploy_runs_the_constructor_and_records_its_private_state() {
     .expect("background sync");
     drop(sync);
 
-    // A call finalizes, so the next test on this seed sees the deploy too.
     contract
         .circuits()
         .with_witnesses(&OwnerKey)

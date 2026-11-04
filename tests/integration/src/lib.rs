@@ -657,9 +657,10 @@ mod queue_grows {
 // InitialState: the generated defaults against the compiler's
 // ===================================================================
 
-/// The conformance fixtures with no constructor. For each one, the canonical
-/// runtime's `initialState` leaves the compiler's initial value in every
-/// field, and the generated `Default` must build that same state.
+/// The generated initial state against the canonical runtime's: the `Default`
+/// of each conformance fixture with no constructor, which must hold the
+/// compiler's initial value in every field, and the constructor run of tiny and
+/// bboard.
 #[cfg(test)]
 mod initial_state_defaults {
     use std::time::UNIX_EPOCH;

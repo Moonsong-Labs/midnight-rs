@@ -34,7 +34,7 @@ pub struct Constructor {
 
 impl Constructor {
     /// Refuse `args` when they leave out an argument of the constructor.
-    pub(crate) fn check_args(&self, args: &[(String, Value)]) -> Result<(), ContractError> {
+    pub(crate) fn check_args(&self, args: &[(&str, Value)]) -> Result<(), ContractError> {
         let missing: Vec<&str> = self
             .circuit
             .arguments
@@ -65,24 +65,20 @@ impl Constructor {
     ///   deploy does not carry.
     pub(crate) fn run(
         &self,
-        args: &[(String, Value)],
+        args: &[(&str, Value)],
         witnesses: &dyn WitnessProvider,
         mut private_state: Vec<u8>,
         coin_public_key: CoinPublicKey,
         block_time: Timestamp,
     ) -> Result<(ContractState<InMemoryDB>, Vec<u8>), ContractError> {
         let program = Program::new(&self.circuits, &self.witnesses, &self.natives);
-        let args: Vec<(&str, Value)> = args
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.clone()))
-            .collect();
         let ran = crate::call::run_call(
             &self.circuit,
             &program,
             &self.state,
             block_time,
             zero_address(),
-            &args,
+            args,
             witnesses,
             Some(&mut private_state),
             Some(coin_public_key),
@@ -195,10 +191,6 @@ mod tests {
         args: Vec<(&str, Value)>,
         witnesses: &dyn WitnessProvider,
     ) -> Result<ContractState<InMemoryDB>, ContractError> {
-        let args: Vec<(String, Value)> = args
-            .into_iter()
-            .map(|(name, value)| (name.to_owned(), value))
-            .collect();
         let (state, _) = constructor.run(
             &args,
             witnesses,

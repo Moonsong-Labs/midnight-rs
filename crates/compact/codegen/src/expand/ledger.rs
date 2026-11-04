@@ -64,8 +64,8 @@ pub(crate) fn emit_ledger_wrapper(
     };
 
     // Generate InitialState struct with typed fields
-    let unrunnable = info.constructor.as_ref().and_then(|c| c.as_ref().err());
-    let initial_state = emit_initial_state(fields, name, unrunnable.map(String::as_str));
+    let unrunnable_constructor = matches!(info.constructor, Some(Err(_)));
+    let initial_state = emit_initial_state(fields, name, unrunnable_constructor);
 
     // Generate Circuits struct with async on-chain call methods
     let circuit_methods_struct = emit_circuits_struct(info, &struct_name);
@@ -396,12 +396,6 @@ fn emit_deploy(
         }
     };
 
-    let with_initial_state_doc = if info.runnable_constructor().is_some() {
-        "Deploy `state` as it is, and skip the contract's constructor."
-    } else {
-        "Set the state to deploy."
-    };
-
     let with_constructor_args = info
         .runnable_constructor()
         .filter(|c| !c.arguments.is_empty())
@@ -413,13 +407,7 @@ fn emit_deploy(
                 pub fn with_constructor_args(self #(, #params)*) -> Self {
                     #args
                     Self {
-                        inner: self.inner.with_constructor_args(
-                            ::std::iter::IntoIterator::into_iter(__args)
-                                .map(|(__name, __value)| {
-                                    (::std::borrow::ToOwned::to_owned(__name), __value)
-                                })
-                                .collect(),
-                        ),
+                        inner: self.inner.with_constructor_args(::std::vec::Vec::from(__args)),
                         ..self
                     }
                 }
@@ -487,7 +475,7 @@ fn emit_deploy(
         }
 
         impl<'a, P, Wp> DeployBuilder<'a, P, Wp> {
-            #[doc = #with_initial_state_doc]
+            /// Deploy `state` as it is, and run no constructor.
             pub fn with_initial_state(self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
                 Self { inner: self.inner.with_initial_state(state), ..self }
             }
@@ -708,30 +696,33 @@ fn state_array_expr(slots: Vec<(Vec<usize>, TokenStream)>) -> TokenStream {
     quote! { StateValue::Array(vec![#(#elements),*].into()) }
 }
 
-/// The doc of `{Name}InitialState`, with a note when the SDK cannot run the
-/// contract's constructor for `unrunnable`, the reason.
-fn initial_state_doc(unrunnable: Option<&str>) -> TokenStream {
+/// The doc of `{Name}InitialState`, with the constructor note when the SDK
+/// cannot run the contract's constructor.
+fn initial_state_doc(unrunnable_constructor: bool) -> TokenStream {
     let mut lines = vec![
-        " Initial state for deploying this contract.".to_owned(),
-        String::new(),
-        " `Default` gives each field the compiler's initial value for its type.".to_owned(),
+        " Initial state for deploying this contract.",
+        "",
+        " `Default` gives each field the compiler's initial value for its type.",
     ];
-    if let Some(reason) = unrunnable {
+    if unrunnable_constructor {
         lines.extend([
-            String::new(),
-            format!(" The SDK cannot run the contract's constructor ({reason}), so this state is"),
-            " the state before the constructor runs. Before you deploy, set each field that"
-                .to_owned(),
-            " the constructor writes to the value that the constructor writes.".to_owned(),
+            "",
+            " The SDK cannot run the contract's constructor, so this state is the",
+            " state before the constructor runs. Before you deploy, set each field that",
+            " the constructor writes to the value that the constructor writes.",
         ]);
     }
     quote! { #(#[doc = #lines])* }
 }
 
-fn emit_initial_state(fields: &[LedgerField], name: &str, unrunnable: Option<&str>) -> TokenStream {
+fn emit_initial_state(
+    fields: &[LedgerField],
+    name: &str,
+    unrunnable_constructor: bool,
+) -> TokenStream {
     let struct_name = format_ident!("{}InitialState", name);
     let ledger_name = format_ident!("{}", name);
-    let doc = initial_state_doc(unrunnable);
+    let doc = initial_state_doc(unrunnable_constructor);
 
     let mut field_defs = Vec::new();
     let mut field_defaults = Vec::new();
@@ -1790,7 +1781,7 @@ mod tests {
 
     /// The state expression `build()` hands to `ContractState::new`.
     fn built_state(fields: &[LedgerField]) -> String {
-        let out = emit_initial_state(fields, "Wide", None)
+        let out = emit_initial_state(fields, "Wide", false)
             .to_string()
             .replace(' ', "");
         out.split("ContractState::new(")

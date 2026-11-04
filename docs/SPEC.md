@@ -256,8 +256,6 @@ append_pending(address, extrinsic_hash, None, private_state)   // only for a pri
 prepared.submit().await                       → PendingTx (carries the reservation)
   (fails → SubmissionWait; the snapshot stays Pending)
   ↓
-wait_finalized                                // settles the snapshot as a call does
-  ↓
 into_contract
   ├─ one deadline: deploy_timeout from the start of into_contract
   ├─ the inclusion of the last wait, or wait_best under the deadline
