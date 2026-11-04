@@ -1318,10 +1318,11 @@ fn transaction_ledger_version(tx_bytes: &[u8]) -> Result<LedgerVersion, Provider
 /// early has to hand the inputs back or they stay unusable until their TTL
 /// elapses. Run the rest of the build through [`Self::keep_on_ok`], which
 /// keeps the reservation when the build succeeds and awaits the release when
-/// it fails. A caller can drop the build future (a `timeout`, a `select!`, an
-/// aborted task) before the release runs. `Drop` cannot await, so under a
-/// Tokio runtime it hands the release to the runtime. With no runtime, the
-/// inputs wait for their TTL.
+/// it fails. On success it also tells the wallet to keep the reservation
+/// across a restart ([`WalletFacade::persist_reservation`]). A caller can drop
+/// the build future (a `timeout`, a `select!`, an aborted task) before the
+/// release runs. `Drop` cannot await, so under a Tokio runtime it hands the
+/// release to the runtime. With no runtime, the inputs wait for their TTL.
 pub struct HeldInputs {
     wallet: Option<Arc<dyn WalletFacade>>,
     spent: SpentInputs,
@@ -1343,9 +1344,10 @@ impl HeldInputs {
     /// Run `work` and keep the inputs reserved only if it succeeds.
     ///
     /// `work` is the rest of the build. On `Ok` the build can reach the chain,
-    /// so the reservation stands. On `Err` the release completes before the
-    /// error returns, so a caller that observes the error also observes the
-    /// inputs back.
+    /// so the reservation stands, and the wallet keeps it across a restart
+    /// ([`WalletFacade::persist_reservation`]) before the result returns. On
+    /// `Err` the release completes before the error returns, so a caller that
+    /// observes the error also observes the inputs back.
     ///
     /// # Errors
     ///
@@ -1353,10 +1355,10 @@ impl HeldInputs {
     ///
     /// # Cancellation
     ///
-    /// Under a Tokio runtime, dropping the returned future while `work` runs
-    /// releases the inputs in the background, as dropping `self` does. A
-    /// release that has started runs to its end, even when the returned
-    /// future is dropped during it.
+    /// Under a Tokio runtime, dropping the returned future while `work` runs,
+    /// or while the wallet persists the reservation, releases the inputs in
+    /// the background, as dropping `self` does. A release that has started
+    /// runs to its end, even when the returned future is dropped during it.
     ///
     /// With no Tokio runtime, a drop releases nothing, and the release on
     /// `Err` runs inline. Inputs that a drop leaves reserved stay unusable
@@ -1370,6 +1372,14 @@ impl HeldInputs {
         let work = Box::pin(work);
         async move {
             let result = work.await;
+            // Still armed: a drop during the persist drops the proven result
+            // too, so nothing can reach the chain and the release is right.
+            if result.is_ok()
+                && !self.spent.is_empty()
+                && let Some(wallet) = &self.wallet
+            {
+                wallet.persist_reservation(&self.spent).await;
+            }
             // Disarm `Drop` on both paths: `Ok` keeps the reservation, and
             // `Err` releases it here.
             let wallet = self.wallet.take();

@@ -293,7 +293,7 @@ Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are gener
 
 A snapshot that names no ledger generation reads as ledger 8, the only generation an older build wrote. A snapshot of a later generation than the chain runs belongs to a replaced chain: the sync returns `WalletError::LedgerRegression`, which names the directory to remove.
 
-Persistence is not a one-shot at initial sync: every successful `resync_wallet` re-saves the moved cursors, refreshed parameters, and pending set, and each transfer build rewrites `pending.json` with its new reservation. `pending.json` is removed once no reservations remain.
+Persistence is not a one-shot at initial sync: every successful `resync_wallet` re-saves the moved cursors, refreshed parameters, and pending set, and each build rewrites `pending.json` with its reservation once its proof succeeds. `pending.json` is removed once no reservations remain.
 
 ## Balance
 
@@ -390,7 +390,7 @@ let pending = provider
 1. Resyncs, then takes a write lock on the wallet and builds the context of the wallet's ledger generation.
 2. Selects inputs from the wallet's local UTXO set.
 3. Balances Dust fees via a `speculative_spend` loop (mock proofs first, real proofs once balanced).
-4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
+4. Reserves the selected inputs so the next concurrent build can't re-pick the same coins. Once the transaction is proven, the reservation reaches `pending.json`.
 5. Submits the proven bytes to the node and returns a `PendingTx`.
 
 Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the chain's latest block that the resync read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships), and `Wallet::parameters().global_ttl` gives the value of the connected chain. To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
@@ -475,12 +475,14 @@ The registration is recorded and persisted before the replay starts. If the repl
 
 ## Pending reservations
 
-In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`, persisted as `pending.json` next to the wallet state. They serve two purposes:
+In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`. They serve two purposes:
 
 - **Prevent double-spending across builds.** Input selection skips reserved coins.
 - **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL passed, as a backstop for transactions that never confirm.
 
 Each reservation expires at the earliest TTL of the intents that its build made (see [Transfers](#transfers)). The wallet drops the reservation once the time of the chain's latest block passes that TTL, because the transaction can no longer land.
+
+A reservation reaches `pending.json`, next to the wallet state, once its build is proven. A process that stops during a proof (Ctrl-C, a kill or a panic) leaves no reservation for that build in `pending.json`, so the next process can spend its inputs. A proven build keeps its reservation across a restart, also when its bytes never reach a node, because the wallet cannot know whether they left the process. `HeldInputs::keep_on_ok` tells the wallet that a build is proven with `WalletFacade::persist_reservation`, so a custom wallet that persists its state implements it.
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
