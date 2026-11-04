@@ -312,6 +312,9 @@ impl WalletFacade for Wallet {
         self.inner().read().await.dust_synced()
     }
 
+    /// See [`WalletFacade::release`]. The save that follows is best-effort,
+    /// because the in-memory release already frees the inputs for this
+    /// process.
     async fn release(&self, spent: &SpentInputs) {
         self.inner().write().await.release(spent);
     }
@@ -326,6 +329,12 @@ impl WalletFacade for Wallet {
         self.rescan_held(chain).await
     }
 
+    /// See [`WalletFacade::watch_for_coins`]. A registration is part of the
+    /// wallet state, so this wallet saves it with the state when it has a
+    /// storage directory, and a coin registered before it lands on chain
+    /// survives a restart. When that save fails, the call returns
+    /// [`WalletError::Storage`] before the replay, and the registration stays
+    /// in memory.
     async fn watch_for_coins(
         &self,
         coins: Vec<CoinInfo>,
@@ -339,6 +348,10 @@ impl WalletFacade for Wallet {
         self.rescan_held(chain).await
     }
 
+    /// See [`WalletFacade::forget_coins`]. When this wallet has a storage
+    /// directory, the call saves the state once when it drops a registration,
+    /// and also when the last save failed. A failed save returns
+    /// [`WalletError::Storage`].
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {
         // Wait for a resync in flight, although this is one write. That resync
         // commits the state its plan read, so a registration dropped here would

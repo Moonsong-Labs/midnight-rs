@@ -118,9 +118,6 @@ impl WalletState {
     /// Only call this for a transaction that cannot land. Releasing one that is
     /// still in flight lets a later build re-select the same inputs, and the
     /// loser is rejected on chain.
-    ///
-    /// Persistence is best-effort, since the in-memory release already frees
-    /// the inputs for this process.
     pub(crate) fn release(&mut self, spent: &SpentInputs) {
         each!(&mut self.state, w => w.release(spent))
     }
@@ -148,10 +145,7 @@ impl WalletState {
         each!(&mut self.state, w => w.set_chain_pin(pin))
     }
 
-    /// How far the sync has reached, as one snapshot.
-    ///
-    /// The four cursors advance together during a sync, so reading them one
-    /// at a time can report a mixture of two syncs.
+    /// See [`WalletFacade::sync_cursors`](crate::WalletFacade::sync_cursors).
     pub(crate) fn sync_cursors(&self) -> SyncCursors {
         each!(&self.state, w => w.sync_cursors())
     }
@@ -161,13 +155,7 @@ impl WalletState {
         &self.seed
     }
 
-    /// The wallet's shielded public keys: the coin public key an output
-    /// commits to, and the encryption key its discovery ciphertext is sealed
-    /// to.
-    ///
-    /// Public material, so anything that only needs to address a coin to this
-    /// wallet can take these instead of the seed. A signer that never releases
-    /// its seed can still supply them.
+    /// See [`WalletFacade::shielded_public_keys`](crate::WalletFacade::shielded_public_keys).
     pub(crate) fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
         each!(&self.state, w => w.shielded_public_keys())
     }
@@ -196,14 +184,7 @@ impl WalletState {
         each!(&self.state, w => w.balance())
     }
 
-    /// Enumerate the wallet's spendable shielded coins, each with its full
-    /// coin info (nonce, token type, value) plus the nullifier that pins it.
-    ///
-    /// Use this to address a specific coin for a circuit that spends it (e.g.
-    /// `receiveShielded`): build the `ShieldedCoinInfo` argument from the
-    /// coin's `nonce`/`token_type`/`value`, then hand the same coin back to the
-    /// call builder so the SDK spends that exact coin as the shielded input.
-    /// Coins a still-pending build already spent are left out.
+    /// See [`WalletFacade::spendable_shielded_coins`](crate::WalletFacade::spendable_shielded_coins).
     pub(crate) fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
         each!(&self.state, w => w.spendable_shielded_coins())
     }
@@ -222,11 +203,6 @@ impl WalletState {
     /// collapses that Merkle leaf, and a resync resumes from the cursor
     /// instead of revisiting it. So the [`Wallet`](crate::Wallet) handle
     /// registers, then replays the stream from its first event.
-    ///
-    /// A registration is part of the wallet state, so it is persisted with it
-    /// when a storage directory is configured, and a coin registered before
-    /// it lands on chain survives a restart. The in-memory registration
-    /// stands even when that save fails.
     pub(crate) fn watch_for_coins(
         &mut self,
         coins: impl IntoIterator<Item = CoinInfo>,
@@ -244,8 +220,6 @@ impl WalletState {
     /// This drops the registration only. A coin the wallet already claimed is
     /// untouched, and stays spendable: it is held now, not watched for.
     /// Forgetting a coin that was never registered changes no registration.
-    /// When the last save failed, this call still saves, and can return
-    /// [`WalletError::Storage`].
     pub(crate) fn forget_coins(
         &mut self,
         coins: impl IntoIterator<Item = CoinInfo>,

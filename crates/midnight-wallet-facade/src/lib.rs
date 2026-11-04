@@ -57,7 +57,13 @@ pub trait WalletFacade: Send + Sync {
     /// generation.
     async fn ledger_version(&self) -> LedgerVersion;
 
-    /// The public keys a coin addressed to this wallet commits to.
+    /// The public keys that address a shielded coin to this wallet.
+    ///
+    /// An output to this wallet commits to the coin public key, and the
+    /// sender seals its discovery ciphertext to the encryption key. Both keys
+    /// are public material, so a caller that only addresses a coin to this
+    /// wallet can take them in place of the seed. A signer that never releases
+    /// its seed can still supply them.
     async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey);
 
     /// What this wallet holds, across shielded coins, unshielded UTXOs and
@@ -82,6 +88,11 @@ pub trait WalletFacade: Send + Sync {
 
     /// The shielded coins this wallet can spend, each with the nullifier that
     /// pins it.
+    ///
+    /// A caller pins one of these coins to spend that exact coin in a circuit
+    /// such as `receiveShielded`. [`SpendableShieldedCoin`] says how. An
+    /// implementation leaves out each coin that a pending build reserves, so a
+    /// caller cannot pin a coin that another build spends.
     async fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin>;
 
     /// The unshielded UTXOs this wallet tracks.
@@ -90,7 +101,10 @@ pub trait WalletFacade: Send + Sync {
     /// The chain's Dust and TTL parameters, as this wallet last synced them.
     async fn parameters(&self) -> ChainParameters;
 
-    /// How far this wallet's sync has reached.
+    /// How far this wallet's sync has reached, as one snapshot.
+    ///
+    /// The cursors advance together during a sync, so a reading of them one at
+    /// a time can report a mixture of two syncs.
     async fn sync_cursors(&self) -> SyncCursors;
 
     /// Whether this wallet has completed its Dust sync.
