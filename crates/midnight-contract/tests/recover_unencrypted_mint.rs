@@ -49,6 +49,10 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let contract = shielded_mint::Contract::deploy(provider)
         .with_initial_state(shielded_mint::LedgerInitialState)
         .with_zk_config(shielded_mint::ZK_CONFIG_DIR)
+        .send()
+        .await
+        .expect("submit deploy")
+        .into_contract()
         .await
         .expect("deploy mint contract");
     eprintln!("deployed mint contract at {}", contract.address());
@@ -63,6 +67,10 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         contract
             .circuits()
             .mint(Bytes(domain_sep), mint_value, Bytes(nonce), cpk.into())
+            .send()
+            .await
+            .expect("submit mint")
+            .wait_finalized()
             .await
             .expect("mint call");
         eprintln!("minted {mint_value} with no discovery ciphertext");

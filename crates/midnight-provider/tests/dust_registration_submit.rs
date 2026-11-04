@@ -51,6 +51,7 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     for _ in 0..3 {
         funder
             .transfer_unshielded(NIGHT, SEND, &address)
+            .send()
             .await
             .expect("fund the fresh address")
             .wait_finalized()
@@ -150,6 +151,7 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
 
     fresh
         .register_dust(None)
+        .send()
         .await
         .expect("build and submit the registration")
         .wait_finalized()

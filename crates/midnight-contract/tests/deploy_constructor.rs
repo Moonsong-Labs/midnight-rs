@@ -145,6 +145,10 @@ async fn a_deploy_runs_the_constructor_and_records_its_private_state() {
         .circuits()
         .with_witnesses(&OwnerKey)
         .bump()
+        .send()
+        .await
+        .expect("submit bump")
+        .wait_finalized()
         .await
         .expect("the owner bumps");
     assert_eq!(

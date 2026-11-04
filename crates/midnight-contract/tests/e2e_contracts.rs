@@ -619,7 +619,7 @@ fn execute_all_compiled_circuits() {
 /// current committee key, and submitted. No key is stored by the SDK.
 ///
 /// One deploy serves both updates. Two deploys from the dev seed race: a build
-/// only avoids inputs its own wallet reserved, awaiting a deploy returns at the
+/// only avoids inputs its own wallet reserved, `into_contract` returns at the
 /// best block rather than at finalization, and a second wallet syncing before
 /// the indexer surfaces the first spend re-selects it. That is ledger custom
 /// error 196, `DustDoubleSpend`. Sharing one provider across two
@@ -652,6 +652,10 @@ async fn governance_deploy_then_apply_both_updates() {
         .with_initial_state(initial)
         .with_zk_config(&keys_dir)
         .with_maintenance_authority(vec![authority.verifying_key()], 1)
+        .send()
+        .await
+        .expect("submit deploy")
+        .into_contract()
         .await
         .expect("deploy with maintenance authority");
     let address = contract.address().to_string();
@@ -678,6 +682,7 @@ async fn governance_deploy_then_apply_both_updates() {
         .await
         .expect("prepare batch")
         .sign(0, &authority)
+        .send()
         .await
         .expect("submit batch")
         .wait_best()
@@ -709,6 +714,7 @@ async fn governance_deploy_then_apply_both_updates() {
         .await
         .expect("prepare replace_authority")
         .sign(0, &authority)
+        .send()
         .await
         .expect("submit replace_authority")
         .wait_best()

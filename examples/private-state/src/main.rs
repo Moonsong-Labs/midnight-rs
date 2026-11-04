@@ -101,6 +101,9 @@ async fn main() -> anyhow::Result<()> {
     println!("1. Deploying secret-counter...");
     let contract = secret_counter::Contract::deploy(&provider)
         .with_zk_config(secret_counter::ZK_CONFIG_DIR)
+        .send()
+        .await?
+        .into_contract()
         .await?;
     println!("   address: {}", contract.address());
     println!(
@@ -138,7 +141,13 @@ async fn main() -> anyhow::Result<()> {
             println!("   finalized; the private-state snapshot is Confirmed");
             returned
         } else {
-            circuits.contribute().await?.value
+            circuits
+                .contribute()
+                .send()
+                .await?
+                .wait_finalized()
+                .await?
+                .value
         };
         let total = contract.ledger().await?.total()?;
         println!("   witness disclosed {returned}; on-chain total = {total}");

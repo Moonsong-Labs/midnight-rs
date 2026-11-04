@@ -793,9 +793,15 @@ mod constructor_shapes {
     {
         plain_constructor::Contract::deploy(plain)
             .with_constructor_args(TransientFr::from(42u64))
+            .send()
+            .await?
+            .into_contract()
             .await?;
         coin_vault::Contract::deploy(vault)
             .with_initial_state(coin_vault::CoinVaultInitialState::default())
+            .send()
+            .await?
+            .into_contract()
             .await?;
         Ok(())
     }

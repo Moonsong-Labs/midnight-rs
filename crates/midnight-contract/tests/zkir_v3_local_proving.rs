@@ -35,6 +35,7 @@ async fn a_zkir_v3_contract_runs_only_on_ledger_9() {
     let deploy = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(counter::ZK_CONFIG_DIR)
+        .send()
         .await;
 
     match ledger {
@@ -47,7 +48,11 @@ async fn a_zkir_v3_contract_runs_only_on_ledger_9() {
             Ok(_) => panic!("a ledger 8 chain must not take a ZKIR v3 contract"),
         },
         LedgerVersion::V9 => {
-            let contract = deploy.expect("deploy");
+            let contract = deploy
+                .expect("submit deploy")
+                .into_contract()
+                .await
+                .expect("deploy");
             let round_before = contract
                 .ledger()
                 .await
@@ -58,6 +63,10 @@ async fn a_zkir_v3_contract_runs_only_on_ledger_9() {
             contract
                 .circuits()
                 .increment()
+                .send()
+                .await
+                .expect("submit increment")
+                .wait_finalized()
                 .await
                 .expect("the node must accept the call");
 
