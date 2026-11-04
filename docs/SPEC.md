@@ -304,7 +304,7 @@ zk_config.verifier_key(circuit)               // on a blocking thread
        no operation → VerifierKeyMismatch { reason: Missing }, no key → Keyless,
        another key → Mismatched
   ↓
-provider.shielded_recipient()                 // the wallet's coin public key, which ownPublicKey() returns
+provider.shielded_recipient().coin_public_key // the wallet's coin public key, which ownPublicKey() returns
   ↓
 interpreter::execute(ir, program, state, args,
                      Env { witnesses, private_state, address, block_time, coin_public_key })
