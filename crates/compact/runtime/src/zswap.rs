@@ -22,8 +22,7 @@ pub enum WitnessNative {
     /// of [`WitnessNative::CreateZswapOutput`]).
     CreateZswapInput,
     /// `createZswapOutput(coin, recipient) -> []`: a shielded output, captured
-    /// for the call path to build into the transaction's Zswap offer. A deploy
-    /// refuses it.
+    /// for the call path to build into the transaction's Zswap offer.
     CreateZswapOutput,
 }
 

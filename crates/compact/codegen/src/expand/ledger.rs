@@ -64,7 +64,8 @@ pub(crate) fn emit_ledger_wrapper(
     };
 
     // Generate InitialState struct with typed fields
-    let initial_state = emit_initial_state(fields, name, info.constructor.as_ref());
+    let unrunnable = info.constructor.as_ref().and_then(|c| c.as_ref().err());
+    let initial_state = emit_initial_state(fields, name, unrunnable.map(String::as_str));
 
     // Generate Circuits struct with async on-chain call methods
     let circuit_methods_struct = emit_circuits_struct(info, &struct_name);
@@ -176,9 +177,7 @@ pub(crate) fn emit_ledger_wrapper(
             ///
             /// Consumes `self` and returns it back so callers can chain. Fails
             /// with `ContractError::TransactionFailed` when the chain did not
-            /// apply the deploy. The deploy's private-state snapshot stays
-            /// `Pending`, unless the wait reads `SubmitError::Invalid`, which
-            /// drops it.
+            /// apply the deploy.
             pub async fn wait_best(
                 self,
             ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
@@ -192,8 +191,8 @@ pub(crate) fn emit_ledger_wrapper(
             /// Consumes `self` and returns it back. May be called without a
             /// prior `wait_best`; the best-block status is then skipped. Fails
             /// with `ContractError::TransactionFailed` when the chain did not
-            /// apply the deploy. The wait confirms or drops the deploy's
-            /// private-state snapshot by the verdict.
+            /// apply the deploy. The wait settles the deploy's private-state
+            /// snapshot.
             pub async fn wait_finalized(
                 self,
             ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
@@ -328,10 +327,6 @@ pub(crate) fn emit_ledger_wrapper(
 }
 
 /// `Contract::deploy`, and the items of the `DeployBuilder` that it returns.
-///
-/// The generated deploy runs the contract's constructor when the interpreter
-/// can run it, and deploys the default state when the contract has no
-/// constructor.
 fn emit_deploy(
     info: &crate::types::ContractInfo,
     ledger_name: &Ident,
@@ -339,33 +334,20 @@ fn emit_deploy(
     declared_circuits: &[&str],
 ) -> (TokenStream, TokenStream) {
     let initial_state_name = format_ident!("{}InitialState", contract_name);
-    let default_state = format!("`{contract_name}InitialState::default()`");
     let declares_witnesses = !info.witnesses.is_empty();
-    let takes_arguments = info
-        .runnable_constructor()
-        .is_some_and(|c| !c.arguments.is_empty());
 
     let (source, source_doc) = match &info.constructor {
         None => (
             quote! { .with_initial_state(#initial_state_name::default()) },
-            format!(
-                "The deploy deploys {default_state}. `DeployBuilder::with_initial_state` \
-                 deploys another state."
-            ),
+            format!("The deploy deploys `{contract_name}InitialState::default()`."),
         ),
-        Some(Ok(_)) => {
+        Some(Ok(constructor)) => {
             let mut doc = format!(
-                "The deploy runs the contract's constructor on {default_state}, and deploys \
-                 the state that the constructor leaves. `DeployBuilder::with_initial_state` \
-                 deploys a state as it is and skips the constructor."
+                "The deploy runs the contract's constructor on \
+                 `{contract_name}InitialState::default()`."
             );
-            if takes_arguments {
-                doc.push_str(
-                    " The constructor takes arguments: set them with \
-                     `DeployBuilder::with_constructor_args`. Without them, a deploy that runs \
-                     the constructor fails with `ContractError::Construction` before it \
-                     proves anything.",
-                );
+            if !constructor.arguments.is_empty() {
+                doc.push_str(" Set its arguments with `DeployBuilder::with_constructor_args`.");
             }
             let source = quote! {
                 .with_constructor(midnight_contract::Constructor {
@@ -381,9 +363,8 @@ fn emit_deploy(
         Some(Err(reason)) => (
             TokenStream::new(),
             format!(
-                "The SDK cannot run the contract's constructor ({reason}). Set the state to \
-                 deploy with `DeployBuilder::with_initial_state`. Without it, the deploy fails \
-                 with `ContractError::Construction` before it proves anything."
+                "The SDK cannot run the contract's constructor ({reason}): set the state to \
+                 deploy with `DeployBuilder::with_initial_state`."
             ),
         ),
     };
@@ -415,17 +396,10 @@ fn emit_deploy(
         }
     };
 
-    let with_initial_state_doc = if info.runnable_constructor().is_none() {
-        "Set the state to deploy.".to_owned()
-    } else if declares_witnesses {
-        "Deploy `state` as it is, and skip the contract's constructor.\n\n\
-         The constructor arguments and the witnesses then have no use. The deploy still \
-         records the initial private state."
-            .to_owned()
+    let with_initial_state_doc = if info.runnable_constructor().is_some() {
+        "Deploy `state` as it is, and skip the contract's constructor."
     } else {
-        "Deploy `state` as it is, and skip the contract's constructor.\n\n\
-         The constructor arguments then have no use."
-            .to_owned()
+        "Set the state to deploy."
     };
 
     let with_constructor_args = info
@@ -435,12 +409,7 @@ fn emit_deploy(
             let params = typed_params(&c.arguments);
             let args = args_binding(&c.arguments);
             quote! {
-                /// Set the arguments of the contract's constructor, which the deploy runs.
-                ///
-                /// Without them, a deploy that runs the constructor fails with
-                /// `ContractError::Construction` before it proves anything.
-                /// `with_initial_state` skips the constructor, and the arguments then
-                /// have no use.
+                /// Set the arguments of the contract's constructor.
                 pub fn with_constructor_args(self #(, #params)*) -> Self {
                     #args
                     Self {
@@ -457,39 +426,13 @@ fn emit_deploy(
             }
         });
 
-    let (with_witnesses_doc, with_initial_private_state_doc) =
-        if info.runnable_constructor().is_some() {
-            (
-                "Attach a typed [`Witnesses`] implementation.\n\n\
-                 It answers the witness calls of the contract's constructor. Without it, a \
-                 constructor that calls a witness fails with `ContractError::Interpreter` before \
-                 the deploy proves anything. Chain \
-                 [`DeployBuilder::with_initial_private_state`] to set the private state that the \
-                 constructor starts from.",
-                "Set the private state that the deploy starts from.\n\n\
-                 The constructor's witnesses start from `state`, and the deploy records the \
-                 private state that they leave as the first snapshot of the new contract. Its \
-                 first call then starts from that snapshot. Without this method, the private \
-                 state starts at `Default`.",
-            )
-        } else {
-            (
-                "Attach a typed [`Witnesses`] implementation.\n\n\
-                 The deploy runs no constructor, so the witnesses answer no call. They set the \
-                 private-state type of [`DeployBuilder::with_initial_private_state`].",
-                "Set the private state that the deploy records as the first snapshot of the new \
-                 contract.\n\n\
-                 The first call on the contract starts from that snapshot. Without this method, \
-                 the private state starts at `Default`.",
-            )
-        };
-
     // `Witnesses` and `WitnessesAdapter` exist only for a contract that
     // declares witnesses.
     let witness_impls = declares_witnesses.then(|| {
         quote! {
             impl<'a, P> DeployBuilder<'a, P, midnight_contract::runtime::NoWitnesses> {
-                #[doc = #with_witnesses_doc]
+                /// Attach a typed [`Witnesses`] implementation, which answers the
+                /// witness calls of the contract's constructor.
                 pub fn with_witnesses<W: Witnesses>(
                     self,
                     witnesses: &'a W,
@@ -503,13 +446,13 @@ fn emit_deploy(
             }
 
             impl<'a, P, W: Witnesses> DeployBuilder<'a, P, WitnessesAdapter<'a, W>> {
-                #[doc = #with_initial_private_state_doc]
+                /// Set the private state that the constructor's witnesses start from
+                /// (default: `Default`).
                 ///
-                /// A private state to record needs a private-state store on the provider
-                /// (`MidnightProvider::with_private_state`). Without one, the deploy fails
-                /// with `ContractError::Construction` before it proves anything. The deploy
-                /// encodes `state` with `serde_json`, and a state that does not encode
-                /// fails the deploy with `ContractError::Serialization`.
+                /// The deploy records the resulting private state as the first snapshot
+                /// of the new contract, so it needs a private-state store on the
+                /// provider. A state that `serde_json` cannot encode fails the deploy
+                /// with `ContractError::Serialization`.
                 pub fn with_initial_private_state(self, state: W::PrivateState) -> Self {
                     match serde_json::to_vec(&state) {
                         ::core::result::Result::Ok(bytes) => Self {
@@ -538,7 +481,7 @@ fn emit_deploy(
         #[must_use = "does nothing until awaited or sent"]
         pub struct DeployBuilder<'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
             inner: midnight_contract::DeployBuilder<'a, P>,
-            /// The first error of a setter, which `send` and `.await` return.
+            /// The first error of a setter, which `send` returns.
             error: ::core::option::Option<midnight_contract::ContractError>,
             witnesses: ::core::marker::PhantomData<fn() -> Wp>,
         }
@@ -622,12 +565,7 @@ fn emit_deploy(
             type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
 
             fn into_future(self) -> Self::IntoFuture {
-                Box::pin(async move {
-                    if let ::core::option::Option::Some(error) = self.error {
-                        return Err(error);
-                    }
-                    self.inner.await.map(Contract)
-                })
+                Box::pin(async move { self.send().await?.into_contract().await })
             }
         }
     };
@@ -770,44 +708,30 @@ fn state_array_expr(slots: Vec<(Vec<usize>, TokenStream)>) -> TokenStream {
     quote! { StateValue::Array(vec![#(#elements),*].into()) }
 }
 
-/// The doc of `{Name}InitialState`, with a note on the contract's
-/// constructor when it has one.
-fn initial_state_doc(constructor: Option<&Result<crate::ir::Circuit, String>>) -> TokenStream {
+/// The doc of `{Name}InitialState`, with a note when the SDK cannot run the
+/// contract's constructor for `unrunnable`, the reason.
+fn initial_state_doc(unrunnable: Option<&str>) -> TokenStream {
     let mut lines = vec![
         " Initial state for deploying this contract.".to_owned(),
         String::new(),
         " `Default` gives each field the compiler's initial value for its type.".to_owned(),
     ];
-    match constructor {
-        None => {}
-        Some(Ok(_)) => lines.extend([
+    if let Some(reason) = unrunnable {
+        lines.extend([
             String::new(),
-            " `Default` gives the state before the constructor runs. `Contract::deploy` runs"
+            format!(" The SDK cannot run the contract's constructor ({reason}), so this state is"),
+            " the state before the constructor runs. Before you deploy, set each field that"
                 .to_owned(),
-            " the constructor on it. `DeployBuilder::with_initial_state` deploys a state as it"
-                .to_owned(),
-            " is and skips the constructor.".to_owned(),
-        ]),
-        Some(Err(reason)) => lines.extend([
-            String::new(),
-            format!(" The SDK cannot run the contract's constructor ({reason})."),
-            " So `Default` is the state before the constructor runs. Before you deploy, set"
-                .to_owned(),
-            " each field that the constructor writes to the value that the constructor writes."
-                .to_owned(),
-        ]),
+            " the constructor writes to the value that the constructor writes.".to_owned(),
+        ]);
     }
     quote! { #(#[doc = #lines])* }
 }
 
-fn emit_initial_state(
-    fields: &[LedgerField],
-    name: &str,
-    constructor: Option<&Result<crate::ir::Circuit, String>>,
-) -> TokenStream {
+fn emit_initial_state(fields: &[LedgerField], name: &str, unrunnable: Option<&str>) -> TokenStream {
     let struct_name = format_ident!("{}InitialState", name);
     let ledger_name = format_ident!("{}", name);
-    let doc = initial_state_doc(constructor);
+    let doc = initial_state_doc(unrunnable);
 
     let mut field_defs = Vec::new();
     let mut field_defaults = Vec::new();
@@ -1641,27 +1565,12 @@ pub(crate) fn emit_simulator(
         let params = typed_params(&c.arguments);
         let program = program_setup(&ledger_name);
         let args = args_binding(&c.arguments);
-        let private_state = if info.witnesses.is_empty() {
-            ""
-        } else {
-            " The witnesses start from the simulator's private state, which starts at \
-             `Default`. A deploy starts them from the state of `with_initial_private_state`."
-        };
-        let doc = format!(
-            "Run the contract's constructor in process, as a deploy does.\n\n\
-             The constructor runs on the simulator's ledger. On success, the simulator keeps the \
-             ledger and the private state after the constructor. A simulator over \
-             `{contract_name}InitialState::default()` then holds the state that a deploy with \
-             these arguments makes, when the inputs below are the same.\n\n\
-             The constructor runs at the address, the block time and the coin public key of the \
-             simulator. A deploy runs it at the zero address, the wall-clock time and the \
-             wallet's coin public key.{private_state} The simulator refuses no effect. A deploy \
-             refuses a constructor that mints, claims, spends a coin or creates a shielded coin, \
-             or makes an unshielded input or output.\n\n\
+        let doc = "Run the contract's constructor in process, as a deploy does.\n\n\
+             On success, the simulator keeps the ledger and the private state after the \
+             constructor. Unlike a deploy, the simulator refuses no effect.\n\n\
              # Errors\n\n\
              `ContractError::Interpreter` when the constructor or a witness fails, for example \
-             on a failed `assert`. The simulator then keeps the state from before the run."
-        );
+             on a failed `assert`. The simulator then keeps the state from before the run.";
         quote! {
             #[doc = #doc]
             pub fn run_constructor(

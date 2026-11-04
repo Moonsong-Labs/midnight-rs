@@ -65,21 +65,6 @@ pub enum ContractError {
         paid: u128,
     },
 
-    /// The contract's constructor has an effect that the deploy does not carry.
-    ///
-    /// A deploy carries the state that the constructor leaves, and no
-    /// transcript. The ledger takes a ledger effect, and a shielded coin that a
-    /// contract spends, only from the transcript of a call. The SDK does not
-    /// carry a shielded coin that the constructor creates into the offer of
-    /// the deploy. So the deploy stops after the constructor runs, before it
-    /// proves anything. Deploy a state with `with_initial_state`, which skips
-    /// the constructor, and make the effect in a circuit call.
-    #[error(
-        "the constructor {0}: deploy a state with `with_initial_state`, and make the \
-         effect in a circuit call"
-    )]
-    ConstructorEffect(ConstructorEffect),
-
     #[error("serialization failed: {0}")]
     Serialization(String),
 
@@ -89,11 +74,12 @@ pub enum ContractError {
     #[error("invalid contract address: {0}")]
     InvalidContractAddress(String),
 
-    /// The SDK submitted a circuit-call or deploy transaction, or tried to, and got no verdict.
+    /// The SDK submitted a circuit call or a deploy, or tried to, and got no
+    /// verdict.
     ///
     /// A failed submit or wait does **not** retract the transaction, so it can
-    /// still land. A deploy gives this error only from its submit, in
-    /// [`DeployBuilder::send`](crate::DeployBuilder::send). A wait that reads a verdict other than `Success` gives
+    /// still land. A deploy gives this error only from its submit. A wait that
+    /// reads a verdict other than `Success` gives
     /// [`TransactionFailed`](ContractError::TransactionFailed) instead. Match
     /// the [`SubmitError`] kind in `source` to choose the recovery:
     ///
@@ -120,9 +106,9 @@ pub enum ContractError {
     /// is true, call `confirm` when it applied, or `mark_failed` when it did
     /// not, with `extrinsic_hash`. Until you reconcile the snapshot, the next
     /// call on this contract builds on it. A `mark_failed` of it then also
-    /// drops the snapshots of the later calls. A deploy's snapshot is at the
-    /// address of the new contract, which this error does not carry.
-    /// `export_private_states` shows it.
+    /// drops the snapshots of the later calls. A deploy's snapshot needs no
+    /// reconcile, because no contract exists at its address unless the deploy
+    /// lands.
     ///
     /// ```rust
     /// # use midnight_contract::{ContractError, SubmitError};
@@ -328,44 +314,6 @@ pub enum ContractError {
 
     #[error("maintenance error: {0}")]
     Maintenance(String),
-}
-
-/// An effect of a contract's constructor that the deploy does not carry.
-///
-/// [`ContractError::ConstructorEffect`] carries it. Its `Display` gives the
-/// reason.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ConstructorEffect {
-    /// A ledger effect: a mint, a claimed nullifier, coin or contract call,
-    /// or an unshielded input or output. The ledger takes one only from the
-    /// transcript of a call.
-    LedgerEffect,
-    /// A shielded coin that the constructor spends, with `createZswapInput`.
-    /// The ledger takes a contract's spend only from the transcript of a call.
-    ShieldedInput,
-    /// A shielded coin that the constructor creates, with `createZswapOutput`.
-    /// The SDK does not carry it into the offer of the deploy.
-    ShieldedOutput,
-}
-
-impl std::fmt::Display for ConstructorEffect {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::LedgerEffect => {
-                "makes a ledger effect (a mint, a claimed nullifier, coin or contract call, or \
-                 an unshielded input or output), which the ledger takes only from the \
-                 transcript of a call"
-            }
-            Self::ShieldedInput => {
-                "spends a shielded coin, which the ledger takes from a contract only in the \
-                 transcript of a call"
-            }
-            Self::ShieldedOutput => {
-                "creates a shielded coin, which the SDK does not carry into the offer of a deploy"
-            }
-        })
-    }
 }
 
 /// What a contract state holds for a circuit whose local verifier key it does

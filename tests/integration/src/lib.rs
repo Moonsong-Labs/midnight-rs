@@ -31,8 +31,8 @@ compact_bindgen::contract!(
     Bboard,
     "../../crates/midnight-contract/tests/fixtures/bboard/compiler/analyzed-ir.sexp"
 );
-// A constructor that takes an argument and calls no witness, and one that the
-// interpreter cannot run, so each shape of the generated deploy compiles.
+// Constructor shapes of the generated deploy: one that takes an argument and
+// calls no witness, and one that the interpreter cannot run.
 compact_bindgen::contract!(
     PlainConstructor,
     "../fixtures/compiled/plain-constructor/compiler/analyzed-ir.sexp"
@@ -745,12 +745,10 @@ mod initial_state_defaults {
         }
     }
 
-    /// The generated default state, then the constructor, gives the state that
-    /// the canonical runtime's constructor gives. A run that starts from
-    /// another state, binds no argument or drops the body fails it. tiny's
-    /// constructor takes an argument, calls a witness and a circuit, and
-    /// bboard's increments a counter. The arguments and the key are those of
-    /// the cases of the goldens.
+    /// The constructor on the generated default state gives the canonical
+    /// runtime's state. tiny's constructor takes an argument and calls a
+    /// witness and a circuit. The arguments and the key are those of the golden
+    /// cases.
     #[test]
     fn the_constructor_state_is_the_compilers() {
         let mut tiny =
@@ -775,8 +773,6 @@ mod initial_state_defaults {
     }
 }
 
-/// The generated deploy of a constructor that calls no witness, and of a
-/// constructor that the interpreter cannot run.
 #[cfg(test)]
 mod constructor_shapes {
     use compact_bindgen::TransientFr;
@@ -784,8 +780,8 @@ mod constructor_shapes {
 
     use crate::{coin_vault, plain_constructor};
 
-    /// The deploy takes the typed arguments of a constructor that calls no
-    /// witness, and a state for a constructor that the SDK cannot run.
+    /// The generated deploy builds for each constructor shape, with no
+    /// `Provider` bound.
     #[expect(
         dead_code,
         reason = "the build checks the generated types, and a deploy needs a devnet"

@@ -249,8 +249,8 @@ Both SDKs run the contract's Compact constructor locally when they deploy, and d
 
 The differences:
 
-- midnight-js stores the private state with `privateStateProvider.set` after the deploy finalizes, and only when the caller gives a `privateStateId`. midnight-rs records it as a `Pending` snapshot before the submit, and `wait_finalized` confirms it when the chain applied the deploy. midnight-rs refuses a private state that it cannot record, when no store is attached. midnight-js refuses an `initialPrivateState` without a `privateStateId` before it builds anything. When the caller gives neither, midnight-js stores no private state, also when the constructor's witnesses leave one.
-- midnight-js drops the ledger effects of the constructor, and puts the constructor's Zswap outputs into the guaranteed offer of the deploy (`zswapStateToOffer`). midnight-rs refuses a constructor with a ledger effect, a Zswap input or a Zswap output, with `ContractError::ConstructorEffect`, before any proof. A deploy carries no transcript, so the ledger takes none of the ledger effects. The ledger can take a Zswap output for a user key in the offer of the deploy. midnight-rs does not carry a constructor's Zswap output into that offer.
+- midnight-js stores the private state with `privateStateProvider.set` after the deploy finalizes, and only when the caller gives a `privateStateId`. Without one, it stores nothing, also when the constructor's witnesses leave a private state. midnight-rs records the private state as a `Pending` snapshot before the submit, as for a call. It refuses a private state to record when no store is attached.
+- midnight-js drops the ledger effects of the constructor, and puts its Zswap outputs into the guaranteed offer of the deploy (`zswapStateToOffer`). midnight-rs refuses a constructor with a ledger effect, a Zswap input or a Zswap output, with `ContractError::Construction`, before any proof.
 - compact-js gives the contract a maintenance authority with one key from a sampled signing key. midnight-rs keeps the empty committee unless the caller sets one with `with_maintenance_authority`.
 
 ## Feature gaps

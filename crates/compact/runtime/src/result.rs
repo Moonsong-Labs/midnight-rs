@@ -31,14 +31,14 @@ pub struct ExecutionResult {
     pub private_transcript_outputs: Vec<AlignedValue>,
     /// Coins the circuit asked to create on-chain via `createZswapOutput`
     /// (shielded mints / sends), in call order. The call path turns each into
-    /// an `Output` in the Zswap offer, and a deploy refuses a constructor that
-    /// creates one. Empty for circuits that don't create shielded outputs.
+    /// an `Output` in the Zswap offer. Empty for circuits that don't create
+    /// shielded outputs.
     pub zswap_outputs: Vec<CircuitZswapOutput>,
     /// Coins the circuit asked to spend on-chain via `createZswapInput`
     /// (shielded sends / merges), in call order. The call path turns each into
     /// an `Input` (or, when it pairs with a same-call self-output, a
-    /// `Transient`) in the Zswap offer, and a deploy refuses a constructor that
-    /// spends one. Empty for circuits that don't spend shielded coins.
+    /// `Transient`) in the Zswap offer. Empty for circuits that don't spend
+    /// shielded coins.
     pub zswap_inputs: Vec<CircuitZswapInput>,
     /// The events that the circuit emitted with `emit`, in emission order, as
     /// the VM decodes each `log` op: a version, an event type and the payload.
