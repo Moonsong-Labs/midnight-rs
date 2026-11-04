@@ -1610,8 +1610,8 @@ pub(crate) fn emit_simulator(
         );
 
         impl Simulator {
-            /// A simulator over `state` at `block_time`, at the zero address,
-            /// with no coin public key.
+            /// A simulator over `state` at `block_time`, with no contract
+            /// address and no coin public key.
             ///
             /// The block time floors to whole seconds, the unit of the chain's
             /// clock checks.

@@ -63,14 +63,14 @@ pub struct Runner<Wp = NoWitnesses> {
     private_state: Vec<u8>,
     witnesses: Wp,
     block_time: Timestamp,
-    address: ContractAddress,
+    address: Option<ContractAddress>,
     coin_public_key: Option<CoinPublicKey>,
 }
 
 impl Runner {
     /// A runner over `state` at `block_time`.
     ///
-    /// It has no witnesses, an empty private state, the zero address and no
+    /// It has no witnesses, an empty private state, no contract address and no
     /// coin public key. The block time floors to whole seconds, the unit of
     /// the chain's clock checks.
     ///
@@ -83,7 +83,7 @@ impl Runner {
             private_state: Vec::new(),
             witnesses: NoWitnesses,
             block_time: block_timestamp(block_time),
-            address: ContractAddress(midnight_helpers::HashOutput([0; 32])),
+            address: None,
             coin_public_key: None,
         }
     }
@@ -116,7 +116,7 @@ impl<Wp> Runner<Wp> {
 
     /// Set the address that `kernel.self()` reads.
     pub fn set_address(&mut self, address: ContractAddress) {
-        self.address = address;
+        self.address = Some(address);
     }
 
     /// Set the caller's coin public key, which `ownPublicKey()` returns.
@@ -142,16 +142,17 @@ impl<Wp: WitnessProvider> Runner<Wp> {
     /// # Errors
     ///
     /// [`ContractError::Interpreter`] when the circuit or a witness fails, for
-    /// example on a failed `assert`. With no coin public key set, a circuit
-    /// that calls `ownPublicKey()` fails with this error. The runner keeps the
-    /// state from before the call.
+    /// example on a failed `assert`. With no address set, a circuit that reads
+    /// `kernel.self()` fails with this error, and with no coin public key set,
+    /// a circuit that calls `ownPublicKey()`. The runner keeps the state from
+    /// before the call.
     pub fn run(
         &mut self,
         circuit: &compact_codegen::ir::Circuit,
         program: &Program<'_>,
         args: &[(&str, Value)],
     ) -> Result<Value, ContractError> {
-        self.run_at(Some(self.address), circuit, program, args)
+        self.run_at(self.address, circuit, program, args)
     }
 
     /// Run `constructor` as [`run`](Self::run) runs a circuit, but with no

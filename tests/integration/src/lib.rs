@@ -1145,6 +1145,8 @@ mod simulator_tests {
         assert_eq!(simulator.ledger().unlocked().unwrap(), 1);
     }
 
+    /// A simulator with a default address mints under a placeholder in place
+    /// of the contract's address.
     #[test]
     fn the_address_reaches_kernel_self() {
         let address = ContractAddress(HashOutput([9; 32]));
@@ -1152,6 +1154,17 @@ mod simulator_tests {
             call_context::CallContextInitialState::default(),
             UNIX_EPOCH,
         );
+        let unset = simulator.mint(Bytes([7; 32]), 1);
+        assert!(
+            matches!(
+                unset,
+                Err(ContractError::Interpreter(
+                    InterpreterError::NoContractAddress
+                ))
+            ),
+            "{unset:?}"
+        );
+
         simulator.set_address(address);
 
         // `mint` returns the token type that the `kernel.self()` address mints
