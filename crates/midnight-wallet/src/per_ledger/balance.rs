@@ -91,7 +91,7 @@ impl Wallet {
         ShieldedBalance { coins, total_count }
     }
 
-    /// See [`crate::Wallet::spendable_shielded_coins`].
+    /// See [`crate::wallet::WalletState::spendable_shielded_coins`].
     pub fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
         // Exclude coins a recent still-pending build already spent, so callers
         // (and the pinned-coin validation in the contract-call builder) don't

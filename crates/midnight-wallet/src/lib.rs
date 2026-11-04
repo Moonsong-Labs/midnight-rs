@@ -1,21 +1,21 @@
 //! Wallet state and address derivation for the Midnight SDK.
 //!
-//! [`Wallet`] owns the seed, the secret keys, the synced ledger state
-//! (shielded coins, dust UTXOs, unshielded UTXOs), the ledger parameters,
-//! and the latest block context, in the ledger generation the chain runs. It
-//! exposes accessors for balances, addresses and cursors. Its resyncs and
-//! rescans run through [`LocalWallet`].
+//! [`Wallet`] is a handle on the seed, the secret keys, the synced ledger
+//! state (shielded coins, dust UTXOs, unshielded UTXOs), the ledger
+//! parameters, and the latest block context, in the ledger generation the
+//! chain runs. Every clone of the handle shares that state. The identity
+//! (network, addresses) reads through plain methods, and the synced state
+//! through [`WalletFacade`].
 //!
 //! The API a consumer programs against is the `WalletFacade` trait in
-//! `midnight-wallet-facade`, which this crate depends on and implements:
-//! [`LocalWallet`] is that role over a `Wallet` this process owns. Readings
-//! return owned values and a mutation is one call, so a consumer never holds
-//! a lock.
+//! `midnight-wallet-facade`, which this crate depends on and implements for
+//! [`Wallet`]. Readings return owned values and a mutation is one call, so a
+//! consumer never holds a lock.
 //!
 //! Once a wallet is attached, `midnight_provider::MidnightProvider` starts
 //! its resyncs and rescans and builds its transactions. Every build resyncs
 //! the wallet first. When asked, the wallet also resyncs itself in a
-//! background task ([`LocalWallet::sync_in_background`]). The wallet runs
+//! background task ([`Wallet::sync_in_background`]). The wallet runs
 //! each replay against the indexer that it synced from. The provider holds
 //! the wallet as an `Arc<dyn WalletFacade>`.
 //!
@@ -67,13 +67,13 @@
 //! ```
 
 mod background;
+mod handle;
 mod ledger_8;
 #[expect(
     clippy::duplicate_mod,
     reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
 )]
 mod ledger_9;
-mod local;
 mod replay;
 mod storage;
 mod sync;
@@ -95,7 +95,6 @@ pub use midnight_types::{
 pub use midnight_wallet_facade::WalletFacade;
 
 pub use background::BackgroundSync;
-pub use local::LocalWallet;
+pub use handle::Wallet;
 pub use midnight_types::hd::{self, AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use sync::{SyncHandle, SyncProgress, WalletBuilder};
-pub use wallet::Wallet;

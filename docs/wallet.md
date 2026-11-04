@@ -6,21 +6,21 @@ The SDK's wallet covers Midnight's three asset legs:
 - **Unshielded UTXOs**: public UTXO-model balances (NIGHT lives here)
 - **Dust**: fee-token, generated continuously from NIGHT holdings
 
-`Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` or `Wallet::from_mnemonic` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts. The wallet can also resync itself in a background task (see [Background sync](#background-sync)).
+`Wallet` is a handle on the synced state of one seed. Callers start one with `Wallet::from_seed` or `Wallet::from_mnemonic` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts. The wallet can also resync itself in a background task (see [Background sync](#background-sync)).
 
-The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`). Such an implementation must serialize its own `resync`, `rescan_shielded`, `watch_for_coins` and `forget_coins` against each other, because the provider holds no lock across them. Its `rescan_shielded` and `watch_for_coins` take the chain view, as `resync` does. When its state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync. `watch_for_coins` registers the coins and then rescans.
+`Wallet` is `Clone`, and every clone is the same wallet: a change through one clone shows through all of them. To keep a handle on the attached wallet, attach a clone with `provider.with_wallet(wallet.clone())` and keep the original. The identity of a wallet does not change after its sync, so its readers are plain methods: `network()`, `seed()`, `unshielded_address()`, `shielded_address()` and `dust_address()`. The readers of the synced state, such as `balance()`, and the sync methods are `WalletFacade` methods, so import the trait to call them.
+
+`WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `Wallet` keeps its lock as a private field. The provider holds the wallet as `Arc<dyn WalletFacade>`. Another implementation goes in as itself when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`). Such an implementation must serialize its own `resync`, `rescan_shielded`, `watch_for_coins` and `forget_coins` against each other, because the provider holds no lock across them. Its `rescan_shielded` and `watch_for_coins` take the chain view, as `resync` does. When its state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync. `watch_for_coins` registers the coins and then rescans.
 
 ```rust
-use std::sync::Arc;
 use midnight_core::WalletFacade;
-use midnight_core::wallet::LocalWallet;
 
-let wallet = Arc::new(LocalWallet::new(wallet));
-let provider = provider.with_wallet(Arc::clone(&wallet));
+let provider = provider.with_wallet(wallet.clone());
+let address = wallet.unshielded_address();
 let balance = wallet.balance().await;
 ```
 
-The wallet serializes its own resyncs, rescans, coin watches and forgets. So the handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.rescan_shielded(&provider)`.
+The wallet serializes its own resyncs, rescans, coin watches and forgets across all its clones. So the handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.rescan_shielded(&provider)`.
 
 ## Seeds
 
@@ -211,15 +211,13 @@ To incrementally refresh an already-synced wallet without replaying from the cur
 
 ### Background sync
 
-`LocalWallet::sync_in_background` resyncs the wallet in a background task until you drop the handle that it returns. Each pass is one resync against the chain view that you give. So the pass resumes the replay from the wallet's cursors. When the wallet holds a chain pin, the pass checks that pin. Give `sync_in_background` the provider that the wallet is attached to:
+`Wallet::sync_in_background` resyncs the wallet in a background task until you drop the handle that it returns. Each pass is one resync against the chain view that you give. So the pass resumes the replay from the wallet's cursors. When the wallet holds a chain pin, the pass checks that pin. Give `sync_in_background` the provider that the wallet is attached to:
 
 ```rust
 use std::sync::Arc;
 use std::time::Duration;
-use midnight_core::wallet::LocalWallet;
 
-let wallet = Arc::new(LocalWallet::new(wallet));
-let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));
+let provider = Arc::new(provider.with_wallet(wallet.clone()));
 let sync = wallet.sync_in_background(provider.clone(), Duration::from_secs(5));
 ```
 
@@ -471,7 +469,7 @@ To check the outcome, look for the coin in `provider.spendable_shielded_coins()`
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-`provider.rescan_shielded()` runs the replay alone. A handle (`Arc<LocalWallet>`) has the same two methods: `watch_for_coins(coins, &provider)` and `rescan_shielded(&provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them. When the wallet's state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync.
+`provider.rescan_shielded()` runs the replay alone. The `Wallet` handle has the same two methods: `watch_for_coins(coins, &provider)` and `rescan_shielded(&provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them. When the wallet's state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync.
 
 ## Pending reservations
 
@@ -507,12 +505,13 @@ Wallet::from_seed(hex)? | Wallet::from_mnemonic(phrase)? | WalletBuilder::new(se
   │ subscribe zswap + unshielded + dust  (parallel)
   │ persist (metadata + binary state + pending)
   ↓
-provider.with_wallet(wallet)
+provider.with_wallet(wallet.clone())
   ↓
+  wallet.unshielded_address() / .shielded_address() / .dust_address()   identity, no lock
   provider.balance()                     read-only
   provider.parameters() / .sync_cursors() / .unshielded_utxos()
   provider.resync_wallet()               incremental refresh + re-persist
-  wallet.sync_in_background(provider, pause)   resync in a task until the handle drops (an Arc<LocalWallet>)
+  wallet.sync_in_background(provider, pause)   resync in a task until the handle drops (the provider in an Arc)
       sync.wait_until(done)              wait until done holds for the balance (at the call and after each pass)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext: register, then replay
   provider.rescan_shielded()             replay the shielded stream (a resync first, to cross a fork)

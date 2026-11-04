@@ -29,8 +29,8 @@ pub use types::{Health, TransactionHash};
 
 // Re-export the vocabulary that appears in MidnightProvider's public surface
 // so callers don't need separate deps for it. The implementation types
-// (`Wallet`, `LocalWallet`, `WalletBuilder`) live in midnight-wallet; this
-// crate never names them.
+// (`Wallet`, `WalletBuilder`) live in midnight-wallet; this crate never names
+// them.
 pub use midnight_types::{
     BlockHash, ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
     DustParameters, DustPublicKey, EncryptionPublicKey, ExtrinsicHash, HashOutput, LedgerVersion,
@@ -46,7 +46,7 @@ pub use midnight_types::{
     SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind,
     TransferRequest, TransferResult, WalletBalance, WalletError,
 };
-pub use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
+pub use midnight_wallet_facade::WalletFacade;
 
 // Re-export the private-state types so callers configure
 // `MidnightProvider::with_private_state` without a separate dep.

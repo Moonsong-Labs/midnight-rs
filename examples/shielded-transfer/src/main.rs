@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use midnight_core::wallet::LocalWallet;
 use midnight_core::{MidnightProvider, Network, Wallet};
 use tracing_subscriber::EnvFilter;
 
@@ -59,8 +58,7 @@ async fn main() -> anyhow::Result<()> {
         .sync(&provider, &indexer_url)
         .await?;
     let address = wallet.shielded_address();
-    let wallet = Arc::new(LocalWallet::new(wallet));
-    let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));
+    let provider = Arc::new(provider.with_wallet(wallet.clone()));
     println!("Sync complete.");
     println!("Shielded address:  {address}\n");
 

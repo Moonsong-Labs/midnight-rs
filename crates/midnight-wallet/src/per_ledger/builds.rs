@@ -1,4 +1,4 @@
-//! [`LocalWallet`]'s builds on this generation.
+//! [`crate::Wallet`]'s builds on this generation.
 
 use std::sync::Arc;
 
@@ -14,7 +14,6 @@ use super::types::{
     PreparedInput, PreparedTransfer, TransferBuilder, balance_external, longest_ttl,
     prepare_no_validate, prepare_shielded_inputs,
 };
-use crate::LocalWallet;
 
 /// Reserve what `prepared` spends, and hand it over as reserved.
 fn reserve(wallet: &mut super::Wallet, prepared: PreparedTransfer) -> ReservedBuild {
@@ -40,7 +39,7 @@ fn fund_from(
 }
 
 #[async_trait]
-impl WalletBuilds for LocalWallet {
+impl WalletBuilds for crate::Wallet {
     async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
         let wallet = self.inner().read().await;
         super::wallet_state(&wallet)?.execution_context()

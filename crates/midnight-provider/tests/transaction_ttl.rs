@@ -12,7 +12,7 @@ mod common;
 
 use std::time::Duration;
 
-use midnight_provider::{LedgerVersion, MidnightProvider, NIGHT};
+use midnight_provider::{LedgerVersion, MidnightProvider, NIGHT, WalletFacade};
 
 /// Long enough for a build, its proof and its inclusion, and well short of
 /// the devnet's `global_ttl`.
@@ -67,7 +67,7 @@ async fn a_transfer_with_a_short_ttl_lands() {
 
     let provider = MidnightProvider::new(&node_url);
     let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
-    let global_ttl = wallet.parameters().global_ttl.as_seconds();
+    let global_ttl = wallet.parameters().await.global_ttl.as_seconds();
     assert!(
         global_ttl > i128::from(TTL.as_secs()),
         "the devnet's global_ttl of {global_ttl}s leaves no room for a shorter TTL"

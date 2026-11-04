@@ -5,7 +5,7 @@
 //! implementation is committed to a particular way of sharing its state. This
 //! crate carries the traits alone and speaks in `midnight-types`'s
 //! vocabulary, so it depends on no wallet implementation; `midnight-wallet`
-//! implements them with `LocalWallet`, over a `Wallet` that process owns.
+//! implements them for its `Wallet`.
 //!
 //! [`WalletFacade`] is the same for every ledger generation. The builds are
 //! not, because they name a generation's transaction types:
@@ -140,8 +140,15 @@ pub trait WalletFacade: Send + Sync {
 
     /// Register coins this wallet owns but cannot discover, persist the
     /// registrations, and then rescan as [`Self::rescan_shielded`] does, so
-    /// the replay claims them. See `Wallet::watch_for_coin` on the
-    /// implementing wallet.
+    /// the replay claims them.
+    ///
+    /// A shielded coin normally reaches its owner through the discovery
+    /// ciphertext on its output. That channel fails when the party that built
+    /// the transaction attached no ciphertext, or sealed it to a key this
+    /// wallet does not hold. The coin is still owned by this wallet's coin
+    /// public key and still spendable, as long as its owner can rebuild the
+    /// `CoinInfo` (nonce, token type, value) from somewhere else. A contract
+    /// that evolves one public nonce per mint is such a case.
     ///
     /// An empty list does nothing: no write and no replay.
     ///
@@ -155,30 +162,6 @@ pub trait WalletFacade: Send + Sync {
 
     /// Drop registrations that matched no on-chain output.
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError>;
-}
-
-/// A value that `MidnightProvider::with_wallet` attaches as its wallet.
-///
-/// A wallet that serves the builds of both ledger generations goes in as
-/// itself. `midnight-wallet` also implements it for its synced `Wallet`,
-/// which goes in behind the lock of a `LocalWallet`.
-pub trait IntoWalletFacade {
-    /// The wallet the provider holds.
-    type Facade: ledger_8::WalletBuilds + ledger_9::WalletBuilds + 'static;
-
-    /// Convert into the wallet the provider holds.
-    fn into_facade(self) -> Self::Facade;
-}
-
-impl<W> IntoWalletFacade for W
-where
-    W: ledger_8::WalletBuilds + ledger_9::WalletBuilds + 'static,
-{
-    type Facade = W;
-
-    fn into_facade(self) -> W {
-        self
-    }
 }
 
 /// A shared wallet is a wallet: every call forwards to the one inside.

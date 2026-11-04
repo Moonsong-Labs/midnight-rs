@@ -515,7 +515,7 @@ pub(crate) fn zswap_keys(seed: &Seed) -> SecretKeys {
 }
 
 impl Wallet {
-    /// See [`crate::Wallet::snapshot_dir`].
+    /// See [`crate::wallet::WalletState::snapshot_dir`].
     pub fn snapshot_dir(&self) -> Option<std::path::PathBuf> {
         let dir = self.storage_dir.as_deref()?;
         Some(crate::storage::snapshot_path(
@@ -525,7 +525,7 @@ impl Wallet {
         ))
     }
 
-    /// See [`crate::Wallet::chain_pin`].
+    /// See [`crate::wallet::WalletState::chain_pin`].
     pub fn chain_pin(&self) -> Option<&ChainPin> {
         self.chain_pin.as_ref()
     }
@@ -536,7 +536,7 @@ impl Wallet {
         &self.indexer_url
     }
 
-    /// See [`crate::Wallet::set_chain_pin`].
+    /// See [`crate::wallet::WalletState::set_chain_pin`].
     pub fn set_chain_pin(&mut self, pin: ChainPin) {
         self.chain_pin = Some(pin);
     }
@@ -741,7 +741,7 @@ impl Wallet {
         self.persist_pending();
     }
 
-    /// Hand back the inputs a build reserved. See [`crate::Wallet::release`].
+    /// Hand back the inputs a build reserved. See [`crate::wallet::WalletState::release`].
     ///
     /// The updated pending set is persisted as [`Self::reserve_pending`]
     /// persists it.
@@ -820,7 +820,14 @@ impl Wallet {
             .flat_map(|batch| batch.spends.iter().map(|spend| &spend.old_nullifier))
     }
 
-    /// See [`crate::Wallet::save`].
+    /// Save the current wallet state to disk.
+    ///
+    /// Writes the confirmed-state files (`metadata.json`, `zswap-N.bin`,
+    /// `dust_wallet-N.bin`) and the in-flight reservations to a separate
+    /// `pending.json`. Confirmed and pending live in distinct files so a
+    /// failed save of one does not corrupt the other. Runs at the end of the
+    /// initial sync and after every successful resync when a storage
+    /// directory is configured.
     pub fn save(&self, base: &Path) -> Result<(), WalletError> {
         let wallet_id = self.storage_id();
         super::snapshot::save(
@@ -1059,7 +1066,7 @@ impl Wallet {
     // Accessors
     // -------------------------------------------------------------------------
 
-    /// See [`crate::Wallet::sync_cursors`].
+    /// See [`crate::wallet::WalletState::sync_cursors`].
     pub fn sync_cursors(&self) -> SyncCursors {
         SyncCursors {
             last_block_height: self.last_block_height,
@@ -1073,7 +1080,7 @@ impl Wallet {
         &self.seed
     }
 
-    /// See [`crate::Wallet::shielded_public_keys`].
+    /// See [`crate::wallet::WalletState::shielded_public_keys`].
     pub fn shielded_public_keys(&self) -> (crate::CoinPublicKey, crate::EncryptionPublicKey) {
         (
             self.secret_keys.coin_public_key().into_sdk(),
@@ -1132,7 +1139,7 @@ impl Wallet {
         }
     }
 
-    /// See [`crate::Wallet::commit_resync`].
+    /// See [`crate::wallet::WalletState::commit_resync`].
     pub fn commit_resync(&mut self, commit: ResyncCommit) -> Result<(), WalletError> {
         let ResyncCommit {
             dust_wallet,
@@ -1211,12 +1218,7 @@ impl Wallet {
     // Coins the wallet owns but cannot discover
     // -------------------------------------------------------------------------
 
-    /// See [`crate::Wallet::watch_for_coin`].
-    pub fn watch_for_coin(&mut self, coin: crate::CoinInfo) -> Result<(), WalletError> {
-        self.watch_for_coins([coin])
-    }
-
-    /// [`Self::watch_for_coin`] for several coins, persisting once.
+    /// See [`crate::wallet::WalletState::watch_for_coins`].
     ///
     /// Registering nothing writes nothing, unless the last save failed.
     pub fn watch_for_coins(
@@ -1234,12 +1236,7 @@ impl Wallet {
         self.persist(registered)
     }
 
-    /// See [`crate::Wallet::forget_coin`].
-    pub fn forget_coin(&mut self, coin: crate::CoinInfo) -> Result<(), WalletError> {
-        self.forget_coins([coin])
-    }
-
-    /// [`Self::forget_coin`] for several coins, persisting once.
+    /// See [`crate::wallet::WalletState::forget_coins`].
     pub fn forget_coins(
         &mut self,
         coins: impl IntoIterator<Item = crate::CoinInfo>,
@@ -1315,7 +1312,7 @@ impl Wallet {
         self.storage_dir.as_deref()
     }
 
-    /// See [`crate::Wallet::commit_shielded_rescan`].
+    /// See [`crate::wallet::WalletState::commit_shielded_rescan`].
     pub fn commit_shielded_rescan(
         &mut self,
         commit: ShieldedRescanCommit,
@@ -1992,7 +1989,7 @@ mod tests {
         let mut wallet = test_wallet(None);
         let coin = unreachable_coin(9, 42);
 
-        wallet.watch_for_coin(coin).unwrap();
+        wallet.watch_for_coins([coin]).unwrap();
 
         assert!(
             wallet
@@ -2012,7 +2009,7 @@ mod tests {
         let right = unreachable_coin(9, 42);
         wallet.watch_for_coins([wrong, right]).unwrap();
 
-        wallet.forget_coin(wrong).unwrap();
+        wallet.forget_coins([wrong]).unwrap();
 
         assert_eq!(wallet.registered_coins(), vec![right.into_ledger()]);
     }
@@ -2028,7 +2025,7 @@ mod tests {
             .insert_coin(&wallet.secret_keys, coin.into_ledger())
             .expect("claim the coin");
 
-        wallet.forget_coin(coin).unwrap();
+        wallet.forget_coins([coin]).unwrap();
 
         assert_eq!(wallet.spendable_shielded_coins().len(), 1);
     }
@@ -2042,7 +2039,7 @@ mod tests {
         wallet.save(dir.path()).unwrap();
 
         wallet.watch_for_coins([]).unwrap();
-        wallet.forget_coin(unreachable_coin(9, 42)).unwrap();
+        wallet.forget_coins([unreachable_coin(9, 42)]).unwrap();
 
         assert_eq!(stored_generations(dir.path()), vec![1]);
     }
@@ -2055,7 +2052,7 @@ mod tests {
         let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
         let coin = unreachable_coin(9, 42);
 
-        wallet.watch_for_coin(coin).unwrap();
+        wallet.watch_for_coins([coin]).unwrap();
 
         let loaded = super::super::snapshot::load(dir.path(), "undeployed", &wallet.storage_id())
             .unwrap()
@@ -2076,7 +2073,7 @@ mod tests {
         let mut wallet = test_wallet(None);
         insert_shielded_coin(&mut wallet, 7, 100);
         let coin = unreachable_coin(9, 42);
-        wallet.watch_for_coin(coin).unwrap();
+        wallet.watch_for_coins([coin]).unwrap();
 
         let plan = wallet.shielded_rescan_plan();
 
@@ -2118,7 +2115,7 @@ mod tests {
     #[test]
     fn commit_shielded_rescan_keeps_no_registration_its_replay_consumed() {
         let mut wallet = test_wallet(None);
-        wallet.watch_for_coin(unreachable_coin(9, 42)).unwrap();
+        wallet.watch_for_coins([unreachable_coin(9, 42)]).unwrap();
 
         wallet
             .commit_shielded_rescan(ShieldedRescanCommit {
@@ -2510,7 +2507,7 @@ mod tests {
             );
             assert_eq!(wallet.sync_cursors().zswap_event_id, 1);
 
-            wallet.watch_for_coin(coin).unwrap();
+            wallet.watch_for_coins([coin]).unwrap();
             rescan(&mut wallet, &url).await;
 
             let claimed = wallet.spendable_shielded_coins();
@@ -2577,13 +2574,13 @@ mod tests {
                 }
             });
 
-            wallet.watch_for_coin(first).unwrap();
+            wallet.watch_for_coins([first]).unwrap();
             rescan(&mut wallet, &url).await;
             assert_eq!(wallet.spendable_shielded_coins().len(), 1);
 
             // Registering the second coin replays again, which must not cost
             // us the first.
-            wallet.watch_for_coin(second).unwrap();
+            wallet.watch_for_coins([second]).unwrap();
             rescan(&mut wallet, &url).await;
 
             let mut values: Vec<u128> = wallet
@@ -2605,7 +2602,7 @@ mod tests {
     #[test]
     fn commit_resync_keeps_no_registration_its_replay_consumed() {
         let mut wallet = test_wallet(None);
-        wallet.watch_for_coin(unreachable_coin(9, 42)).unwrap();
+        wallet.watch_for_coins([unreachable_coin(9, 42)]).unwrap();
 
         let mut commit = noop_commit(&wallet);
         commit.zswap_state = ZswapLocalState::new();

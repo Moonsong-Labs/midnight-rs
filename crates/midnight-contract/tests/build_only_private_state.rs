@@ -19,7 +19,6 @@ use midnight_contract::ContractError;
 use midnight_provider::{
     DustlessBuilder, FsPrivateStateProvider, MidnightProvider, PrivateStateProvider,
 };
-use midnight_wallet::LocalWallet;
 
 /// The pause between two passes of the background sync.
 const SYNC_PAUSE: Duration = Duration::from_secs(1);
@@ -49,14 +48,12 @@ async fn a_build_only_call_that_changes_the_private_state_refuses_before_the_bui
     };
 
     let provider = MidnightProvider::new(&node_url);
-    let wallet = Arc::new(LocalWallet::new(
-        common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await,
-    ));
+    let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let dir = tempfile::tempdir().expect("temp dir");
     let store: Arc<dyn PrivateStateProvider> = Arc::new(FsPrivateStateProvider::new(dir.path()));
     let provider = Arc::new(
         provider
-            .with_wallet(Arc::clone(&wallet))
+            .with_wallet(wallet.clone())
             .with_private_state(Arc::clone(&store)),
     );
 

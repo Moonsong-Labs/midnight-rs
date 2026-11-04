@@ -19,7 +19,6 @@ use std::time::Duration;
 use anyhow::bail;
 use midnight_core::contract::parse_contract_address;
 use midnight_core::provider::{HashOutput, ShieldedCoinBalance};
-use midnight_core::wallet::LocalWallet;
 use midnight_core::{MidnightProvider, Seed, Wallet};
 
 mod shielded_mint {
@@ -110,12 +109,10 @@ async fn main() -> anyhow::Result<()> {
     // 4. The recipient syncs from scratch and finds the coin — no watchFor.
     println!("4. Recipient syncing to discover the coin...");
     let recipient_provider = MidnightProvider::new(&node_url);
-    let wallet = Arc::new(LocalWallet::new(
-        Wallet::from_seed(RECIPIENT_SEED)?
-            .sync(&recipient_provider, &indexer_url)
-            .await?,
-    ));
-    let recipient_provider = Arc::new(recipient_provider.with_wallet(Arc::clone(&wallet)));
+    let wallet = Wallet::from_seed(RECIPIENT_SEED)?
+        .sync(&recipient_provider, &indexer_url)
+        .await?;
+    let recipient_provider = Arc::new(recipient_provider.with_wallet(wallet.clone()));
     let sync = wallet.sync_in_background(recipient_provider.clone(), SYNC_PAUSE);
 
     let token_type =

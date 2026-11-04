@@ -10,6 +10,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
+use crate::storage::{load_chain_pin, snapshot_path, wallet_storage_id};
+use crate::wallet::WalletState;
 use crate::{Seed, SeedError, Wallet};
 
 /// Progress updates emitted during wallet sync.
@@ -344,7 +346,8 @@ impl WalletBuilder {
         source: &dyn SyncSource,
         indexer_url: &str,
     ) -> Result<Wallet, WalletError> {
-        Wallet::sync_inner(self.prepare(source, indexer_url).await?, None).await
+        let state = WalletState::sync_inner(self.prepare(source, indexer_url).await?, None).await?;
+        Ok(Wallet::from_state(state))
     }
 
     /// Run the sync in a background task and stream progress events.
@@ -383,7 +386,11 @@ impl WalletBuilder {
             // A clone of the progress sender watches for receiver drop; the
             // original is consumed by the sync itself.
             let receiver_gone = tx.clone();
-            let sync = Wallet::sync_inner(plan, Some(tx));
+            let sync = async {
+                WalletState::sync_inner(plan, Some(tx))
+                    .await
+                    .map(Wallet::from_state)
+            };
             tokio::select! {
                 // Biased with the cancellation arm first: when the receiver
                 // drop and a sync-side "receiver dropped" error become ready
@@ -432,10 +439,11 @@ impl WalletBuilder {
             // Take the pin this sync carries before the check and the replay;
             // see `require_same_chain`.
             let candidate = current_pin(source).await;
+            let wallet_id = wallet_storage_id(&address);
             if let Some(dir) = storage_dir.as_deref()
-                && let Some(stored) = Wallet::stored_chain_pin(dir, network.clone(), &address)?
+                && let Some(stored) = load_chain_pin(dir, network.as_str(), &wallet_id)?
             {
-                let snapshot = Wallet::snapshot_path(dir, network.clone(), &address);
+                let snapshot = snapshot_path(dir, network.as_str(), &wallet_id);
                 require_same_chain(source, &stored, Some(&snapshot)).await?;
             }
             chain_pin = candidate;

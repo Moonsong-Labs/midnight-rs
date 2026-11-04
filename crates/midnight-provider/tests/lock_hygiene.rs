@@ -3,18 +3,18 @@
 //!
 //! - `resync_wallet` must not hold the wallet lock across the replay I/O:
 //!   reads (`balance`) complete while a stalled resync replay is in flight.
-//! - `LocalWallet` serializes its own sync methods: a forget waits for a
-//!   resync in flight.
+//! - `Wallet` serializes its own sync methods across its clones: a forget
+//!   waits for a resync in flight on another clone.
 //! - `WalletBuilder::sync_with_progress` must not leak the spawned sync task:
 //!   dropping the progress receiver or the `SyncHandle` tears down the
 //!   indexer WebSocket subscriptions promptly.
-//! - `LocalWallet::sync_in_background` keeps the error of a failed pass until
+//! - `Wallet::sync_in_background` keeps the error of a failed pass until
 //!   a pass commits, and reports a task that a panic ended. Dropping its
 //!   handle closes the subscriptions of the pass in flight, and no later pass
 //!   starts.
 //! - `BackgroundSync::wait_until` outlasts a failed pass, and ends when a
 //!   panic ends the task.
-//! - A rescan on a `LocalWallet` crosses a fork that the wallet has not
+//! - A rescan on a `Wallet` crosses a fork that the wallet has not
 //!   crossed yet.
 //!
 //! The mock serves both indexer protocols on one port: GraphQL-over-HTTP
@@ -38,8 +38,8 @@ use midnight_indexer_client::testutil::{
 };
 use midnight_provider::{BlockHash, MidnightProvider};
 use midnight_wallet::{
-    CoinInfo, HashOutput, LedgerVersion, LocalWallet, Network, Nonce, ShieldedTokenType,
-    SyncHandle, SyncProgress, Wallet, WalletBuilder, WalletError, WalletFacade,
+    CoinInfo, HashOutput, LedgerVersion, Network, Nonce, ShieldedTokenType, SyncHandle,
+    SyncProgress, Wallet, WalletBuilder, WalletError, WalletFacade,
 };
 use serde_json::json;
 use tokio::net::TcpStream;
@@ -330,14 +330,17 @@ async fn balance_completes_while_resync_replay_is_in_flight() {
 
 /// A forget waits for a resync in flight. Otherwise the commit of that resync
 /// brings the forgotten registration back, and nothing reports it.
+///
+/// The resync runs on a clone of the wallet. A clone that copies the state
+/// and its locks, in place of sharing them, does not wait and fails here.
 #[tokio::test]
 async fn forget_coins_waits_for_a_resync_in_flight() {
     let (url, state) = spawn_mock().await;
-    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+    let wallet = synced_wallet(&url).await;
 
     state.stall.store(true, Ordering::SeqCst);
     let resync = tokio::spawn({
-        let wallet = Arc::clone(&wallet);
+        let wallet = wallet.clone();
         let chain = provider();
         async move { wallet.resync(&chain).await }
     });
@@ -505,7 +508,6 @@ async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
         .sync(&chain, &url)
         .await
         .expect("initial sync against the mock indexer");
-    let wallet = LocalWallet::new(wallet);
 
     state.quiet_unshielded.store(true, Ordering::SeqCst);
 
@@ -535,7 +537,7 @@ async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
 #[tokio::test]
 async fn dropping_the_background_sync_closes_its_subscriptions() {
     let (url, state) = spawn_mock().await;
-    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+    let wallet = synced_wallet(&url).await;
 
     state.stall.store(true, Ordering::SeqCst);
     let sync = wallet.sync_in_background(Arc::new(provider()), PAUSE);
@@ -576,7 +578,7 @@ async fn dropping_the_background_sync_closes_its_subscriptions() {
 #[tokio::test]
 async fn a_failed_pass_is_recorded_and_the_next_pass_clears_it() {
     let (url, state) = spawn_mock().await;
-    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+    let wallet = synced_wallet(&url).await;
 
     state.fail_block.store(true, Ordering::SeqCst);
     let sync = wallet.sync_in_background(Arc::new(provider()), PAUSE);
@@ -620,7 +622,6 @@ async fn a_panicked_pass_ends_the_sync_and_last_error_names_it() {
         .sync(&SwappableChain::new(), &url)
         .await
         .expect("initial sync against the mock indexer");
-    let wallet = Arc::new(LocalWallet::new(wallet));
 
     let sync = wallet.sync_in_background(Arc::new(PanickingChain), PAUSE);
     // The first pass starts one pause from now, so this wait is in flight
@@ -648,7 +649,7 @@ async fn a_panicked_pass_ends_the_sync_and_last_error_names_it() {
 #[tokio::test]
 async fn a_wait_outlasts_a_failed_pass() {
     let (url, state) = spawn_mock().await;
-    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+    let wallet = synced_wallet(&url).await;
 
     state.fail_block.store(true, Ordering::SeqCst);
     let sync = wallet.sync_in_background(Arc::new(provider()), PAUSE);
@@ -694,7 +695,7 @@ async fn a_wait_outlasts_a_failed_pass() {
 #[tokio::test]
 async fn a_rescan_crosses_a_fork_that_the_wallet_has_not() {
     let (url, state) = spawn_mock().await;
-    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+    let wallet = synced_wallet(&url).await;
     assert_eq!(wallet.ledger_version().await, LedgerVersion::V8);
 
     state.forked.store(true, Ordering::SeqCst);

@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use midnight_core::provider::WalletBalance;
-use midnight_core::wallet::{BackgroundSync, LocalWallet};
+use midnight_core::wallet::BackgroundSync;
 use midnight_core::{MidnightProvider, Seed, Wallet};
 
 fn env_or(name: &str, default: &str) -> String {
@@ -87,19 +87,15 @@ async fn main() -> anyhow::Result<()> {
     let seed_b = Seed::from_hex(SEED_B)?;
 
     let provider_a = MidnightProvider::new(&node_url);
-    let wallet_a = Arc::new(LocalWallet::new(
-        Wallet::from_seed(SEED_A)?
-            .sync(&provider_a, &indexer_url)
-            .await?,
-    ));
-    let provider_a = Arc::new(provider_a.with_wallet(Arc::clone(&wallet_a)));
+    let wallet_a = Wallet::from_seed(SEED_A)?
+        .sync(&provider_a, &indexer_url)
+        .await?;
+    let provider_a = Arc::new(provider_a.with_wallet(wallet_a.clone()));
     let provider_b = MidnightProvider::new(&node_url);
-    let wallet_b = Arc::new(LocalWallet::new(
-        Wallet::from_seed(SEED_B)?
-            .sync(&provider_b, &indexer_url)
-            .await?,
-    ));
-    let provider_b = Arc::new(provider_b.with_wallet(Arc::clone(&wallet_b)));
+    let wallet_b = Wallet::from_seed(SEED_B)?
+        .sync(&provider_b, &indexer_url)
+        .await?;
+    let provider_b = Arc::new(provider_b.with_wallet(wallet_b.clone()));
 
     // Setup: two tokens to trade. X is A's genesis shielded token; Y is a fresh
     // token A mints to B (see `mint`). Not part of the swap.

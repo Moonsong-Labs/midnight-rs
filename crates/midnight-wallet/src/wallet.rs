@@ -1,5 +1,5 @@
-//! A synced wallet on whichever ledger generation its chain runs, and the
-//! sync that carries it across a hard fork.
+//! The state of a synced wallet on whichever ledger generation its chain
+//! runs, and the sync that carries it across a hard fork.
 
 use std::path::{Path, PathBuf};
 
@@ -22,19 +22,10 @@ use crate::storage::wallet_storage_id;
 use crate::sync::SyncPlan;
 use crate::{SyncProgress, ledger_8, ledger_9};
 
-/// A Midnight wallet: identity (seed, addresses) and synced ledger state.
-///
-/// Maintains three streams of state from the indexer:
-/// - `zswapLedgerEvents` → shielded coin tracking + Merkle tree
-/// - `dustLedgerEvents` → dust/fee UTXO tracking
-/// - `unshieldedTransactions` → unshielded UTXO balance
-///
-/// The state is in the ledger generation its chain runs
-/// ([`Self::ledger_version`]). A sync reads the generation from the chain.
-/// A sync or resync that meets a hard fork carries the wallet across it. The
-/// shielded state continues in the new generation, and the Dust state starts
-/// empty, because the fork emptied the chain's Dust state.
-pub struct Wallet {
+/// The state behind a [`Wallet`](crate::Wallet) handle: the seed, and the
+/// synced ledger state in the generation its chain runs
+/// ([`Self::ledger_version`]).
+pub(crate) struct WalletState {
     seed: Seed,
     state: State,
 }
@@ -56,7 +47,7 @@ macro_rules! each {
     };
 }
 
-impl Wallet {
+impl WalletState {
     pub(crate) fn state(&self) -> &State {
         &self.state
     }
@@ -65,45 +56,12 @@ impl Wallet {
         &mut self.state
     }
 
-    /// Default storage directory: `~/.midnight/wallets/`
-    pub fn default_storage_dir() -> Option<PathBuf> {
-        std::env::home_dir().map(|h| h.join(".midnight").join("wallets"))
-    }
-
     /// The ledger generation this wallet's state is in.
-    pub fn ledger_version(&self) -> LedgerVersion {
+    pub(crate) fn ledger_version(&self) -> LedgerVersion {
         match self.state {
             State::Ledger8(_) => LedgerVersion::V8,
             State::Ledger9(_) => LedgerVersion::V9,
         }
-    }
-
-    /// The chain pin a snapshot on disk carries, or `None` when there is no
-    /// snapshot or it predates the pin.
-    ///
-    /// Read this before a resume and judge it with
-    /// [`crate::chain_pin::verify_pin`], against what the node reports for
-    /// that height. A snapshot from a chain that no longer exists still
-    /// resumes cleanly and reports the old balance, so nothing later in the
-    /// sync will catch it.
-    pub fn stored_chain_pin(
-        storage_dir: &Path,
-        network: impl Into<Network>,
-        address: &str,
-    ) -> Result<Option<ChainPin>, WalletError> {
-        let network = network.into();
-        crate::storage::load_chain_pin(storage_dir, network.as_str(), &wallet_storage_id(address))
-    }
-
-    /// Where the snapshot for `address` lives, so an error can name what to
-    /// remove.
-    pub fn snapshot_path(
-        storage_dir: &Path,
-        network: impl Into<Network>,
-        address: &str,
-    ) -> PathBuf {
-        let network = network.into();
-        crate::storage::snapshot_path(storage_dir, network.as_str(), &wallet_storage_id(address))
     }
 
     /// The sync that [`crate::WalletBuilder::sync`] and
@@ -145,7 +103,7 @@ impl Wallet {
 
     /// Whether the dust state has been synced (required for transaction
     /// building).
-    pub fn dust_synced(&self) -> bool {
+    pub(crate) fn dust_synced(&self) -> bool {
         each!(&self.state, w => w.dust_synced())
     }
 
@@ -163,28 +121,15 @@ impl Wallet {
     ///
     /// Persistence is best-effort, since the in-memory release already frees
     /// the inputs for this process.
-    pub fn release(&mut self, spent: &SpentInputs) {
+    pub(crate) fn release(&mut self, spent: &SpentInputs) {
         each!(&mut self.state, w => w.release(spent))
-    }
-
-    /// Save the current wallet state to disk.
-    ///
-    /// Writes the confirmed-state files (`metadata.json`, `zswap-N.bin`,
-    /// `dust_wallet-N.bin`) and the in-flight reservations to a separate
-    /// `pending.json`. Confirmed and pending live in distinct files so a
-    /// failed save of one does not corrupt the other. Runs automatically at
-    /// the end of initial sync and after every successful resync when a
-    /// storage directory is configured; calling it manually is only needed
-    /// for extra checkpoints.
-    pub fn save(&self, base: &Path) -> Result<(), WalletError> {
-        each!(&self.state, w => w.save(base))
     }
 
     /// Where this wallet's snapshot lives, when it persists one.
     ///
     /// An error that tells a reader to remove the snapshot has to name it, so
     /// this is the path that goes in the message.
-    pub fn snapshot_dir(&self) -> Option<PathBuf> {
+    pub(crate) fn snapshot_dir(&self) -> Option<PathBuf> {
         each!(&self.state, w => w.snapshot_dir())
     }
 
@@ -193,13 +138,13 @@ impl Wallet {
     /// A resume checks the pin on disk; a wallet that stays attached has to
     /// check this one, because its cursors go just as stale when the chain is
     /// replaced underneath it.
-    pub fn chain_pin(&self) -> Option<&ChainPin> {
+    pub(crate) fn chain_pin(&self) -> Option<&ChainPin> {
         each!(&self.state, w => w.chain_pin())
     }
 
     /// Move the pin to the block a fresh check saw, so it stays inside an
     /// archive's retention window rather than ageing out of it.
-    pub fn set_chain_pin(&mut self, pin: ChainPin) {
+    pub(crate) fn set_chain_pin(&mut self, pin: ChainPin) {
         each!(&mut self.state, w => w.set_chain_pin(pin))
     }
 
@@ -207,12 +152,12 @@ impl Wallet {
     ///
     /// The four cursors advance together during a sync, so reading them one
     /// at a time can report a mixture of two syncs.
-    pub fn sync_cursors(&self) -> SyncCursors {
+    pub(crate) fn sync_cursors(&self) -> SyncCursors {
         each!(&self.state, w => w.sync_cursors())
     }
 
     /// The seed this wallet signs and derives with.
-    pub fn seed(&self) -> &Seed {
+    pub(crate) fn seed(&self) -> &Seed {
         &self.seed
     }
 
@@ -223,44 +168,31 @@ impl Wallet {
     /// Public material, so anything that only needs to address a coin to this
     /// wallet can take these instead of the seed. A signer that never releases
     /// its seed can still supply them.
-    pub fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
+    pub(crate) fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
         each!(&self.state, w => w.shielded_public_keys())
     }
 
-    /// The network this wallet derives addresses for. [`Network::as_str`]
-    /// gives its literal name in the bech32 HRP.
-    pub fn network(&self) -> &Network {
+    /// The network this wallet derives addresses for.
+    pub(crate) fn network(&self) -> &Network {
         each!(&self.state, w => w.network())
     }
 
     /// The wallet's unshielded receiving address.
-    pub fn unshielded_address(&self) -> String {
+    pub(crate) fn unshielded_address(&self) -> String {
         each!(&self.state, w => w.unshielded_address())
     }
 
-    /// The wallet's shielded receiving address, e.g. `mn_shield-addr_undeployed1...`.
-    pub fn shielded_address(&self) -> String {
-        self.seed.shielded_address(self.network())
-    }
-
-    /// The wallet's Dust address, e.g. `mn_dust_undeployed1...`. Another
-    /// wallet can register its tNIGHT to it, so that this wallet gets the
-    /// Dust that tNIGHT generates. See [`Seed::dust_address`].
-    pub fn dust_address(&self) -> String {
-        self.seed.dust_address(self.network())
-    }
-
     /// The unshielded UTXOs this wallet tracks.
-    pub fn unshielded_utxos(&self) -> &[TrackedUtxo] {
+    pub(crate) fn unshielded_utxos(&self) -> &[TrackedUtxo] {
         each!(&self.state, w => w.unshielded_utxos())
     }
 
     /// The chain's Dust and TTL parameters, as this wallet last synced them.
-    pub fn parameters(&self) -> ChainParameters {
+    pub(crate) fn parameters(&self) -> ChainParameters {
         each!(&self.state, w => w.chain_parameters())
     }
 
-    pub fn balance(&self) -> WalletBalance {
+    pub(crate) fn balance(&self) -> WalletBalance {
         each!(&self.state, w => w.balance())
     }
 
@@ -272,20 +204,14 @@ impl Wallet {
     /// coin's `nonce`/`token_type`/`value`, then hand the same coin back to the
     /// call builder so the SDK spends that exact coin as the shielded input.
     /// Coins a still-pending build already spent are left out.
-    pub fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
+    pub(crate) fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
         each!(&self.state, w => w.spendable_shielded_coins())
     }
 
-    /// Register a coin this wallet owns but cannot discover, so a replay
-    /// claims it without decrypting anything.
-    ///
-    /// A shielded coin normally reaches its owner through the discovery
-    /// ciphertext on its output. That channel fails when the party that built
-    /// the transaction attached no ciphertext, or sealed it to a key this
-    /// wallet does not hold. The coin is still owned by this wallet's coin
-    /// public key and still spendable, as long as its owner can rebuild the
-    /// `CoinInfo` (nonce, token type, value) from somewhere else. A contract
-    /// that evolves one public nonce per mint is such a case.
+    /// Register coins this wallet owns but cannot discover, so a replay
+    /// claims them without decrypting anything. Persist once.
+    /// [`WalletFacade::watch_for_coins`](crate::WalletFacade::watch_for_coins)
+    /// says which coins those are.
     ///
     /// Registration records the coin's commitment under this wallet's coin
     /// public key. A replay that meets the matching output claims the coin
@@ -294,30 +220,22 @@ impl Wallet {
     /// **Registration alone does not recover a coin whose output the wallet
     /// already replayed past.** A replay that meets an output it cannot claim
     /// collapses that Merkle leaf, and a resync resumes from the cursor
-    /// instead of revisiting it. Register through the handle instead:
-    /// [`WalletFacade::watch_for_coins`](crate::WalletFacade::watch_for_coins)
-    /// on a [`LocalWallet`](crate::LocalWallet) registers, then replays the
-    /// stream from its first event. `MidnightProvider::watch_for_coin` calls
-    /// it.
+    /// instead of revisiting it. So the [`Wallet`](crate::Wallet) handle
+    /// registers, then replays the stream from its first event.
     ///
     /// A registration is part of the wallet state, so it is persisted with it
     /// when a storage directory is configured, and a coin registered before
     /// it lands on chain survives a restart. The in-memory registration
     /// stands even when that save fails.
-    pub fn watch_for_coin(&mut self, coin: CoinInfo) -> Result<(), WalletError> {
-        each!(&mut self.state, w => w.watch_for_coin(coin))
-    }
-
-    /// [`Self::watch_for_coin`] for several coins, persisting once.
-    pub fn watch_for_coins(
+    pub(crate) fn watch_for_coins(
         &mut self,
         coins: impl IntoIterator<Item = CoinInfo>,
     ) -> Result<(), WalletError> {
         each!(&mut self.state, w => w.watch_for_coins(coins))
     }
 
-    /// Drop a registration [`Self::watch_for_coin`] made, for a coin that
-    /// turned out to be wrong.
+    /// Drop the registrations [`Self::watch_for_coins`] made, for coins that
+    /// turned out to be wrong. Persist once.
     ///
     /// A registration whose `CoinInfo` does not match the coin an on-chain
     /// output commits to never matches anything, so it would otherwise ride
@@ -328,12 +246,7 @@ impl Wallet {
     /// Forgetting a coin that was never registered changes no registration.
     /// When the last save failed, this call still saves, and can return
     /// [`WalletError::Storage`].
-    pub fn forget_coin(&mut self, coin: CoinInfo) -> Result<(), WalletError> {
-        each!(&mut self.state, w => w.forget_coin(coin))
-    }
-
-    /// [`Self::forget_coin`] for several coins, persisting once.
-    pub fn forget_coins(
+    pub(crate) fn forget_coins(
         &mut self,
         coins: impl IntoIterator<Item = CoinInfo>,
     ) -> Result<(), WalletError> {
@@ -376,14 +289,14 @@ impl Wallet {
     ///   coin registration (see below): transfer builds record their
     ///   in-flight spends in the separate pending set and never touch
     ///   confirmed state.
-    /// - Coin registrations ([`Self::watch_for_coin`]) live in `zswap_state`.
+    /// - Coin registrations ([`Self::watch_for_coins`]) live in `zswap_state`.
     ///   The replay starts from the plan's registrations, so the commit keeps
     ///   each one that the replay did not consume. A replay consumes a
     ///   registration when it claims the coin. The overwrite drops a
     ///   registration made after the plan snapshot, and brings back one
     ///   forgotten after it. So callers must not change a registration
-    ///   between plan and commit, as [`LocalWallet`](crate::LocalWallet)
-    ///   makes sure with its sync lock.
+    ///   between plan and commit, as [`Wallet`](crate::Wallet) makes sure
+    ///   with its sync lock.
     /// - The pending reservation set is **merged, not overwritten**:
     ///   `clear_confirmed` drops exactly the entries whose spends this
     ///   replay observed on-chain, evaluated against the pending set as it
@@ -474,19 +387,19 @@ impl Wallet {
 }
 
 /// Snapshot of everything a resync's replay phase consumes, taken from a
-/// `&Wallet` by [`Wallet::resync_plan`], with the indexer the wallet synced
-/// from.
+/// `&WalletState` by [`WalletState::resync_plan`], with the indexer the
+/// wallet synced from.
 ///
 /// Exists so callers that share a wallet across tasks (notably
-/// [`LocalWallet`](crate::LocalWallet)) can run the slow replay I/O while
+/// [`Wallet`](crate::Wallet)) can run the slow replay I/O while
 /// reads and builds still reach the wallet: snapshot under a brief read lock,
 /// [`ResyncPlan::run`] the replays with no read or write lock held, then apply
 /// the validated result under a brief write lock via
-/// [`Wallet::commit_resync`].
+/// [`WalletState::commit_resync`].
 ///
 /// The fields are clones of the wallet's cursors and replay state; taking a
 /// plan does not mutate or lock anything beyond the `&self` borrow.
-#[must_use = "run the plan with ResyncPlan::run, then apply it with Wallet::commit_resync"]
+#[must_use = "run the plan with ResyncPlan::run, then apply it with WalletState::commit_resync"]
 pub(crate) struct ResyncPlan {
     indexer_url: String,
     kind: ResyncPlanKind,
@@ -515,15 +428,14 @@ impl ResyncPlan {
     /// ledger parameters), all without touching the wallet.
     ///
     /// Returns the validated [`ResyncCommit`] to apply with
-    /// [`Wallet::commit_resync`]. On any replay or fetch error nothing was
+    /// [`WalletState::commit_resync`]. On any replay or fetch error nothing was
     /// committed anywhere, so the wallet the plan was taken from is
     /// untouched.
     ///
     /// Callers that release the wallet lock between plan and commit must
     /// serialize resyncs themselves (two concurrent runs would replay from
-    /// the same cursors and race their commits).
-    /// [`LocalWallet`](crate::LocalWallet) holds a mutex across plan → run →
-    /// commit for this.
+    /// the same cursors and race their commits). [`Wallet`](crate::Wallet)
+    /// holds a mutex across plan → run → commit for this.
     ///
     /// When the chain moved to a later generation since the wallet's last
     /// sync, the replay crosses the fork. It applies the shielded events up
@@ -613,13 +525,14 @@ async fn cross(
 }
 
 /// Validated results of a resync's replay tasks and latest-block fetch,
-/// ready to be committed into a [`Wallet`] via [`Wallet::commit_resync`].
+/// ready to be committed into a [`WalletState`] via
+/// [`WalletState::commit_resync`].
 ///
 /// Produced only by [`ResyncPlan::run`]; the fields are private so a commit
 /// can't be forged from un-validated data. Grouping the commit inputs also
 /// makes the commit-and-persist sequence unit-testable without a live
 /// indexer.
-#[must_use = "apply with Wallet::commit_resync, or the completed replay is discarded"]
+#[must_use = "apply with WalletState::commit_resync, or the completed replay is discarded"]
 pub(crate) struct ResyncCommit(ResyncCommitKind);
 
 enum ResyncCommitKind {
@@ -631,12 +544,12 @@ enum ResyncCommitKind {
 }
 
 /// Snapshot of what a shielded rescan's replay consumes, taken from a
-/// `&Wallet` by [`Wallet::shielded_rescan_plan`], with the indexer the wallet
-/// synced from.
+/// `&WalletState` by [`WalletState::shielded_rescan_plan`], with the indexer
+/// the wallet synced from.
 ///
 /// A rescan replays `zswapLedgerEvents` from its first event against a state
 /// that starts empty and carries the wallet's registered coins (see
-/// [`Wallet::watch_for_coin`]). Starting over is the point: a replay that
+/// [`WalletState::watch_for_coins`]). Starting over is the point: a replay that
 /// meets an output it cannot claim collapses that Merkle leaf, and a resync
 /// resumes from the cursor rather than revisiting it, so a registration made
 /// after the fact is only honoured by a replay that starts at zero.
@@ -645,7 +558,7 @@ enum ResyncCommitKind {
 /// reason: a caller that shares the wallet across tasks snapshots under a
 /// brief read lock, runs the replay with no read or write lock held, and
 /// applies the result under a brief write lock.
-#[must_use = "run the plan with ShieldedRescanPlan::run, then apply it with Wallet::commit_shielded_rescan"]
+#[must_use = "run the plan with ShieldedRescanPlan::run, then apply it with WalletState::commit_shielded_rescan"]
 pub(crate) struct ShieldedRescanPlan {
     indexer_url: String,
     seed: Seed,
@@ -663,15 +576,15 @@ impl ShieldedRescanPlan {
     /// from its first event, without touching the wallet.
     ///
     /// Returns the [`ShieldedRescanCommit`] to apply with
-    /// [`Wallet::commit_shielded_rescan`]. On a replay error nothing was
+    /// [`WalletState::commit_shielded_rescan`]. On a replay error nothing was
     /// committed anywhere, so the wallet the plan was taken from is
     /// untouched.
     ///
     /// Callers that release the wallet lock between plan and commit must
     /// serialize this against resyncs (a resync committing its own cursor and
     /// state in the middle would overwrite the rebuilt state).
-    /// [`LocalWallet`](crate::LocalWallet) holds a mutex across plan → run →
-    /// commit for this.
+    /// [`Wallet`](crate::Wallet) holds a mutex across plan → run → commit for
+    /// this.
     ///
     /// A stream that starts in an earlier generation than the wallet's is
     /// replayed from that generation, and the state crosses each fork on the
@@ -728,11 +641,11 @@ impl ShieldedRescanPlan {
 }
 
 /// Validated result of a shielded rescan's replay, ready to be committed into
-/// a [`Wallet`] via [`Wallet::commit_shielded_rescan`].
+/// a [`WalletState`] via [`WalletState::commit_shielded_rescan`].
 ///
 /// Produced only by [`ShieldedRescanPlan::run`]; the fields are private so a
 /// commit can't be forged from un-replayed state.
-#[must_use = "apply with Wallet::commit_shielded_rescan, or the completed replay is discarded"]
+#[must_use = "apply with WalletState::commit_shielded_rescan, or the completed replay is discarded"]
 pub(crate) struct ShieldedRescanCommit(RescanCommitKind);
 
 enum RescanCommitKind {

@@ -44,17 +44,16 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap; SyncSource
   │     └── error.rs             WalletError
   │
-  ├── midnight-wallet-facade     the WalletFacade trait, IntoWalletFacade (what
-  │                              with_wallet takes), and per generation the
+  ├── midnight-wallet-facade     the WalletFacade trait, and per generation the
   │                              WalletBuilds trait and ReservedBuild, in
   │                              midnight-types's vocabulary; nothing else
   │
   ├── midnight-wallet            the local implementation; depends on the two crates above
-  │     ├── local.rs             LocalWallet: the facade over a locally-owned Wallet
-  │     ├── background.rs        BackgroundSync: LocalWallet::sync_in_background resyncs until the handle drops
+  │     ├── handle.rs            Wallet: the Clone handle on the shared state, and the facade over it
+  │     ├── background.rs        BackgroundSync: Wallet::sync_in_background resyncs until the handle drops
   │     ├── sync.rs              Wallet::from_seed / from_mnemonic / from_mnemonic_with_passphrase or
   │     │                        WalletBuilder::new → WalletBuilder → sync(source), pinned by default
-  │     ├── wallet.rs            Wallet { seed, state of the chain's generation }, crossing forks
+  │     ├── wallet.rs            WalletState { seed, state of the chain's generation }, crossing forks
   │     ├── ledger_8 / ledger_9  the state, balance and pending reservations of one generation
   │     └── storage.rs           generation-based atomic persistence
   │
@@ -85,10 +84,10 @@ midnight-core                    meta-crate; re-exports the public API
 |---|---|---|
 | `MidnightProvider` | provider | Network entry. Holds node URL, the attached wallet (`Arc<dyn WalletFacade>`), the proof backends and the optional private-state store. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
-| `Wallet` | wallet | The synced state itself. It runs the indexer replays of a sync, a resync and a rescan. The provider reaches it through `WalletFacade`. |
+| `Wallet` | wallet | A `Clone` handle on the synced state: every clone is the same wallet. Its identity (network, seed, addresses) reads through plain methods, and its synced state through `WalletFacade`, which it implements. It runs the indexer replays of a sync, a resync and a rescan. The provider reaches it through `WalletFacade`. |
 | `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
-| `BackgroundSync` | wallet | The handle of the task that `LocalWallet::sync_in_background` starts. The task resyncs the wallet after each pause. Dropping the handle stops the sync. `last_error()` names the error of the last pass. `wait_until(done)` waits until `done` holds for the balance. It checks at the call and after each pass. |
-| `LocalWallet` / `WalletBuilder` | wallet | The facade implemented over a locally-owned `Wallet`, and the builder (`Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase`, `WalletBuilder::new`) that syncs one from an indexer. |
+| `BackgroundSync` | wallet | The handle of the task that `Wallet::sync_in_background` starts. The task resyncs the wallet after each pause. Dropping the handle stops the sync. `last_error()` names the error of the last pass. `wait_until(done)` waits until `done` holds for the balance. It checks at the call and after each pass. |
+| `WalletBuilder` | wallet | The builder (`Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase`, `WalletBuilder::new`) that syncs a `Wallet` from an indexer. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
@@ -102,9 +101,9 @@ midnight-core                    meta-crate; re-exports the public API
 
 ## Provider ↔ Wallet model
 
-The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every build resyncs the wallet first, and when asked, `LocalWallet::sync_in_background` resyncs it in a background task. A sync replays from the indexer at the `indexer_url` it gets. It asks its `SyncSource`, such as the provider, for the network and the chain pin. The wallet keeps that indexer URL for later replays, and the provider answers a resync's pin queries.
+The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every build resyncs the wallet first, and when asked, `Wallet::sync_in_background` resyncs it in a background task. A sync replays from the indexer at the `indexer_url` it gets. It asks its `SyncSource`, such as the provider, for the network and the chain pin. The wallet keeps that indexer URL for later replays, and the provider answers a resync's pin queries.
 
-Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three under a mutex of its own, which serializes its resyncs, rescans, coin watches and forgets. Under one hold of that mutex, a rescan of a state in an earlier generation than the chain resyncs first, and a coin watch registers and then rescans. A `Wallet` has no resync of its own: to resync or rescan one outside a provider, wrap it in `LocalWallet`.
+Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `Wallet` composes the three under a mutex that all its clones share, which serializes its resyncs, rescans, coin watches and forgets. Under one hold of that mutex, a rescan of a state in an earlier generation than the chain resyncs first, and a coin watch registers and then rescans. To resync or rescan a `Wallet` outside a provider, call its `WalletFacade` methods with a chain view.
 
 `MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and never names an implementation. The local one is built on its own and attached:
 
@@ -120,8 +119,8 @@ Wallet::from_mnemonic(phrase)?                      // midnight-wallet; or from_
     or .sync_with_progress(&provider, indexer_url).await // streaming progress
 
 provider
-  .with_wallet(wallet)                              // a synced Wallet, or a WalletFacade that also
-                                                    // implements each generation's WalletBuilds
+  .with_wallet(wallet.clone())                      // a clone of a synced Wallet, or a WalletFacade that
+                                                    // also implements each generation's WalletBuilds
   .with_proof_provider(provers)                     // optional, ProofProviders::local() by default
   .ledger_version().await          → the chain's generation, from the node's finalized block
   .resync_wallet().await                            // incremental refresh
@@ -144,7 +143,8 @@ provider
   .release(&spent)                 // hand back a build's reserved inputs
   .health().await                  → node reachability
 
-Arc<LocalWallet>                                    // a handle on the attached wallet
+wallet                                              // the Wallet handle, a clone of the attached wallet
+  .network() / .seed() / .unshielded_address() / .shielded_address() / .dust_address()   // identity, no lock
   .sync_in_background(provider, pause) → BackgroundSync (resyncs after each pause until dropped)
       sync.last_error()            → the error of the last pass, None after a commit
       sync.wait_until(done).await  // wait until done(&WalletBalance) holds: at the call and after each pass

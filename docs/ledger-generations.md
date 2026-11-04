@@ -17,7 +17,7 @@ Every encoded ledger value starts with a tag. A value whose encoding changed at 
 
 ```rust
 let chain = provider.ledger_version().await?; // LedgerVersion::V8 or LedgerVersion::V9
-let state = wallet.ledger_version();          // the generation of the wallet's state
+let state = wallet.ledger_version().await;    // the generation of the wallet's state
 ```
 
 The wallet returns `WalletError::UnknownLedger` for data of a generation this build does not link.
@@ -27,7 +27,7 @@ The wallet returns `WalletError::UnknownLedger` for data of a generation this bu
 Most of the API is the same on both generations:
 
 - the provider's transfers (`transfer_shielded`, `transfer_unshielded`, `shielded_swap`, `register_dust`), `balance`, `submit`, `merge_transactions` and `balance_transaction`
-- the wallet sync (the `WalletBuilder` that `Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase` and `WalletBuilder::new` start) and `LocalWallet`
+- the wallet sync (the `WalletBuilder` that `Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase` and `WalletBuilder::new` start) and the `Wallet` it gives
 - the generated contract bindings (`Contract::deploy`, `circuits()`, `ledger()`), `Contract::call_with`, a deploy's `ShieldedOffer`, and contract maintenance
 
 Its vocabulary lives in `midnight-types`, one type for both generations: `ShieldedTokenType`, `UnshieldedTokenType`, `Nullifier`, `Nonce`, `CoinInfo`, `CoinPublicKey`, `EncryptionPublicKey`, `ShieldedRecipient`, `ContractAddress`, `DustNullifier`, `DustPublicKey`, `ChainParameters` and `LedgerVersion`. The provider, wallet and contract crates re-export it. A DApp that uses only this surface runs on either chain with no code for a generation.
@@ -90,7 +90,7 @@ Each `Builds` has `build_context`, `execution_context`, `add_funding`, `build_fu
 
 ### A custom wallet
 
-`with_wallet` takes a wallet that implements `WalletFacade` and the `WalletBuilds` trait of each generation: `midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`. The provider uses the `WalletBuilds` of the generation the wallet reports in `WalletFacade::ledger_version`. `LocalWallet` implements all three, and a synced `Wallet` goes in behind a `LocalWallet`. `crates/midnight-provider/tests/substituting_the_wallet.rs` has a stub wallet that implements them.
+`with_wallet` takes a wallet that implements `WalletFacade` and the `WalletBuilds` trait of each generation: `midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`. The provider uses the `WalletBuilds` of the generation the wallet reports in `WalletFacade::ledger_version`. A synced `Wallet` implements all three. `crates/midnight-provider/tests/substituting_the_wallet.rs` has a stub wallet that implements them.
 
 ### Proof backends
 

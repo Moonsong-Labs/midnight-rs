@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use midnight_provider::{
     Builds, HashOutput, LedgerVersion, MidnightProvider, NIGHT, Network, Nullifier,
 };
-use midnight_wallet::{LocalWallet, Wallet, WalletFacade};
+use midnight_wallet::{Wallet, WalletFacade};
 
 #[tokio::test]
 async fn a_wallet_crosses_the_fork_to_ledger_9() {
@@ -112,9 +112,9 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .await
         .expect("sync from genesis across the fork");
     for (wallet, how) in [(&resumed, "resumed"), (&fresh, "synced from genesis")] {
-        assert_eq!(wallet.ledger_version(), LedgerVersion::V9, "{how}");
+        assert_eq!(wallet.ledger_version().await, LedgerVersion::V9, "{how}");
         assert_eq!(
-            wallet.balance().dust.unregistered_night_utxos,
+            wallet.balance().await.dust.unregistered_night_utxos,
             unregistered,
             "{how}: a UTXO registered before the fork generates no Dust after it"
         );
@@ -170,19 +170,22 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .await
         .expect("sync from genesis across the fork");
     for (wallet, how) in [(&resumed, "resumed"), (&fresh, "synced from genesis")] {
-        assert_eq!(wallet.ledger_version(), LedgerVersion::V9, "{how}");
+        assert_eq!(wallet.ledger_version().await, LedgerVersion::V9, "{how}");
         assert_eq!(
-            nullifiers(wallet.spendable_shielded_coins()),
+            nullifiers(wallet.spendable_shielded_coins().await),
             attached,
             "{how}"
         );
     }
-    let generating_fresh = generating(fresh.unshielded_utxos());
+    let generating_fresh = generating(&fresh.unshielded_utxos().await);
     assert!(
         !generating_fresh.is_empty(),
         "the registrations on ledger 9 generate Dust"
     );
-    assert_eq!(generating(resumed.unshielded_utxos()), generating_fresh);
+    assert_eq!(
+        generating(&resumed.unshielded_utxos().await),
+        generating_fresh
+    );
 }
 
 /// Register each NIGHT UTXO the attached wallet holds, one registration at a
@@ -261,15 +264,13 @@ async fn wait_for_ledger_9(
         assert!(Instant::now() < deadline, "the node did not run ledger 9");
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
-    let probe = LocalWallet::new(
-        Wallet::from_seed(common::DEV_WALLET_SEED)
-            .unwrap()
-            .with_network(network.clone())
-            .with_storage(snapshot)
-            .sync(provider, indexer_url)
-            .await
-            .expect("resume the probe snapshot"),
-    );
+    let probe = Wallet::from_seed(common::DEV_WALLET_SEED)
+        .unwrap()
+        .with_network(network.clone())
+        .with_storage(snapshot)
+        .sync(provider, indexer_url)
+        .await
+        .expect("resume the probe snapshot");
     while probe.ledger_version().await != LedgerVersion::V9 {
         assert!(
             Instant::now() < deadline,
