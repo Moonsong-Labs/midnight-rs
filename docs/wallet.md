@@ -482,7 +482,7 @@ In-flight spends that have been built but not yet confirmed on-chain are tracked
 
 Each reservation expires at the earliest TTL of the intents that its build made (see [Transfers](#transfers)). The wallet drops the reservation once the time of the chain's latest block passes that TTL, because the transaction can no longer land.
 
-A reservation reaches `pending.json`, next to the wallet state, once its build is proven. A process that stops during a proof (Ctrl-C, a kill or a panic) leaves no reservation for that build in `pending.json`, so the next process can spend its inputs. A proven build keeps its reservation across a restart, also when its bytes never reach a node, because the wallet cannot know whether they left the process. `HeldInputs::keep_on_ok` tells the wallet that a build is proven with `WalletFacade::persist_reservation`, so a custom wallet that persists its state implements it.
+A reservation reaches `pending.json`, next to the wallet state, once its build is proven. A process that stops during a proof (Ctrl-C, a kill or a panic) leaves no reservation for that build in `pending.json`, so the next process can spend its inputs. A proven build keeps its reservation across a restart, also when its bytes never reach a node, because the wallet cannot know whether they left the process. `HeldInputs::keep_on_ok` tells the wallet that a build is proven with `WalletFacade::persist_reservation`. Every custom wallet implements it, and a wallet that keeps no state across a restart makes it a no-op.
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
