@@ -193,13 +193,16 @@ impl PendingReservations {
     ///
     /// Each named input also carries its own `reserved_at`, the chain time of
     /// its build context. An entry goes only when its stamp matches, so a
-    /// build hands back only what it reserved. A later build takes a reserved
-    /// input only after a release or a TTL eviction frees it. After an
-    /// eviction, the later build carries a later stamp. The eviction needs the
-    /// chain time past the TTL, and a TTL is never before the chain time of
-    /// its build. Without the timestamp a late release drops whatever entry
-    /// now holds the input, and a third build then selects an input the second
-    /// one is still spending.
+    /// build hands back only what it reserved. Without the timestamp a late
+    /// release drops whatever entry now holds the input, and a third build
+    /// then selects an input the second one is still spending.
+    ///
+    /// A later build takes a reserved input only after a release, or after
+    /// the chain time passes the TTL of the reservation. A TTL is never before
+    /// the chain time of its build. So after that TTL, a later build carries a
+    /// later stamp when its context is as new as the wallet's chain view.
+    /// [`super::Wallet::add_funding`] re-anchors the context of a funded build
+    /// on that view.
     ///
     /// Release each reservation once. Two builds at one chain time share a
     /// stamp, so a second release of the same inputs can drop an entry another
