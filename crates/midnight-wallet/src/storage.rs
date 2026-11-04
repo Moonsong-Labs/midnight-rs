@@ -353,7 +353,7 @@ pub(crate) fn save_snapshot(
 }
 
 /// On-disk representation of a wallet's pending reservations. The hex fields
-/// hold the `tagged_serialize` bytes of the Dust spends and the shielded
+/// hold the `tagged_serialize` bytes of the Dust nullifiers and the shielded
 /// nullifiers, so the JSON schema stays free of the tagged codec.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredPending {
@@ -370,8 +370,8 @@ pub(crate) struct StoredPending {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredPendingDustBatch {
-    /// Tagged-serialized `Vec<DustSpend<ProofPreimageMarker, DefaultDB>>`, hex.
-    pub spends_hex: String,
+    /// Tagged-serialized `Vec<DustNullifier>`, hex.
+    pub nullifiers_hex: String,
     /// `Timestamp::to_secs()` value.
     pub reserved_at_secs: u64,
     /// `Timestamp::to_secs()` value.
