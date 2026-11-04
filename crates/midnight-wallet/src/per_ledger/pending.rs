@@ -195,7 +195,7 @@ impl PendingReservations {
     /// its build context. An entry goes only when its stamp matches, so a
     /// build hands back only what it reserved. A later build takes a reserved
     /// input only after a release or a TTL eviction frees it. After an
-    /// eviction, the later build carries a later stamp: the eviction needs the
+    /// eviction, the later build carries a later stamp. The eviction needs the
     /// chain time past the TTL, and a TTL is never before the chain time of
     /// its build. Without the timestamp a late release drops whatever entry
     /// now holds the input, and a third build then selects an input the second
