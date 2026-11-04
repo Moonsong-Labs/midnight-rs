@@ -189,13 +189,13 @@ pub struct Env<'a> {
 }
 
 impl Env<'_> {
-    /// No witnesses, a scratch private state, the zero address, no coin
+    /// No witnesses, a scratch private state, no contract address, no coin
     /// public key.
     pub fn new(block_time: Timestamp) -> Self {
         Self {
             witnesses: &NoWitnesses,
             private_state: None,
-            address: Some(ContractAddress::default()),
+            address: None,
             block_time,
             coin_public_key: None,
         }
