@@ -1355,30 +1355,35 @@ impl HeldInputs {
     ///
     /// # Cancellation
     ///
-    /// Under a Tokio runtime, dropping the returned future while `work` runs,
-    /// or while the wallet persists the reservation, releases the inputs in
-    /// the background, as dropping `self` does. A release that has started
-    /// runs to its end, even when the returned future is dropped during it.
+    /// Under a Tokio runtime, dropping the returned future while `work` runs
+    /// releases the inputs in the background, as dropping `self` does. A drop
+    /// while the wallet persists the reservation also releases the inputs
+    /// that the result of `work` names. A release that has started runs to its
+    /// end, even when the returned future is dropped during it.
     ///
     /// With no Tokio runtime, a drop releases nothing, and the release on
     /// `Err` runs inline. Inputs that a drop leaves reserved stay unusable
     /// until their TTL elapses.
-    pub fn keep_on_ok<T, E>(
+    pub fn keep_on_ok<E>(
         mut self,
-        work: impl Future<Output = Result<T, E>>,
-    ) -> impl Future<Output = Result<T, E>> {
+        work: impl Future<Output = Result<TransferResult, E>>,
+    ) -> impl Future<Output = Result<TransferResult, E>> {
         // Boxed before the returned future exists: an `async fn` stores its
         // arguments, so a caller's future would carry the whole build inline.
         let work = Box::pin(work);
         async move {
             let result = work.await;
-            // Still armed: a drop during the persist drops the proven result
-            // too, so nothing can reach the chain and the release is right.
-            if result.is_ok()
+            if let Ok(transaction) = &result
                 && !self.spent.is_empty()
                 && let Some(wallet) = &self.wallet
             {
-                wallet.persist_reservation(&self.spent).await;
+                // Hold what the result names too: a guard inside `work` may
+                // have left its inputs to the result, and a drop during the
+                // persist drops it. A release drops each named entry once, so
+                // an input named twice is harmless.
+                let own = self.spent.clone();
+                self.spent.merge(transaction.spent.clone());
+                wallet.persist_reservation(&own).await;
             }
             // Disarm `Drop` on both paths: `Ok` keeps the reservation, and
             // `Err` releases it here.
