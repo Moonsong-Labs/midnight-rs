@@ -238,7 +238,7 @@ Private state is also **threaded** through witness execution, matching midnight-
 
 ## Deploy and the constructor
 
-Both SDKs run the contract's Compact constructor locally when they deploy, and deploy the state that it leaves. midnight-js runs `contractExec.initialize(initialPrivateState, ...args)` from `deployContract` (`packages/contracts/src/unproven-deploy-tx.ts`). midnight-rs runs the constructor's analyzed IR with the interpreter, from the generated `Contract::deploy`. Both run it at the zero contract address, with the wallet's coin public key for `ownPublicKey()` and the wall-clock time.
+Both SDKs run the contract's Compact constructor locally when they deploy, and deploy the state that it leaves. midnight-js runs `contractExec.initialize(initialPrivateState, ...args)` from `deployContract` (`packages/contracts/src/unproven-deploy-tx.ts`). midnight-rs runs the constructor's analyzed IR with the interpreter, from the generated `Contract::deploy`. Both run it with the wallet's coin public key for `ownPublicKey()` and the wall-clock time. midnight-js runs it at the zero contract address, `dummyContractAddress()`, so `kernel.self()` there reads zeros ([LFDT-Minokawa/compact#117](https://github.com/LFDT-Minokawa/compact/issues/117)). midnight-rs runs it with no address, and refuses a constructor that reads `kernel.self()`.
 
 | midnight-js `deployContract` option | midnight-rs generated `DeployBuilder` |
 | --- | --- |

@@ -6,8 +6,7 @@ use midnight_onchain_runtime::context::{Effects, QueryContext};
 use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::ledger_9::convert::IntoLedger;
-use midnight_types::{CoinPublicKey, ContractAddress};
+use midnight_types::CoinPublicKey;
 
 use crate::error::ContractError;
 use crate::interpreter::Program;
@@ -54,13 +53,15 @@ impl Constructor {
     /// Run the constructor, and return the state and the private state that it
     /// leaves.
     ///
-    /// The constructor runs at the zero address, as `dummyContractAddress()`
-    /// does in the canonical runtime, because the contract gets its address
-    /// from the deploy.
+    /// The constructor runs with no contract address, because the deploy
+    /// computes the address from the state that the constructor leaves. The
+    /// canonical runtime runs it at a placeholder, so `kernel.self()` there
+    /// reads zeros (LFDT-Minokawa/compact#117).
     ///
     /// # Errors
     ///
-    /// - [`ContractError::Interpreter`] when the constructor or a witness fails.
+    /// - [`ContractError::Interpreter`] when the constructor or a witness
+    ///   fails, or when the constructor reads `kernel.self()`.
     /// - [`ContractError::Construction`] when the run has an effect that the
     ///   deploy does not carry.
     pub(crate) fn run(
@@ -77,7 +78,7 @@ impl Constructor {
             &program,
             &self.state,
             block_time,
-            zero_address(),
+            None,
             args,
             witnesses,
             Some(&mut private_state),
@@ -86,10 +87,6 @@ impl Constructor {
         refuse_effects(&self.state, &ran, block_time)?;
         Ok((ran.state, private_state))
     }
-}
-
-fn zero_address() -> ContractAddress {
-    ContractAddress(midnight_helpers::HashOutput([0; 32]))
 }
 
 /// Refuse a constructor run with an effect that the deploy does not carry.
@@ -103,7 +100,8 @@ fn refuse_effects(
     ran: &ExecutionResult,
     block_time: Timestamp,
 ) -> Result<(), ContractError> {
-    let mut context = QueryContext::new(state_before.data.clone(), zero_address().into_ledger());
+    // No op reads the address: the run refuses `kernel.self()`.
+    let mut context = QueryContext::new(state_before.data.clone(), Default::default());
     context.call_context.tblock = block_time;
     context.call_context.balance = state_before.balance.clone();
     let replayed = context
@@ -277,6 +275,54 @@ mod tests {
             &NoWitnesses,
         )
         .unwrap_or_else(|e| panic!("a read of the block time makes no effect: {e:?}"));
+    }
+
+    /// A run at a placeholder address deploys what the constructor derives
+    /// from `kernel.self()`: zeros in place of the contract's address.
+    #[test]
+    fn a_constructor_that_reads_kernel_self_is_refused() {
+        let family = compact_codegen::types::SUPPORTED_COMPILER_FAMILY;
+        let info = compact_codegen::artifact::load_str(&format!(
+            r#"(analyzed-ir (compiler-version "{family}.0") (language-version "0.25.107")
+              (runtime-version "0.18.107") (exports) (contract-types)
+              (kernel-declaration (%kernel.1 () (exported #f) (Kernel)))
+              (public-ledger-declaration
+                (public-ledger-array
+                  (%owner.0 (0) (exported #t) (__compact_Cell (tbytes 32))))
+                (constructor ()
+                  (seq (public-ledger %kernel.1 read () self
+                         (tstruct ContractAddress (bytes (tbytes 32)))
+                         (instructions (dup (n 2))
+                           (idx (cached #t) (pushPath #f) (path ((align 0 1))))
+                           (popeq (cached #t) (result (void)))))
+                       (return (tuple))))))"#
+        ))
+        .expect("the constructor loads");
+        let Some(Ok(circuit)) = info.constructor else {
+            panic!(
+                "expected a runnable constructor, got {:?}",
+                info.constructor
+            );
+        };
+        let constructor = Constructor {
+            circuit,
+            circuits: Vec::new(),
+            witnesses: Vec::new(),
+            natives: Vec::new(),
+            state: ContractState::default(),
+        };
+
+        let ran = deploy_run(&constructor, vec![], &NoWitnesses);
+        assert!(
+            matches!(
+                ran,
+                Err(ContractError::Interpreter(
+                    InterpreterError::NoContractAddress
+                ))
+            ),
+            "got {:?}",
+            ran.err()
+        );
     }
 
     /// A Zswap input or output with no claim makes no ledger effect, so the

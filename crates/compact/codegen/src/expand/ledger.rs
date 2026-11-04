@@ -1561,7 +1561,8 @@ pub(crate) fn emit_simulator(
              constructor. Unlike a deploy, the simulator refuses no effect.\n\n\
              # Errors\n\n\
              `ContractError::Interpreter` when the constructor or a witness fails, for example \
-             on a failed `assert`. The simulator then keeps the state from before the run.";
+             on a failed `assert`, or when the constructor reads `kernel.self()`. The simulator \
+             then keeps the state from before the run.";
         quote! {
             #[doc = #doc]
             pub fn run_constructor(
@@ -1571,8 +1572,7 @@ pub(crate) fn emit_simulator(
                 #program
                 #args
                 self.0
-                    .run(&#ledger_name::__constructor(), &program, &__args)
-                    .map(::core::mem::drop)
+                    .run_constructor(&#ledger_name::__constructor(), &program, &__args)
             }
         }
     });

@@ -174,8 +174,11 @@ pub struct Env<'a> {
     /// [`execute`] returns, the buffer holds the state after the call. `None`
     /// runs the witnesses on a scratch buffer.
     pub private_state: Option<&'a mut Vec<u8>>,
-    /// The address that `kernel.self()` reads.
-    pub address: ContractAddress,
+    /// The address that `kernel.self()` reads. With `None`, a circuit that
+    /// reads `kernel.self()` fails with [`InterpreterError::NoContractAddress`].
+    /// A placeholder would give the circuit an address that is not the
+    /// contract's.
+    pub address: Option<ContractAddress>,
     /// The time that the kernel clock checks compare against.
     pub block_time: Timestamp,
     /// The caller's coin public key, which `ownPublicKey()` returns. With
@@ -192,7 +195,7 @@ impl Env<'_> {
         Self {
             witnesses: &NoWitnesses,
             private_state: None,
-            address: ContractAddress::default(),
+            address: Some(ContractAddress::default()),
             block_time,
             coin_public_key: None,
         }
@@ -240,7 +243,8 @@ pub fn execute(
     let mut scratch = Vec::new();
     let private_state = private_state.unwrap_or(&mut scratch);
     let call_context = CallContext {
-        own_address: address,
+        // With no address, `eval_expr` refuses `kernel.self()`, the only read of it.
+        own_address: address.unwrap_or_default(),
         tblock: block_time,
         balance: state.balance.clone(),
         ..CallContext::default()
@@ -273,6 +277,7 @@ pub fn execute(
         private_state,
         program,
         call_context,
+        has_address: address.is_some(),
         coin_public_key,
     };
 
@@ -382,6 +387,8 @@ struct ExecContext<'a> {
     /// from the [`Env`] and the balance of the state. The clock checks read
     /// its `tblock` (slot 2), and the balance checks its `balance` (slot 5).
     call_context: CallContext<InMemoryDB>,
+    /// Whether `call_context` holds the contract's address.
+    has_address: bool,
     coin_public_key: Option<CoinPublicKey>,
 }
 
@@ -600,11 +607,16 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         // skipping it (an earlier shortcut) produced a "public transcript input
         // mismatch" at prove time.
         E::PublicLedger {
+            op,
             result_type,
             instructions,
             ..
         } => {
             check_type(result_type)?;
+            // Only the `Kernel` ADT has an operation named `self`.
+            if op == "self" && !ctx.has_address {
+                return Err(InterpreterError::NoContractAddress);
+            }
             exec_ledger_query(ctx, instructions)
         }
 
@@ -3029,6 +3041,46 @@ mod tests {
         }
     }
 
+    /// A run with no address that reads the context's placeholder gives the
+    /// circuit an address that is not the contract's.
+    #[test]
+    fn kernel_self_without_an_address_fails() {
+        let address_type = Type::Struct {
+            name: "ContractAddress".into(),
+            fields: vec![("bytes".to_string(), Type::Bytes(32))],
+        };
+        let circ = circuit(
+            Vec::new(),
+            address_type.clone(),
+            ir::Expr::PublicLedger {
+                op_class: ir::OpClass::Plain("read".into()),
+                field: ident("%kernel.0"),
+                path: Vec::new(),
+                op: "self".to_string(),
+                result_type: address_type,
+                instructions: Vec::new(),
+                args: Vec::new(),
+            },
+        );
+        let env = Env {
+            address: None,
+            ..epoch()
+        };
+
+        let result = execute(
+            &circ,
+            &Program::new(&[], &[], &[]),
+            make_counter_state(0),
+            &[],
+            env,
+        );
+        match result {
+            Err(InterpreterError::NoContractAddress) => {}
+            Err(other) => panic!("expected NoContractAddress, got {other:?}"),
+            Ok(result) => panic!("kernel.self() returned {:?}", result.result),
+        }
+    }
+
     #[test]
     fn vector_index_beyond_usize_errors() {
         // 2^64 + 1 truncated `as usize` on 64-bit would wrap to 1 and silently
@@ -3417,6 +3469,7 @@ mod tests {
             private_state,
             program,
             call_context: CallContext::default(),
+            has_address: true,
             coin_public_key: None,
         }
     }

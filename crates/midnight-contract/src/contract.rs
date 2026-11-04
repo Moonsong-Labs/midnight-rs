@@ -565,8 +565,9 @@ impl<'a, P> DeployBuilder<'a, P> {
     /// Run `constructor` before any proof, and deploy the state that it leaves.
     ///
     /// `ownPublicKey()` returns the wallet's coin public key, and the clock
-    /// checks read the wall-clock time. The generated `Contract::deploy` sets
-    /// the contract's constructor.
+    /// checks read the wall-clock time. `kernel.self()` fails, because the
+    /// contract gets its address from the deploy. The generated
+    /// `Contract::deploy` sets the contract's constructor.
     pub fn with_constructor(mut self, constructor: Constructor) -> Self {
         self.constructor = Some(constructor);
         self
@@ -699,7 +700,8 @@ where
     ///   deploy does not carry, or when a private state to record has no
     ///   private-state store.
     /// - [`ContractError::Interpreter`], before any proof, when the
-    ///   constructor or a witness fails.
+    ///   constructor or a witness fails, or when the constructor reads
+    ///   `kernel.self()`.
     /// - [`ContractError::ShieldedOfferShortfall`], before any proof, when the
     ///   shielded offer pays more of a token than its coins hold.
     /// - [`ContractError::Provider`] when a wallet query, the build or the
@@ -1290,7 +1292,7 @@ impl<P> Contract<P> {
             program,
             &state.view,
             state.time,
-            address,
+            Some(address),
             args,
             witnesses,
             Some(&mut private_state),
@@ -1493,7 +1495,7 @@ impl<P> Contract<P> {
             program,
             &state.view,
             state.time,
-            address,
+            Some(address),
             args,
             witnesses,
             Some(&mut private_state),

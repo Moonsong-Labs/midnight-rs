@@ -220,8 +220,8 @@ Internally:
 the state: initial_state as it is, or else the constructor's run (neither → Construction)
   ├─ Constructor::check_args                  // a missing argument → Construction
   ├─ provider.shielded_public_keys()          // ownPublicKey() returns the wallet's coin key
-  ├─ Constructor::run at the zero address and the wall-clock time, with the witnesses
-  │  and the initial private state (Interpreter on a failure)
+  ├─ Constructor::run with no contract address and at the wall-clock time, with the
+  │  witnesses and the initial private state (Interpreter on a failure or a kernel.self())
   └─ refuse a ledger effect or a Zswap input or output (Construction)
   ↓
 refuse a private state that is not empty when no store is attached (Construction)

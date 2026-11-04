@@ -151,6 +151,32 @@ impl<Wp: WitnessProvider> Runner<Wp> {
         program: &Program<'_>,
         args: &[(&str, Value)],
     ) -> Result<Value, ContractError> {
+        self.run_at(Some(self.address), circuit, program, args)
+    }
+
+    /// Run `constructor` as [`run`](Self::run) runs a circuit, but with no
+    /// contract address, as a deploy does.
+    ///
+    /// # Errors
+    ///
+    /// As for `run`. A constructor that reads `kernel.self()` fails with
+    /// [`ContractError::Interpreter`].
+    pub fn run_constructor(
+        &mut self,
+        constructor: &compact_codegen::ir::Circuit,
+        program: &Program<'_>,
+        args: &[(&str, Value)],
+    ) -> Result<(), ContractError> {
+        self.run_at(None, constructor, program, args).map(drop)
+    }
+
+    fn run_at(
+        &mut self,
+        address: Option<ContractAddress>,
+        circuit: &compact_codegen::ir::Circuit,
+        program: &Program<'_>,
+        args: &[(&str, Value)],
+    ) -> Result<Value, ContractError> {
         // The witnesses write the buffer as they run, so a call that fails
         // after a witness must not reach `self.private_state`.
         let mut private_state = self.private_state.clone();
@@ -159,7 +185,7 @@ impl<Wp: WitnessProvider> Runner<Wp> {
             program,
             &self.state,
             self.block_time,
-            self.address,
+            address,
             args,
             &self.witnesses,
             Some(&mut private_state),

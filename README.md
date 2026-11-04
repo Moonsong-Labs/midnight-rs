@@ -166,7 +166,7 @@ let contract = owned_counter::Contract::deploy(&provider)
     .await?;
 ```
 
-The deploy records the private state that the constructor leaves as the first snapshot of the new contract (see [`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy)). The `.await` leaves that snapshot `Pending`. To confirm it, deploy with `.send()` and call `PendingDeploy::wait_finalized`. A constructor that mints, claims, or spends or creates a coin fails the deploy with `ContractError::Construction` before any proof.
+The deploy records the private state that the constructor leaves as the first snapshot of the new contract (see [`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy)). The `.await` leaves that snapshot `Pending`. To confirm it, deploy with `.send()` and call `PendingDeploy::wait_finalized`. A constructor that mints, claims, or spends or creates a coin fails the deploy with `ContractError::Construction` before any proof. A constructor that reads `kernel.self()` fails the deploy with `ContractError::Interpreter`, because the contract gets its address from the deploy.
 
 ## Connecting to an existing contract
 
