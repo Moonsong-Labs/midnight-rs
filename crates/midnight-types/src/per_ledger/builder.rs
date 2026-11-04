@@ -1670,8 +1670,8 @@ mod tests {
     /// A release matches an entry by its input and its stamp. A build that
     /// takes the inputs of an expired build must carry another stamp.
     /// Otherwise the late release of the expired build drops the entry of the
-    /// later one. The Dust anchor can stay the same for hours, so a stamp from it does not
-    /// move between the two builds.
+    /// later one. The Dust anchor can stay the same for hours, so a stamp from
+    /// it does not move between the two builds.
     #[test]
     fn a_build_after_an_expired_one_carries_a_later_stamp() {
         let anchor = 1_000;
