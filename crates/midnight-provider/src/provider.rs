@@ -19,9 +19,9 @@ use crate::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
-    BlockHash, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion,
-    Network, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
+    BlockHash, ChainParameters, CoinInfo, LedgerVersion, Network, ShieldedRecipient,
+    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
+    TransferRequest, TransferResult, UnshieldedRecipient, UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
@@ -505,7 +505,7 @@ impl MidnightProvider {
         &'a self,
         token_type: ShieldedTokenType,
         amount: u128,
-        recipient: &str,
+        recipient: ShieldedRecipient,
     ) -> ShieldedTransfer<'a> {
         ShieldedTransfer::new(self, token_type, amount, recipient)
     }
@@ -565,7 +565,7 @@ impl MidnightProvider {
         &'a self,
         token_type: UnshieldedTokenType,
         amount: u128,
-        recipient: &str,
+        recipient: UnshieldedRecipient,
     ) -> UnshieldedTransfer<'a> {
         UnshieldedTransfer::new(self, token_type, amount, recipient)
     }
@@ -826,13 +826,11 @@ impl MidnightProvider {
     }
 
     /// The attached wallet's shielded public keys. See
-    /// `Wallet::shielded_public_keys` on the implementing wallet.
+    /// `Wallet::shielded_recipient` on the implementing wallet.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn shielded_public_keys(
-        &self,
-    ) -> Result<(CoinPublicKey, EncryptionPublicKey), ProviderError> {
-        Ok(self.attached()?.facade.shielded_public_keys().await)
+    pub async fn shielded_recipient(&self) -> Result<ShieldedRecipient, ProviderError> {
+        Ok(self.attached()?.facade.shielded_recipient().await)
     }
 
     /// Get or create the node connection.

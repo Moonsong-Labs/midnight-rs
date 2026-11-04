@@ -57,13 +57,13 @@ async fn a_registration_to_another_dust_address_funds_that_wallet() {
     };
 
     let (cold_seed, hot_seed) = unused_seeds();
-    let cold_address = Seed::from_hex(&cold_seed)
+    let cold_recipient = Seed::from_hex(&cold_seed)
         .expect("hex seed")
-        .unshielded_address(Network::Undeployed);
+        .unshielded_recipient();
 
     let funder = common::synced_provider(&node_url, &indexer_url, common::DEV_WALLET_SEED).await;
     funder
-        .transfer_unshielded(NIGHT, SEND, &cold_address)
+        .transfer_unshielded(NIGHT, SEND, cold_recipient)
         .await
         .expect("fund the cold address")
         .wait_finalized()
@@ -109,7 +109,7 @@ async fn a_registration_to_another_dust_address_funds_that_wallet() {
     );
 
     let dustless = cold
-        .transfer_unshielded(NIGHT, SEND, &cold_address)
+        .transfer_unshielded(NIGHT, SEND, cold_recipient)
         .without_dust()
         .await
         .expect("build the fee-less transfer");

@@ -12,7 +12,7 @@
 
 mod common;
 
-use midnight_provider::{Network, ProviderError, Seed};
+use midnight_provider::{ProviderError, Seed};
 use midnight_wallet::{HashOutput, NIGHT, ShieldedTokenType, UnshieldedTokenType, WalletError};
 
 /// Enough tNIGHT that the coin carries real generationless dust.
@@ -43,14 +43,14 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
 
     let seed = unused_seed();
     let keys = Seed::from_hex(&seed).expect("hex seed");
-    let address = keys.unshielded_address(Network::Undeployed);
-    let shielded_address = keys.shielded_address(Network::Undeployed);
+    let recipient = keys.unshielded_recipient();
+    let shielded_recipient = keys.shielded_recipient();
 
     let funder = common::synced_provider(&node_url, &indexer_url, common::DEV_WALLET_SEED).await;
 
     for _ in 0..3 {
         funder
-            .transfer_unshielded(NIGHT, SEND, &address)
+            .transfer_unshielded(NIGHT, SEND, recipient)
             .await
             .expect("fund the fresh address")
             .wait_finalized()
@@ -86,7 +86,7 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     // Each shortfall fails before the build reserves anything, so the
     // registration below still sees all three UTXOs.
     let result = fresh
-        .transfer_unshielded(NIGHT, 4 * SEND, &address)
+        .transfer_unshielded(NIGHT, 4 * SEND, recipient)
         .build()
         .await;
     let Err(ProviderError::Wallet(WalletError::InsufficientUnshielded {
@@ -106,7 +106,10 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     );
 
     let unheld = UnshieldedTokenType(HashOutput([1; 32]));
-    let result = fresh.transfer_unshielded(unheld, 1, &address).build().await;
+    let result = fresh
+        .transfer_unshielded(unheld, 1, recipient)
+        .build()
+        .await;
     let Err(ProviderError::Wallet(WalletError::InsufficientUnshielded {
         token_type,
         required,
@@ -123,7 +126,11 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     );
 
     let result = fresh
-        .transfer_shielded(ShieldedTokenType(HashOutput([0; 32])), 1, &shielded_address)
+        .transfer_shielded(
+            ShieldedTokenType(HashOutput([0; 32])),
+            1,
+            shielded_recipient,
+        )
         .build()
         .await;
     let Err(ProviderError::Wallet(WalletError::InsufficientShielded {
@@ -137,7 +144,7 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     assert_eq!(required, 1);
     assert_eq!(available, 0, "a fresh wallet holds no shielded coins");
 
-    let result = fresh.transfer_unshielded(NIGHT, 1, &address).build().await;
+    let result = fresh.transfer_unshielded(NIGHT, 1, recipient).build().await;
     let Err(ProviderError::Wallet(WalletError::InsufficientDust {
         required,
         available,

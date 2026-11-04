@@ -131,7 +131,10 @@ pub(crate) async fn call_transaction(
     // 1. The build context, from the provider's synced wallet. Nothing here
     //    needs the seed: the wallet performs the spends, and addressing a coin
     //    takes public keys.
-    let (change_cpk, change_epk) = builds.provider().shielded_public_keys().await?;
+    let midnight_types::ShieldedRecipient {
+        coin_public_key: change_cpk,
+        enc_public_key: change_epk,
+    } = builds.provider().shielded_recipient().await?;
     let (change_cpk, change_epk) = (change_cpk.into_ledger(), change_epk.into_ledger());
     let context = builds.execution_context().await?;
 

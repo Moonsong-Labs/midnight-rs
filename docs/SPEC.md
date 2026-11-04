@@ -40,7 +40,8 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
   │     ├── sync.rs              TrackedUtxo, SyncCursors
   │     ├── hd.rs                Seed and its addresses, mnemonic, Role and the BIP-32 role keys
-  │     ├── address.rs           parse_shielded_recipient, parse_dust_address
+  │     ├── address.rs           parse_shielded_recipient, parse_unshielded_recipient,
+  │     │                        parse_dust_address
   │     ├── network.rs           Network: the bech32 HRP suffix, typed
   │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap; SyncSource
   │     └── error.rs             WalletError
@@ -303,7 +304,7 @@ zk_config.verifier_key(circuit)               // on a blocking thread
        no operation → VerifierKeyMismatch { reason: Missing }, no key → Keyless,
        another key → Mismatched
   ↓
-provider.shielded_public_keys()               // the wallet's coin public key, which ownPublicKey() returns
+provider.shielded_recipient()                 // the wallet's coin public key, which ownPublicKey() returns
   ↓
 interpreter::execute(ir, program, state, args,
                      Env { witnesses, private_state, address, block_time, coin_public_key })
@@ -371,7 +372,7 @@ settle the result of the wait:
 Each of the four provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`). The builder defers all work until awaited or `.build()` is called:
 
 ```
-provider.transfer_shielded(token_type, amount, recipient)       // bech32 address; no work yet
+provider.transfer_shielded(token_type, amount, recipient)       // a typed recipient; no work yet
         .transfer_unshielded(token_type, amount, recipient)
         .shielded_swap(give_token, give_amount, receive_token, receive_amount)
         .register_dust(utxo_ctime)                              // .to(dust_key) sends the Dust to another wallet

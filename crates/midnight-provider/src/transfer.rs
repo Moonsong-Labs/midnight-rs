@@ -23,19 +23,22 @@
 //! `.build()`.
 //!
 //! ```rust,no_run
-//! # use midnight_provider::{MidnightProvider, NIGHT, ShieldedTokenType};
+//! # use midnight_provider::{
+//! #     MidnightProvider, NIGHT, ShieldedRecipient, ShieldedTokenType, UnshieldedRecipient,
+//! # };
 //! # async fn f(
 //! #     provider: MidnightProvider,
-//! #     recipient: String,
+//! #     unshielded: UnshieldedRecipient,
+//! #     shielded: ShieldedRecipient,
 //! #     token: ShieldedTokenType,
 //! # ) -> anyhow::Result<()> {
 //! // One-shot: build and submit, then wait however you like. The wait fails
 //! // when the chain does not apply the transfer.
-//! let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
+//! let pending = provider.transfer_unshielded(NIGHT, 100, unshielded).await?;
 //! pending.wait_finalized().await?;
 //!
 //! // Build only: read the fee, then submit with the reservation.
-//! let result = provider.transfer_shielded(token, 1, &recipient).build().await?;
+//! let result = provider.transfer_shielded(token, 1, shielded).build().await?;
 //! println!("fee: {} SPECK", result.fee_speck);
 //! provider.submit_reserved(result).await?.wait_finalized().await?;
 //! # Ok(())
@@ -46,8 +49,8 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
 use midnight_types::{
-    DustPublicKey, ShieldedTokenType, TransferKind, TransferRequest, TransferResult,
-    UnshieldedTokenType,
+    DustPublicKey, ShieldedRecipient, ShieldedTokenType, TransferKind, TransferRequest,
+    TransferResult, UnshieldedRecipient, UnshieldedTokenType,
 };
 
 use crate::{MidnightProvider, PendingTx, ProviderError};
@@ -60,7 +63,7 @@ pub struct UnshieldedTransfer<'a> {
     provider: &'a MidnightProvider,
     token_type: UnshieldedTokenType,
     amount: u128,
-    recipient: String,
+    recipient: UnshieldedRecipient,
     coin_selection: midnight_types::CoinSelectionStrategy,
     ttl: Option<std::time::Duration>,
 }
@@ -70,13 +73,13 @@ impl<'a> UnshieldedTransfer<'a> {
         provider: &'a MidnightProvider,
         token_type: UnshieldedTokenType,
         amount: u128,
-        recipient: &str,
+        recipient: UnshieldedRecipient,
     ) -> Self {
         Self {
             provider,
             token_type,
             amount,
-            recipient: recipient.to_string(),
+            recipient,
             coin_selection: midnight_types::CoinSelectionStrategy::default(),
             ttl: None,
         }
@@ -144,7 +147,7 @@ pub struct ShieldedTransfer<'a> {
     provider: &'a MidnightProvider,
     token_type: ShieldedTokenType,
     amount: u128,
-    recipient: String,
+    recipient: ShieldedRecipient,
     coin_selection: midnight_types::CoinSelectionStrategy,
     ttl: Option<std::time::Duration>,
 }
@@ -154,13 +157,13 @@ impl<'a> ShieldedTransfer<'a> {
         provider: &'a MidnightProvider,
         token_type: ShieldedTokenType,
         amount: u128,
-        recipient: &str,
+        recipient: ShieldedRecipient,
     ) -> Self {
         Self {
             provider,
             token_type,
             amount,
-            recipient: recipient.to_string(),
+            recipient,
             coin_selection: midnight_types::CoinSelectionStrategy::default(),
             ttl: None,
         }

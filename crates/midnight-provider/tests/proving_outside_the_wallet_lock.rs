@@ -31,7 +31,7 @@ use std::time::Duration;
 use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{
     LedgerVersion, MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, SpentInputs,
-    TransferKind, TransferRequest, WalletError, WalletFacade,
+    TransferKind, TransferRequest, UnshieldedRecipient, WalletError, WalletFacade,
 };
 use midnight_wallet::LocalWallet;
 use tokio::sync::Notify;
@@ -44,7 +44,7 @@ fn night() -> ShieldedTokenType {
 /// the wallet's own builds, and return what it reserved. Nothing proves it.
 async fn prepare_night_self_transfer(
     wallet: Arc<LocalWallet>,
-    recipient: String,
+    recipient: UnshieldedRecipient,
 ) -> Result<SpentInputs, WalletError> {
     let request = TransferRequest::new(TransferKind::Unshielded {
         token_type: NIGHT,
@@ -151,14 +151,14 @@ async fn the_wallet_is_readable_while_a_build_proves() {
     let prover = Arc::new(ParkedProver::default());
     let provider = MidnightProvider::new(&node).with_proof_provider(prover.clone());
     let wallet = common::synced_wallet(&provider, &indexer, common::DEV_WALLET_SEED).await;
-    let recipient = wallet.shielded_address();
+    let recipient = wallet.shielded_recipient();
     let provider = Arc::new(provider.with_wallet(wallet));
 
     let building = {
         let provider = provider.clone();
         tokio::spawn(async move {
             provider
-                .transfer_shielded(night(), 1, &recipient)
+                .transfer_shielded(night(), 1, recipient)
                 .build()
                 .await
         })
@@ -211,7 +211,7 @@ async fn two_preparations_at_once_draw_different_inputs() {
     };
     let source = MidnightProvider::new(&node);
     let wallet = common::synced_wallet(&source, &indexer, common::DEV_WALLET_SEED).await;
-    let address = wallet.unshielded_address();
+    let recipient = wallet.unshielded_recipient();
 
     // Each preparation spends one tNIGHT UTXO and draws Dust for its fee, so
     // the wallet needs two of each for the two to be able to differ at all.
@@ -232,8 +232,8 @@ async fn two_preparations_at_once_draw_different_inputs() {
     // Real tasks, not `join!`: two futures polled by one task interleave only
     // at await points the runtime chooses, and would pass here for the wrong
     // reason.
-    let first = tokio::spawn(prepare_night_self_transfer(wallet.clone(), address.clone()));
-    let second = tokio::spawn(prepare_night_self_transfer(wallet.clone(), address.clone()));
+    let first = tokio::spawn(prepare_night_self_transfer(wallet.clone(), recipient));
+    let second = tokio::spawn(prepare_night_self_transfer(wallet.clone(), recipient));
     let first = first.await.expect("first task").expect("first preparation");
     let second = second
         .await
@@ -275,11 +275,11 @@ async fn the_spendable_dust_leaves_out_a_reservation() {
     };
     let source = MidnightProvider::new(&node);
     let wallet = common::synced_wallet(&source, &indexer, common::DEV_WALLET_SEED).await;
-    let address = wallet.unshielded_address();
+    let recipient = wallet.unshielded_recipient();
     let wallet = Arc::new(LocalWallet::new(wallet));
 
     let before = wallet.balance().await.dust;
-    let spent = prepare_night_self_transfer(wallet.clone(), address)
+    let spent = prepare_night_self_transfer(wallet.clone(), recipient)
         .await
         .expect("the dev seed pays a tNIGHT self-transfer's fee in Dust");
     let reserved = wallet.balance().await.dust;
@@ -317,7 +317,7 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
     };
     let provider = MidnightProvider::new(&node);
     let wallet = common::synced_wallet(&provider, &indexer, common::DEV_WALLET_SEED).await;
-    let recipient = wallet.shielded_address();
+    let recipient = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
 
     let spendable_before = provider
@@ -332,7 +332,7 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
     let broken = provider.with_proof_provider(Arc::new(BrokenProver));
 
     let outcome = broken
-        .transfer_shielded(night(), 1, &recipient)
+        .transfer_shielded(night(), 1, recipient)
         .build()
         .await;
 

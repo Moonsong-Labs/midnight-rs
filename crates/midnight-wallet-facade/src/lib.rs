@@ -28,8 +28,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use midnight_types::chain_pin::ChainView;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
-    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
+    ChainParameters, CoinInfo, LedgerVersion, Network, ShieldedRecipient, SpendableShieldedCoin,
+    SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 
 pub mod ledger_8;
@@ -58,7 +58,7 @@ pub trait WalletFacade: Send + Sync {
     async fn ledger_version(&self) -> LedgerVersion;
 
     /// The public keys a coin addressed to this wallet commits to.
-    async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey);
+    async fn shielded_recipient(&self) -> ShieldedRecipient;
 
     /// What this wallet holds, across shielded coins, unshielded UTXOs and
     /// Dust.
@@ -197,8 +197,8 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).ledger_version().await
     }
 
-    async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
-        (**self).shielded_public_keys().await
+    async fn shielded_recipient(&self) -> ShieldedRecipient {
+        (**self).shielded_recipient().await
     }
 
     async fn balance(&self) -> WalletBalance {

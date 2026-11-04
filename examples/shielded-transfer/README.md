@@ -75,7 +75,8 @@ balance: ... SPECK, spendable UTXOs: ...
 ## What it covers
 
 - `Wallet::from_seed(DEV_SEED)?.with_network(&network).sync(&provider, &indexer_url)` + `MidnightProvider::with_wallet`: the first wallet sync against the indexer, then the attach step. The example attaches an `Arc<LocalWallet>`, so it keeps a handle on the wallet.
-- `Wallet::shielded_address`: the synced wallet's own address, which receives the self-transfer
+- `Wallet::shielded_address`: the synced wallet's own address, which the example prints
+- `Wallet::shielded_recipient`: the synced wallet's own shielded keys, which receive the self-transfer
 - `MidnightProvider::balance`: shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))
 - `MidnightProvider::transfer_shielded(token_type, amount, recipient)`: builds a proven zswap transfer and submits it
 - `PendingTx::wait_best` + `wait_finalized`: the submission lifecycle

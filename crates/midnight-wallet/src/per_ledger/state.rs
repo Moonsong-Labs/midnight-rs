@@ -1052,12 +1052,12 @@ impl Wallet {
         &self.seed
     }
 
-    /// See [`crate::Wallet::shielded_public_keys`].
-    pub fn shielded_public_keys(&self) -> (crate::CoinPublicKey, crate::EncryptionPublicKey) {
-        (
-            self.secret_keys.coin_public_key().into_sdk(),
-            self.secret_keys.enc_public_key().into_sdk(),
-        )
+    /// See [`crate::Wallet::shielded_recipient`].
+    pub fn shielded_recipient(&self) -> crate::ShieldedRecipient {
+        crate::ShieldedRecipient {
+            coin_public_key: self.secret_keys.coin_public_key().into_sdk(),
+            enc_public_key: self.secret_keys.enc_public_key().into_sdk(),
+        }
     }
 
     /// See [`crate::Wallet::network`].

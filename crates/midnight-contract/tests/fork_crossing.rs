@@ -49,8 +49,8 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .sync(&provider, &indexer_url)
         .await
         .expect("sync on ledger 8");
-    let own_unshielded = wallet.unshielded_address();
-    let own_shielded = wallet.shielded_address();
+    let own_unshielded = wallet.unshielded_recipient();
+    let own_shielded = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
@@ -131,7 +131,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     let round = contract.ledger().await.unwrap().round().unwrap();
     assert_eq!(round, 2, "the contract keeps its ledger 8 state");
     provider
-        .transfer_unshielded(NIGHT, 1_000_000, &own_unshielded)
+        .transfer_unshielded(NIGHT, 1_000_000, own_unshielded)
         .await
         .expect("submit an unshielded transfer on ledger 9")
         .wait_finalized()
@@ -143,7 +143,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .expect("a shielded coin from before the fork")
         .token_type;
     provider
-        .transfer_shielded(token_type, 1, &own_shielded)
+        .transfer_shielded(token_type, 1, own_shielded)
         .await
         .expect("submit a shielded transfer on ledger 9")
         .wait_finalized()

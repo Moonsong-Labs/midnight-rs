@@ -55,7 +55,7 @@ TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 - `balance.unshielded_value(NIGHT)`: the NIGHT held, in STAR
 - `provider.parameters()` / `provider.sync_cursors()`: the ledger parameters and the sync counters
 - `provider.register_dust(None)`: registers one tNIGHT UTXO for Dust generation
-- `provider.transfer_unshielded(NIGHT, amount, &recipient)`: an unshielded self-transfer
+- `provider.transfer_unshielded(NIGHT, amount, seed.unshielded_recipient())`: an unshielded self-transfer
 - `PendingTx::extrinsic_hash_hex` and `PendingTx::wait_best`: the submission lifecycle
 
 For the API reference, see [`docs/wallet.md`](../../docs/wallet.md).

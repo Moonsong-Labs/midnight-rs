@@ -8,7 +8,8 @@
 use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 
 use crate::coin::{
-    DustNullifier, DustPublicKey, Nullifier, ShieldedTokenType, UnshieldedTokenType,
+    DustNullifier, DustPublicKey, Nullifier, ShieldedRecipient, ShieldedTokenType,
+    UnshieldedRecipient, UnshieldedTokenType,
 };
 use crate::ledger_version::LedgerVersion;
 
@@ -134,8 +135,7 @@ pub enum TransferKind {
     Shielded {
         token_type: ShieldedTokenType,
         amount: u128,
-        /// A bech32 shielded address.
-        recipient: String,
+        recipient: ShieldedRecipient,
         /// False leaves the transaction fee-less, for another wallet to fund.
         pay_fees: bool,
     },
@@ -144,8 +144,7 @@ pub enum TransferKind {
     Unshielded {
         token_type: UnshieldedTokenType,
         amount: u128,
-        /// A bech32 unshielded address.
-        recipient: String,
+        recipient: UnshieldedRecipient,
         /// False leaves the transaction fee-less, for another wallet to fund.
         pay_fees: bool,
     },
