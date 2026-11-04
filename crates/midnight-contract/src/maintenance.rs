@@ -465,8 +465,11 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     {
         let provider = self.contract.provider().as_midnight_provider();
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        let transaction = Box::pin(self.build_inner()).await?;
-        Ok(provider.submit_reserved(transaction).await?)
+        Box::pin(async move {
+            let transaction = self.build_inner().await?;
+            Ok(provider.submit_reserved(transaction).await?)
+        })
+        .await
     }
 
     async fn build_inner(self) -> Result<TransferResult, ContractError>
