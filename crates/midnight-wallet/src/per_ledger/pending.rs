@@ -714,8 +714,9 @@ mod tests {
     /// Only a proven build can reach the chain, so only its reservation
     /// outlives the process. A save that ignores the mark keeps the inputs of
     /// a build that stopped during its proof unspendable after a restart. A
-    /// mark that matches nothing loses a proven build's reservation. Only a
-    /// restart shows either.
+    /// mark that matches nothing loses a proven build's reservation at the
+    /// restart, and a load that forgets the mark loses it at the next one.
+    /// Only a restart shows each.
     #[test]
     fn only_a_proven_reservation_survives_a_restart() {
         let mut p = PendingReservations::default();
@@ -741,7 +742,8 @@ mod tests {
             &[at(shielded_nf(1), 100)],
         );
 
-        let loaded = PendingReservations::from_stored(p.to_stored().unwrap()).unwrap();
+        let restarted = PendingReservations::from_stored(p.to_stored().unwrap()).unwrap();
+        let loaded = PendingReservations::from_stored(restarted.to_stored().unwrap()).unwrap();
         assert_eq!(
             loaded
                 .dust_batches()
