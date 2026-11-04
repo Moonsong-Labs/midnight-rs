@@ -1090,11 +1090,11 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 /// would let that party set how long the sponsor's Dust stays reserved.
 ///
 /// The lower bound: a TTL that already passed would let the next build at the
-/// same chain time evict this reservation and take the same Dust with the same
-/// stamp. A release of this build would then drop that build's reservation
-/// too. A TTL at the chain time keeps the reservation through every build at
-/// that chain time, because `within_ttl` keeps an entry while its TTL is at or
-/// after the chain time.
+/// same chain time evict this reservation. That build would take the same Dust
+/// with the same stamp. A release of this build would then drop the
+/// reservation of that build too. The wallet keeps a reservation while its TTL
+/// is at or after the chain time. So a TTL at the chain time keeps the
+/// reservation through every build at that chain time.
 fn fee_ttl(external: &FinalizedTx, context: &BuildContext) -> Timestamp {
     let longest = longest_ttl(context);
     let Some(earliest) = external.intents().map(|(_, intent)| intent.ttl).min() else {
@@ -1114,10 +1114,11 @@ fn fee_ttl(external: &FinalizedTx, context: &BuildContext) -> Timestamp {
 /// Each round prices the merge with a mock proof, which is exact here
 /// because the fee intent carries only Dust spends.
 ///
-/// The fee intent takes the earliest TTL of the intents of `external`, so the
-/// Dust that it reserves expires when the merged transaction can no longer
-/// land. An `external` with no intent gets the chain's `global_ttl` after the
-/// chain time of the build.
+/// The fee intent takes the earliest TTL of the intents of `external`, kept
+/// between the chain time of the build (see [`chain_time`]) and
+/// [`longest_ttl`]. So the Dust that the fee intent reserves expires when the
+/// merged transaction can no longer land. When `external` has no intent, the
+/// fee intent gets [`longest_ttl`].
 ///
 /// `None` when `external` already balances its Dust. There is nothing to
 /// draw then, and an intent with no spends is one the ledger rejects.

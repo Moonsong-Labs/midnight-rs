@@ -749,9 +749,10 @@ impl MidnightProvider {
     /// `spent`, and the fee of the merged transaction in `fee_speck`. Submit
     /// it with [`Self::submit_reserved`], which hands the Dust back when the
     /// node never gets the transaction or rejects it. The reservation of the
-    /// Dust expires at the earliest TTL of the transaction that it pays for.
-    /// A transaction that already pays its own fee comes back unchanged, with
-    /// nothing reserved.
+    /// Dust expires at the earliest TTL of the intents of the transaction.
+    /// When the transaction has no intent, the reservation expires the chain's
+    /// `global_ttl` after the chain time. A transaction that already pays its
+    /// own fee comes back unchanged, with nothing reserved.
     pub async fn balance_transaction(
         &self,
         tx_bytes: &[u8],
