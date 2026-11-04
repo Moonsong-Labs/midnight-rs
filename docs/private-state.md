@@ -96,7 +96,7 @@ Under the store root, one directory per contract address, one file per snapshot:
 
 `forget_all`, `clear_signing_keys`, `export_private_states` and `export_signing_keys` act on the store of one wallet. They do not touch the store of another wallet under the same base.
 
-On Unix, the store creates its directories with mode 0700 and its files with mode 0600, so no other local user can read the private state or the signing keys. Each write first narrows the store root to 0700. The root then also bars other users from a file that an earlier version wrote at the process umask. Other platforms keep their default permissions.
+On Unix, the store creates its directories with mode 0700 and its files with mode 0600, so no other local user can read the private state or the signing keys. An existing directory keeps its mode. Other platforms keep their default permissions.
 
 A store from before the per-wallet layout sits directly under the base, as `<base>/states/` and `<base>/signing-keys/`. No store reads it, and `with_default_dir` logs a warning when it finds one. The SDK does not move it, because nothing tells which wallet wrote it. To keep that private state, move both directories into the store root of the wallet that wrote them, before that wallet writes to its new store:
 
@@ -106,7 +106,7 @@ mkdir -p "$root" && chmod 700 "$root"
 mv ~/.midnight/private-state/states ~/.midnight/private-state/signing-keys "$root"/
 ```
 
-Snapshot filenames begin with a 020-padded nanosecond timestamp purely for human inspection (a directory listing reads in append-time order). The journal head is derived from the `dependsOn` graph: the head is the snapshot no other snapshot depends on. Filename order is not load-bearing, since an export/import round-trip rewrites timestamps. Snapshots carry the producing tx's `extrinsic_hash` plus a `dependsOn` link to the previous snapshot at that address; `mark_failed` / `rollback_from` walk that graph to cascade-drop dependents. Writes go to a `.tmp` sibling and are `rename`d into place, so a crash never leaves a half-written file.
+Snapshot filenames begin with a 020-padded nanosecond timestamp purely for human inspection (a directory listing reads in append-time order). The journal head is derived from the `dependsOn` graph: the head is the snapshot no other snapshot depends on. Filename order is not load-bearing, since an export/import round-trip rewrites timestamps. Snapshots carry the producing tx's `extrinsic_hash` plus a `dependsOn` link to the previous snapshot at that address; `mark_failed` / `rollback_from` walk that graph to cascade-drop dependents. Writes go to a `.tmp` sibling, which is synced to disk and `rename`d into place, and on Unix the directory is synced after the rename. So a crash or a power loss never leaves a half-written file.
 
 State is stored **plaintext at rest**. Encryption is applied on export, which is the secure-transport surface.
 
