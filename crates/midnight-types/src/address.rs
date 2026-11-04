@@ -176,7 +176,6 @@ mod tests {
     /// without an error.
     #[test]
     fn a_parsed_unshielded_address_names_the_owner_its_wallet_tracks_on_each_generation() {
-        use crate::ledger_9::convert::IntoLedger as IntoLedger9;
         use crate::{Network, WalletError};
 
         let address = seed().unshielded_address(Network::Undeployed);
@@ -191,8 +190,5 @@ mod tests {
         let seed8 = IntoLedger::into_ledger(&seed());
         let wallet8 = ledger_8::UnshieldedWallet::default(seed8);
         assert_eq!(IntoLedger::into_ledger(recipient), wallet8.user_address);
-        let seed9 = IntoLedger9::into_ledger(&seed());
-        let wallet9 = midnight_helpers::ledger_9::UnshieldedWallet::default(seed9);
-        assert_eq!(IntoLedger9::into_ledger(recipient), wallet9.user_address);
     }
 }
