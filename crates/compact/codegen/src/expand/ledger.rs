@@ -465,8 +465,9 @@ fn emit_deploy(
     });
 
     let deploy_builder = quote! {
-        /// Builder wrapper around `midnight_contract::DeployBuilder` that
-        /// yields the generated `Contract<P>` on deploy.
+        /// Builder wrapper around `midnight_contract::DeployBuilder`. Its
+        /// `send` returns the generated `PendingDeploy`, and
+        /// `PendingDeploy::into_contract` gives the generated `Contract<P>`.
         ///
         /// `Wp` is the witness provider that the constructor runs with.
         #[must_use = "does nothing until sent"]
@@ -1319,9 +1320,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 #send_bounds
             {
                 type Error = midnight_contract::ContractError;
-                // Boxed: the build-and-prove future is large, and leaving it
-                // inline here makes the caller's frame big enough to overflow
-                // the stack on debug builds.
+                // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
                 /// Build and prove the call with no Dust fee, for another wallet to
                 /// sponsor with `MidnightProvider::balance_transaction`.
                 ///
