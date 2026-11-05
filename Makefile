@@ -26,7 +26,7 @@ CARGO ?= cargo
 #    crates/compact/bindgen-macro/tests/ui/fixtures/unknown-type.sexp.
 # 5. Replace the old commit in README.md, docs/compact-natives.md and
 #    crates/midnight-contract/tests/fixtures/README.md.
-COMPACT_REV    := fa2181fbc6dac2135defdb4f55ce10d8332185d5
+COMPACT_REV    := c7a8d2a21593d98d003a54bf5937375ba9aa8d66
 COMPACTC_IMAGE := ghcr.io/romarq/compactc:$(COMPACT_REV)
 # The cache of public parameters that key generation reads and fills, in the
 # fall-back order of the SDK prover, so the two share one cache. Set
@@ -41,10 +41,10 @@ COMPACTC ?= docker run --rm --user $$(id -u):$$(id -g) -v "$(CURDIR):$(CURDIR)" 
 	-v "$(ZK_PARAMS):/zk-params" -e MIDNIGHT_PP=/zk-params \
 	--entrypoint compactc $(COMPACTC_IMAGE)
 
-# The ledger generation the devnet runs: 8 (devnet/docker-compose.yml) or 9
-# (devnet/docker-compose.ledger-9.yml). Both listen on the same ports, so run
-# one at a time.
-DEVNET_LEDGER ?= 8
+# The ledger generation the devnet runs: 9 (devnet/docker-compose.ledger-9.yml)
+# or 8 (devnet/docker-compose.yml). Both listen on the same ports, so run one at
+# a time. Only ledger 9 verifies the keys of the compiled contracts.
+DEVNET_LEDGER ?= 9
 ifeq ($(DEVNET_LEDGER),9)
 DEVNET_COMPOSE := devnet/docker-compose.ledger-9.yml
 NODE_CONTAINER := midnight-example-node-l9
@@ -65,16 +65,10 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 # Examples that run against the devnet with no extra env.
 # wallet-sync gets its devnet env from a dedicated target.
 EXAMPLES  := counter private-state contract-maintenance shielded-transfer combine-and-sponsor shielded-swap
-CONTRACTS := call-context counter counter-zkir-v3 events owned-counter receive-shielded secret-counter shielded-mint unshielded-payout
-# The contracts that compile for ZKIR v3. Only a ledger 9 chain verifies their keys.
-ZKIR_V3_CONTRACTS := counter-zkir-v3
-# The compiler flag of contract $$c, which only a ZKIR v3 contract has. The
-# pattern opens with `(` so that bash 3.2, the macOS /bin/sh, parses it inside $(...).
-CONTRACT_ZKIR = case " $(ZKIR_V3_CONTRACTS) " in (*" $$c "*) echo --feature-zkir-v3 ;; esac
-# The fingerprint of contract $$c: its source and its flag under the compiler at
-# COMPACT_REV. POSIX cksum, so a fingerprint from the Linux CI job matches on
-# macOS.
-CONTRACT_CKSUM = { echo $(COMPACT_REV); $(CONTRACT_ZKIR); cat devnet/contracts/$$c/*.compact; } | cksum
+CONTRACTS := call-context counter events owned-counter receive-shielded secret-counter shielded-mint unshielded-payout
+# The fingerprint of contract $$c: its source under the compiler at COMPACT_REV.
+# POSIX cksum, so a fingerprint from the Linux CI job matches on macOS.
+CONTRACT_CKSUM = { echo $(COMPACT_REV); cat devnet/contracts/$$c/*.compact; } | cksum
 
 # Interpreter test fixtures: crates/midnight-contract/tests/fixtures/<name>/<name>.compact.
 TEST_FIXTURES := bboard counter election tiny
@@ -95,11 +89,6 @@ PARSER_FIXTURE_DIR := crates/compact/analyzed-ir/tests/fixtures
 CONFORMANCE_FIXTURES := bboard containers counter curve25519 defaults events indexing keccak kernel \
                         loops ops peers scopes secp256k1 secp256r1 sha512 shadowing slices structs \
                         tiny trees vectors
-# The fixtures that compile for ZKIR v3. Without the flag, the compiler declares
-# no sha512 and no foreign-curve types. Its ZKIR v2 backend also rejects
-# keccak256 in a circuit that needs a proof, and the driver runs only such
-# circuits.
-CONFORMANCE_ZKIR_V3_FIXTURES := curve25519 keccak secp256k1 secp256r1 sha512
 CONFORMANCE_DIR := tests/conformance
 # The runtime tarball the driver installs, which `vendor-compact-runtime` builds
 # from COMPACT_REV, and the file that names the revision it came from. The name
@@ -119,15 +108,12 @@ FIXTURES := $(foreach f,$(CONFORMANCE_FIXTURES),$(CONFORMANCE_DIR)/fixtures/$(f)
             $(foreach f,$(TEST_FIXTURES),$(TEST_FIXTURE_DIR)/$(f):$(TEST_FIXTURE_DIR)/$(f)/$(f).compact) \
             $(foreach f,$(CODEGEN_FIXTURES),tests/fixtures/compiled/$(f):tests/fixtures/sources/$(f).compact) \
             $(foreach f,$(PARSER_FIXTURES),$(PARSER_FIXTURE_DIR)/$(f):$(PARSER_FIXTURE_DIR)/$(f)/$(f).compact)
-# The compiler flag of the fixture in $$dir, which only a ZKIR v3 conformance
-# fixture has. The pattern opens with `(` for bash 3.2, as CONTRACT_ZKIR does.
-FIXTURE_ZKIR = case " $(foreach f,$(CONFORMANCE_ZKIR_V3_FIXTURES),$(CONFORMANCE_DIR)/fixtures/$(f)) " in (*" $$dir "*) echo --feature-zkir-v3 ;; esac
 # The fingerprint of the fixture $$src, as CONTRACT_CKSUM is for a contract.
-FIXTURE_CKSUM = { echo $(COMPACT_REV); $(FIXTURE_ZKIR); cat "$$src"; } | cksum
+FIXTURE_CKSUM = { echo $(COMPACT_REV); cat "$$src"; } | cksum
 # The fingerprint of the goldens: what the driver reads, under the compiler and
 # the runtime at COMPACT_REV. Make sorts the file list, so it is the same on
 # Linux and macOS.
-GOLDENS_CKSUM = { echo $(COMPACT_REV) $(CONFORMANCE_ZKIR_V3_FIXTURES); \
+GOLDENS_CKSUM = { echo $(COMPACT_REV); \
 	cat $(sort $(wildcard $(CONFORMANCE_DIR)/fixtures/*/*.compact $(CONFORMANCE_DIR)/cases/*/*.json)) \
 		$(CONFORMANCE_DIR)/ts-driver/driver.mjs $(CONFORMANCE_DIR)/package-lock.json; } | cksum
 
@@ -153,7 +139,7 @@ help:
 	@echo "    audit         cargo audit (fails on vulnerabilities; warnings allowed)"
 	@echo "    ci            fmt-check + clippy + doc + test + audit (the CI gates)"
 	@echo ""
-	@echo "  Devnet (node, indexer and proof server via $(DEVNET_COMPOSE); DEVNET_LEDGER=9 for ledger 9)"
+	@echo "  Devnet (node, indexer and proof server via $(DEVNET_COMPOSE); DEVNET_LEDGER=8 for ledger 8)"
 	@echo "    dev-up        start the devnet and wait until it is ready"
 	@echo "    dev-settle    wait until the indexer has every block the node calls best"
 	@echo "    dev-down      stop the devnet"
@@ -343,30 +329,33 @@ E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDN
 test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test node_e2e -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-wallet --test integration -- --show-output --test-threads=1
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test balance_bare_call -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test prove_once_per_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_offer -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_submit -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_target -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test transaction_hash_identity -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test transaction_ttl -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test proving_outside_the_wallet_lock -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test deploy_shielded_offer -- --show-output
+# Every compiled contract has `verifier-key[v7]` keys, which only a ledger 9
+# chain verifies, so the tests that deploy or call one run only there.
+ifeq ($(DEVNET_LEDGER),9)
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test balance_bare_call -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test prove_once_per_call -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test unshielded_payout_to_user -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test call_context -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test simulate_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test build_only_private_state -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test deploy_constructor -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test emit_event -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test zkir_v3_local_proving -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test remote_proving -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test receive_shielded_coin -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test deploy_shielded_offer -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test failed_submit_hands_back -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test e2e_contracts -- --show-output --test-threads=1
+endif
 
 # Restarts the node container, so it disrupts every other test talking to it.
 # Kept out of test-e2e; run it last, on its own.
@@ -425,7 +414,7 @@ compile-contracts:
 		dir="devnet/contracts/$$c"; \
 		echo "Compiling $$dir ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		$(COMPACTC) $$($(CONTRACT_ZKIR)) --analyzed-ir "$$dir"/*.compact "$$dir/compiled.tmp"; \
+		$(COMPACTC) --analyzed-ir "$$dir"/*.compact "$$dir/compiled.tmp"; \
 		rm -rf "$$dir/compiled"; \
 		mkdir -p "$$dir/compiled/compiler"; \
 		mv "$$dir/compiled.tmp/keys" "$$dir/compiled.tmp/zkir" "$$dir/compiled/"; \
@@ -449,7 +438,7 @@ fixtures:
 			&& continue; \
 		echo "Compiling $$src ..."; \
 		rm -rf "$$dir/compiled.tmp" "$$dir/compiler" "$$dir/contract"; \
-		$(COMPACTC) --skip-zk $$($(FIXTURE_ZKIR)) --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null; \
+		$(COMPACTC) --skip-zk --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null; \
 		mkdir -p "$$dir/compiler"; \
 		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiler/"; \
 		case "$$dir" in ($(CONFORMANCE_DIR)/fixtures/*) \

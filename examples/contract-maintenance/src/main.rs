@@ -16,7 +16,7 @@
 //!
 //! Reuses the counter contract, so deploying it gives a contract with the
 //! `increment` / `increment_by` circuits to rotate. Runs against the shared
-//! local devnet (`devnet/docker-compose.yml`); see README.md.
+//! local devnet (`devnet/docker-compose.ledger-9.yml`); see README.md.
 
 use midnight_core::contract::{Signature, SigningKey};
 use midnight_core::{MidnightProvider, Wallet};

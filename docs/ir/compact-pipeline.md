@@ -14,7 +14,7 @@ source ─parser─► Lparser/Lsrc ─frontend─► ... ─analysis─► Llow
    ├─ save-analyzed-ir-passes    (on the analyzed IR, with --analyzed-ir) ─► compiler/analyzed-ir.sexp
    ├─ typescript-passes          (on the analyzed IR) ─► Ltypescript ─► contract/index.{js,d.ts}
    └─ circuit-passes             (on the analyzed IR) ─► Lnovectorref ─► Lcircuit ─► Lflattened
-                                                          ├─ zkir-passes     (on Lflattened) ─► Lzkir ─► zkir/*.zkir
+                                                          ├─ zkir-v3-passes  (on Lflattened) ─► Lzkir ─► zkir/*.zkir
                                                           └─ manifest-passes (on Lflattened) ─► compiler/contract-manifest.json
 ```
 

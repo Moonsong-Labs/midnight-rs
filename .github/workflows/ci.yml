@@ -182,7 +182,9 @@ jobs:
       fail-fast: false
       matrix:
         ledger: [8, 9]
-    # The Makefile's devnet targets pick the compose file from it.
+    # The Makefile's devnet targets pick the compose file from it, and test-e2e
+    # runs its contract tests only on ledger 9, the only ledger that verifies
+    # the compiled contracts' keys. The contract examples below run there too.
     env:
       DEVNET_LEDGER: ${{ matrix.ledger }}
     steps:
@@ -217,12 +219,15 @@ jobs:
         run: make test-e2e
 
       - name: Run counter example
+        if: matrix.ledger == 9
         run: make dev-settle run-counter
 
       - name: Run private-state example
+        if: matrix.ledger == 9
         run: make dev-settle run-private-state
 
       - name: Run contract-maintenance example
+        if: matrix.ledger == 9
         run: make dev-settle run-contract-maintenance
 
       - name: Run shielded-transfer example
@@ -232,6 +237,7 @@ jobs:
       # and balance_transaction (one wallet sponsors the other's fees). Funds
       # seed 2 from the genesis seed, so it needs the devnet fully up.
       - name: Run combine-and-sponsor example
+        if: matrix.ledger == 9
         run: make dev-settle run-combine-and-sponsor
 
       # Native two-party token swap: each wallet builds one fee-less, unbalanced
@@ -239,6 +245,7 @@ jobs:
       # merged swap's fees (balance_transaction). Also seeds the second wallet
       # with a minted token, so it needs the devnet fully up.
       - name: Run shielded-swap example
+        if: matrix.ledger == 9
         run: make dev-settle run-shielded-swap
 
       # Last, because it restarts the node container out from under everything

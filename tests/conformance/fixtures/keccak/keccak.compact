@@ -1,6 +1,5 @@
 // Conformance corpus contract: keccak256 over a struct whose fields have
-// different widths, so the digest covers the alignment of each field. The
-// Makefile compiles this fixture for ZKIR v3 (CONFORMANCE_ZKIR_V3_FIXTURES).
+// different widths, so the digest covers the alignment of each field.
 
 import CompactStandardLibrary;
 
