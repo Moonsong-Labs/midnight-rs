@@ -179,4 +179,4 @@ A snapshot of a later generation than the chain runs belongs to a chain that was
 ## Testing both generations
 
 - `make dev-up` runs a ledger 9 devnet, and `make dev-up DEVNET_LEDGER=8` a ledger 8 one. Both use ports 9944 and 8088, so run one at a time. `make test-e2e` runs the E2E suite against the devnet that runs. CI runs the suite once per generation. On ledger 8 it runs only the tests that deploy or call no compiled contract.
-- `make fork-up fork-test fork-down` runs `crates/midnight-contract/tests/fork_crossing.rs` on a chain that starts on ledger 8. The test forks the chain to ledger 9 in the middle, with `make fork-upgrade`, so every run needs a new `fork-up`. It checks the three crossings, the Dust registrations, a call to a contract deployed before the fork, and a transfer of each kind.
+- `make fork-up fork-test fork-down` runs `crates/midnight-contract/tests/fork_crossing.rs` on a chain that starts on ledger 8. The test forks the chain to ledger 9 in the middle, with `make fork-upgrade`, so every run needs a new `fork-up`. It checks the three crossings, the Dust registrations, and a transfer of each kind.

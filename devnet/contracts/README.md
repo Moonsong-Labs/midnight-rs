@@ -1,6 +1,6 @@
 # Devnet example contracts
 
-The Compact contracts that the examples and the devnet tests deploy to the local devnet, which must run ledger 9: the compiler gives each circuit a `verifier-key[v7]` key, which only ledger 9 verifies. Each directory holds the contract source. `make compile-contracts` writes the compiler output to a `compiled/` directory beside the source, and git ignores it.
+The Compact contracts that the examples and the devnet tests deploy to the local devnet. The compiler gives each circuit a `verifier-key[v7]` key, which only ledger 9 verifies, so that devnet must run ledger 9. Each directory holds the contract source. `make compile-contracts` writes the compiler output to a `compiled/` directory beside the source, and git ignores it.
 
 This directory holds only contract assets. It is not a Rust crate. It sits outside `examples/`, so the `examples/*` glob of the workspace does not see it as a crate.
 

@@ -156,7 +156,7 @@ Before you judge a candidate, read all of these:
 - its history: `git log -S '<name>'`, `git log -L '/fn <name>/,+20:<path>'`, and the PR that added it. An early commit can have no PR, so read its message.
 - the fixtures it reads, the target that builds each one, and the CI step that runs that target
 - the dependency source when the test claims dependency behavior, such as midnight-ledger or subxt. `cargo metadata --format-version 1` gives each package's `manifest_path`.
-- for node or indexer behavior, the images in `devnet/docker-compose.yml`. Read the upstream source at those tags, or read the captured output in the E2E log. The node crates in `Cargo.toml` come from a node fork at a pinned rev. They can declare an RPC method that the devnet image does not serve.
+- for node or indexer behavior, the images in `devnet/docker-compose.ledger-9.yml`, and in `devnet/docker-compose.yml` for a test that also runs on ledger 8. Read the upstream source at those tags, or read the captured output in the E2E log. The node crates in `Cargo.toml` come from a node fork at a pinned rev. They can declare an RPC method that the devnet image does not serve.
 
 ## Discovery
 

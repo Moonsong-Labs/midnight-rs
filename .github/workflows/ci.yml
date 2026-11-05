@@ -182,9 +182,9 @@ jobs:
       fail-fast: false
       matrix:
         ledger: [8, 9]
-    # The Makefile's devnet targets pick the compose file from it, and test-e2e
-    # runs its contract tests only on ledger 9, the only ledger that verifies
-    # the compiled contracts' keys. The contract examples below run there too.
+    # The Makefile's devnet targets pick the compose file from it. Only ledger 9
+    # verifies the keys of the compiled contracts, so the contract examples
+    # below run only there.
     env:
       DEVNET_LEDGER: ${{ matrix.ledger }}
     steps:

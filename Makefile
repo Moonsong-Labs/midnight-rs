@@ -311,7 +311,7 @@ fork-upgrade:
 		--rpc-url ws://node:9944 --signer-key //Alice
 
 # The crossing test forks the chain itself, so it runs once per `fork-up`.
-fork-test: contracts
+fork-test:
 	$(E2E_ENV) MIDNIGHT_FORK_UPGRADE_CMD="$(MAKE) -C $(CURDIR) --no-print-directory fork-upgrade" \
 		$(CARGO) test -p midnight-contract --test fork_crossing -- --show-output
 

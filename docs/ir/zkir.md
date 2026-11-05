@@ -23,7 +23,7 @@ So ZKIR **consumes** a pre-built preimage. It does not build the transcript, inv
 
 ## On-chain footprint
 
-A contract stores, per entry point, a `ContractOperation` (`onchain-state/src/state.rs`), which holds a `verifier-key[v6]` in its `v2` slot and a `verifier-key[v7]`, the key of a ZKIR v3 circuit, in its `v3` slot. On-chain transaction validation verifies the proof against that verifier key. ZKIR instructions are not stored or executed on-chain. There are plans to put ZKIR on-chain so it can be interpreted off-chain (for contract upgrades and cross-contract calls), but that is not the case today.
+A contract stores a `ContractOperation` for each entry point (`onchain-state/src/state.rs`). On ledger 9, its `v2` slot holds a `verifier-key[v6]`, and its `v3` slot holds a `verifier-key[v7]`, the key of a ZKIR v3 circuit. Its `ir` slot can hold the circuit's IR, and the SDK leaves that slot empty. On-chain transaction validation verifies the proof against the verifier key. The chain does not execute ZKIR instructions. There are plans to put ZKIR on-chain so it can be interpreted off-chain (for contract upgrades and cross-contract calls), but that is not the case today.
 
 ## Depends on / produces
 
