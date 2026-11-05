@@ -28,8 +28,8 @@ pub use state::{ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPl
 /// The state of `wallet`, when it is in this generation.
 fn wallet_state(wallet: &crate::wallet::WalletState) -> Result<&Wallet, WalletError> {
     let expected = wallet.ledger_version();
-    match wallet.state() {
-        crate::wallet::State::Ledger9(state) => Ok(state),
+    match wallet {
+        crate::wallet::WalletState::Ledger9(state) => Ok(state),
         _ => Err(WalletError::LedgerMismatch {
             expected,
             found: LEDGER,
@@ -40,8 +40,8 @@ fn wallet_state(wallet: &crate::wallet::WalletState) -> Result<&Wallet, WalletEr
 /// [`wallet_state`], to change it.
 fn wallet_state_mut(wallet: &mut crate::wallet::WalletState) -> Result<&mut Wallet, WalletError> {
     let expected = wallet.ledger_version();
-    match wallet.state_mut() {
-        crate::wallet::State::Ledger9(state) => Ok(state),
+    match wallet {
+        crate::wallet::WalletState::Ledger9(state) => Ok(state),
         _ => Err(WalletError::LedgerMismatch {
             expected,
             found: LEDGER,

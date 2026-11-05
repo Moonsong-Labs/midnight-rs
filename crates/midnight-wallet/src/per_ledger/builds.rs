@@ -41,12 +41,12 @@ fn fund_from(
 #[async_trait]
 impl WalletBuilds for crate::Wallet {
     async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
-        let wallet = self.inner().read().await;
+        let wallet = self.state().read().await;
         super::wallet_state(&wallet)?.execution_context()
     }
 
     async fn add_funding(&self, context: &BuildContext) -> Result<(), WalletError> {
-        let mut wallet = self.inner().write().await;
+        let mut wallet = self.state().write().await;
         super::wallet_state_mut(&mut wallet)?.add_funding(context)
     }
 
@@ -55,7 +55,7 @@ impl WalletBuilds for crate::Wallet {
         request: TransferRequest,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Result<ReservedBuild, WalletError> {
-        let mut guard = self.inner().write().await;
+        let mut guard = self.state().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
         let context = wallet.build_context_inner()?;
         let prepared = TransferBuilder::new(&*wallet, context, proof_provider)
@@ -68,7 +68,7 @@ impl WalletBuilds for crate::Wallet {
         &self,
         mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     ) -> Result<ReservedBuild, WalletError> {
-        let mut guard = self.inner().write().await;
+        let mut guard = self.state().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
         fund_from(wallet, &mut tx_info)?;
         let prepared = prepare_no_validate(tx_info).await?;
@@ -86,7 +86,7 @@ impl WalletBuilds for crate::Wallet {
         if nullifiers.is_empty() {
             return Ok((Vec::new(), SpentInputs::default()));
         }
-        let mut guard = self.inner().write().await;
+        let mut guard = self.state().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
         let ledger_nullifiers: Vec<_> = nullifiers.iter().map(|n| n.into_ledger()).collect();
         // The funding view in `context` predates this hold, so a coin named
@@ -120,7 +120,7 @@ impl WalletBuilds for crate::Wallet {
         mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         external: &FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
-        let mut guard = self.inner().write().await;
+        let mut guard = self.state().write().await;
         let wallet = super::wallet_state_mut(&mut guard)?;
         fund_from(wallet, &mut tx_info)?;
         let Some(prepared) = balance_external(tx_info, external)? else {

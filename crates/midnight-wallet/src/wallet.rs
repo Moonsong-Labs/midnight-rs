@@ -2,18 +2,20 @@
 //! runs, and the sync that carries it across a hard fork.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use midnight_helpers::DefaultDB;
 use midnight_indexer_client::SubscriptionClient;
 use midnight_types::chain_pin::ChainPin;
 use midnight_types::hd::Seed;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
+    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion,
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::handle::Identity;
 use crate::replay::{
     UnshieldedReplay, latest_block, ledger_of, progress_cancelled, replay_unshielded_events,
     send_progress,
@@ -22,16 +24,9 @@ use crate::storage::wallet_storage_id;
 use crate::sync::SyncPlan;
 use crate::{SyncProgress, ledger_8, ledger_9};
 
-/// The state behind a [`Wallet`](crate::Wallet) handle: the seed, and the
-/// synced ledger state in the generation its chain runs
-/// ([`Self::ledger_version`]).
-pub(crate) struct WalletState {
-    seed: Seed,
-    state: State,
-}
-
-/// The wallet's state, in its generation.
-pub(crate) enum State {
+/// The synced ledger state behind a [`Wallet`](crate::Wallet) handle, in the
+/// generation its chain runs ([`Self::ledger_version`]).
+pub(crate) enum WalletState {
     Ledger8(ledger_8::Wallet),
     Ledger9(ledger_9::Wallet),
 }
@@ -41,27 +36,24 @@ pub(crate) enum State {
 macro_rules! each {
     ($state:expr, $w:ident => $body:expr) => {
         match $state {
-            State::Ledger8($w) => $body,
-            State::Ledger9($w) => $body,
+            WalletState::Ledger8($w) => $body,
+            WalletState::Ledger9($w) => $body,
         }
     };
 }
 
 impl WalletState {
-    pub(crate) fn state(&self) -> &State {
-        &self.state
-    }
-
-    pub(crate) fn state_mut(&mut self) -> &mut State {
-        &mut self.state
-    }
-
     /// The ledger generation this wallet's state is in.
     pub(crate) fn ledger_version(&self) -> LedgerVersion {
-        match self.state {
-            State::Ledger8(_) => LedgerVersion::V8,
-            State::Ledger9(_) => LedgerVersion::V9,
+        match self {
+            WalletState::Ledger8(_) => LedgerVersion::V8,
+            WalletState::Ledger9(_) => LedgerVersion::V9,
         }
+    }
+
+    /// The identity the sync gave this wallet. A fork crossing keeps it.
+    pub(crate) fn identity(&self) -> &Arc<Identity> {
+        each!(self, w => w.identity())
     }
 
     /// The sync that [`crate::WalletBuilder::sync`] and
@@ -78,9 +70,7 @@ impl WalletState {
     ) -> Result<Self, WalletError> {
         let sync = ChainSync {
             indexer_url: &plan.indexer_url,
-            seed: &plan.seed,
-            address: &plan.address,
-            network: &plan.network,
+            identity: &plan.identity,
             storage_dir: plan.storage_dir.as_deref(),
             save: true,
             chain_pin: plan.chain_pin,
@@ -88,23 +78,19 @@ impl WalletState {
         // A chain can fork between the read of its latest block and the
         // replay of its events. The replay then meets the later generation,
         // and a second attempt reads the block again and starts from there.
-        let state = match sync_once(sync.clone(), progress.clone()).await {
+        match sync_once(sync.clone(), progress.clone()).await {
             Err(WalletError::LedgerMismatch { expected, found }) if found > expected => {
                 info!(%found, "the chain moved to a later ledger during the sync; syncing again");
-                sync_once(sync, progress).await?
+                sync_once(sync, progress).await
             }
-            result => result?,
-        };
-        Ok(Self {
-            seed: plan.seed,
-            state,
-        })
+            result => result,
+        }
     }
 
     /// Whether the dust state has been synced (required for transaction
     /// building).
     pub(crate) fn dust_synced(&self) -> bool {
-        each!(&self.state, w => w.dust_synced())
+        each!(self, w => w.dust_synced())
     }
 
     /// Hand back the inputs a build reserved, because that build will never
@@ -119,7 +105,7 @@ impl WalletState {
     /// still in flight lets a later build re-select the same inputs, and the
     /// loser is rejected on chain.
     pub(crate) fn release(&mut self, spent: &SpentInputs) {
-        each!(&mut self.state, w => w.release(spent))
+        each!(self, w => w.release(spent))
     }
 
     /// Where this wallet's snapshot lives, when it persists one.
@@ -127,7 +113,7 @@ impl WalletState {
     /// An error that tells a reader to remove the snapshot has to name it, so
     /// this is the path that goes in the message.
     pub(crate) fn snapshot_dir(&self) -> Option<PathBuf> {
-        each!(&self.state, w => w.snapshot_dir())
+        each!(self, w => w.snapshot_dir())
     }
 
     /// The finalized block this wallet is pinned to, held in memory.
@@ -136,57 +122,42 @@ impl WalletState {
     /// check this one, because its cursors go just as stale when the chain is
     /// replaced underneath it.
     pub(crate) fn chain_pin(&self) -> Option<&ChainPin> {
-        each!(&self.state, w => w.chain_pin())
+        each!(self, w => w.chain_pin())
     }
 
     /// Move the pin to the block a fresh check saw, so it stays inside an
     /// archive's retention window rather than ageing out of it.
     pub(crate) fn set_chain_pin(&mut self, pin: ChainPin) {
-        each!(&mut self.state, w => w.set_chain_pin(pin))
+        each!(self, w => w.set_chain_pin(pin))
     }
 
     /// See [`WalletFacade::sync_cursors`](crate::WalletFacade::sync_cursors).
     pub(crate) fn sync_cursors(&self) -> SyncCursors {
-        each!(&self.state, w => w.sync_cursors())
-    }
-
-    /// The seed this wallet signs and derives with.
-    pub(crate) fn seed(&self) -> &Seed {
-        &self.seed
+        each!(self, w => w.sync_cursors())
     }
 
     /// See [`WalletFacade::shielded_public_keys`](crate::WalletFacade::shielded_public_keys).
     pub(crate) fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
-        each!(&self.state, w => w.shielded_public_keys())
-    }
-
-    /// The network this wallet derives addresses for.
-    pub(crate) fn network(&self) -> &Network {
-        each!(&self.state, w => w.network())
-    }
-
-    /// The wallet's unshielded receiving address.
-    pub(crate) fn unshielded_address(&self) -> String {
-        each!(&self.state, w => w.unshielded_address())
+        each!(self, w => w.shielded_public_keys())
     }
 
     /// The unshielded UTXOs this wallet tracks.
     pub(crate) fn unshielded_utxos(&self) -> &[TrackedUtxo] {
-        each!(&self.state, w => w.unshielded_utxos())
+        each!(self, w => w.unshielded_utxos())
     }
 
     /// The chain's Dust and TTL parameters, as this wallet last synced them.
     pub(crate) fn parameters(&self) -> ChainParameters {
-        each!(&self.state, w => w.chain_parameters())
+        each!(self, w => w.chain_parameters())
     }
 
     pub(crate) fn balance(&self) -> WalletBalance {
-        each!(&self.state, w => w.balance())
+        each!(self, w => w.balance())
     }
 
     /// See [`WalletFacade::spendable_shielded_coins`](crate::WalletFacade::spendable_shielded_coins).
     pub(crate) fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
-        each!(&self.state, w => w.spendable_shielded_coins())
+        each!(self, w => w.spendable_shielded_coins())
     }
 
     /// Register coins this wallet owns but cannot discover, so a replay
@@ -207,7 +178,7 @@ impl WalletState {
         &mut self,
         coins: impl IntoIterator<Item = CoinInfo>,
     ) -> Result<(), WalletError> {
-        each!(&mut self.state, w => w.watch_for_coins(coins))
+        each!(self, w => w.watch_for_coins(coins))
     }
 
     /// Drop the registrations [`Self::watch_for_coins`] made, for coins that
@@ -224,25 +195,24 @@ impl WalletState {
         &mut self,
         coins: impl IntoIterator<Item = CoinInfo>,
     ) -> Result<(), WalletError> {
-        each!(&mut self.state, w => w.forget_coins(coins))
+        each!(self, w => w.forget_coins(coins))
     }
 
     /// Snapshot the inputs of a resync's replay phase. See [`ResyncPlan`].
     pub(crate) fn resync_plan(&self) -> ResyncPlan {
-        let kind = match &self.state {
-            State::Ledger8(w) => ResyncPlanKind::Ledger8 {
+        let kind = match self {
+            WalletState::Ledger8(w) => ResyncPlanKind::Ledger8 {
                 plan: w.resync_plan(),
-                identity: WalletIdentity {
-                    seed: self.seed.clone(),
-                    network: w.network().clone(),
+                crossing: Crossing {
+                    identity: Arc::clone(w.identity()),
                     storage_dir: w.storage_dir().map(Path::to_path_buf),
                     chain_pin: w.chain_pin().cloned(),
                 },
             },
-            State::Ledger9(w) => ResyncPlanKind::Ledger9(w.resync_plan()),
+            WalletState::Ledger9(w) => ResyncPlanKind::Ledger9(w.resync_plan()),
         };
         ResyncPlan {
-            indexer_url: each!(&self.state, w => w.indexer_url()).to_string(),
+            indexer_url: each!(self, w => w.indexer_url()).to_string(),
             kind,
         }
     }
@@ -285,15 +255,15 @@ impl WalletState {
     /// reservations do not carry over: a transaction built for the earlier
     /// generation cannot land on the chain that left it.
     pub(crate) fn commit_resync(&mut self, commit: ResyncCommit) -> Result<(), WalletError> {
-        match (&mut self.state, commit.0) {
-            (State::Ledger8(w), ResyncCommitKind::Ledger8(c)) => w.commit_resync(c),
-            (State::Ledger9(w), ResyncCommitKind::Ledger9(c)) => w.commit_resync(c),
-            (State::Ledger8(w8), ResyncCommitKind::Crossed(mut w9)) => {
+        match (&mut *self, commit.0) {
+            (WalletState::Ledger8(w), ResyncCommitKind::Ledger8(c)) => w.commit_resync(c),
+            (WalletState::Ledger9(w), ResyncCommitKind::Ledger9(c)) => w.commit_resync(c),
+            (WalletState::Ledger8(w8), ResyncCommitKind::Crossed(mut w9)) => {
                 if let Some(pin) = w8.chain_pin() {
                     w9.set_chain_pin(pin.clone());
                 }
                 let saved = w9.persist(true);
-                self.state = State::Ledger9(*w9);
+                *self = WalletState::Ledger9(*w9);
                 info!("the wallet crossed to ledger 9");
                 saved
             }
@@ -312,19 +282,19 @@ impl WalletState {
     /// Snapshot the inputs of a shielded rescan's replay phase. See
     /// [`ShieldedRescanPlan`] for the intended plan → run → commit flow.
     pub(crate) fn shielded_rescan_plan(&self) -> ShieldedRescanPlan {
-        let (plan, coins) = match &self.state {
-            State::Ledger8(w) => (
+        let (plan, coins) = match self {
+            WalletState::Ledger8(w) => (
                 RescanPlanKind::Ledger8(w.shielded_rescan_plan()),
                 w.rescan_coins(),
             ),
-            State::Ledger9(w) => (
+            WalletState::Ledger9(w) => (
                 RescanPlanKind::Ledger9(w.shielded_rescan_plan()),
                 w.rescan_coins(),
             ),
         };
         ShieldedRescanPlan {
-            indexer_url: each!(&self.state, w => w.indexer_url()).to_string(),
-            seed: self.seed.clone(),
+            indexer_url: each!(self, w => w.indexer_url()).to_string(),
+            identity: Arc::clone(self.identity()),
             coins,
             plan,
         }
@@ -345,17 +315,21 @@ impl WalletState {
         &mut self,
         commit: ShieldedRescanCommit,
     ) -> Result<(), WalletError> {
-        match (&mut self.state, commit.0) {
-            (State::Ledger8(w), RescanCommitKind::Ledger8(c)) => w.commit_shielded_rescan(c),
-            (State::Ledger9(w), RescanCommitKind::Ledger9(c)) => w.commit_shielded_rescan(c),
-            (State::Ledger8(_), RescanCommitKind::Ledger9(_)) => Err(WalletError::LedgerMismatch {
-                expected: LedgerVersion::V8,
-                found: LedgerVersion::V9,
-            }),
-            (State::Ledger9(_), RescanCommitKind::Ledger8(_)) => Err(WalletError::LedgerMismatch {
-                expected: LedgerVersion::V9,
-                found: LedgerVersion::V8,
-            }),
+        match (self, commit.0) {
+            (WalletState::Ledger8(w), RescanCommitKind::Ledger8(c)) => w.commit_shielded_rescan(c),
+            (WalletState::Ledger9(w), RescanCommitKind::Ledger9(c)) => w.commit_shielded_rescan(c),
+            (WalletState::Ledger8(_), RescanCommitKind::Ledger9(_)) => {
+                Err(WalletError::LedgerMismatch {
+                    expected: LedgerVersion::V8,
+                    found: LedgerVersion::V9,
+                })
+            }
+            (WalletState::Ledger9(_), RescanCommitKind::Ledger8(_)) => {
+                Err(WalletError::LedgerMismatch {
+                    expected: LedgerVersion::V9,
+                    found: LedgerVersion::V8,
+                })
+            }
         }
     }
 }
@@ -382,16 +356,15 @@ pub(crate) struct ResyncPlan {
 enum ResyncPlanKind {
     Ledger8 {
         plan: ledger_8::ResyncPlan,
-        identity: WalletIdentity,
+        crossing: Crossing,
     },
     Ledger9(ledger_9::ResyncPlan),
 }
 
 /// What a resync that crosses a hard fork needs beyond its plan, to build
 /// the wallet again in the later generation.
-struct WalletIdentity {
-    seed: Seed,
-    network: Network,
+struct Crossing {
+    identity: Arc<Identity>,
     storage_dir: Option<PathBuf>,
     chain_pin: Option<ChainPin>,
 }
@@ -423,7 +396,7 @@ impl ResyncPlan {
             ResyncPlanKind::Ledger9(plan) => Ok(ResyncCommit(ResyncCommitKind::Ledger9(
                 plan.run(indexer_url).await?,
             ))),
-            ResyncPlanKind::Ledger8 { plan, identity } => {
+            ResyncPlanKind::Ledger8 { plan, crossing } => {
                 let block = latest_block(indexer_url).await?;
                 let block = if ledger_of(&block)? == LedgerVersion::V8 {
                     // The chain can fork before this replay ends, and the
@@ -440,7 +413,7 @@ impl ResyncPlan {
                 } else {
                     block
                 };
-                cross(plan, identity, &block, indexer_url).await
+                cross(plan, crossing, &block, indexer_url).await
             }
         }
     }
@@ -450,12 +423,11 @@ impl ResyncPlan {
 /// and return the wallet again in ledger 9.
 async fn cross(
     plan: ledger_8::ResyncPlan,
-    identity: WalletIdentity,
+    crossing: Crossing,
     block: &midnight_indexer_client::Block,
     indexer_url: &str,
 ) -> Result<ResyncCommit, WalletError> {
     let ledger_8::ResyncPlan {
-        unshielded_address,
         dust_wallet,
         dust_event_id,
         zswap_state,
@@ -477,12 +449,10 @@ async fn cross(
     let state = sync_on_chain(
         ChainSync {
             indexer_url,
-            seed: &identity.seed,
-            address: &unshielded_address,
-            network: &identity.network,
-            storage_dir: identity.storage_dir.as_deref(),
+            identity: &crossing.identity,
+            storage_dir: crossing.storage_dir.as_deref(),
             save: false,
-            chain_pin: identity.chain_pin,
+            chain_pin: crossing.chain_pin,
         },
         block,
         Some(from),
@@ -490,8 +460,10 @@ async fn cross(
     )
     .await?;
     match state {
-        State::Ledger9(wallet) => Ok(ResyncCommit(ResyncCommitKind::Crossed(Box::new(wallet)))),
-        State::Ledger8(_) => Err(WalletError::LedgerMismatch {
+        WalletState::Ledger9(wallet) => {
+            Ok(ResyncCommit(ResyncCommitKind::Crossed(Box::new(wallet))))
+        }
+        WalletState::Ledger8(_) => Err(WalletError::LedgerMismatch {
             expected: LedgerVersion::V9,
             found: LedgerVersion::V8,
         }),
@@ -535,7 +507,7 @@ enum ResyncCommitKind {
 #[must_use = "run the plan with ShieldedRescanPlan::run, then apply it with WalletState::commit_shielded_rescan"]
 pub(crate) struct ShieldedRescanPlan {
     indexer_url: String,
-    seed: Seed,
+    identity: Arc<Identity>,
     coins: Vec<CoinInfo>,
     plan: RescanPlanKind,
 }
@@ -566,7 +538,7 @@ impl ShieldedRescanPlan {
     pub(crate) async fn run(self) -> Result<ShieldedRescanCommit, WalletError> {
         let ShieldedRescanPlan {
             indexer_url,
-            seed,
+            identity,
             coins,
             plan,
         } = self;
@@ -582,11 +554,12 @@ impl ShieldedRescanPlan {
         let kind = match result {
             Err(WalletError::LedgerMismatch { expected, found }) if found < expected => {
                 info!(%found, "the shielded stream starts in an earlier ledger; rescanning across the fork");
-                let start = ledger_8::ShieldedRescanPlan::new(&seed, &coins).initial_state;
+                let seed = identity.seed();
+                let start = ledger_8::ShieldedRescanPlan::new(seed, &coins).initial_state;
                 let sub_client = SubscriptionClient::new(indexer_url);
                 let replayed = replay_zswap(
                     &sub_client,
-                    &seed,
+                    seed,
                     ZswapState::Ledger8(start),
                     0,
                     false,
@@ -757,9 +730,7 @@ struct Resume {
 #[derive(Clone)]
 pub(crate) struct ChainSync<'a> {
     pub(crate) indexer_url: &'a str,
-    pub(crate) seed: &'a Seed,
-    pub(crate) address: &'a str,
-    pub(crate) network: &'a Network,
+    pub(crate) identity: &'a Arc<Identity>,
     pub(crate) storage_dir: Option<&'a Path>,
     /// Whether the sync writes its state under `storage_dir` as it goes:
     /// Dust checkpoints, the pending reservations it loads, and the synced
@@ -776,14 +747,14 @@ pub(crate) struct ChainSync<'a> {
 async fn sync_once(
     sync: ChainSync<'_>,
     progress: Option<mpsc::Sender<SyncProgress>>,
-) -> Result<State, WalletError> {
+) -> Result<WalletState, WalletError> {
     let block = latest_block(sync.indexer_url).await?;
     let chain = ledger_of(&block)?;
-    let wallet_id = wallet_storage_id(sync.address);
+    let wallet_id = wallet_storage_id(sync.identity.unshielded_address());
 
     info!("loading cached state from disk");
     let snapshot = match sync.storage_dir {
-        Some(dir) => load_snapshot(dir, sync.network.as_str(), &wallet_id, chain)?,
+        Some(dir) => load_snapshot(dir, sync.identity.network().as_str(), &wallet_id, chain)?,
         None => None,
     };
     let (resume, sync) = match snapshot {
@@ -872,7 +843,7 @@ async fn sync_on_chain(
     block: &midnight_indexer_client::Block,
     resume: Option<Resume>,
     progress: Option<mpsc::Sender<SyncProgress>>,
-) -> Result<State, WalletError> {
+) -> Result<WalletState, WalletError> {
     let chain = ledger_of(block)?;
     let resuming = resume.is_some();
     // Where each stream starts. When resuming, start from the next event
@@ -920,7 +891,7 @@ async fn sync_on_chain(
     let (zswap, unshielded) = tokio::join!(
         replay_zswap(
             &sub_client,
-            sync.seed,
+            sync.identity.seed(),
             zswap_start,
             start_zswap_id,
             resuming,
@@ -928,7 +899,7 @@ async fn sync_on_chain(
         ),
         replay_unshielded_events(
             &sub_client,
-            sync.address,
+            sync.identity.unshielded_address(),
             utxos,
             start_tx_id,
             height,
@@ -970,7 +941,7 @@ async fn sync_on_chain(
                 progress,
             )
             .await?;
-            Ok(State::Ledger8(wallet))
+            Ok(WalletState::Ledger8(wallet))
         }
         ZswapState::Ledger9(zswap_state) => {
             let dust = match dust_state {
@@ -1005,7 +976,7 @@ async fn sync_on_chain(
                 progress,
             )
             .await?;
-            Ok(State::Ledger9(wallet))
+            Ok(WalletState::Ledger9(wallet))
         }
     }
 }

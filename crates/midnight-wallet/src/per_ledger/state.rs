@@ -20,6 +20,7 @@ use super::pending::{PendingReservations, within_ttl};
 use super::types::chain_time;
 use super::types::convert::{IntoLedger, IntoSdk};
 use crate::chain_pin::ChainPin;
+use crate::handle::Identity;
 use crate::replay::{
     LedgerStream, UnshieldedReplay, replay_ledger_events, replay_unshielded_events,
 };
@@ -37,10 +38,8 @@ use crate::{Network, ReservedInput, Seed, SpentUtxoKey, SyncProgress, WalletErro
 /// The state of the SDK's `Wallet` on this generation. Transaction building
 /// uses it directly (no full-chain replay).
 pub struct Wallet {
-    seed: Seed,
+    identity: Arc<Identity>,
     secret_keys: SecretKeys,
-    network: Network,
-    unshielded_address: String,
 
     // Shielded state (from zswapLedgerEvents)
     zswap_state: ZswapLocalState<DefaultDB>,
@@ -520,8 +519,8 @@ impl Wallet {
         let dir = self.storage_dir.as_deref()?;
         Some(crate::storage::snapshot_path(
             dir,
-            self.network.as_str(),
-            &wallet_storage_id(&self.unshielded_address),
+            self.network().as_str(),
+            &wallet_storage_id(self.identity.unshielded_address()),
         ))
     }
 
@@ -556,13 +555,12 @@ impl Wallet {
     ) -> Result<Self, WalletError> {
         let ChainSync {
             indexer_url,
-            seed,
-            address,
-            network,
+            identity,
             storage_dir,
             save,
             chain_pin,
         } = sync;
+        let (seed, network) = (identity.seed(), identity.network());
         let save_dir = storage_dir.filter(|_| save);
         let SyncStart {
             zswap_state,
@@ -573,7 +571,7 @@ impl Wallet {
             spent_unshielded,
             dust,
         } = start;
-        let wallet_id = wallet_storage_id(address);
+        let wallet_id = wallet_storage_id(identity.unshielded_address());
         let secret_keys = zswap_keys(seed);
 
         let parameters = decode_ledger_parameters(block)?;
@@ -649,10 +647,8 @@ impl Wallet {
         };
 
         let mut state = Self {
-            seed: seed.clone(),
+            identity: Arc::clone(identity),
             secret_keys,
-            network: network.clone(),
-            unshielded_address: address.to_string(),
             zswap_state,
             zswap_event_id,
             dust_wallet,
@@ -756,7 +752,7 @@ impl Wallet {
 
     /// This wallet's on-disk identity; see [`wallet_storage_id`].
     fn storage_id(&self) -> String {
-        wallet_storage_id(&self.unshielded_address)
+        wallet_storage_id(self.identity.unshielded_address())
     }
 
     /// Write the pending set to `pending.json`, when the wallet has a storage
@@ -773,7 +769,7 @@ impl Wallet {
         if let Some(dir) = self.storage_dir.as_deref()
             && let Err(err) = self
                 .pending
-                .save(dir, self.network.as_str(), &self.storage_id())
+                .save(dir, self.network().as_str(), &self.storage_id())
         {
             error!(error = %err, "failed to persist pending reservations; in-memory set is ahead of pending.json");
             self.save_failed = true;
@@ -832,7 +828,7 @@ impl Wallet {
         let wallet_id = self.storage_id();
         super::snapshot::save(
             base,
-            self.network.as_str(),
+            self.network().as_str(),
             &wallet_id,
             super::snapshot::Snapshot {
                 zswap_state: &self.zswap_state,
@@ -845,7 +841,7 @@ impl Wallet {
                 unshielded_utxos: &self.unshielded_utxos,
             },
         )?;
-        self.pending.save(base, self.network.as_str(), &wallet_id)
+        self.pending.save(base, self.network().as_str(), &wallet_id)
     }
 
     /// Save to the storage directory when `changed` is true or the last save
@@ -878,7 +874,7 @@ impl Wallet {
     pub fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
         // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
         let ledger_state = LedgerState::with_genesis_settings(
-            self.network.as_str(),
+            self.network().as_str(),
             self.parameters.clone(),
             0,
             MAX_SUPPLY,
@@ -916,7 +912,7 @@ impl Wallet {
         // set into the one already there: the second pass skips what a pending
         // build reserved, but cannot withdraw what the first pass inserted, so
         // a spent input stays selectable.
-        let seed = (&self.seed).into_ledger();
+        let seed = self.seed().into_ledger();
         if ctx
             .wallets
             .lock()
@@ -1077,7 +1073,12 @@ impl Wallet {
     }
 
     pub fn seed(&self) -> &Seed {
-        &self.seed
+        self.identity.seed()
+    }
+
+    /// See [`crate::wallet::WalletState::identity`].
+    pub(crate) fn identity(&self) -> &Arc<Identity> {
+        &self.identity
     }
 
     /// See [`crate::wallet::WalletState::shielded_public_keys`].
@@ -1090,12 +1091,7 @@ impl Wallet {
 
     /// See [`crate::Wallet::network`].
     pub fn network(&self) -> &Network {
-        &self.network
-    }
-
-    /// See [`crate::Wallet::unshielded_address`].
-    pub fn unshielded_address(&self) -> String {
-        self.unshielded_address.clone()
+        self.identity.network()
     }
 
     pub fn unshielded_utxos(&self) -> &[TrackedUtxo] {
@@ -1128,7 +1124,7 @@ impl Wallet {
     pub fn resync_plan(&self) -> ResyncPlan {
         ResyncPlan {
             secret_keys: self.secret_keys.clone(),
-            unshielded_address: self.unshielded_address.clone(),
+            unshielded_address: self.identity.unshielded_address().to_owned(),
             dust_wallet: self.dust_wallet.clone(),
             dust_event_id: self.dust_event_id,
             zswap_state: self.zswap_state.clone(),
@@ -1295,7 +1291,7 @@ impl Wallet {
     /// Snapshot the inputs of a shielded rescan's replay phase. See
     /// [`ShieldedRescanPlan`] for the intended plan → run → commit flow.
     pub fn shielded_rescan_plan(&self) -> ShieldedRescanPlan {
-        ShieldedRescanPlan::new(&self.seed, &self.rescan_coins())
+        ShieldedRescanPlan::new(self.seed(), &self.rescan_coins())
     }
 
     /// Every coin a rescan must register before its replay; see
@@ -1610,10 +1606,8 @@ mod tests {
         let shielded = ShieldedWallet::<DefaultDB>::default((&seed).into_ledger());
         let secret_keys = shielded.secret_keys().clone();
         Wallet {
-            seed: seed.clone(),
+            identity: Arc::new(Identity::new(seed.clone(), Network::Undeployed)),
             secret_keys,
-            network: Network::Undeployed,
-            unshielded_address: "mn_addr_undeployed1test".into(),
             zswap_state: shielded.state.clone(),
             zswap_event_id: 0,
             dust_wallet: DustWallet::default((&seed).into_ledger(), Some(&INITIAL_PARAMETERS)),
@@ -2483,7 +2477,7 @@ mod tests {
             let (listener, url) = bind().await;
             let mut wallet = test_wallet(None);
             let coin = unreachable_coin(9, 42);
-            let raw = ciphertextless_output(&wallet.seed, &coin, 0);
+            let raw = ciphertextless_output(wallet.seed(), &coin, 0);
 
             let server = tokio::spawn(async move {
                 // The same one-event stream twice: once for the replay that
@@ -2553,8 +2547,8 @@ mod tests {
             let first = unreachable_coin(9, 42);
             let second = unreachable_coin(8, 77);
             let stream = [
-                ciphertextless_output(&wallet.seed, &first, 0),
-                ciphertextless_output(&wallet.seed, &second, 1),
+                ciphertextless_output(wallet.seed(), &first, 0),
+                ciphertextless_output(wallet.seed(), &second, 1),
             ];
 
             let server = tokio::spawn(async move {

@@ -25,8 +25,9 @@ use crate::wallet::WalletState;
 ///
 /// [`WalletBuilder::sync`](crate::WalletBuilder::sync) gives one. A `Wallet`
 /// is a handle, and every clone of it is the same wallet: a change through
-/// one clone shows through all of them. Attach a clone to a provider and keep
-/// the original to read or sync the wallet.
+/// one clone shows through all of them. This is unlike alloy, where a clone
+/// of an `EthereumWallet` is an independent wallet. Attach a clone to a
+/// provider and keep the original to read or sync the wallet.
 ///
 /// The wallet keeps three streams of state from the indexer:
 /// - `zswapLedgerEvents` → shielded coin tracking + Merkle tree
@@ -43,8 +44,8 @@ use crate::wallet::WalletState;
 /// methods: [`Self::network`], [`Self::seed`] and the three addresses. The
 /// readers of the synced state, such as the balance, and the sync methods are
 /// [`WalletFacade`] methods, so import the trait to call them. Each read
-/// returns an owned value. The lock over the state is a private field, so a
-/// caller cannot block a sync by keeping a guard alive.
+/// returns an owned value. The locks are private fields, so a caller cannot
+/// block a sync by keeping a guard alive.
 ///
 /// The wallet serializes its resyncs, rescans, coin watches and forgets
 /// against each other, across all its clones. [`Self::sync_in_background`]
@@ -68,32 +69,53 @@ use crate::wallet::WalletState;
 /// ```
 #[derive(Clone)]
 pub struct Wallet {
-    shared: Arc<Shared>,
+    identity: Arc<Identity>,
+    state: Arc<RwLock<WalletState>>,
+    /// Held across each resync, rescan, coin watch and forget. Take it before
+    /// `state`. Reads and builds take `state` alone, so the order cannot
+    /// invert.
+    sync: Arc<Mutex<()>>,
 }
 
-/// What every clone of a [`Wallet`] holds.
-struct Shared {
+/// What a sync fixes for the life of a wallet. Nothing changes it, so
+/// nothing locks it.
+pub(crate) struct Identity {
     seed: Seed,
     network: Network,
+    /// Names the snapshot directory and the unshielded subscription.
     unshielded_address: String,
-    inner: RwLock<WalletState>,
-    /// Held across each resync, rescan, coin watch and forget. Take it before
-    /// `inner`. Reads and builds take `inner` alone, so the order cannot
-    /// invert.
-    sync: Mutex<()>,
+}
+
+impl Identity {
+    pub(crate) fn new(seed: Seed, network: Network) -> Self {
+        let unshielded_address = seed.unshielded_address(network.clone());
+        Self {
+            seed,
+            network,
+            unshielded_address,
+        }
+    }
+
+    pub(crate) fn seed(&self) -> &Seed {
+        &self.seed
+    }
+
+    pub(crate) fn network(&self) -> &Network {
+        &self.network
+    }
+
+    pub(crate) fn unshielded_address(&self) -> &str {
+        &self.unshielded_address
+    }
 }
 
 impl Wallet {
-    /// Put a synced state behind the lock of a new handle.
-    pub(crate) fn from_state(state: WalletState) -> Self {
+    /// Put a synced state behind the locks of a new handle.
+    pub(crate) fn new(state: WalletState) -> Self {
         Self {
-            shared: Arc::new(Shared {
-                seed: state.seed().clone(),
-                network: state.network().clone(),
-                unshielded_address: state.unshielded_address(),
-                inner: RwLock::new(state),
-                sync: Mutex::new(()),
-            }),
+            identity: Arc::clone(state.identity()),
+            state: Arc::new(RwLock::new(state)),
+            sync: Arc::new(Mutex::new(())),
         }
     }
 
@@ -104,30 +126,30 @@ impl Wallet {
 
     /// The seed this wallet signs and derives with.
     pub fn seed(&self) -> &Seed {
-        &self.shared.seed
+        self.identity.seed()
     }
 
     /// The network this wallet derives addresses for. [`Network::as_str`]
     /// gives its literal name in the bech32 HRP.
     pub fn network(&self) -> &Network {
-        &self.shared.network
+        self.identity.network()
     }
 
     /// The wallet's unshielded receiving address.
     pub fn unshielded_address(&self) -> String {
-        self.shared.unshielded_address.clone()
+        self.identity.unshielded_address().to_owned()
     }
 
     /// The wallet's shielded receiving address, e.g. `mn_shield-addr_undeployed1...`.
     pub fn shielded_address(&self) -> String {
-        self.shared.seed.shielded_address(self.network())
+        self.seed().shielded_address(self.network())
     }
 
     /// The wallet's Dust address, e.g. `mn_dust_undeployed1...`. Another
     /// wallet can register its tNIGHT to it, so that this wallet gets the
     /// Dust that tNIGHT generates. See [`Seed::dust_address`].
     pub fn dust_address(&self) -> String {
-        self.shared.seed.dust_address(self.network())
+        self.seed().dust_address(self.network())
     }
 
     /// Resync this wallet in a background task until the returned handle
@@ -197,14 +219,14 @@ impl Wallet {
         background::spawn(self.clone(), chain, pause)
     }
 
-    pub(crate) fn inner(&self) -> &RwLock<WalletState> {
-        &self.shared.inner
+    pub(crate) fn state(&self) -> &RwLock<WalletState> {
+        &self.state
     }
 
     /// [`WalletFacade::resync`], for a caller that holds the sync lock.
     async fn resync_held(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
         let (pin, snapshot) = {
-            let wallet = self.inner().read().await;
+            let wallet = self.state.read().await;
             (wallet.chain_pin().cloned(), wallet.snapshot_dir())
         };
 
@@ -223,15 +245,15 @@ impl Wallet {
         // The plan is snapshotted under a read lock and the commit applied
         // under a write one, so the replay in between runs with the wallet
         // free.
-        let plan = self.inner().read().await.resync_plan();
+        let plan = self.state.read().await.resync_plan();
         let commit = plan.run().await?;
-        self.inner().write().await.commit_resync(commit)?;
+        self.state.write().await.commit_resync(commit)?;
 
         // Move the pin forward with the commit, so a wallet that runs for a
         // long time keeps a recent mark rather than one an archive has since
         // pruned, which would leave every later check inconclusive.
         if let Some(fresh) = replacement {
-            self.inner().write().await.set_chain_pin(fresh);
+            self.state.write().await.set_chain_pin(fresh);
         }
         Ok(())
     }
@@ -240,7 +262,7 @@ impl Wallet {
     /// lock.
     async fn rescan_held(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
         let (pin, snapshot) = {
-            let wallet = self.inner().read().await;
+            let wallet = self.state.read().await;
             (wallet.chain_pin().cloned(), wallet.snapshot_dir())
         };
         if let Some(pin) = &pin {
@@ -259,17 +281,17 @@ impl Wallet {
     }
 
     async fn rescan_once(&self) -> Result<(), WalletError> {
-        let plan = self.inner().read().await.shielded_rescan_plan();
+        let plan = self.state.read().await.shielded_rescan_plan();
         let commit = plan.run().await?;
-        self.inner().write().await.commit_shielded_rescan(commit)
+        self.state.write().await.commit_shielded_rescan(commit)
     }
 }
 
 impl std::fmt::Debug for Wallet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Wallet")
-            .field("network", &self.shared.network)
-            .field("unshielded_address", &self.shared.unshielded_address)
+            .field("network", self.identity.network())
+            .field("unshielded_address", &self.identity.unshielded_address())
             .finish_non_exhaustive()
     }
 }
@@ -277,55 +299,55 @@ impl std::fmt::Debug for Wallet {
 #[async_trait]
 impl WalletFacade for Wallet {
     async fn network(&self) -> Network {
-        self.shared.network.clone()
+        self.identity.network().clone()
     }
 
     async fn ledger_version(&self) -> LedgerVersion {
-        self.inner().read().await.ledger_version()
+        self.state.read().await.ledger_version()
     }
 
     async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
-        self.inner().read().await.shielded_public_keys()
+        self.state.read().await.shielded_public_keys()
     }
 
     async fn balance(&self) -> WalletBalance {
-        self.inner().read().await.balance()
+        self.state.read().await.balance()
     }
 
     async fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
-        self.inner().read().await.spendable_shielded_coins()
+        self.state.read().await.spendable_shielded_coins()
     }
 
     async fn unshielded_utxos(&self) -> Vec<TrackedUtxo> {
-        self.inner().read().await.unshielded_utxos().to_vec()
+        self.state.read().await.unshielded_utxos().to_vec()
     }
 
     async fn parameters(&self) -> ChainParameters {
-        self.inner().read().await.parameters()
+        self.state.read().await.parameters()
     }
 
     async fn sync_cursors(&self) -> SyncCursors {
-        self.inner().read().await.sync_cursors()
+        self.state.read().await.sync_cursors()
     }
 
     async fn dust_synced(&self) -> bool {
-        self.inner().read().await.dust_synced()
+        self.state.read().await.dust_synced()
     }
 
     /// See [`WalletFacade::release`]. The save that follows is best-effort,
     /// because the in-memory release already frees the inputs for this
     /// process.
     async fn release(&self, spent: &SpentInputs) {
-        self.inner().write().await.release(spent);
+        self.state.write().await.release(spent);
     }
 
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
-        let _sync = self.shared.sync.lock().await;
+        let _sync = self.sync.lock().await;
         self.resync_held(chain).await
     }
 
     async fn rescan_shielded(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
-        let _sync = self.shared.sync.lock().await;
+        let _sync = self.sync.lock().await;
         self.rescan_held(chain).await
     }
 
@@ -343,8 +365,8 @@ impl WalletFacade for Wallet {
         if coins.is_empty() {
             return Ok(());
         }
-        let _sync = self.shared.sync.lock().await;
-        self.inner().write().await.watch_for_coins(coins)?;
+        let _sync = self.sync.lock().await;
+        self.state.write().await.watch_for_coins(coins)?;
         self.rescan_held(chain).await
     }
 
@@ -356,7 +378,7 @@ impl WalletFacade for Wallet {
         // Wait for a resync in flight, although this is one write. That resync
         // commits the state its plan read, so a registration dropped here would
         // come back.
-        let _sync = self.shared.sync.lock().await;
-        self.inner().write().await.forget_coins(coins)
+        let _sync = self.sync.lock().await;
+        self.state.write().await.forget_coins(coins)
     }
 }

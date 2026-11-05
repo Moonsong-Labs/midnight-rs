@@ -1,6 +1,7 @@
 //! Build a synced [`Wallet`] from its seed or mnemonic, as a standalone step.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use midnight_types::chain_pin::{
     ChainCheck, ChainPin, ChainView, SyncSource, current_pin, verify_pin,
@@ -10,6 +11,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
+use crate::handle::Identity;
 use crate::storage::{load_chain_pin, snapshot_path, wallet_storage_id};
 use crate::wallet::WalletState;
 use crate::{Seed, SeedError, Wallet};
@@ -241,9 +243,7 @@ pub struct WalletBuilder {
 /// borrow is what lets [`WalletBuilder::sync_with_progress`] spawn.
 pub(crate) struct SyncPlan {
     pub(crate) indexer_url: String,
-    pub(crate) seed: Seed,
-    pub(crate) address: String,
-    pub(crate) network: Network,
+    pub(crate) identity: Arc<Identity>,
     pub(crate) storage_dir: Option<PathBuf>,
     /// The finalized block the node reports now, persisted so a later
     /// resume can ask whether it is still on this chain. `None` when the
@@ -347,7 +347,7 @@ impl WalletBuilder {
         indexer_url: &str,
     ) -> Result<Wallet, WalletError> {
         let state = WalletState::sync_inner(self.prepare(source, indexer_url).await?, None).await?;
-        Ok(Wallet::from_state(state))
+        Ok(Wallet::new(state))
     }
 
     /// Run the sync in a background task and stream progress events.
@@ -389,7 +389,7 @@ impl WalletBuilder {
             let sync = async {
                 WalletState::sync_inner(plan, Some(tx))
                     .await
-                    .map(Wallet::from_state)
+                    .map(Wallet::new)
             };
             tokio::select! {
                 // Biased with the cancellation arm first: when the receiver
@@ -432,14 +432,15 @@ impl WalletBuilder {
             Some(wallet) => wallet,
             None => source.network().await.ok_or(WalletError::NetworkUnknown)?,
         };
-        let address = seed.unshielded_address(network.clone());
+        let identity = Arc::new(Identity::new(seed, network));
 
         let mut chain_pin = None;
         if pin {
             // Take the pin this sync carries before the check and the replay;
             // see `require_same_chain`.
             let candidate = current_pin(source).await;
-            let wallet_id = wallet_storage_id(&address);
+            let network = identity.network();
+            let wallet_id = wallet_storage_id(identity.unshielded_address());
             if let Some(dir) = storage_dir.as_deref()
                 && let Some(stored) = load_chain_pin(dir, network.as_str(), &wallet_id)?
             {
@@ -451,9 +452,7 @@ impl WalletBuilder {
 
         Ok(SyncPlan {
             indexer_url: indexer_url.to_string(),
-            seed,
-            address,
-            network,
+            identity,
             storage_dir,
             chain_pin,
         })
@@ -718,9 +717,9 @@ mod tests {
                 Ok(plan) => plan,
                 Err(err) => panic!("pin {pin}: the node names a network, got {err:?}"),
             };
-            assert_eq!(plan.network, Network::Preprod, "pin {pin}");
+            assert_eq!(plan.identity.network(), &Network::Preprod, "pin {pin}");
             assert_eq!(
-                plan.address,
+                plan.identity.unshielded_address(),
                 seed().unshielded_address(Network::Preprod),
                 "pin {pin}"
             );
@@ -732,7 +731,10 @@ mod tests {
             match builder().prepare(&silent, INDEXER_URL).await {
                 Err(WalletError::NetworkUnknown) => {}
                 Err(err) => panic!("pin {pin}: expected NetworkUnknown, got {err:?}"),
-                Ok(plan) => panic!("pin {pin}: the sync took {} from nowhere", plan.network),
+                Ok(plan) => panic!(
+                    "pin {pin}: the sync took {} from nowhere",
+                    plan.identity.network()
+                ),
             }
         }
     }
