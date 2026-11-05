@@ -709,8 +709,8 @@ impl Wallet {
     /// cleared by TTL only: once the spend confirms, resync drops the coin from
     /// `zswap_state`, so filtering it out becomes a no-op regardless.
     ///
-    /// `reserved_at` should be the block time of the build context (typically
-    /// [`PreparedTransfer::reserved_at`](super::types::PreparedTransfer::reserved_at)),
+    /// `reserved_at` should be the [`chain_time`] of the build context
+    /// (typically [`PreparedTransfer::reserved_at`](super::types::PreparedTransfer::reserved_at)),
     /// which a release names. `expires_at` should be the TTL of the
     /// transaction ([`PreparedTransfer::expires_at`](super::types::PreparedTransfer::expires_at)):
     /// TTL eviction compares it against the chain time of `block_context`.

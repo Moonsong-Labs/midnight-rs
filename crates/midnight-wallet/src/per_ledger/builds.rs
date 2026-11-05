@@ -11,7 +11,7 @@ use super::helpers::{
 };
 use super::types::convert::IntoLedger;
 use super::types::{
-    PreparedInput, PreparedTransfer, TransferBuilder, balance_external, longest_ttl,
+    PreparedInput, PreparedTransfer, TransferBuilder, balance_external, chain_time, longest_ttl,
     prepare_no_validate, prepare_shielded_inputs,
 };
 
@@ -101,7 +101,7 @@ impl WalletBuilds for crate::Wallet {
         }
 
         let prepared = prepare_shielded_inputs(context, wallet.seed(), &ledger_nullifiers, rng)?;
-        let reserved_at = context.latest_block_context().tblock;
+        let reserved_at = chain_time(&context.latest_block_context());
         wallet.reserve_pending(
             Vec::new(),
             Vec::new(),

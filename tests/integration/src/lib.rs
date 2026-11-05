@@ -31,6 +31,16 @@ compact_bindgen::contract!(
     Bboard,
     "../../crates/midnight-contract/tests/fixtures/bboard/compiler/analyzed-ir.sexp"
 );
+// Constructor shapes of the generated deploy: one that takes an argument and
+// calls no witness, and one that the interpreter cannot run.
+compact_bindgen::contract!(
+    PlainConstructor,
+    "../fixtures/compiled/plain-constructor/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    CoinVault,
+    "../fixtures/compiled/coin-vault/compiler/analyzed-ir.sexp"
+);
 compact_bindgen::contract!(
     Containers,
     "../conformance/fixtures/containers/compiler/analyzed-ir.sexp"
@@ -647,12 +657,15 @@ mod queue_grows {
 // InitialState: the generated defaults against the compiler's
 // ===================================================================
 
-/// The conformance fixtures with no constructor. For each one, the canonical
-/// runtime's `initialState` leaves the compiler's initial value in every
-/// field, and the generated `Default` must build that same state.
+/// The generated initial state against the canonical runtime's: the `Default`
+/// of each conformance fixture with no constructor, which must hold the
+/// compiler's initial value in every field, and the constructor run of tiny and
+/// bboard.
 #[cfg(test)]
 mod initial_state_defaults {
-    use compact_bindgen::{ContractState, InMemoryDB};
+    use std::time::UNIX_EPOCH;
+
+    use compact_bindgen::{Bytes, ContractState, InMemoryDB, TransientFr};
     use conformance::report::state_report_json;
 
     use conformance::corpus::{corpus_dir, read_json};
@@ -720,6 +733,71 @@ mod initial_state_defaults {
                 "{fixture}: the generated default is not the compiler's initial state"
             );
         }
+    }
+
+    /// Answers tiny's witness with the key of the conformance case `tiny/get`.
+    struct CaseKey;
+
+    impl crate::tiny::Witnesses for CaseKey {
+        type PrivateState = ();
+
+        fn private_secret_key(&self, _: &mut ()) -> Result<Bytes<32>, crate::tiny::WitnessError> {
+            Ok(Bytes([7; 32]))
+        }
+    }
+
+    /// The constructor on the generated default state gives the canonical
+    /// runtime's state. tiny's constructor takes an argument and calls a
+    /// witness and a circuit. The arguments and the key are those of the golden
+    /// cases.
+    #[test]
+    fn the_constructor_state_is_the_compilers() {
+        let mut tiny =
+            crate::tiny::Simulator::new(crate::tiny::TinyInitialState::default(), UNIX_EPOCH)
+                .with_witnesses(&CaseKey);
+        tiny.run_constructor(TransientFr::from(42u64))
+            .expect("tiny's constructor runs");
+        let mut bboard =
+            crate::bboard::Simulator::new(crate::bboard::BboardInitialState::default(), UNIX_EPOCH);
+        bboard.run_constructor().expect("bboard's constructor runs");
+
+        for (fixture, state) in [
+            ("tiny", tiny.ledger().into_contract_state()),
+            ("bboard", bboard.ledger().into_contract_state()),
+        ] {
+            assert_eq!(
+                state_report_json(&state.data.get()),
+                golden_constructor_state(fixture),
+                "{fixture}: the constructor state is not the canonical runtime's"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod constructor_shapes {
+    use compact_bindgen::TransientFr;
+    use compact_bindgen::midnight_contract::{AsMidnightProvider, ContractError};
+
+    use crate::{coin_vault, plain_constructor};
+
+    /// The generated deploy builds for each constructor shape, with no
+    /// `Provider` bound.
+    #[expect(
+        dead_code,
+        reason = "the build checks the generated types, and a deploy needs a devnet"
+    )]
+    async fn deploys<P>(plain: P, vault: P) -> Result<(), ContractError>
+    where
+        P: AsMidnightProvider + Send,
+    {
+        plain_constructor::Contract::deploy(plain)
+            .with_constructor_args(TransientFr::from(42u64))
+            .await?;
+        coin_vault::Contract::deploy(vault)
+            .with_initial_state(coin_vault::CoinVaultInitialState::default())
+            .await?;
+        Ok(())
     }
 }
 
@@ -1067,6 +1145,8 @@ mod simulator_tests {
         assert_eq!(simulator.ledger().unlocked().unwrap(), 1);
     }
 
+    /// A simulator with a default address mints under a placeholder in place
+    /// of the contract's address.
     #[test]
     fn the_address_reaches_kernel_self() {
         let address = ContractAddress(HashOutput([9; 32]));
@@ -1074,6 +1154,17 @@ mod simulator_tests {
             call_context::CallContextInitialState::default(),
             UNIX_EPOCH,
         );
+        let unset = simulator.mint(Bytes([7; 32]), 1);
+        assert!(
+            matches!(
+                unset,
+                Err(ContractError::Interpreter(
+                    InterpreterError::NoContractAddress
+                ))
+            ),
+            "{unset:?}"
+        );
+
         simulator.set_address(address);
 
         // `mint` returns the token type that the `kernel.self()` address mints

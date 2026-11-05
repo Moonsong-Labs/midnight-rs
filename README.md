@@ -118,7 +118,6 @@ mod counter {
 }
 
 let contract = counter::Contract::deploy(&provider)
-    .with_initial_state(counter::LedgerInitialState::default())
     .with_zk_config(counter::ZK_CONFIG_DIR)
     .await?;
 
@@ -132,6 +131,42 @@ println!("increment returned {returned}");
 let returned: u16 = contract.circuits().increment_by(5).await?.value;
 println!("increment_by(5) returned {returned}");
 ```
+
+## Deploy a contract with a constructor
+
+The deploy runs the contract's Compact constructor locally, before any proof, as midnight-js does. It deploys the state that the constructor leaves. The generated builder takes what the constructor needs:
+
+- `with_constructor_args(..)`, only for a constructor with parameters. It takes the same Rust types as the circuit methods.
+- `with_witnesses(&w)` and `with_initial_private_state(state)`, only for a contract with witnesses. The witnesses answer the constructor's witness calls and start from the initial private state.
+- `with_initial_state(state)` deploys `state` as it is and skips the constructor.
+
+The [`owned-counter`](devnet/contracts/owned-counter) contract keeps the owner's secret in its private state, and its constructor takes the first round. Bind it with `contract!` as above, then deploy it:
+
+```rust,ignore
+struct OwnerKey;
+
+impl owned_counter::Witnesses for OwnerKey {
+    type PrivateState = [u8; 32];
+
+    fn owner_secret(&self, secret: &mut [u8; 32]) -> Result<Bytes<32>, owned_counter::WitnessError> {
+        Ok(Bytes(*secret))
+    }
+}
+
+// The deploy records the private state, so the provider needs a store. Take
+// `address` from `wallet.unshielded_address()` before `with_wallet`.
+let store = FsPrivateStateProvider::with_default_dir(&address).expect("a home directory");
+let provider = provider.with_private_state(Arc::new(store));
+
+let contract = owned_counter::Contract::deploy(&provider)
+    .with_witnesses(&OwnerKey)
+    .with_initial_private_state(secret)
+    .with_constructor_args(5)
+    .with_zk_config(owned_counter::ZK_CONFIG_DIR)
+    .await?;
+```
+
+The deploy records the private state that the constructor leaves as the first snapshot of the new contract (see [`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy)). The `.await` leaves that snapshot `Pending`. To confirm it, deploy with `.send()` and call `PendingDeploy::wait_finalized`. A constructor that mints, claims, or spends or creates a coin fails the deploy with `ContractError::Construction` before any proof. A constructor that reads `kernel.self()` fails the deploy with `ContractError::Interpreter`, because the contract gets its address from the deploy.
 
 ## Connecting to an existing contract
 
@@ -153,7 +188,6 @@ The `.await` of a deploy waits for the best block, then reads the contract from 
 
 ```rust,ignore
 let pending = counter::Contract::deploy(&provider)
-    .with_initial_state(counter::LedgerInitialState::default())
     .with_zk_config(counter::ZK_CONFIG_DIR)
     .send().await?;
 println!("ext: {}", pending.extrinsic_hash_hex());

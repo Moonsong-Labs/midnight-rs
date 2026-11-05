@@ -33,7 +33,6 @@ pub async fn mint_token_to(
     use rand::Rng;
 
     let mint = contract::Contract::deploy(minter)
-        .with_initial_state(contract::LedgerInitialState)
         .with_zk_config(contract::ZK_CONFIG_DIR)
         .await?;
 

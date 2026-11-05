@@ -60,10 +60,10 @@ pub struct ShieldedInputs {
 
 /// Run a circuit on a contract's state, with no wallet access.
 ///
-/// The circuit's clock checks read `block_time`. `coin_public_key` is what
-/// `ownPublicKey()` returns. With `None`, a circuit that calls
-/// `ownPublicKey()` fails. The witnesses update `private_state` when it is
-/// given.
+/// The circuit's clock checks read `block_time`. `contract_address` is what
+/// `kernel.self()` returns, and `coin_public_key` is what `ownPublicKey()`
+/// returns. A circuit that reads a value given as `None` fails. The witnesses
+/// update `private_state` when it is given.
 #[expect(
     clippy::too_many_arguments,
     reason = "one value for each input of the circuit's `Env`, as the callers hold them"
@@ -73,7 +73,7 @@ pub(crate) fn run_call(
     program: &interpreter::Program<'_>,
     state: &ContractState<InMemoryDB>,
     block_time: Timestamp,
-    contract_address: midnight_types::ContractAddress,
+    contract_address: Option<midnight_types::ContractAddress>,
     args: &[(&str, runtime::Value)],
     witnesses: &dyn runtime::WitnessProvider,
     private_state: Option<&mut Vec<u8>>,
@@ -87,7 +87,7 @@ pub(crate) fn run_call(
         interpreter::Env {
             witnesses,
             private_state,
-            address: contract_address.into_ledger(),
+            address: contract_address.map(IntoLedger::into_ledger),
             block_time,
             coin_public_key: coin_public_key.map(IntoLedger::into_ledger),
         },

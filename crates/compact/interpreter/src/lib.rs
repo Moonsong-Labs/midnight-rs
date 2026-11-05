@@ -174,8 +174,11 @@ pub struct Env<'a> {
     /// [`execute`] returns, the buffer holds the state after the call. `None`
     /// runs the witnesses on a scratch buffer.
     pub private_state: Option<&'a mut Vec<u8>>,
-    /// The address that `kernel.self()` reads.
-    pub address: ContractAddress,
+    /// The address that `kernel.self()` reads. With `None`, a circuit that
+    /// reads `kernel.self()` fails with [`InterpreterError::NoContractAddress`].
+    /// A placeholder would give the circuit an address that is not the
+    /// contract's.
+    pub address: Option<ContractAddress>,
     /// The time that the kernel clock checks compare against.
     pub block_time: Timestamp,
     /// The caller's coin public key, which `ownPublicKey()` returns. With
@@ -186,13 +189,13 @@ pub struct Env<'a> {
 }
 
 impl Env<'_> {
-    /// No witnesses, a scratch private state, the zero address, no coin
+    /// No witnesses, a scratch private state, no contract address, no coin
     /// public key.
     pub fn new(block_time: Timestamp) -> Self {
         Self {
             witnesses: &NoWitnesses,
             private_state: None,
-            address: ContractAddress::default(),
+            address: None,
             block_time,
             coin_public_key: None,
         }
@@ -240,7 +243,8 @@ pub fn execute(
     let mut scratch = Vec::new();
     let private_state = private_state.unwrap_or(&mut scratch);
     let call_context = CallContext {
-        own_address: address,
+        // With no address, `eval_expr` refuses `kernel.self()`, the only read of it.
+        own_address: address.unwrap_or_default(),
         tblock: block_time,
         balance: state.balance.clone(),
         ..CallContext::default()
@@ -273,6 +277,7 @@ pub fn execute(
         private_state,
         program,
         call_context,
+        has_address: address.is_some(),
         coin_public_key,
     };
 
@@ -365,10 +370,10 @@ struct ExecContext<'a> {
     /// call order. Surfaced as `ExecutionResult::private_transcript_outputs`.
     private_transcript_outputs: Vec<AlignedValue>,
     /// Coins the circuit asked to create via `createZswapOutput`, in call
-    /// order. Surfaced on `ExecutionResult` for the call/deploy path.
+    /// order. Surfaced on `ExecutionResult` for the call path.
     zswap_outputs: Vec<CircuitZswapOutput>,
     /// Coins the circuit asked to spend via `createZswapInput`, in call order.
-    /// Surfaced on `ExecutionResult` for the call/deploy path.
+    /// Surfaced on `ExecutionResult` for the call path.
     zswap_inputs: Vec<CircuitZswapInput>,
     /// The events of the `log` ops, in emission order. Surfaced as
     /// `ExecutionResult::logs`.
@@ -382,6 +387,8 @@ struct ExecContext<'a> {
     /// from the [`Env`] and the balance of the state. The clock checks read
     /// its `tblock` (slot 2), and the balance checks its `balance` (slot 5).
     call_context: CallContext<InMemoryDB>,
+    /// Whether `call_context` holds the contract's address.
+    has_address: bool,
     coin_public_key: Option<CoinPublicKey>,
 }
 
@@ -600,11 +607,16 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         // skipping it (an earlier shortcut) produced a "public transcript input
         // mismatch" at prove time.
         E::PublicLedger {
+            op,
             result_type,
             instructions,
             ..
         } => {
             check_type(result_type)?;
+            // Only the `Kernel` ADT has an operation named `self`.
+            if op == "self" && !ctx.has_address {
+                return Err(InterpreterError::NoContractAddress);
+            }
             exec_ledger_query(ctx, instructions)
         }
 
@@ -1281,7 +1293,7 @@ fn eval_witness_call(
     // `WitnessNative` variant forces a decision. `createZswapOutput` records
     // no ledger effect of its own (the mint/spend/receive effects are separate
     // ledger ops); it marks "attach a Zswap output for this coin here", so we
-    // capture its `(coin, recipient)` args for the call/deploy path to build
+    // capture its `(coin, recipient)` args for the call path to build
     // the corresponding `Output` in the transaction's Zswap offer.
     if let Some(native) = WitnessNative::from_name(name) {
         match native {
@@ -1301,7 +1313,7 @@ fn eval_witness_call(
             // The spend counterpart of `createZswapOutput`: like it, records
             // no ledger effect of its own (the spend/nullifier effects are
             // separate ledger ops), so we capture the coin arg for the
-            // call/deploy path to build the `Input` / `Transient` in the
+            // call path to build the `Input` / `Transient` in the
             // transaction's Zswap offer.
             WitnessNative::CreateZswapInput => {
                 return match values.into_iter().next() {
@@ -2942,7 +2954,7 @@ mod tests {
     #[test]
     fn create_zswap_input_is_captured() {
         // `createZswapInput(coin)` records no ledger effect; the interpreter
-        // captures its coin arg into `zswap_inputs` for the call/deploy path to
+        // captures its coin arg into `zswap_inputs` for the call path to
         // build the `Input` / `Transient`. Here the coin is passed as a
         // struct-encoded `QualifiedShieldedCoinInfo` value.
         let natives = vec![ir::Native {
@@ -3026,6 +3038,46 @@ mod tests {
                 "ownPublicKey ran with no coin key and returned {:?}",
                 result.result
             ),
+        }
+    }
+
+    /// A run with no address that reads the context's placeholder gives the
+    /// circuit an address that is not the contract's.
+    #[test]
+    fn kernel_self_without_an_address_fails() {
+        let address_type = Type::Struct {
+            name: "ContractAddress".into(),
+            fields: vec![("bytes".to_string(), Type::Bytes(32))],
+        };
+        let circ = circuit(
+            Vec::new(),
+            address_type.clone(),
+            ir::Expr::PublicLedger {
+                op_class: ir::OpClass::Plain("read".into()),
+                field: ident("%kernel.0"),
+                path: Vec::new(),
+                op: "self".to_string(),
+                result_type: address_type,
+                instructions: Vec::new(),
+                args: Vec::new(),
+            },
+        );
+        let env = Env {
+            address: None,
+            ..epoch()
+        };
+
+        let result = execute(
+            &circ,
+            &Program::new(&[], &[], &[]),
+            make_counter_state(0),
+            &[],
+            env,
+        );
+        match result {
+            Err(InterpreterError::NoContractAddress) => {}
+            Err(other) => panic!("expected NoContractAddress, got {other:?}"),
+            Ok(result) => panic!("kernel.self() returned {:?}", result.result),
         }
     }
 
@@ -3417,6 +3469,7 @@ mod tests {
             private_state,
             program,
             call_context: CallContext::default(),
+            has_address: true,
             coin_public_key: None,
         }
     }
