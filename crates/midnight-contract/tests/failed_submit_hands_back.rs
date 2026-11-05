@@ -245,7 +245,7 @@ async fn a_deploy_or_a_call_that_the_node_never_gets_hands_its_inputs_back() {
     drop(sync);
 
     let mut circuits = contract.circuits().with_witnesses(&NextSecret);
-    let called = circuits.contribute().await;
+    let called = circuits.contribute().send().await;
     assert!(
         matches!(called, Err(ContractError::PendingSnapshotFailed { .. })),
         "the call must stop at the snapshot, after a build that reserved its fee: {called:?}"

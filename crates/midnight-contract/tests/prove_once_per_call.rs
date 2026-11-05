@@ -118,6 +118,10 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(counter::ZK_CONFIG_DIR)
         .with_maintenance_authority(vec![authority.verifying_key()], 1)
+        .send()
+        .await
+        .expect("submit deploy")
+        .into_contract()
         .await
         .expect("deploy");
 
@@ -131,11 +135,15 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
     // Only the call is measured; deploy has its own (mock-proved) fee path.
     counter_proofs.reset();
 
-    // Awaiting the builder submits, waits, and errors unless the call landed
-    // and its fallible phase succeeded.
+    // The wait errors unless the call landed and its fallible phase
+    // succeeded.
     let outcome = contract
         .circuits()
         .increment()
+        .send()
+        .await
+        .expect("submit increment")
+        .wait_finalized()
         .await
         .expect("the node must accept the call");
     eprintln!("increment() tx = {}", hex::encode(outcome.extrinsic_hash));
@@ -173,6 +181,7 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         .build()
         .circuits()
         .increment()
+        .send()
         .await;
     match refused {
         Err(ContractError::VerifierKeyMismatch {
@@ -194,7 +203,7 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
     // before it selects Dust. A failed deploy or maintenance build releases its
     // Dust. So each build below still reaches the prover.
     counter_proofs.fail.store(true, Ordering::Relaxed);
-    expect_proving_failure("increment()", contract.circuits().increment().await);
+    expect_proving_failure("increment()", contract.circuits().increment().send().await);
     expect_proving_failure(
         "a deploy",
         counter::Contract::deploy(&provider)

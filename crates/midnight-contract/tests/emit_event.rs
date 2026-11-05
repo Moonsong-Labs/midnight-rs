@@ -51,6 +51,10 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
     let contract = events::Contract::deploy(&provider)
         .with_initial_state(events::LedgerInitialState::default())
         .with_zk_config(events::ZK_CONFIG_DIR)
+        .send()
+        .await
+        .expect("submit deploy")
+        .into_contract()
         .await
         .unwrap_or_else(|e| panic!("the deploy must apply on ledger {ledger}: {e:?}"));
 
@@ -73,12 +77,16 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
         "the Misc payload is the name, then the padded text"
     );
 
-    // The call's `.await` waits for finality, so the test ends on a final
+    // `wait_finalized` waits for finality, so the test ends on a final
     // block. The next test in the suite is another process on the same seed,
     // and its wallet reads finalized state only.
     let outcome = contract
         .circuits()
         .record(Bytes(NAME))
+        .send()
+        .await
+        .expect("submit record")
+        .wait_finalized()
         .await
         .unwrap_or_else(|e| panic!("the emitting call must apply on ledger {ledger}: {e:?}"));
     assert_eq!(

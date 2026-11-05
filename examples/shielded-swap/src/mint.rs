@@ -34,6 +34,9 @@ pub async fn mint_token_to(
 
     let mint = contract::Contract::deploy(minter)
         .with_zk_config(contract::ZK_CONFIG_DIR)
+        .send()
+        .await?
+        .into_contract()
         .await?;
 
     let shielded = recipient.shielded_recipient();
@@ -48,6 +51,9 @@ pub async fn mint_token_to(
             nonce,
             shielded.coin_public_key.into(),
         )
+        .send()
+        .await?
+        .wait_finalized()
         .await?;
 
     Ok(parse_contract_address(mint.address())?.custom_shielded_token_type(HashOutput(domain_sep)))

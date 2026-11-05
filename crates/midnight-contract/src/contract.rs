@@ -1,5 +1,3 @@
-use std::future::{Future, IntoFuture};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -363,8 +361,8 @@ impl<T> PendingCall<T> {
     /// [timeouts of `PendingTx`](PendingTx#timeouts-and-cancellation). To bound
     /// the wait, wrap it in [`tokio::time::timeout`]. Read the hashes before
     /// you call it, because a timeout drops the handle. [`Contract::call_with`]
-    /// and the `.await` of a generated call builder bound the wait for
-    /// finality to 60 s. They settle the snapshot after that wait.
+    /// bounds the wait for finality to 60 s, and settles the snapshot after
+    /// that wait.
     ///
     /// # Errors
     ///
@@ -474,8 +472,9 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 
 /// Builder for deploying a contract.
 ///
-/// Typically accessed via `Contract::deploy(&provider)`. Await the builder to
-/// run the deployment.
+/// Typically accessed via `Contract::deploy(&provider)`. Call
+/// [`send`](Self::send) to submit the deploy, then
+/// [`PendingDeploy::into_contract`] to get the [`Contract`].
 ///
 /// The deploy carries the state of
 /// [`with_initial_state`](Self::with_initial_state). Without one, it runs the
@@ -492,11 +491,14 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 /// # ) -> Result<(), midnight_contract::ContractError> {
 /// let contract = counter::Contract::deploy(&provider)
 ///     .with_zk_config(counter::ZK_CONFIG_DIR)
+///     .send()
+///     .await?
+///     .into_contract()
 ///     .await?;
 /// # Ok(())
 /// # }
 /// ```
-#[must_use = "does nothing until awaited or sent"]
+#[must_use = "does nothing until sent"]
 pub struct DeployBuilder<'a, P> {
     provider: P,
     initial_state: Option<ContractState<InMemoryDB>>,
@@ -680,10 +682,8 @@ where
     /// inclusion states, then [`PendingDeploy::into_contract`] to read the
     /// deployed contract and obtain the [`Contract`]. Each wait fails with
     /// [`ContractError::TransactionFailed`] when the chain did not apply the
-    /// deploy.
-    ///
-    /// For the common case where you don't need to observe both states, just
-    /// `.await?` the builder directly.
+    /// deploy. `into_contract` waits for the best block itself when no wait
+    /// ran before it.
     ///
     /// Before the submit, the deploy records its private state as a `Pending`
     /// snapshot (see [`with_initial_private_state`](Self::with_initial_private_state)).
@@ -775,20 +775,6 @@ where
     }
 }
 
-impl<'a, P> IntoFuture for DeployBuilder<'a, P>
-where
-    P: AsMidnightProvider + Send + 'a,
-{
-    type Output = Result<Contract<P>, ContractError>;
-    // `Pin<Box<dyn Future>>` rather than `impl Future` because the latter is
-    // still unstable in associated type position (rust-lang/rust#63063).
-    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move { self.send().await?.into_contract().await })
-    }
-}
-
 // ---------------------------------------------------------------------------
 // PendingDeploy: handle for an in-flight deploy transaction.
 // ---------------------------------------------------------------------------
@@ -801,8 +787,9 @@ where
 /// reads the deployed contract from the node).
 ///
 /// Only [`wait_finalized`](Self::wait_finalized) settles the deploy's
-/// private-state snapshot. A best-block wait, and so the `.await` of the
-/// builder, leaves it `Pending`.
+/// private-state snapshot. A best-block wait, and so an
+/// [`into_contract`](Self::into_contract) with no wait before it, leaves it
+/// `Pending`.
 pub struct PendingDeploy<P> {
     pending: PendingTx,
     address: String,

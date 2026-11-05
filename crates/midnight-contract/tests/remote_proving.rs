@@ -34,6 +34,10 @@ macro_rules! deploy_and_increment {
         let contract = $counter::Contract::deploy($provider)
             .with_initial_state($counter::LedgerInitialState::default())
             .with_zk_config($counter::ZK_CONFIG_DIR)
+            .send()
+            .await
+            .expect("submit deploy")
+            .into_contract()
             .await
             .expect("the node must accept the remotely proven deploy");
         let round_before = contract
@@ -46,6 +50,10 @@ macro_rules! deploy_and_increment {
         contract
             .circuits()
             .increment()
+            .send()
+            .await
+            .expect("submit increment")
+            .wait_finalized()
             .await
             .expect("the node must accept the remotely proven call");
 

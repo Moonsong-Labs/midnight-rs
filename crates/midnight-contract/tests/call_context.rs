@@ -44,6 +44,10 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
     let contract = call_context::Contract::deploy(&provider)
         .with_initial_state(call_context::LedgerInitialState::default())
         .with_zk_config(call_context::ZK_CONFIG_DIR)
+        .send()
+        .await
+        .expect("submit deploy")
+        .into_contract()
         .await
         .expect("deploy");
 
@@ -68,6 +72,10 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
     contract
         .circuits()
         .unlock(now - 1, now + 3600)
+        .send()
+        .await
+        .expect("submit unlock")
+        .wait_finalized()
         .await
         .expect("an unlock between the best block's time and an hour later must apply");
     let unlocked = contract
@@ -93,12 +101,20 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
     let color = contract
         .circuits()
         .mint(Bytes(DOMAIN_SEP), MINTED)
+        .send()
+        .await
+        .expect("submit mint")
+        .wait_finalized()
         .await
         .expect("the contract must be able to mint to itself")
         .value;
     contract
         .circuits()
         .holds(color, u128::from(MINTED) - 1)
+        .send()
+        .await
+        .expect("submit holds")
+        .wait_finalized()
         .await
         .expect("the contract must see the balance that its mint gave it");
 }

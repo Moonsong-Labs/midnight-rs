@@ -494,8 +494,8 @@ impl MidnightProvider {
 
     /// Build a shielded (Zswap) transfer transaction.
     ///
-    /// Returns a pending builder. `.await?` builds + submits and returns the
-    /// resulting [`PendingTx`]; `.build().await?` returns the raw
+    /// Returns a pending builder. `.send().await?` builds + submits and returns
+    /// the resulting [`PendingTx`]; `.build().await?` returns the raw
     /// [`TransferResult`] without submitting (e.g. for inspection or custom
     /// routing). Either path selects the inputs and records them in the
     /// wallet's pending list as one transition, so a second build in this
@@ -560,7 +560,7 @@ impl MidnightProvider {
 
     /// Build an unshielded (UTXO) transfer transaction. See
     /// [`Self::transfer_shielded`] for reservation semantics and the
-    /// `.await` vs `.build()` distinction.
+    /// `.send()` vs `.build()` distinction.
     pub fn transfer_unshielded<'a>(
         &'a self,
         token_type: UnshieldedTokenType,
@@ -572,7 +572,7 @@ impl MidnightProvider {
 
     /// Build a dust-address registration transaction. See
     /// [`Self::transfer_shielded`] for reservation semantics and the
-    /// `.await` vs `.build()` distinction.
+    /// `.send()` vs `.build()` distinction.
     ///
     /// One call registers one tNIGHT UTXO and pays its own fee from that
     /// UTXO. Call it again until [`DustBalance::unregistered_night_utxos`]

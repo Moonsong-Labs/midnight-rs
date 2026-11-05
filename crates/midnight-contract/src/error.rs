@@ -283,10 +283,10 @@ pub enum ContractError {
     /// [`Contract::build_call_with`](crate::Contract::build_call_with), give
     /// this error after the local run of the circuit. The call reserves no
     /// input, makes no proof, and writes no private-state snapshot. Submit the
-    /// call with `.await` or `.send()`, which record the new state.
+    /// call with `.send()`, which records the new state.
     #[error(
         "the witnesses of this call change the private state of contract {address}, and a \
-         build-only call does not record it: submit the call with `.await` or `.send()`"
+         build-only call does not record it: submit the call with `.send()`"
     )]
     UnrecordedPrivateState {
         /// The address of the contract whose private state the call changes.

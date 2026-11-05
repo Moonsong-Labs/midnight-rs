@@ -61,12 +61,13 @@ async fn main() -> anyhow::Result<()> {
     // NIGHT is the native token. Amounts are in STAR, its smallest unit.
     let pending = provider
         .transfer_unshielded(NIGHT, STARS_PER_NIGHT, &unshielded)
+        .send()
         .await?;
     println!("unshielded transfer {}", pending.extrinsic_hash_hex());
     pending.wait_finalized().await?;
 
     let token = balance.shielded.coins[0].token_type;
-    let pending = provider.transfer_shielded(token, 1, &shielded).await?;
+    let pending = provider.transfer_shielded(token, 1, &shielded).send().await?;
     println!("shielded transfer {}", pending.extrinsic_hash_hex());
     pending.wait_finalized().await?;
 
@@ -119,16 +120,20 @@ mod counter {
 
 let contract = counter::Contract::deploy(&provider)
     .with_zk_config(counter::ZK_CONFIG_DIR)
+    .send()
+    .await?
+    .into_contract()
     .await?;
 
 println!("deployed at {}", contract.address());
 println!("round = {}", contract.ledger().await?.round()?);
 
-// `.value` is the typed return value of the circuit.
-let returned: u64 = contract.circuits().increment().await?.value;
+// `send` submits the call. `wait_finalized` waits for finality and returns
+// the outcome, whose `.value` is the typed return value of the circuit.
+let returned: u64 = contract.circuits().increment().send().await?.wait_finalized().await?.value;
 println!("increment returned {returned}");
 
-let returned: u16 = contract.circuits().increment_by(5).await?.value;
+let returned: u16 = contract.circuits().increment_by(5).send().await?.wait_finalized().await?.value;
 println!("increment_by(5) returned {returned}");
 ```
 
@@ -163,10 +168,13 @@ let contract = owned_counter::Contract::deploy(&provider)
     .with_initial_private_state(secret)
     .with_constructor_args(5)
     .with_zk_config(owned_counter::ZK_CONFIG_DIR)
+    .send()
+    .await?
+    .into_contract()
     .await?;
 ```
 
-The deploy records the private state that the constructor leaves as the first snapshot of the new contract (see [`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy)). The `.await` leaves that snapshot `Pending`. To confirm it, deploy with `.send()` and call `PendingDeploy::wait_finalized`. A constructor that mints, claims, or spends or creates a coin fails the deploy with `ContractError::Construction` before any proof. A constructor that reads `kernel.self()` fails the deploy with `ContractError::Interpreter`, because the contract gets its address from the deploy.
+The deploy records the private state that the constructor leaves as the first snapshot of the new contract (see [`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy)). An `into_contract` with no wait before it leaves that snapshot `Pending`. To confirm it, call `PendingDeploy::wait_finalized` before `into_contract`. A constructor that mints, claims, or spends or creates a coin fails the deploy with `ContractError::Construction` before any proof. A constructor that reads `kernel.self()` fails the deploy with `ContractError::Interpreter`, because the contract gets its address from the deploy.
 
 ## Connecting to an existing contract
 
@@ -177,14 +185,14 @@ let contract = counter::Contract::at(&provider, &address)
     .with_zk_config(counter::ZK_CONFIG_DIR)
     .build();
 
-let returned: u64 = contract.circuits().increment().await?.value;
+let returned: u64 = contract.circuits().increment().send().await?.wait_finalized().await?.value;
 println!("increment returned {returned}");
 println!("round = {}", contract.ledger().await?.round()?);
 ```
 
 ## Observing inclusion explicitly
 
-The `.await` of a deploy waits for the best block, then reads the contract from the node at that block. `with_deploy_timeout` sets one deadline for the wait and the read (60 s by default). To see each step, call `.send()`:
+`send` submits a deploy and returns a `PendingDeploy`. When no wait ran on it, `into_contract` waits for the best block, then reads the contract from the node at that block. `with_deploy_timeout` sets one deadline for the wait and the read (60 s by default). To see each step, wait on the `PendingDeploy` before `into_contract`:
 
 ```rust,ignore
 let pending = counter::Contract::deploy(&provider)

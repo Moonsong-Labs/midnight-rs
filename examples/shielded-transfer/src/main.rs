@@ -85,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Building + submitting...");
     let pending = provider
         .transfer_shielded(coin.token_type, 1, &address)
+        .send()
         .await?;
     println!("Submitted: ext hash {}", pending.extrinsic_hash_hex());
     let (best, pending) = pending.wait_best().await?;

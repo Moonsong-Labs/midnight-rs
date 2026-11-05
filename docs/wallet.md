@@ -238,6 +238,7 @@ provider.resync_wallet().await?;
 let before = provider.balance().await?.shielded_value(token);
 provider
     .transfer_shielded(token, amount, &recipient)
+    .send()
     .await?
     .wait_finalized()
     .await?;
@@ -336,7 +337,7 @@ Every reading returns an owned value taken under a short read lock, so nothing a
 Before NIGHT holdings can generate spendable Dust, the wallet must publish a **dust registration** that binds its dust address to its unshielded address. One `register_dust` call registers one tNIGHT UTXO and pays its own fee from that UTXO, so a wallet with no Dust can register. The rustdoc of [`register_dust`](../crates/midnight-provider/src/provider.rs) gives the full rule.
 
 ```rust
-let pending = provider.register_dust(None).await?;     // None = now - 1 hour for a UTXO with no ctime
+let pending = provider.register_dust(None).send().await?;     // None = now - 1 hour for a UTXO with no ctime
 pending.wait_best().await?;
 ```
 
@@ -355,7 +356,7 @@ use midnight_core::wallet::parse_dust_address;
 
 let hot_address = hot_wallet.dust_address(); // mn_dust_undeployed1...
 let target = parse_dust_address(&hot_address, provider.network().await?)?;
-provider.register_dust(None).to(target).await?.wait_finalized().await?;
+provider.register_dust(None).to(target).send().await?.wait_finalized().await?;
 ```
 
 The registration sets the Dust address of the whole NIGHT address, not only of the UTXO it spends:
@@ -368,13 +369,14 @@ The cold wallet gets no Dust of its own. Its registrations still pay their own f
 
 ## Transfers
 
-Two flavors, same shape. Each method returns a builder, and `.await?` builds and submits in one step:
+Two flavors, same shape. Each method returns a builder, and `.send().await?` builds and submits in one step:
 
 ```rust
 use midnight_core::wallet::NIGHT;
 
 let pending = provider
     .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
+    .send()
     .await?;
 pending.wait_best().await?;
 ```
@@ -382,6 +384,7 @@ pending.wait_best().await?;
 ```rust
 let pending = provider
     .transfer_shielded(token_type, amount, &recipient_shielded_address)
+    .send()
     .await?;
 ```
 
@@ -401,12 +404,13 @@ use std::time::Duration;
 let pending = provider
     .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
     .with_ttl(Duration::from_secs(300))
+    .send()
     .await?;
 ```
 
 `transfer_shielded`, `transfer_unshielded` and `register_dust` take it. The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the build with `WalletError::TtlOutOfRange`, before it spends or proves anything. A Dustless shielded transfer (`.without_dust()`) is a Zswap offer with no intent, so it cannot carry a TTL, and its build fails with `WalletError::TtlWithoutIntent`. A shielded swap half has no `with_ttl` for the same reason.
 
-To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder instead of awaiting it:
+To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder in place of `.send()`:
 
 ```rust
 let result = provider
@@ -418,7 +422,7 @@ println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64
 let pending = provider.submit_reserved(result).await?;
 ```
 
-`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved. `submit_reserved` hands them back when the node never gets the transaction or rejects it (see [Pending reservations](#pending-reservations)).
+`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like `.send()`; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved. `submit_reserved` hands them back when the node never gets the transaction or rejects it (see [Pending reservations](#pending-reservations)).
 
 ## Submission and waiting
 
@@ -519,10 +523,11 @@ provider.with_wallet(wallet)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext: register, then replay
   provider.rescan_shielded()             replay the shielded stream (a resync first, to cross a fork)
   provider.forget_coin(coin)             drop a registration that matched nothing
-  provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
-      .to(dust_key)                          the Dust goes to another wallet's Dust address
-  provider.transfer_unshielded(...).await    builds + submits → PendingTx
-  provider.transfer_shielded(...).await      builds + submits → PendingTx
+  provider.register_dust(None)                      registers one tNIGHT UTXO, self-funded
+      .to(dust_key)                                 the Dust goes to another wallet's Dust address
+      .send().await                                 builds + submits → PendingTx
+  provider.transfer_unshielded(...).send().await    builds + submits → PendingTx
+  provider.transfer_shielded(...).send().await      builds + submits → PendingTx
        │     .build().await → TransferResult (escape hatch, no submit)
        │
        └─ PendingTx
