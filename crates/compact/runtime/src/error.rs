@@ -24,4 +24,9 @@ pub enum InterpreterError {
     /// ([`crate::WitnessOutcome::Unknown`]). Always aborts execution.
     #[error("witness error: {0}")]
     Witness(String),
+
+    /// The circuit read `kernel.self()` in a run with no contract address,
+    /// such as a constructor's run before the deploy gives the address.
+    #[error("kernel.self() has no value: the contract has no address yet")]
+    NoContractAddress,
 }

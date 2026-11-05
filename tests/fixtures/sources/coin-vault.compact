@@ -1,0 +1,11 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// A constructor that writes a coin with `writeCoin`, which the interpreter
+// cannot run.
+
+export ledger vault: QualifiedShieldedCoinInfo;
+
+constructor(coin: ShieldedCoinInfo) {
+  vault.writeCoin(disclose(coin), right<ZswapCoinPublicKey, ContractAddress>(kernel.self()));
+}
