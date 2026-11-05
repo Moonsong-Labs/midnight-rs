@@ -61,11 +61,11 @@ Seed fixtures, chosen for op coverage:
 - `containers` (purpose-built): Set, Map, List and Counter operations, for the Impact instructions their templates carry and nothing else emits (`rem`, `size`, `eq`, `type`, `concat`, `subi`, `lt`, `jmp`, `pop`).
 - `trees` (purpose-built): MerkleTree and HistoricMerkleTree writes, the only source of `root`.
 - `events` (purpose-built): an `emit` between two ledger operations, the only source of `log`.
-- `keccak` (purpose-built): `keccak256` over a struct whose fields have different widths. The case count has zero high bytes, so the digest pins its padding to the `Uint<64>` width. The ZKIR v2 backend rejects `keccak256` in a circuit that needs a proof, so this fixture compiles for ZKIR v3.
-- `sha512` (purpose-built): `sha512` over the same struct and case as `keccak`. The compiler declares `sha512` only for ZKIR v3, so this fixture also compiles for ZKIR v3.
+- `keccak` (purpose-built): `keccak256` over a struct whose fields have different widths. The case count has zero high bytes, so the digest pins its padding to the `Uint<64>` width.
+- `sha512` (purpose-built): `sha512` over the same struct and case as `keccak`.
 - `kernel` (purpose-built): the Kernel operations that reach past the contract's own state into the transaction effects (`ckpt`, `swap`, `neg`, `branch`, `add`), and the clock and balance checks that read the call context. `blockTimeGt(B - 1)` and `blockTimeLt(B + 1)` at the case's block time B pin the time that each executor reads. In the same way, `unshieldedBalanceGt(color, A - 1)` is true and `unshieldedBalanceGt(color, A)` is false at the case's balance A, so the two steps pin the amount. A circuit returns `ownPublicKey()` at a case key whose bytes all differ and end in a zero byte, which pins the byte order, the trimmed atom and the `Bytes<32>` alignment.
 
-Together the corpus reaches every Impact instruction the interpreter implements except `noop`: the compiler reads one (`zkir-passes/print-zkir.ss`) but no ledger template emits one, so no Compact source can produce it.
+Together the corpus reaches every Impact instruction the interpreter implements except `noop`: no ledger template emits one, so no Compact source can produce it.
 
 `election` (Merkle-path witnesses, the broadest ledger coverage) is a planned follow-up: it still needs Merkle-path witness scripting.
 
@@ -90,7 +90,7 @@ The runtime brings its own `@midnightntwrk/onchain-runtime-v4` and re-exports th
 - `make goldens`: run the TS driver when a golden is missing or stale (needs Node).
 - `make vendor-compact-runtime`: rebuild the driver's runtime from the fork at `COMPACT_REV` (needs curl, Docker and Node). `make goldens` runs it when the tarball is missing or comes from another `COMPACT_REV`.
 
-Adding coverage for a new op is: extend a fixture's `.compact` (or add a case JSON), and commit it. `make test` compiles the fixture and writes its goldens. Adding a whole fixture also means listing it in the Makefile's `CONFORMANCE_FIXTURES`. A fixture that needs ZKIR v3 also goes in `CONFORMANCE_ZKIR_V3_FIXTURES`. To cover a check that must make a circuit fail, add a step with `"error"` set to a part of the message that names the check.
+Adding coverage for a new op is: extend a fixture's `.compact` (or add a case JSON), and commit it. `make test` compiles the fixture and writes its goldens. Adding a whole fixture also means listing it in the Makefile's `CONFORMANCE_FIXTURES`. To cover a check that must make a circuit fail, add a step with `"error"` set to a part of the message that names the check.
 
 ## Findings from the first corpus run (2026-07-05)
 

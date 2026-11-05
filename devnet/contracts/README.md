@@ -1,14 +1,13 @@
 # Devnet example contracts
 
-The Compact contracts that the examples and the devnet tests deploy to the local devnet. Each directory holds the contract source. `make compile-contracts` writes the compiler output to a `compiled/` directory beside the source, and git ignores it.
+The Compact contracts that the examples and the devnet tests deploy to the local devnet. The compiler gives each circuit a `verifier-key[v7]` key, which only ledger 9 verifies, so that devnet must run ledger 9. Each directory holds the contract source. `make compile-contracts` writes the compiler output to a `compiled/` directory beside the source, and git ignores it.
 
 This directory holds only contract assets. It is not a Rust crate. It sits outside `examples/`, so the `examples/*` glob of the workspace does not see it as a crate.
 
 | Contract | Used by |
 | --- | --- |
 | [`call-context`](call-context) | the `call_context` devnet test of `midnight-contract`, and the `Simulator` tests of `tests/integration`: circuits that check the block time and the contract balance |
-| [`counter`](counter) | [`example-counter`](../../examples/counter), [`example-contract-maintenance`](../../examples/contract-maintenance), [`example-combine-and-sponsor`](../../examples/combine-and-sponsor), and the counter tests of `midnight-contract` and `midnight-typed-state` |
-| [`counter-zkir-v3`](counter-zkir-v3) | the `zkir_v3_local_proving` devnet test of `midnight-contract`: the `counter` source, compiled for ZKIR v3, which only a ledger 9 chain verifies |
+| [`counter`](counter) | [`example-counter`](../../examples/counter), [`example-contract-maintenance`](../../examples/contract-maintenance), [`example-combine-and-sponsor`](../../examples/combine-and-sponsor), and the counter tests of `midnight-contract` |
 | [`events`](events) | the `emit_event` devnet test of `midnight-contract`: a circuit that emits a `Misc` event between two ledger operations |
 | [`owned-counter`](owned-counter) | the `deploy_constructor` devnet test of `midnight-contract`: a constructor that takes an argument and calls a witness, which makes the deployer the owner |
 | [`receive-shielded`](receive-shielded) | the `receive_shielded_coin` devnet test of `midnight-contract`: a `deposit` circuit that receives a shielded coin from the caller |

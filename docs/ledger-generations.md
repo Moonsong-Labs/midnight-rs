@@ -9,7 +9,7 @@ A Midnight chain runs one generation of the ledger at a time: a transaction form
 | mainnet, preprod, preview | ledger 8, until their hard fork |
 | the public devnet | ledger 9, since its hard fork on 2026-09-28 |
 | stagenet | ledger 9 |
-| a local devnet | ledger 8 from `make dev-up`, ledger 9 from `make dev-up DEVNET_LEDGER=9` |
+| a local devnet | ledger 9 from `make dev-up`, ledger 8 from `make dev-up DEVNET_LEDGER=8` |
 
 ## How the SDK picks the generation
 
@@ -33,6 +33,8 @@ Most of the API is the same on both generations:
 Its vocabulary lives in `midnight-types`, one type for both generations: `ShieldedTokenType`, `UnshieldedTokenType`, `Nullifier`, `Nonce`, `CoinInfo`, `CoinPublicKey`, `EncryptionPublicKey`, `ShieldedRecipient`, `ContractAddress`, `DustNullifier`, `DustPublicKey`, `ChainParameters` and `LedgerVersion`. The provider, wallet and contract crates re-export it. A DApp that uses only this surface runs on either chain with no code for a generation.
 
 The Compact side (the interpreter, the typed state and the generated bindings) reads ledger 9's types on both chains. The two generations share the Impact ops and the state encoding, and `midnight_typed_state::decode_contract_state` converts the state a ledger 8 chain serves.
+
+The compiler at `COMPACT_REV` writes only ZKIR v3, so each circuit gets a `verifier-key[v7]` key, which only ledger 9 verifies. On a ledger 8 chain, the SDK refuses such a key before the build. A contract with `verifier-key[v6]` keys, from an older compiler, deploys on both chains.
 
 ### A shielded offer on a deploy
 
@@ -176,5 +178,5 @@ A snapshot of a later generation than the chain runs belongs to a chain that was
 
 ## Testing both generations
 
-- `make dev-up` runs a ledger 8 devnet, and `make dev-up DEVNET_LEDGER=9` a ledger 9 one. Both use ports 9944 and 8088, so run one at a time. `make test-e2e` runs the E2E suite against the devnet that runs. CI runs the suite once per generation.
-- `make fork-up fork-test fork-down` runs `crates/midnight-contract/tests/fork_crossing.rs` on a chain that starts on ledger 8. The test forks the chain to ledger 9 in the middle, with `make fork-upgrade`, so every run needs a new `fork-up`. It checks the three crossings, the Dust registrations, a call to a contract deployed before the fork, and a transfer of each kind.
+- `make dev-up` runs a ledger 9 devnet, and `make dev-up DEVNET_LEDGER=8` a ledger 8 one. Both use ports 9944 and 8088, so run one at a time. `make test-e2e` runs the E2E suite against the devnet that runs. CI runs the suite once per generation. On ledger 8 it runs only the tests that deploy or call no compiled contract.
+- `make fork-up fork-test fork-down` runs `crates/midnight-contract/tests/fork_crossing.rs` on a chain that starts on ledger 8. The test forks the chain to ledger 9 in the middle, with `make fork-upgrade`, so every run needs a new `fork-up`. It checks the three crossings, the Dust registrations, and a transfer of each kind.

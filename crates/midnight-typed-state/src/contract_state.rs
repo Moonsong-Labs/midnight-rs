@@ -114,12 +114,8 @@ mod tests {
     /// cannot verify.
     #[test]
     fn ledger_8_state_keeps_its_data_keys_and_committee() {
-        let vk_bytes = std::fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../devnet/contracts/counter/compiled/keys/increment.verifier"
-        ))
-        .unwrap();
-        let vk = tagged_deserialize(&mut vk_bytes.as_slice()).unwrap();
+        // A `verifier-key[v6]`, the only key version ledger 8 verifies.
+        let vk = midnight_helpers::ledger_8::mn_ledger::dust::SPEND_VK.clone();
         let member = SigningKey::from_bytes(&[7; 32]).unwrap().verifying_key();
         let old = ContractStateV8::<InMemoryDB>::new(
             StateValueV8::Array(vec![StateValueV8::from(5u64)].into()),

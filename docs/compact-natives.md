@@ -6,8 +6,8 @@ Reference for everyone touching the Compact interpreter (`crates/compact/interpr
 
 The complete, canonical list lives in the Compact compiler, not in `midnight-ledger`. It is two `declare-native-entry` tables of the compiler fork, at the commit that `COMPACT_REV` in the `Makefile` names:
 
-- [`compiler/midnight-natives.ss`](https://github.com/RomarQ/compact/blob/fa2181fbc6dac2135defdb4f55ce10d8332185d5/compiler/midnight-natives.ss) declares the natives of every compile.
-- [`compiler/zkir-v3-natives.ss`](https://github.com/RomarQ/compact/blob/fa2181fbc6dac2135defdb4f55ce10d8332185d5/compiler/zkir-v3-natives.ss) declares the natives that the compiler adds with `--feature-zkir-v3`, and the native types of the secp256k1, secp256r1 and Curve25519 curves.
+- [`compiler/midnight-natives.ss`](https://github.com/RomarQ/compact/blob/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/compiler/midnight-natives.ss) declares the natives of every compile.
+- [`compiler/zkir-v3-natives.ss`](https://github.com/RomarQ/compact/blob/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/compiler/zkir-v3-natives.ss) declares the other natives of every compile, and the native types of the secp256k1, secp256r1 and Curve25519 curves.
 
 Each entry has one of two kinds:
 
@@ -25,11 +25,11 @@ A name that shows up in a circuit's lowered IR reaches one of four places. Only 
 1. **Native circuits (pure builtins).** The `declare-native-entry circuit` primitives. In our interpreter these are `try_builtin_typed(symbol, args, arg_types)` arms.
 2. **Native witnesses.** The `declare-native-entry witness` primitives (`ownPublicKey`, `createZswapInput`, `createZswapOutput`). These are effectful: they read the caller's key or capture a coin to add to the transaction. In our interpreter they are modelled by the `WitnessNative` enum and matched exhaustively in `eval_witness_call`, because routing them to the witness provider or `try_builtin_typed` would error.
 3. **Kernel ledger methods.** `kernel.self()`, `kernel.mintShielded(...)`, `kernel.claimZswapCoinSpend(...)`, `kernel.claimZswapCoinReceive(...)`, and friends are methods on the runtime-managed `Kernel` ledger type. They are not natives; the compiler lowers them to `ledger-query` op sequences, which the interpreter runs through `exec_ledger_query` (the same path as any other ledger read/write). `kernel.self()` is the one context read that needs the real contract address injected.
-4. **High-level standard-library circuits.** `mintShieldedToken`, `sendShielded`, `receiveShielded`, `sendImmediateShielded`, `sendUnshielded`, `receiveUnshielded`, etc. (in [`compiler/standard-library.compact`](https://github.com/RomarQ/compact/blob/fa2181fbc6dac2135defdb4f55ce10d8332185d5/compiler/standard-library.compact) of the fork) are ordinary Compact circuits. They are compiled inline and decompose into the primitives above. They need no interpreter support of their own; they work as soon as the natives and kernel methods they call do. For example `mintShieldedToken` lowers to `tokenType` (persistentCommit) plus `kernel.self()`, `kernel.mintShielded`, `createZswapOutput`, `coinCommitment` (persistentHash), `kernel.claimZswapCoinSpend`, and the mint-to-self `kernel.claimZswapCoinReceive` branch.
+4. **High-level standard-library circuits.** `mintShieldedToken`, `sendShielded`, `receiveShielded`, `sendImmediateShielded`, `sendUnshielded`, `receiveUnshielded`, etc. (in [`compiler/standard-library.compact`](https://github.com/RomarQ/compact/blob/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/compiler/standard-library.compact) of the fork) are ordinary Compact circuits. They are compiled inline and decompose into the primitives above. They need no interpreter support of their own; they work as soon as the natives and kernel methods they call do. For example `mintShieldedToken` lowers to `tokenType` (persistentCommit) plus `kernel.self()`, `kernel.mintShielded`, `createZswapOutput`, `coinCommitment` (persistentHash), `kernel.claimZswapCoinSpend`, and the mint-to-self `kernel.claimZswapCoinReceive` branch.
 
 ## How the reference TypeScript runtime handles these
 
-The reference path never dispatches on native names and has no native table of its own. For each native, the compiler emits TypeScript that calls the JS symbol named in the second field of the `declare-native-entry` (`__compactRuntime.SYMBOL`). `__compactRuntime` is the runtime package (the source is [`runtime/src/`](https://github.com/RomarQ/compact/tree/fa2181fbc6dac2135defdb4f55ce10d8332185d5/runtime/src) of the fork), which implements every primitive: the pure ones in `built-ins.ts`, the Zswap witnesses in `zswap.ts`. A consumer loads the compiler-generated contract JS and runs it; the runtime supplies the implementations by direct function call.
+The reference path never dispatches on native names and has no native table of its own. For each native, the compiler emits TypeScript that calls the JS symbol named in the second field of the `declare-native-entry` (`__compactRuntime.SYMBOL`). `__compactRuntime` is the runtime package (the source is [`runtime/src/`](https://github.com/RomarQ/compact/tree/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/runtime/src) of the fork), which implements every primitive: the pure ones in `built-ins.ts`, the Zswap witnesses in `zswap.ts`. A consumer loads the compiler-generated contract JS and runs it; the runtime supplies the implementations by direct function call.
 
 So that path gets "all of them, never missing one" for free: the compiler is the single source that both defines the natives and wires each call straight to its runtime implementation. The runtime's `createZswapOutput`, for instance, does exactly what our interpreter's special-case does (capture `(coin, recipient)`, insert the coin commitment, append to the local Zswap outputs); `ownPublicKey` just returns the caller's coin public key from the circuit context.
 
@@ -73,7 +73,7 @@ The interpreter implements every native of `midnight-natives.ss`.
 
 ### ZKIR v3 natives (`zkir-v3-natives.ss`)
 
-The compiler declares these natives only with `--feature-zkir-v3`. A contract compiled for ZKIR v3 gets `verifier-key[v7]` keys, which only ledger 9 accepts.
+Every compile declares these natives. The compiler writes only ZKIR v3, so every contract gets `verifier-key[v7]` keys, which only ledger 9 accepts.
 
 | Native | Symbols | Returns | Status |
 | --- | --- | --- | --- |

@@ -1,6 +1,5 @@
-# A dev chain that runs ledger 9 from genesis. `make DEVNET_LEDGER=9 dev-up`
-# starts it on the same ports as devnet/docker-compose.yml, so run one at a
-# time.
+# A dev chain that runs ledger 9 from genesis. `make dev-up` starts it on the
+# same ports as devnet/docker-compose.yml, so run one at a time.
 services:
   node:
     container_name: midnight-example-node-l9

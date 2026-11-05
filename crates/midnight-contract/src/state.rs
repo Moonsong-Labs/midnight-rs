@@ -257,6 +257,17 @@ mod tests {
         .unwrap()
     }
 
+    /// A `verifier-key[v6]`. The compiler writes only `verifier-key[v7]`.
+    fn v6_key() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        midnight_serialize::tagged_serialize(
+            &*midnight_helpers::ledger_8::mn_ledger::dust::SPEND_VK,
+            &mut bytes,
+        )
+        .unwrap();
+        bytes
+    }
+
     fn mismatch(result: Result<(), ContractError>) -> KeyMismatch {
         match result {
             Err(ContractError::VerifierKeyMismatch { reason, .. }) => reason,
@@ -303,8 +314,8 @@ mod tests {
     /// in the other.
     #[test]
     fn a_key_of_either_version_passes_on_an_operation_that_holds_both() {
-        let v6 = verifier_key_file("counter", "increment");
-        let v7 = verifier_key_file("counter-zkir-v3", "increment");
+        let v6 = v6_key();
+        let v7 = verifier_key_file("counter", "increment");
         let mut op = crate::ledger_9::state::operation("increment", &v6).unwrap();
         op.v3 = crate::ledger_9::state::operation("increment", &v7)
             .unwrap()
@@ -326,7 +337,21 @@ mod tests {
             .iter()
             .find(|(circuit, _)| circuit == "increment")
             .expect("increment verifier key");
-        assert_eq!(verifier_key_version(key), Ok(VerifierKeyVersion::V6));
+        assert_eq!(verifier_key_version(key), Ok(VerifierKeyVersion::V7));
+    }
+
+    /// A deploy of a `verifier-key[v7]` on ledger 8 otherwise fails at the
+    /// node, after the proof and with no word about the key.
+    #[test]
+    fn ledger_8_refuses_a_v7_key_before_the_build() {
+        let v7 = verifier_key_file("counter", "increment");
+        match crate::ledger_8::state::accepted_key("increment", &v7) {
+            Err(ContractError::Construction(message)) => {
+                assert!(message.contains("verifier-key[v7]"), "{message}");
+            }
+            other => panic!("expected a Construction error, got {other:?}"),
+        }
+        crate::ledger_9::state::accepted_key("increment", &v7).unwrap();
     }
 
     /// The generations' own constructors panic on a key that does not decode,

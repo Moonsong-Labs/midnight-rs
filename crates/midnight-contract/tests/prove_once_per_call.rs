@@ -7,9 +7,8 @@
 //! Counting proofs needs a real prover: mock proving is not available for user
 //! circuits (upstream `MockProver::check` rejects non-builtin circuits).
 //!
-//! A call with the artifacts of another compile of the contract must make no
-//! proof. Its local verifier key is different from the deployed key, so the
-//! call must refuse before the build.
+//! A call whose local verifier key is not the deployed key must make no
+//! proof: the call must refuse before the build.
 //!
 //! The same prover then fails on purpose. A call, a deploy and a maintenance
 //! update must each return the failure typed, as `WalletError::Proving` inside
@@ -27,9 +26,11 @@ mod counter {
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use midnight_contract::{ContractError, KeyMismatch};
+use midnight_contract::{
+    ContractError, FsZkConfigProvider, KeyMismatch, ZkConfigError, ZkConfigProvider,
+};
 use midnight_helpers::{DefaultDB, StdRng};
-use midnight_provider::{MidnightProvider, ProviderError, WalletError};
+use midnight_provider::{MidnightProvider, ProofProviders, ProviderError, WalletError};
 
 /// The message of every proof that [`ProofCounter`] fails.
 const MARKER: &str = "the test prover fails on purpose";
@@ -41,13 +42,46 @@ const MARKER: &str = "the test prover fails on purpose";
 /// not grow is the number of proofs covering the circuit itself.
 ///
 /// While `fail` is set, every proof fails with [`MARKER`].
-#[derive(Default)]
 struct ProofCounter {
     ledger_8: midnight_helpers::ledger_8::LocalProofServer,
-    ledger_9: midnight_helpers::ledger_9::LocalProofServer,
+    /// The SDK's prover, which proves the ZKIR v3 circuits of the counter.
+    ledger_9: Arc<dyn midnight_helpers::ledger_9::ProofProvider<DefaultDB>>,
     with_contract_action: AtomicUsize,
     dust_only: AtomicUsize,
     fail: AtomicBool,
+}
+
+impl Default for ProofCounter {
+    fn default() -> Self {
+        Self {
+            ledger_8: Default::default(),
+            ledger_9: ProofProviders::local().ledger_9(),
+            with_contract_action: AtomicUsize::default(),
+            dust_only: AtomicUsize::default(),
+            fail: AtomicBool::default(),
+        }
+    }
+}
+
+/// The counter's artifacts, with the `increment_by` verifier key in place of
+/// the `increment` key.
+struct SwappedKey(FsZkConfigProvider);
+
+impl ZkConfigProvider for SwappedKey {
+    fn prover_key(&self, circuit: &str) -> Result<Vec<u8>, ZkConfigError> {
+        self.0.prover_key(circuit)
+    }
+
+    fn verifier_key(&self, circuit: &str) -> Result<Vec<u8>, ZkConfigError> {
+        match circuit {
+            "increment" => self.0.verifier_key("increment_by"),
+            other => self.0.verifier_key(other),
+        }
+    }
+
+    fn zkir(&self, circuit: &str) -> Result<Vec<u8>, ZkConfigError> {
+        self.0.zkir(circuit)
+    }
 }
 
 impl ProofCounter {
@@ -163,13 +197,10 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         "the call should have advanced the counter"
     );
 
-    // The same source, compiled for ZKIR v3, gives a v7 verifier key, and the
-    // deploy above stored the v6 key.
     counter_proofs.reset();
-    let other_compile = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../devnet/contracts/counter-zkir-v3/compiled");
+    let swapped = SwappedKey(FsZkConfigProvider::new(counter::ZK_CONFIG_DIR));
     let refused = counter::Contract::at(&provider, contract.address())
-        .with_zk_config(other_compile)
+        .with_zk_config(Arc::new(swapped))
         .build()
         .circuits()
         .increment()
