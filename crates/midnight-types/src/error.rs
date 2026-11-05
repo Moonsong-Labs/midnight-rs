@@ -258,9 +258,10 @@ pub enum WalletError {
     InvalidAddress(String),
 
     /// The recipient address encodes another network than the one that the
-    /// parse expected. The keys in such an address are unusable on this chain,
-    /// so building a transfer against it would send funds nowhere recoverable.
-    #[error("address is for network `{actual}`, but this wallet is on `{expected}`")]
+    /// parse expected. The keys or the user address in such an address are
+    /// unusable on the expected network, so a transfer to it would send funds
+    /// nowhere recoverable.
+    #[error("address is for network `{actual}`, but the parse expected `{expected}`")]
     AddressNetworkMismatch {
         /// The network that the parse expected.
         expected: String,
