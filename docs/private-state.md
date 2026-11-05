@@ -18,7 +18,7 @@ A Compact contract has exactly one `PS` (private state) type per address: a stru
 
 ## The journal
 
-Rather than a single mutable slot per address, this SDK stores private state as an append-only **journal** of [`Snapshot`](../crates/midnight-private-state/src/lib.rs)s, one per submitted transaction whose witnesses actually modified the private state (a call whose post-buffer matches the baseline is a no-op and no snapshot is recorded). Each snapshot is keyed by the producing tx's `extrinsic_hash` and, once the chain finalizes that tx, by the block it landed in (`block_hash` + `block_height`). Snapshots have a small lifecycle:
+Rather than a single mutable slot per address, this SDK stores private state as an append-only **journal** of [`Snapshot`](../crates/midnight-private-state/src/lib.rs)s, one per submitted transaction whose witnesses actually modified the private state (a call whose post-buffer matches the baseline is a no-op and no snapshot is recorded). A deploy that has a private state records the first snapshot of the new contract (see [Threading through a deploy](#threading-through-a-deploy)). Each snapshot is keyed by the producing tx's `extrinsic_hash` and, once the chain finalizes that tx, by the block it landed in (`block_hash` + `block_height`). Snapshots have a small lifecycle:
 
 | Status      | Meaning                                                                                                                                                                                                |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -133,6 +133,12 @@ The build-only calls of a call builder, `.build()` and `.without_dust()`, go thr
 
 The generated witness adapter writes the buffer only when the `serde_json` encoding of the state changes, and an empty buffer counts as the encoding of `Default`. So a call whose witnesses only read the state records no snapshot. A `PrivateState` with a `HashMap` can encode in another key order with no change of value, which reads as a change. Prefer an ordered map, such as a `BTreeMap`.
 
+### Threading through a deploy
+
+A deploy records the private state of the new contract as its first snapshot. The constructor's witnesses start from the state of the generated `with_initial_private_state`, and the deploy records the state that they leave. With `with_initial_state`, which skips the constructor, the deploy records the initial private state as it is.
+
+The deploy does steps 3 and 4 of a call, with no `depends_on`, because the address is new. An empty private state records nothing, so a deploy needs a store only for a private state that is not empty. Without one, the deploy fails with `ContractError::Construction` before any proof. `PendingDeploy::wait_finalized` settles the snapshot as in step 6. A best-block wait, and so the `.await` of the builder, leaves it `Pending`. The first call on the contract starts from it, `Pending` or `Confirmed`.
+
 ### Fallible-phase verdict
 
 The SDK reads the `Midnight` pallet's outcome events for the extrinsic and exposes them as `TxInBlock::verdict`:
@@ -155,6 +161,8 @@ The journal model naturally supports two recovery flavors:
 If the process stops after the pending append and before the submit, the snapshot is on disk for a tx that never reached the node. The next call treats it as the head. Reconcile it: when the TTL passes and the chain holds no such tx, call `mark_failed` on it. If the process stops during the submit, the fate of the tx is unknown, as after a `SubmitError::SubmitRpc`.
 
 If the process is interrupted between the pending append and `wait_finalized`, the pending snapshot is on disk. The next run treats it as the current head; once the chain catches up, manual `confirm` (or, when wired, automatic confirmation via finality detection) promotes it. If the tx actually failed, `mark_failed` drops it. midnight-js has the same hazard and documents it as a known limitation; this SDK does the same.
+
+A deploy's snapshot needs no reconcile. No contract exists at its address unless the deploy lands, and then the snapshot holds the right private state.
 
 ## Limitations and future work
 

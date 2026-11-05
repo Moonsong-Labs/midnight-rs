@@ -1,0 +1,27 @@
+import CompactStandardLibrary;
+
+// The public key of the owner, which the constructor derives from the
+// deployer's secret.
+export ledger owner: Bytes<32>;
+
+// A counter that only the owner advances.
+export ledger round: Counter;
+
+// The owner's secret, from the contract's private state.
+witness owner_secret(): Bytes<32>;
+
+// Make the deployer the owner, and start the round at `start`.
+constructor(start: Uint<16>) {
+  owner = owner_key(owner_secret());
+  round.increment(disclose(start));
+}
+
+// Advance the round by one. Only the owner's secret passes the check.
+export circuit bump(): [] {
+  assert(owner == owner_key(owner_secret()), "only the owner bumps");
+  round.increment(1);
+}
+
+circuit owner_key(sk: Bytes<32>): Bytes<32> {
+  return disclose(persistentHash<Vector<2, Bytes<32>>>([pad(32, "owned-counter:pk:"), sk]));
+}

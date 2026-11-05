@@ -72,7 +72,6 @@ async fn main() -> anyhow::Result<()> {
     // 1. Deploy the counter contract governed by a 2-of-3 committee.
     println!("1. Deploying a governable contract (2-of-3 committee)...");
     let contract = counter::Contract::deploy(&provider)
-        .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(counter::ZK_CONFIG_DIR)
         .with_maintenance_authority(committee, 2)
         .await?;

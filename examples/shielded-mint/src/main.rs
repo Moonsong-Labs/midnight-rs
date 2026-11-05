@@ -77,7 +77,6 @@ async fn main() -> anyhow::Result<()> {
     // 2. Deploy the mint contract.
     println!("2. Deploying mint contract...");
     let contract = shielded_mint::Contract::deploy(provider)
-        .with_initial_state(shielded_mint::LedgerInitialState)
         .with_zk_config(shielded_mint::ZK_CONFIG_DIR)
         .await?;
     let address = contract.address().to_string();
