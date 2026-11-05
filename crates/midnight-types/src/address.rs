@@ -176,15 +176,9 @@ mod tests {
     /// without an error.
     #[test]
     fn a_parsed_unshielded_address_names_the_owner_its_wallet_tracks_on_each_generation() {
-        use crate::{Network, WalletError};
+        use crate::Network;
 
         let address = seed().unshielded_address(Network::Undeployed);
-        let err = super::parse_unshielded_recipient(&address, Network::Testnet).unwrap_err();
-        assert!(
-            matches!(err, WalletError::AddressNetworkMismatch { .. }),
-            "expected AddressNetworkMismatch, got: {err}"
-        );
-
         let recipient = super::parse_unshielded_recipient(&address, Network::Undeployed).unwrap();
         assert_eq!(recipient, seed().unshielded_recipient());
         let seed8 = IntoLedger::into_ledger(&seed());

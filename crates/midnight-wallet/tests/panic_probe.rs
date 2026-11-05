@@ -3,10 +3,13 @@
 //! `TryFrom<&WalletAddress> for ShieldedWallet` asserts the payload length
 //! instead of returning its `InvalidCoinKeyLen` variant, and it validates the
 //! HRP's prefix and credential segments but never its network segment.
-//! `TryFrom<&WalletAddress> for DustWallet` also never checks the network
-//! segment.
+//! `TryFrom<&WalletAddress>` for `DustWallet` and for `UnshieldedWallet` also
+//! never checks the network segment.
 
-use midnight_wallet::{Network, Seed, WalletError, parse_dust_address, parse_shielded_recipient};
+use midnight_wallet::{
+    Network, Seed, WalletError, parse_dust_address, parse_shielded_recipient,
+    parse_unshielded_recipient,
+};
 
 fn seed() -> Seed {
     Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000001").unwrap()
@@ -92,6 +95,17 @@ fn cross_network_dust_address_is_rejected() {
     let testnet = seed().dust_address(Network::Testnet);
     let err = parse_dust_address(&testnet, Network::Undeployed)
         .expect_err("a testnet Dust address must not be accepted by an undeployed wallet");
+    assert!(
+        matches!(err, WalletError::AddressNetworkMismatch { .. }),
+        "expected AddressNetworkMismatch, got: {err}"
+    );
+}
+
+#[test]
+fn cross_network_unshielded_address_is_rejected() {
+    let testnet = seed().unshielded_address(Network::Testnet);
+    let err = parse_unshielded_recipient(&testnet, Network::Undeployed)
+        .expect_err("a testnet unshielded address must not be accepted by an undeployed wallet");
     assert!(
         matches!(err, WalletError::AddressNetworkMismatch { .. }),
         "expected AddressNetworkMismatch, got: {err}"
