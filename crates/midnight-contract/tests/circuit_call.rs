@@ -478,7 +478,10 @@ fn run_mint(
         &program,
         state,
         &args,
-        interpreter::Env { address, ..epoch() },
+        interpreter::Env {
+            address: Some(address),
+            ..epoch()
+        },
     )
     .expect("mint circuit must execute");
 
@@ -542,7 +545,10 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
         &no_program(),
         state,
         &[],
-        interpreter::Env { address, ..epoch() },
+        interpreter::Env {
+            address: Some(address),
+            ..epoch()
+        },
     )
     .expect("kernel.self() circuit executes");
 
