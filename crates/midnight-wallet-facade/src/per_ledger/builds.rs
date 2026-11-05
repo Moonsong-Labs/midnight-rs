@@ -28,7 +28,9 @@ impl ReservedBuild {
     }
 
     /// The build, out of the reservation's custody. Whoever takes it owns
-    /// handing the inputs back if the build never reaches the chain.
+    /// handing the inputs back if the build never reaches the chain. Once the
+    /// build is proven, that owner calls [`WalletFacade::persist_reservation`]
+    /// with what the build spent.
     pub fn into_prepared(self) -> PreparedTransfer {
         self.0
     }
@@ -94,7 +96,8 @@ pub trait WalletBuilds: WalletFacade {
     /// pending build already spent.
     ///
     /// The reservation stands until the caller releases it. A build that never
-    /// reaches the chain must hand the coins back.
+    /// reaches the chain must hand the coins back. Once the build is proven,
+    /// the caller calls [`WalletFacade::persist_reservation`] with the coins.
     ///
     /// An implementation refuses a nullifier that `nullifiers` names twice
     /// with [`WalletError::DuplicateInput`], before it spends anything. A
