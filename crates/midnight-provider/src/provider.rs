@@ -501,6 +501,11 @@ impl MidnightProvider {
     /// wallet's pending list as one transition, so a second build in this
     /// process cannot draw the same input. Proving runs after that, with the
     /// wallet free.
+    ///
+    /// Read `recipient` from a shielded address with
+    /// [`parse_shielded_recipient`](midnight_types::address::parse_shielded_recipient),
+    /// or derive it from a seed with
+    /// [`Seed::shielded_recipient`](midnight_types::hd::Seed::shielded_recipient).
     pub fn transfer_shielded<'a>(
         &'a self,
         token_type: ShieldedTokenType,
@@ -561,6 +566,11 @@ impl MidnightProvider {
     /// Build an unshielded (UTXO) transfer transaction. See
     /// [`Self::transfer_shielded`] for reservation semantics and the
     /// `.await` vs `.build()` distinction.
+    ///
+    /// Read `recipient` from an unshielded address with
+    /// [`parse_unshielded_recipient`](midnight_types::address::parse_unshielded_recipient),
+    /// or derive it from a seed with
+    /// [`Seed::unshielded_recipient`](midnight_types::hd::Seed::unshielded_recipient).
     pub fn transfer_unshielded<'a>(
         &'a self,
         token_type: UnshieldedTokenType,
