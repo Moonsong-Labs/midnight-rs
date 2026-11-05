@@ -50,11 +50,11 @@ midnight-core                    meta-crate; re-exports the public API
   │                              midnight-types's vocabulary; nothing else
   │
   ├── midnight-wallet            the local implementation; depends on the two crates above
-  │     ├── handle.rs            Wallet: the Clone handle on the shared state, and the facade over it
+  │     ├── handle.rs            Wallet: the Clone handle (identity, state lock, sync lock), and the facade over it
   │     ├── background.rs        BackgroundSync: Wallet::sync_in_background resyncs until the handle drops
   │     ├── sync.rs              Wallet::from_seed / from_mnemonic / from_mnemonic_with_passphrase or
   │     │                        WalletBuilder::new → WalletBuilder → sync(source), pinned by default
-  │     ├── wallet.rs            WalletState { seed, state of the chain's generation }, crossing forks
+  │     ├── wallet.rs            WalletState: the state in the chain's generation, crossing forks
   │     ├── ledger_8 / ledger_9  the state, balance and pending reservations of one generation
   │     └── storage.rs           generation-based atomic persistence
   │
