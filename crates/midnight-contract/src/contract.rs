@@ -723,7 +723,7 @@ where
             (Some(state), _) => (state, self.initial_private_state),
             (None, Some(constructor)) => {
                 constructor.check_args(&self.constructor_args)?;
-                let (coin_public_key, _) = provider.shielded_public_keys().await?;
+                let coin_public_key = provider.shielded_recipient().await?.coin_public_key;
                 constructor.run(
                     &self.constructor_args,
                     &*self.witnesses,

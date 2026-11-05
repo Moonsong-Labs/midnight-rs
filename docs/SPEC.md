@@ -220,7 +220,7 @@ Internally:
 ```
 the state: initial_state as it is, or else the constructor's run (neither → Construction)
   ├─ Constructor::check_args                  // a missing argument → Construction
-  ├─ provider.shielded_public_keys()          // ownPublicKey() returns the wallet's coin key
+  ├─ provider.shielded_recipient().coin_public_key // ownPublicKey() returns the wallet's coin key
   ├─ Constructor::run with no contract address and at the wall-clock time, with the
   │  witnesses and the initial private state (Interpreter on a failure or a kernel.self())
   └─ refuse a ledger effect or a Zswap input or output (Construction)
