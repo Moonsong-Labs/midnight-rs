@@ -160,6 +160,8 @@ pub fn run_step(
         &args,
         interpreter::Env {
             witnesses,
+            // The TS driver runs each circuit at `dummyContractAddress()`.
+            address: Some(Default::default()),
             coin_public_key,
             ..interpreter::Env::new(block_time)
         },

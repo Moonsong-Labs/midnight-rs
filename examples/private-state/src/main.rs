@@ -100,7 +100,6 @@ async fn main() -> anyhow::Result<()> {
     // 1. Deploy the secret-counter contract.
     println!("1. Deploying secret-counter...");
     let contract = secret_counter::Contract::deploy(&provider)
-        .with_initial_state(secret_counter::LedgerInitialState::default())
         .with_zk_config(secret_counter::ZK_CONFIG_DIR)
         .await?;
     println!("   address: {}", contract.address());
