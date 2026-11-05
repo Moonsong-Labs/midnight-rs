@@ -33,7 +33,7 @@ use hex::FromHex;
 use midnight_types::HashOutput;
 
 use super::helpers;
-use helpers::{DefaultDB, DustNullifier, DustSpend, Nullifier, ProofPreimageMarker, Timestamp};
+use helpers::{DustNullifier, Nullifier, Timestamp};
 use tracing::warn;
 
 use super::types::DustSpendBatch;
@@ -43,15 +43,15 @@ use crate::storage::{
 };
 use crate::{ReservedInput, SpentUtxoKey, WalletError};
 
-/// One pending batch of dust spends from a single `speculative_spend` call.
-///
-/// A later build applies the `spends` of each batch to a `DustWallet` clone
-/// with the clone's current state, so its coin selection skips the reserved
+/// The Dust UTXOs that one `speculative_spend` call spent, named by their
 /// nullifiers.
+///
+/// A later build selects from a Dust state that leaves these UTXOs out, so it
+/// cannot spend them again.
 #[derive(Clone)]
 pub(crate) struct PendingDustBatch {
-    /// The spends as built. Tagged-serializable so they can be persisted.
-    pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
+    /// The `old_nullifier` of each spend of the batch.
+    pub nullifiers: Vec<DustNullifier>,
     /// The chain time of the build context, which a release names.
     pub reserved_at: Timestamp,
     /// The TTL of the transaction, for TTL eviction.
@@ -69,7 +69,7 @@ impl PendingDustBatch {
     }
 
     fn spends(&self, nullifier: &DustNullifier) -> bool {
-        self.spends.iter().any(|s| s.old_nullifier == *nullifier)
+        self.nullifiers.contains(nullifier)
     }
 }
 
@@ -111,7 +111,7 @@ impl PendingReservations {
     ) {
         self.dust
             .extend(dust_batches.into_iter().map(|b| PendingDustBatch {
-                spends: b.spends,
+                nullifiers: b.spends.iter().map(|s| s.old_nullifier).collect(),
                 reserved_at,
                 expires_at,
             }));
@@ -129,8 +129,7 @@ impl PendingReservations {
             }));
     }
 
-    /// View the pending dust batches. A build marks their spends as spent on
-    /// its `DustWallet` clone, so its coin selection skips them.
+    /// View the pending dust batches.
     pub(crate) fn dust_batches(&self) -> impl Iterator<Item = &PendingDustBatch> {
         self.dust.iter()
     }
@@ -257,7 +256,7 @@ impl PendingReservations {
         let mut dust = Vec::with_capacity(self.dust.len());
         for p in &self.dust {
             dust.push(StoredPendingDustBatch {
-                spends_hex: tagged_to_hex(&p.spends, "pending dust spends")?,
+                nullifiers_hex: tagged_to_hex(&p.nullifiers, "pending dust nullifiers")?,
                 reserved_at_secs: p.reserved_at.to_secs(),
                 expires_at_secs: p.expires_at.to_secs(),
             });
@@ -326,7 +325,7 @@ impl PendingReservations {
         let mut dust = Vec::with_capacity(stored.dust.len());
         for s in stored.dust {
             dust.push(PendingDustBatch {
-                spends: tagged_from_hex(&s.spends_hex, "pending dust spends")?,
+                nullifiers: tagged_from_hex(&s.nullifiers_hex, "pending dust nullifiers")?,
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
                 expires_at: Timestamp::from_secs(s.expires_at_secs),
             });
@@ -369,7 +368,10 @@ pub(super) mod test_support {
     use super::*;
     use crate::Seed;
     use helpers::mn_ledger::dust::DustCommitment;
-    use helpers::{DustLocalState, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage, Sp};
+    use helpers::{
+        DefaultDB, DustLocalState, DustSpend, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage,
+        ProofPreimageMarker, Sp,
+    };
 
     /// The key of output `output_index` of the transaction whose intent
     /// hash repeats the byte `intent_hash`.
@@ -385,8 +387,8 @@ pub(super) mod test_support {
     }
 
     /// A structurally valid `DustSpend` whose identity is `nullifier(n)`.
-    /// The proof is a placeholder preimage. The pending paths read only
-    /// `old_nullifier`, and persistence round-trips the whole struct.
+    /// The proof is a placeholder preimage, because a reservation keeps only
+    /// `old_nullifier`.
     pub(crate) fn dust_spend(n: u64) -> DustSpend<ProofPreimageMarker, DefaultDB> {
         DustSpend {
             v_fee: 1,
@@ -569,7 +571,7 @@ mod tests {
         p.clear_confirmed(&[], &[nullifier(8)]);
         let batches: Vec<_> = p.dust_batches().collect();
         assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].spends[0].old_nullifier, nullifier(9));
+        assert_eq!(batches[0].nullifiers, vec![nullifier(9)]);
     }
 
     /// The snapshot directory is named by public address, so no file in it
@@ -618,7 +620,7 @@ mod tests {
             .expect("pending.json should load");
         let batches: Vec<_> = loaded.dust_batches().collect();
         assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].spends[0].old_nullifier, nullifier(1));
+        assert_eq!(batches[0].nullifiers, vec![nullifier(1)]);
     }
 
     #[test]
@@ -699,7 +701,7 @@ mod tests {
         // batch and leaves the unrelated one alone.
         assert_eq!(
             p.dust_batches()
-                .map(|b| b.spends[0].old_nullifier)
+                .map(|b| b.nullifiers[0])
                 .collect::<Vec<_>>(),
             vec![nullifier(3)]
         );

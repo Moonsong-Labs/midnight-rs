@@ -813,11 +813,30 @@ impl Wallet {
 
     /// Nullifiers of the Dust UTXOs that a reservation holds; see
     /// [`Self::reservation_holds`].
-    pub(crate) fn reserved_dust_nullifiers(&self) -> impl Iterator<Item = &DustNullifier> {
+    fn reserved_dust_nullifiers(&self) -> impl Iterator<Item = &DustNullifier> {
         self.pending
             .dust_batches()
             .filter(|batch| self.reservation_holds(batch.expires_at))
-            .flat_map(|batch| batch.spends.iter().map(|spend| &spend.old_nullifier))
+            .flat_map(|batch| &batch.nullifiers)
+    }
+
+    /// The confirmed Dust state less the UTXOs that a reservation holds; see
+    /// [`Self::reservation_holds`]. `None` when the wallet has no Dust state.
+    ///
+    /// The spendable Dust of a balance and the Dust that a build selects from
+    /// both come from this state, so the two agree. It keeps the confirmed
+    /// commitment tree, because a Dust spend proves against a root that the
+    /// chain holds in its root history.
+    pub(super) fn unreserved_dust(&self) -> Option<helpers::DustLocalState<DefaultDB>> {
+        let confirmed = self.dust_wallet.dust_local_state.as_deref()?;
+        Some(
+            self.reserved_dust_nullifiers()
+                .fold(confirmed.clone(), |state, nullifier| {
+                    state
+                        .remove_utxo(nullifier)
+                        .expect("remove_utxo returns Ok in every ledger generation")
+                }),
+        )
     }
 
     /// See [`crate::Wallet::save`].
@@ -988,48 +1007,8 @@ impl Wallet {
                 shielded.state.coins = shielded.state.coins.remove(nullifier);
             }
 
-            // Add pending-spend nullifiers to the dust wallet's `spent_utxos`
-            // set so speculative_spend skips them, but do not overwrite
-            // `dust_local_state` with the prior tx's post-spend tree.
-            //
-            // `DustWallet::mark_spent(spends, updated_state)` also overwrites
-            // `dust_local_state`. If we apply the speculative `updated_state`,
-            // the dust commitment tree the proof witnesses against is the
-            // wallet's projected post-spend tree, which has no corresponding
-            // entry in the chain's `root_history` until the prior tx has been
-            // processed at the chain-block level, and even then it only
-            // matches if no other dust events landed in the same block.
-            // Re-passing the current state makes the overwrite a no-op while
-            // still adding the nullifiers, keeping the witnessed root aligned
-            // with the chain's `root_history.get(ctime)` lookup at the proof's
-            // declared timestamp.
             let mut dust = self.dust_wallet.clone();
-            match dust.dust_local_state.clone() {
-                Some(state) => {
-                    for batch in self.pending.dust_batches() {
-                        dust.mark_spent(&batch.spends, state.clone());
-                    }
-                }
-                // No construction path in this crate produces `None` here
-                // alongside pending batches: every `DustWallet` is built
-                // with `Some(&parameters)`, so even a pre-registration
-                // wallet carries `Some(empty)` state. `None` is only
-                // reachable via deserialized/legacy or manually-mutated
-                // state, and with nothing pending there is nothing to
-                // replay. The guard below is defensive: pending dust
-                // reservations with no state to apply them to would
-                // silently disable double-build prevention, so refuse and
-                // let the caller sync first.
-                None => {
-                    let pending_dust = self.pending.dust_batches().count();
-                    if pending_dust > 0 {
-                        return Err(WalletError::Transfer(format!(
-                            "wallet has {pending_dust} pending dust reservation(s) but no dust \
-                             state; wait for dust sync before building"
-                        )));
-                    }
-                }
-            }
+            dust.dust_local_state = self.unreserved_dust().map(Sp::new);
 
             let wallet = ContextWallet {
                 root_seed: Some(seed.clone()),
@@ -1668,47 +1647,6 @@ mod tests {
             decode_ledger_parameters(&block_with_params(Some("zz".into()))),
             Err(WalletError::Sync(_))
         ));
-    }
-
-    #[test]
-    fn build_context_refuses_pending_dust_without_dust_state() {
-        let mut wallet = test_wallet(None);
-        wallet.dust_wallet.dust_local_state = None;
-        wallet.pending.reserve(
-            vec![dust_batch(&[7])],
-            Vec::new(),
-            Vec::new(),
-            Timestamp::from_secs(100),
-            Timestamp::MAX,
-        );
-
-        let err = match wallet.build_context_inner() {
-            Err(e) => e,
-            Ok(_) => panic!("expected build_context_inner to refuse"),
-        };
-        assert!(matches!(err, WalletError::Transfer(_)));
-        assert!(err.to_string().contains("pending dust reservation"));
-    }
-
-    #[test]
-    fn build_context_allows_missing_dust_state_with_no_pending_dust() {
-        // The register-dust bootstrap: no dust state yet, nothing pending.
-        let mut wallet = test_wallet(None);
-        wallet.dust_wallet.dust_local_state = None;
-        assert!(wallet.build_context_inner().is_ok());
-    }
-
-    #[test]
-    fn build_context_allows_pending_dust_when_state_present() {
-        let mut wallet = test_wallet(None);
-        wallet.pending.reserve(
-            vec![dust_batch(&[7])],
-            Vec::new(),
-            Vec::new(),
-            Timestamp::from_secs(100),
-            Timestamp::MAX,
-        );
-        assert!(wallet.build_context_inner().is_ok());
     }
 
     /// A build evicts an expired reservation before it selects, so the
@@ -2363,15 +2301,13 @@ mod tests {
     fn reserve_pending_keeps_reservation_when_persistence_fails() {
         // `storage_dir` points at a regular file, so `save_pending` cannot
         // create the wallet directory and the disk write fails. The write
-        // is best-effort: no panic, and the in-memory reservation must
-        // still gate `build_context_inner`.
+        // is best-effort: no panic, and the in-memory reservation stands.
         let dir = tempfile::TempDir::new().unwrap();
         let blocker = dir.path().join("not-a-directory");
         std::fs::write(&blocker, b"occupied").unwrap();
 
         let mut wallet = test_wallet(Some(blocker.clone()));
         wallet.last_tx_id = Some(3);
-        wallet.dust_wallet.dust_local_state = None;
         wallet.reserve_pending(
             vec![dust_batch(&[7])],
             vec![ukey(0xab, 0)],
@@ -2382,12 +2318,6 @@ mod tests {
 
         assert_eq!(wallet.pending.unshielded_spends().count(), 1);
         assert_eq!(wallet.pending.dust_batches().count(), 1);
-        // With no dust state to replay the pending batch against, the
-        // surviving reservation still refuses the build.
-        assert!(matches!(
-            wallet.build_context_inner(),
-            Err(WalletError::Transfer(_))
-        ));
 
         // Once the disk works again, a commit that moves nothing must
         // still write the reservation.
