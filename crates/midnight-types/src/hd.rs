@@ -40,8 +40,8 @@ use midnight_helpers::ledger_9::{
 use rand::RngCore;
 use zeroize::Zeroize;
 
-use crate::ledger_9::convert::IntoLedger;
-use crate::{Network, ShieldedRecipient};
+use crate::ledger_9::convert::{IntoLedger, IntoSdk};
+use crate::{Network, ShieldedRecipient, UnshieldedRecipient};
 
 /// The `role` level of an HD path: the asset family a key belongs to.
 ///
@@ -277,6 +277,19 @@ impl Seed {
     /// instead.
     pub fn shielded_recipient(&self) -> ShieldedRecipient {
         crate::address::shielded_recipient(&ShieldedWallet::default(self.into_ledger()))
+    }
+
+    /// Derive the user address of this seed: the hash of the verifying key
+    /// that owns its unshielded UTXOs.
+    ///
+    /// [`Self::unshielded_address`] bech32-encodes the same user address into
+    /// a string for sharing. This returns it typed, as the recipient of an
+    /// unshielded transfer. To read it from someone else's shared address
+    /// string, use [`crate::address::parse_unshielded_recipient`] instead.
+    pub fn unshielded_recipient(&self) -> UnshieldedRecipient {
+        UnshieldedWallet::default(self.into_ledger())
+            .user_address
+            .into_sdk()
     }
 }
 

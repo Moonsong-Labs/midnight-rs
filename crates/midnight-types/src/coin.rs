@@ -97,6 +97,15 @@ pub struct ShieldedRecipient {
     pub enc_public_key: EncryptionPublicKey,
 }
 
+/// The user address that an unshielded address carries: the hash of the
+/// verifying key that owns the UTXOs sent to it.
+///
+/// [`crate::address::parse_unshielded_recipient`] reads one from a
+/// `mn_addr_*` address, and [`crate::hd::Seed::unshielded_recipient`] derives
+/// the one of a seed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UnshieldedRecipient(pub(crate) HashOutput);
+
 /// The nullifier of a Dust spend.
 ///
 /// A field element, held in its 32-byte little-endian form, which every

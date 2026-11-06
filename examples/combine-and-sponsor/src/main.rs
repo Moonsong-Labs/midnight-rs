@@ -76,13 +76,13 @@ async fn main() -> anyhow::Result<()> {
     let wallet = Wallet::from_seed(SEED_A)?
         .sync(&provider_a, &indexer_url)
         .await?;
-    let address_a = wallet.shielded_address();
+    let recipient_a = wallet.shielded_recipient();
     let provider_a = provider_a.with_wallet(wallet);
     let provider_b = MidnightProvider::new(&node_url);
     let wallet = Wallet::from_seed(SEED_B)?
         .sync(&provider_b, &indexer_url)
         .await?;
-    let address_b = wallet.shielded_address();
+    let recipient_b = wallet.shielded_recipient();
     let wallet_b = Arc::new(LocalWallet::new(wallet));
     let provider_b = Arc::new(provider_b.with_wallet(Arc::clone(&wallet_b)));
     println!("   A and B synced.\n");
@@ -117,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
     // grow, not for any coin of the token.
     let b_before = provider_b.balance().await?.shielded_value(coin.token_type);
     provider_a
-        .transfer_shielded(coin.token_type, SHIELDED_TO_B, &address_b)
+        .transfer_shielded(coin.token_type, SHIELDED_TO_B, recipient_b)
         .send()
         .await?
         .wait_finalized()
@@ -149,7 +149,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("   B builds a Dustless shielded transfer to A...");
     let transfer_tx = provider_b
-        .transfer_shielded(coin.token_type, 1, &address_a)
+        .transfer_shielded(coin.token_type, 1, recipient_a)
         .without_dust()
         .await?;
     println!(

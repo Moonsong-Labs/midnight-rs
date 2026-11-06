@@ -32,7 +32,7 @@ The Quick start runs against a local devnet (node, indexer and proof server) in 
 
 ```rust
 use midnight_core::provider::{NIGHT, STARS_PER_NIGHT};
-use midnight_core::{MidnightProvider, Network, Seed, Wallet};
+use midnight_core::{MidnightProvider, Seed, Wallet};
 
 const NODE_URL: &str = "ws://localhost:9944";
 const INDEXER_URL: &str = "http://localhost:8088";
@@ -55,19 +55,20 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let recipient = Seed::generate();
-    let unshielded = recipient.unshielded_address(Network::Undeployed);
-    let shielded = recipient.shielded_address(Network::Undeployed);
 
     // NIGHT is the native token. Amounts are in STAR, its smallest unit.
     let pending = provider
-        .transfer_unshielded(NIGHT, STARS_PER_NIGHT, &unshielded)
+        .transfer_unshielded(NIGHT, STARS_PER_NIGHT, recipient.unshielded_recipient())
         .send()
         .await?;
     println!("unshielded transfer {}", pending.extrinsic_hash_hex());
     pending.wait_finalized().await?;
 
     let token = balance.shielded.coins[0].token_type;
-    let pending = provider.transfer_shielded(token, 1, &shielded).send().await?;
+    let pending = provider
+        .transfer_shielded(token, 1, recipient.shielded_recipient())
+        .send()
+        .await?;
     println!("shielded transfer {}", pending.extrinsic_hash_hex());
     pending.wait_finalized().await?;
 

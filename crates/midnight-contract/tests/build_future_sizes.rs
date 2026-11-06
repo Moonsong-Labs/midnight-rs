@@ -17,7 +17,7 @@ use midnight_contract::interpreter::Program;
 use midnight_contract::runtime::NoWitnesses;
 use midnight_contract::{Contract, ShieldedInputs};
 use midnight_provider::{
-    DustlessBuilder, HashOutput, MidnightProvider, ShieldedTokenType, UnshieldedTokenType,
+    DustlessBuilder, HashOutput, MidnightProvider, Seed, ShieldedTokenType, UnshieldedTokenType,
 };
 
 /// Room for a builder to gain a field, far below the tens of kilobytes an
@@ -155,6 +155,7 @@ fn the_base_contract_call_methods_return_small_futures() {
 #[test]
 fn provider_entry_points_return_small_futures() {
     let p = provider();
+    let recipient = Seed::from_bytes(&[1; 32]).unwrap();
 
     assert_small("MidnightProvider::resync_wallet", p.resync_wallet());
     assert_small(
@@ -163,23 +164,39 @@ fn provider_entry_points_return_small_futures() {
     );
     assert_small(
         "ShieldedTransfer::build",
-        p.transfer_shielded(ShieldedTokenType(HashOutput([0u8; 32])), 1, "recipient")
-            .build(),
+        p.transfer_shielded(
+            ShieldedTokenType(HashOutput([0u8; 32])),
+            1,
+            recipient.shielded_recipient(),
+        )
+        .build(),
     );
     assert_small(
         "ShieldedTransfer::send",
-        p.transfer_shielded(ShieldedTokenType(HashOutput([0u8; 32])), 1, "recipient")
-            .send(),
+        p.transfer_shielded(
+            ShieldedTokenType(HashOutput([0u8; 32])),
+            1,
+            recipient.shielded_recipient(),
+        )
+        .send(),
     );
     assert_small(
         "UnshieldedTransfer::build",
-        p.transfer_unshielded(UnshieldedTokenType(HashOutput([0u8; 32])), 1, "recipient")
-            .build(),
+        p.transfer_unshielded(
+            UnshieldedTokenType(HashOutput([0u8; 32])),
+            1,
+            recipient.unshielded_recipient(),
+        )
+        .build(),
     );
     assert_small(
         "UnshieldedTransfer::send",
-        p.transfer_unshielded(UnshieldedTokenType(HashOutput([0u8; 32])), 1, "recipient")
-            .send(),
+        p.transfer_unshielded(
+            UnshieldedTokenType(HashOutput([0u8; 32])),
+            1,
+            recipient.unshielded_recipient(),
+        )
+        .send(),
     );
     assert_small(
         "ShieldedSwap::build",

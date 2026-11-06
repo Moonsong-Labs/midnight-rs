@@ -39,7 +39,7 @@ async fn deploy_funded_with_shielded_offer() {
 
     let provider = MidnightProvider::new(&node_url);
     let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
-    let recipient = wallet.seed().shielded_recipient();
+    let recipient = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
 
     // The dev wallet holds the dev devnet's default shielded token id

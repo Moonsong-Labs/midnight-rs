@@ -237,7 +237,7 @@ use std::time::Duration;
 provider.resync_wallet().await?;
 let before = provider.balance().await?.shielded_value(token);
 provider
-    .transfer_shielded(token, amount, &recipient)
+    .transfer_shielded(token, amount, recipient)
     .send()
     .await?
     .wait_finalized()
@@ -372,23 +372,27 @@ The cold wallet gets no Dust of its own. Its registrations still pay their own f
 Two flavors, same shape. Each method returns a builder, and `.send().await?` builds and submits in one step:
 
 ```rust
-use midnight_core::wallet::NIGHT;
+use midnight_core::wallet::{NIGHT, parse_unshielded_recipient};
 
+let recipient = parse_unshielded_recipient(&recipient_address, provider.network().await?)?;
 let pending = provider
-    .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
+    .transfer_unshielded(NIGHT, amount_in_star, recipient)
     .send()
     .await?;
 pending.wait_best().await?;
 ```
 
 ```rust
+use midnight_core::wallet::parse_shielded_recipient;
+
+let recipient = parse_shielded_recipient(&recipient_shielded_address, provider.network().await?)?;
 let pending = provider
-    .transfer_shielded(token_type, amount, &recipient_shielded_address)
+    .transfer_shielded(token_type, amount, recipient)
     .send()
     .await?;
 ```
 
-`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
+`recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network. A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
 
 1. Resyncs, then takes a write lock on the wallet and builds the context of the wallet's ledger generation.
 2. Selects inputs from the wallet's local UTXO set.
@@ -402,7 +406,7 @@ Each intent of the transaction carries a TTL. The chain does not apply a transac
 use std::time::Duration;
 
 let pending = provider
-    .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
+    .transfer_unshielded(NIGHT, amount_in_star, recipient)
     .with_ttl(Duration::from_secs(300))
     .send()
     .await?;
@@ -414,7 +418,7 @@ To inspect the proven transaction before you submit it (e.g. to size-check, or t
 
 ```rust
 let result = provider
-    .transfer_shielded(token_type, amount, &recipient)
+    .transfer_shielded(token_type, amount, recipient)
     .build()
     .await?;
 // result: TransferResult { tx_bytes, ledger_version, spent, fee_speck }

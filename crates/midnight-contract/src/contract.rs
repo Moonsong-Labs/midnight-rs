@@ -723,7 +723,7 @@ where
             (Some(state), _) => (state, self.initial_private_state),
             (None, Some(constructor)) => {
                 constructor.check_args(&self.constructor_args)?;
-                let (coin_public_key, _) = provider.shielded_public_keys().await?;
+                let coin_public_key = provider.shielded_recipient().await?.coin_public_key;
                 constructor.run(
                     &self.constructor_args,
                     &*self.witnesses,
@@ -1268,8 +1268,8 @@ impl<P> Contract<P> {
         let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
 
         let (mut private_state, _) = self.witness_baseline(store.as_deref()).await?;
-        let coin_public_key = match provider.shielded_public_keys().await {
-            Ok((coin_public_key, _)) => Some(coin_public_key),
+        let coin_public_key = match provider.shielded_recipient().await {
+            Ok(recipient) => Some(recipient.coin_public_key),
             Err(midnight_provider::ProviderError::NoWallet) => None,
             Err(e) => return Err(e.into()),
         };
@@ -1474,7 +1474,7 @@ impl<P> Contract<P> {
         .map_err(|e| ContractError::Construction(format!("verifier key {circuit_name}: {e}")))?;
         crate::state::check_verifier_key(&state.view, circuit_name, &verifier_key)?;
         let (baseline, depends_on) = self.witness_baseline(store).await?;
-        let (coin_public_key, _) = provider.shielded_public_keys().await?;
+        let coin_public_key = provider.shielded_recipient().await?.coin_public_key;
 
         let mut private_state = baseline.clone();
         let exec_result = crate::call::run_call(

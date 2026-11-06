@@ -107,7 +107,7 @@ One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only
 use midnight_provider::DustlessBuilder; // brings `.without_dust()` into scope
 
 // Party 1 (owns the coin, pays nothing): a Dustless transaction.
-let partial = alice.transfer_shielded(token, 5, &alice_addr).without_dust().await?;
+let partial = alice.transfer_shielded(token, 5, alice_recipient).without_dust().await?;
 // Party 2 (pays all the fees):
 let complete = bob.balance_transaction(partial.as_bytes()).await?;
 bob.submit_reserved(complete).await?;
@@ -159,7 +159,7 @@ Practical consequences for SDK callers:
 `wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. Only `Success` reaches the caller as `Ok`. For `PartialSuccess` and `Failure`, the wait fails with `ProviderError::NotApplied`, so `?` stops on a transaction that did not apply:
 
 ```rust,ignore
-let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).send().await?;
+let pending = provider.transfer_unshielded(NIGHT, 100, recipient).send().await?;
 pending.wait_finalized().await?;
 ```
 

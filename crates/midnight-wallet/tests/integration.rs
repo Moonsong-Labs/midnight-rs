@@ -171,7 +171,7 @@ async fn build_shielded_transfer_arbitrary_token_id() {
 
     let provider = MidnightProvider::new(&node);
     let wallet = synced_wallet(&provider, &indexer, DEV_SEED).await;
-    let recipient = wallet.shielded_address();
+    let recipient = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
 
     let balance = provider.balance().await.expect("wallet attached");
@@ -191,7 +191,7 @@ async fn build_shielded_transfer_arbitrary_token_id() {
     );
 
     let tx_result = provider
-        .transfer_shielded(coin.token_type, 1, &recipient)
+        .transfer_shielded(coin.token_type, 1, recipient)
         .build()
         .await
         .expect("shielded transfer of arbitrary token id should build (proofs + serialize)");
@@ -226,7 +226,7 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
 
     let payee = MidnightProvider::new(&node);
     let wallet = synced_wallet(&payee, &indexer, RECIPIENT_SEED).await;
-    let recipient = wallet.shielded_address();
+    let recipient = wallet.shielded_recipient();
     let payee = payee.with_wallet(wallet);
     let before: std::collections::HashSet<_> = payee
         .spendable_shielded_coins()
@@ -237,7 +237,7 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
         .collect();
 
     let pending = provider
-        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, AMOUNT, &recipient)
+        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, AMOUNT, recipient)
         .send()
         .await
         .expect("shielded transfer should build + submit");
@@ -306,13 +306,13 @@ async fn shielded_transfer_conserves_value() {
 
     let provider = MidnightProvider::new(&node);
     let wallet = synced_wallet(&provider, &indexer, DEV_SEED).await;
-    let recipient = wallet.shielded_address();
+    let recipient = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
 
     // 1 is deliberately far below any coin the dev preset mints, so the
     // remainder is large and an abandoned one would be unmissable.
     let result = provider
-        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, 1, &recipient)
+        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, 1, recipient)
         .build()
         .await
         .expect("shielded transfer should build");
@@ -342,7 +342,7 @@ async fn shielded_transfer_spans_multiple_coins() {
 
     let provider = MidnightProvider::new(&node);
     let wallet = synced_wallet(&provider, &indexer, DEV_SEED).await;
-    let recipient = wallet.shielded_address();
+    let recipient = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
 
     let balance = provider.balance().await.expect("wallet attached");
@@ -367,7 +367,7 @@ async fn shielded_transfer_spans_multiple_coins() {
     // One more than the biggest coin: satisfiable only by combining coins.
     let amount = largest + 1;
     let result = provider
-        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, amount, &recipient)
+        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, amount, recipient)
         .build()
         .await
         .unwrap_or_else(|e| {
