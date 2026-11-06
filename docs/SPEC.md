@@ -10,6 +10,7 @@ All crates live under `crates/`.
 midnight-core                    meta-crate; re-exports the public API
   ├── midnight-contract          contract lifecycle (deploy / call / prove / submit)
   │     ├── contract.rs          Contract<P>, DeployBuilder, ConnectBuilder, PendingDeploy
+  │     ├── constructor.rs       Constructor: the constructor run of a deploy
   │     ├── call.rs              circuit-call tx builder, shielded inputs, caller change
   │     ├── deploy.rs            deploy tx builder
   │     ├── maintenance.rs       verifier-key rotation, authority replacement
@@ -61,8 +62,6 @@ midnight-core                    meta-crate; re-exports the public API
   ├── midnight-private-state     per-contract private state + maintenance signing keys,
   │                              with password-encrypted export/import
   │
-  ├── midnight-owner-only        0700 directories, 0600 files on Unix, for the wallet and private-state stores
-  │
   ├── midnight-indexer-client    GraphQL client + subscriptions for the wallet sync
   │
   ├── compact-bindgen           `contract!` macro entry point
@@ -92,10 +91,11 @@ midnight-core                    meta-crate; re-exports the public API
 | `BackgroundSync` | wallet | The handle of the task that `LocalWallet::sync_in_background` starts. The task resyncs the wallet after each pause. Dropping the handle stops the sync. `last_error()` names the error of the last pass. `wait_until(done)` waits until `done` holds for the balance. It checks at the call and after each pass. |
 | `LocalWallet` / `WalletBuilder` | wallet | The facade implemented over a locally-owned `Wallet`, and the builder (`Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase`, `WalletBuilder::new`) that syncs one from an indexer. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
-| `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
+| `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder::send` submits the deploy and returns a `PendingDeploy`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
 | `PendingCall<T>` | contract | A submitted circuit call and its decoded result. `wait_finalized()` waits with no SDK deadline and settles the private-state snapshot by the verdict. A drop leaves the snapshot `Pending`. |
-| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. |
+| `Constructor` | contract | A contract's constructor as an `ir::Circuit`, the declarations it calls and the state it starts from. The generated `Contract::deploy` sets it, and the deploy runs it before any proof. |
+| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. `wait_finalized` settles the deploy's private-state snapshot as a call's wait does, and a best-block wait leaves it `Pending`. |
 | `ProofProvider` | helpers | Proof backend trait, one per ledger generation. |
 | `ProofProviders` | provider | One `ProofProvider` per generation. Set on the provider with `with_proof_provider`. `ProofProviders::local()` (in-process) is the default. |
 | `RemoteProofServer` | provider | `ProofProvider` of both generations that delegates to an HTTP proof server (`/check` + `/prove`). |
@@ -162,7 +162,7 @@ Each node read of the provider, its connect included, ends within 10 s (60 s for
 
 `WalletBuilder::sync` replays three indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions): the zswap and unshielded streams at the same time, then the Dust stream. It returns once all three have caught up. A resync replays all three at the same time. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (a per-connection dedupe keeps re-delivered events from being double-applied). The latest-block query that each sync and resync makes retries on the same bound. A sync that gives up on the indexer returns `WalletError::Indexer`, whose `retryable` field tells whether a later sync can succeed. State is persisted under `{base}/{network}/{sha256(unshielded_address)}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup). The sync persists only with `.with_storage(base)`, and `Wallet::default_storage_dir()` gives `~/.midnight/wallets`. `metadata.json` and `pending.json` also name the ledger generation whose types wrote them (`ledger_version`, ledger 8 when absent).
 
-`PendingReservations` records the spends of builds that the chain has not yet confirmed. Every build reserves its dust spends, unshielded UTXOs and shielded nullifiers before it proves, under the same hold of the wallet that selected them. Thus a second build in this process cannot pick the same input.
+`PendingReservations` records the spends of builds that the chain has not yet confirmed. Every build reserves its dust spends, unshielded UTXOs and shielded nullifiers before it proves, under the same hold of the wallet that selected them. Thus a second build in this process cannot pick the same input. A reservation reaches `pending.json` only when its proof succeeds (`WalletFacade::persist_reservation`), so a process that stops during the proof leaves the next process no reservation for those inputs.
 
 A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy with no shielded offer and a maintenance update reserve theirs through `prepare_funded`. A sponsor's build reserves the Dust for the fee it pays through `prepare_fees`. A call, or a deploy with a shielded offer, reserves its pinned coins through `spend_shielded`. It then reserves the Dust for its own fee through `prepare_fees`.
 
@@ -197,26 +197,38 @@ Generated bindings expose this as `contract.ledger().await?`, which calls `midni
 ### Deploy
 
 ```
-Contract::deploy(&provider)                              // DeployBuilder<'_, P>
-  .with_initial_state(LedgerInitialState::default())
+Contract::deploy(&provider)                              // DeployBuilder<'_, P, Wp>; sets the constructor,
+                                                         // or the default state for a contract with none
+  [.with_constructor_args(...)]                          // typed; only for a constructor with parameters
+  [.with_witnesses(&w)]                                  // only for a contract with witnesses
+  [.with_initial_private_state(...)]                     // W::PrivateState; after with_witnesses
+  [.with_initial_state(state)]                           // deploy `state` as it is, skip the constructor
   .with_zk_config("compiled")
   [.with_deploy_timeout(...)]
 
-  .await                                                 // IntoFuture: send + into_contract
-    │
-    └─ .send().await   →  PendingDeploy<P>               // explicit form
-         ├─ .wait_best().await        → (TxInBlock, PendingDeploy)   // TransactionFailed if not applied
-         ├─ .wait_finalized().await   → (TxInBlock, PendingDeploy)   // TransactionFailed if not applied
-         └─ .into_contract().await    → Contract<P>
+  .send().await   →  PendingDeploy<P>
+    ├─ .wait_best().await        → (TxInBlock, PendingDeploy)   // TransactionFailed if not applied
+    ├─ .wait_finalized().await   → (TxInBlock, PendingDeploy)   // TransactionFailed if not applied
+    └─ .into_contract().await    → Contract<P>
 ```
 
 Internally:
 
 ```
-with_zk_config(initial_state, zk_config)      // load *.verifier files into state.operations,
+the state: initial_state as it is, or else the constructor's run (neither → Construction)
+  ├─ Constructor::check_args                  // a missing argument → Construction
+  ├─ provider.shielded_public_keys()          // ownPublicKey() returns the wallet's coin key
+  ├─ Constructor::run with no contract address and at the wall-clock time, with the
+  │  witnesses and the initial private state (Interpreter on a failure or a kernel.self())
+  └─ refuse a ledger effect or a Zswap input or output (Construction)
+  ↓
+refuse a private state that is not empty when no store is attached (Construction)
+  ↓
+populate_verifier_keys(state, zk_config)      // load *.verifier files into state.operations,
                                               // on a blocking thread
   ↓
 deploy_funded(state, provider, shielded_offer)
+  ├─ ContractState::new(data, ..)             // charged keys of the data, which the ledger rechecks
   ├─ provider.builds().await                  // resync wallet, pick its generation's Builds
   ├─ builds.execution_context().await         // build that generation's context
   ├─ builds.proof_provider()                  // that generation's prover (ProofProviders)
@@ -234,7 +246,13 @@ deploy_funded(state, provider, shielded_offer)
       ├─ builds.balance_transaction: the Dust fee in its own intent
       └─ the result's spent: the fee Dust, merged with the offer's coins
   ↓
-provider.submit_reserved(transaction).await   → PendingTx (carries the reservation)
+provider.prepare_reserved(transaction).await  → PreparedTx (holds the reservation, knows the extrinsic hash)
+  ↓
+append_pending(address, extrinsic_hash, None, private_state)   // only for a private state that is not empty
+  (fails → release the reservation, PendingSnapshotFailed)
+  ↓
+prepared.submit().await                       → PendingTx (carries the reservation)
+  (fails → SubmissionWait; the snapshot stays Pending)
   ↓
 into_contract
   ├─ one deadline: deploy_timeout from the start of into_contract
@@ -262,11 +280,9 @@ Contract::at(&provider, address)              // ConnectBuilder<P>
 ```
 contract.circuits().increment_by(5)                      // IncrementByCallBuilder
 
-  .await                                                 // IntoFuture: Contract::call_with, then decode
-    │
-    └─ .send().await   →  PendingCall<T>                 // explicit form: Contract::send_call_with
-         ├─ .transaction_hash() / .extrinsic_hash()
-         └─ .wait_finalized().await   → CallOutcome<T>   // no SDK deadline; .await bounds it to 60 s
+  .send().await   →  PendingCall<T>                      // Contract::send_call_with
+    ├─ .transaction_hash() / .extrinsic_hash()
+    └─ .wait_finalized().await   → CallOutcome<T>        // no SDK deadline
                                                          // value, hashes, and the logs of the run
 ```
 
@@ -326,7 +342,7 @@ TransferResult: the merged bytes, and the pinned coins and the fee Dust in spent
   ↓
 provider.prepare_reserved(result) → PreparedTx            // the extrinsic hash, before the submit
   ↓
-.send() only: decode the typed return value from ExecutionResult.result
+decode the typed return value from ExecutionResult.result
   └─ an error: PreparedTx::release hands the inputs back
   ↓
 append the Pending private-state snapshot, if the witnesses changed the state
@@ -335,20 +351,20 @@ append the Pending private-state snapshot, if the witnesses changed the state
 prepared.submit().await → PendingTx → PendingCall<T>      // .send() returns here
   └─ SubmitRpc: SubmissionWait, the snapshot stays Pending, and the inputs stay reserved
   ↓
-PendingCall::wait_finalized → PendingTx::wait_finalized   // .await bounds it by DEFAULT_TX_FINALIZE_TIMEOUT
+PendingCall::wait_finalized → PendingTx::wait_finalized   // no SDK deadline; Contract::call_with bounds the PendingTx wait by DEFAULT_TX_FINALIZE_TIMEOUT
   ↓
 settle the result of the wait:
   ├─ Ok: confirm the snapshot, if the call recorded one
   └─ NotApplied (PartialSuccess or Failure): mark_failed that snapshot, then TransactionFailed
   ↓
-.await only: decode the typed return value from ExecutionResult.result → caller
+CallOutcome<T> → caller
 ```
 
 `Contract<P>` is not mutated; the new state is discarded because the next call will fetch fresh state anyway.
 
 ### Transfer (shielded / unshielded / swap / register and deregister dust)
 
-Each of the five provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`, `DustDeregistration<'a>`). The builder defers all work until awaited or `.build()` is called:
+Each of the five provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`, `DustDeregistration<'a>`). The builder defers all work until the caller calls `.send()` or `.build()`, or awaits a `ShieldedSwap`, which builds a `DustlessTransaction` and submits nothing:
 
 ```
 provider.transfer_shielded(token_type, amount, recipient)       // bech32 address; no work yet
@@ -357,7 +373,7 @@ provider.transfer_shielded(token_type, amount, recipient)       // bech32 addres
         .register_dust(utxo_ctime)                              // .to(dust_key) sends the Dust to another wallet
         .deregister_dust()
 
-  ↓ .await? (or .build().await? for the no-submit escape hatch)
+  ↓ .send().await? (or .build().await? for the no-submit escape hatch)
 
 provider.builds()                    // resync_wallet, then the wallet's generation
   ↓
@@ -372,11 +388,12 @@ ledger_N::WalletBuilds::prepare_transfer(request, proof_provider)   // one hold 
   ↓
 (wallet released)    PreparedTransfer::prove       // the only real proving
   → TransferResult { tx_bytes, ledger_version, spent, fee_speck }
+  WalletFacade::persist_reservation(spent)          // the reservation reaches pending.json
   ↓
-(.await path only)   provider.submit_reserved(result).await → PendingTx
+(.send() path only)  provider.submit_reserved(result).await → PendingTx
 ```
 
-`.await` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops before submitting and returns `TransferResult`, which the caller can submit with `submit_reserved`. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time a funded build runs `add_funding`.
+`.send()` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops before submitting and returns `TransferResult`, which the caller can submit with `submit_reserved`. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time a funded build runs `add_funding`.
 
 ## Transaction submission
 
@@ -400,7 +417,7 @@ Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancel
 
 `MidnightProvider::prepare_reserved` prepares a `TransferResult`, and the `PreparedTx` holds the reservation of its build. A failed prepare hands the inputs back before it returns. A `PreparedTx` that drops before its submit hands them back too, and `PreparedTx::release` does the same and waits for it. `PreparedTx::submit` moves the reservation to the `PendingTx`, so a wait that reads `Invalid` hands the inputs back. A failed submit keeps them reserved.
 
-`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, `deregister_dust`, a deploy and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call prepares with `prepare_reserved`, because it records its private-state snapshot between the prepare and the submit. So an error before its submit, or an `Invalid` at its wait, hands its inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
+`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust`, `deregister_dust` and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call and a deploy prepare with `prepare_reserved`, because each records its private-state snapshot between the prepare and the submit. So an error before the submit, or an `Invalid` at the wait, hands their inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
 
 ## Block pinning
 

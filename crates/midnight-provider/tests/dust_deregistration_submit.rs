@@ -51,6 +51,7 @@ struct Reading {
 async fn fund(funder: &MidnightProvider, address: &str) {
     funder
         .transfer_unshielded(NIGHT, SEND, address)
+        .send()
         .await
         .expect("fund the fresh address")
         .wait_finalized()
@@ -115,6 +116,7 @@ async fn one_deregistration_stops_every_tnight_utxo_from_generating() {
     .await;
     fresh
         .register_dust(None)
+        .send()
         .await
         .expect("build and submit the registration")
         .wait_finalized()
@@ -187,6 +189,7 @@ async fn another_wallet_pays_for_the_deregistration() {
 
     cold.register_dust(None)
         .to(target)
+        .send()
         .await
         .expect("build and submit the registration")
         .wait_finalized()

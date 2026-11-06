@@ -13,8 +13,6 @@ mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
-use std::future::IntoFuture;
-
 use midnight_contract::interpreter::Program;
 use midnight_contract::runtime::NoWitnesses;
 use midnight_contract::{Contract, ShieldedInputs};
@@ -58,20 +56,14 @@ fn contract_entry_points_return_small_futures() {
             .with_zk_config("compiled")
             .send(),
     );
-    assert_small(
-        "generated DeployBuilder::into_future",
-        counter::Contract::deploy(p)
-            .with_zk_config("compiled")
-            .into_future(),
-    );
 
     let contract = counter::Contract::at(p, ADDR)
         .with_zk_config("compiled")
         .build();
 
     assert_small(
-        "generated circuit call::into_future",
-        contract.circuits().increment().into_future(),
+        "generated circuit call::send",
+        contract.circuits().increment().send(),
     );
     assert_small(
         "generated circuit call::build",
@@ -175,9 +167,19 @@ fn provider_entry_points_return_small_futures() {
             .build(),
     );
     assert_small(
+        "ShieldedTransfer::send",
+        p.transfer_shielded(ShieldedTokenType(HashOutput([0u8; 32])), 1, "recipient")
+            .send(),
+    );
+    assert_small(
         "UnshieldedTransfer::build",
         p.transfer_unshielded(UnshieldedTokenType(HashOutput([0u8; 32])), 1, "recipient")
             .build(),
+    );
+    assert_small(
+        "UnshieldedTransfer::send",
+        p.transfer_unshielded(UnshieldedTokenType(HashOutput([0u8; 32])), 1, "recipient")
+            .send(),
     );
     assert_small(
         "ShieldedSwap::build",
@@ -190,5 +192,7 @@ fn provider_entry_points_return_small_futures() {
         .build(),
     );
     assert_small("DustRegistration::build", p.register_dust(None).build());
+    assert_small("DustRegistration::send", p.register_dust(None).send());
     assert_small("DustDeregistration::build", p.deregister_dust().build());
+    assert_small("DustDeregistration::send", p.deregister_dust().send());
 }

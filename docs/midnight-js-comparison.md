@@ -72,7 +72,7 @@ The "prove" and "balance" steps live together inside `build` because they're int
 
 What you *can* now do is stop before submission and get the proven bytes back: `.build()` on a transfer, or `contract.circuits().<circuit>().build().await` (equivalently `Contract::build_call_with`) for a contract call, returns a proven `Vec<u8>` without submitting. That is the hook the multi-party flows in the next section build on, and it closes most of the "you can't separate building from submitting" gap this section used to describe.
 
-Both the one-shot path (`provider.transfer_*.await`) and `Contract::deploy(...).await` collapse the whole pipeline into one.
+The one-shot paths (`provider.transfer_*(...).send().await` and `Contract::deploy(...).send().await`) collapse the build, the proof and the submit into one call. The wait is a call on the pending handle that `send` returns.
 
 ## Combining and balancing transactions (multi-party)
 
@@ -159,7 +159,7 @@ Practical consequences for SDK callers:
 `wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. Only `Success` reaches the caller as `Ok`. For `PartialSuccess` and `Failure`, the wait fails with `ProviderError::NotApplied`, so `?` stops on a transaction that did not apply:
 
 ```rust,ignore
-let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
+let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).send().await?;
 pending.wait_finalized().await?;
 ```
 
@@ -186,7 +186,7 @@ When `wait_best` / `wait_finalized` fail with no verdict, the error is `Provider
 
 A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes the payloads. Its ledger 8 result has no `logEvents`.
 
-midnight-rs returns the events as `logs` on `CallOutcome` (from `.await` or `PendingCall::wait_finalized`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
+midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::wait_finalized` or `Contract::call_with`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
 
 The differences:
 
@@ -226,7 +226,7 @@ The chain supports three governance operations on a deployed contract:
 
 midnight-js: see `packages/contracts/src/governance/` (`submit-insert-vk-tx.ts`, `submit-remove-vk-tx.ts`, `submit-replace-authority-tx.ts`).
 
-midnight-rs: exposed via `Contract::at(addr).maintenance()`, which returns a `ContractMaintenance` builder. Chain `insert_verifier_key`, `remove_verifier_key`, and `replace_authority` (applied in order, atomically, in one signed update), then `prepare()` for a `PreparedMaintenance`. Signing is caller-controlled: read `data_to_sign()`, attach signatures with `sign(committee_index, key)` / `add_signature(...)`, then await (or `build()`) to submit. The initial authority is set at deploy via `DeployBuilder::with_maintenance_authority`, and `Contract::maintenance_authority()` reads the current committee. The SDK never stores a key. See [`contract-maintenance-governance.md`](./contract-maintenance-governance.md).
+midnight-rs: exposed via `Contract::at(addr).maintenance()`, which returns a `ContractMaintenance` builder. Chain `insert_verifier_key`, `remove_verifier_key`, and `replace_authority` (applied in order, atomically, in one signed update), then `prepare()` for a `PreparedMaintenance`. Signing is caller-controlled: read `data_to_sign()`, attach signatures with `sign(committee_index, key)` / `add_signature(...)`, then call `send()` to submit, or `build()` for the proven bytes without a submit. The initial authority is set at deploy via `DeployBuilder::with_maintenance_authority`, and `Contract::maintenance_authority()` reads the current committee. The SDK never stores a key. See [`contract-maintenance-governance.md`](./contract-maintenance-governance.md).
 
 ## Per-contract private state
 
@@ -235,6 +235,23 @@ Some contracts use witnesses that are themselves stateful (counters, secret bala
 midnight-rs: the `midnight-private-state` crate has a `PrivateStateProvider` trait plus a filesystem default (`FsPrivateStateProvider`) that stores opaque per-contract private-state blobs and signing keys, with password-encrypted (Argon2id + AES-256-GCM) export/import. Unlike midnight-js, it stores the private state in plaintext at rest, and only the export is encrypted. Attach it with `MidnightProvider::with_private_state(...)`. See [`private-state.md`](./private-state.md).
 
 Private state is also **threaded** through witness execution, matching midnight-js. `WitnessProvider::call_witness(ctx, name, args)` takes a `&mut WitnessContext` carrying the mutable private state (the analogue of midnight-js's `(ctx, ...args) => [newPS, result]`). When a `PrivateStateProvider` is attached, a circuit call loads the contract's state before execution and threads it through the witnesses. It records the state after the call as a `Pending` snapshot before the submit. It then settles the snapshot by the chain's verdict (see [`private-state.md`](./private-state.md)). So stateful-witness contracts work across calls without the caller managing storage. Private state is keyed by contract address: a Compact contract has exactly one private-state type shared by all its witnesses, so there is one blob per contract (the caller packs every private variable into it), rather than midnight-js's separate per-app `privateStateId`.
+
+## Deploy and the constructor
+
+Both SDKs run the contract's Compact constructor locally when they deploy, and deploy the state that it leaves. midnight-js runs `contractExec.initialize(initialPrivateState, ...args)` from `deployContract` (`packages/contracts/src/unproven-deploy-tx.ts`). midnight-rs runs the constructor's analyzed IR with the interpreter, from the generated `Contract::deploy`. Both run it with the wallet's coin public key for `ownPublicKey()` and the wall-clock time. midnight-js runs it at the zero contract address, `dummyContractAddress()`, so `kernel.self()` there reads zeros ([LFDT-Minokawa/compact#117](https://github.com/LFDT-Minokawa/compact/issues/117)). midnight-rs runs it with no address, and refuses a constructor that reads `kernel.self()`.
+
+| midnight-js `deployContract` option | midnight-rs generated `DeployBuilder` |
+| --- | --- |
+| `args` | `with_constructor_args(..)`, typed from the constructor's parameters. It exists only for a constructor with parameters. |
+| `initialPrivateState` | `with_initial_private_state(state)`, after `with_witnesses(&w)`. They exist only for a contract with witnesses. |
+| `privateStateId` | none: the journal keys the private state by the contract address (see [Per-contract private state](#per-contract-private-state)) |
+| none | `with_initial_state(state)`: deploy `state` as it is and skip the constructor |
+
+The differences:
+
+- midnight-js stores the private state with `privateStateProvider.set` after the deploy finalizes, and only when the caller gives a `privateStateId`. Without one, it stores nothing, also when the constructor's witnesses leave a private state. midnight-rs records the private state as a `Pending` snapshot before the submit, as for a call. It refuses a private state to record when no store is attached.
+- midnight-js drops the ledger effects of the constructor, and puts its Zswap outputs into the guaranteed offer of the deploy (`zswapStateToOffer`). midnight-rs refuses a constructor with a ledger effect, a Zswap input or a Zswap output, with `ContractError::Construction`, before any proof.
+- compact-js gives the contract a maintenance authority with one key from a sampled signing key. midnight-rs keeps the empty committee unless the caller sets one with `with_maintenance_authority`.
 
 ## Feature gaps
 

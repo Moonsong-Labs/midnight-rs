@@ -3318,13 +3318,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "midnight-owner-only"
-version = "0.1.0"
-dependencies = [
- "tempfile",
-]
-
-[[package]]
 name = "midnight-private-state"
 version = "0.1.0"
 dependencies = [
@@ -3333,7 +3326,6 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "hex",
- "midnight-owner-only",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -3605,7 +3597,6 @@ dependencies = [
  "hex",
  "midnight-helpers",
  "midnight-indexer-client",
- "midnight-owner-only",
  "midnight-provider",
  "midnight-types",
  "midnight-wallet-facade",

@@ -42,7 +42,6 @@ async fn main() -> anyhow::Result<()> {
     // 1. Deploy the contract; observe Best then Finalized inclusion.
     println!("1. Deploying counter contract...");
     let pending = counter::Contract::deploy(&provider)
-        .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(counter::ZK_CONFIG_DIR)
         .send()
         .await?;
@@ -60,14 +59,27 @@ async fn main() -> anyhow::Result<()> {
     println!("2. Calling increment on-chain...");
     // A call returns the circuit's value together with the identity of the
     // transaction that carried it, so it can be logged or linked to.
-    let call = contract.circuits().increment().await?;
+    let call = contract
+        .circuits()
+        .increment()
+        .send()
+        .await?
+        .wait_finalized()
+        .await?;
     println!("   returned = {}", call.value);
     println!("   tx = {}", hex::encode(call.extrinsic_hash));
     println!("   round = {}", contract.ledger().await?.round()?);
 
     // 3. Call increment_by with an argument (returns the amount)
     println!("3. Calling increment_by(5) on-chain...");
-    let returned: u16 = contract.circuits().increment_by(5).await?.value;
+    let returned: u16 = contract
+        .circuits()
+        .increment_by(5)
+        .send()
+        .await?
+        .wait_finalized()
+        .await?
+        .value;
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
 
@@ -78,7 +90,14 @@ async fn main() -> anyhow::Result<()> {
     let reconnected = counter::Contract::at(&provider, &contract_address)
         .with_zk_config(counter::ZK_CONFIG_DIR)
         .build();
-    let returned: u64 = reconnected.circuits().increment().await?.value;
+    let returned: u64 = reconnected
+        .circuits()
+        .increment()
+        .send()
+        .await?
+        .wait_finalized()
+        .await?
+        .value;
     println!("   returned = {returned}");
     println!("   round = {}", reconnected.ledger().await?.round()?);
 

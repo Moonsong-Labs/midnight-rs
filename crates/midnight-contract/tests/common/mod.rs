@@ -192,7 +192,7 @@ pub(crate) fn program(info: &ContractInfo) -> interpreter::Program<'_> {
     interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives)
 }
 
-/// No witnesses, a scratch private state, the zero address, the epoch.
+/// No witnesses, a scratch private state, no contract address, the epoch.
 pub(crate) fn epoch() -> interpreter::Env<'static> {
     interpreter::Env::new(Timestamp::from_secs(0))
 }

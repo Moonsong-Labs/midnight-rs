@@ -29,10 +29,19 @@
 //!     let provider = provider.with_wallet(wallet);
 //!
 //!     let contract = counter::Contract::deploy(&provider)
-//!         .with_initial_state(counter::LedgerInitialState::default())
 //!         .with_zk_config(counter::ZK_CONFIG_DIR)
+//!         .send()
+//!         .await?
+//!         .into_contract()
 //!         .await?;
-//!     let returned = contract.circuits().increment().await?.value;
+//!     let returned = contract
+//!         .circuits()
+//!         .increment()
+//!         .send()
+//!         .await?
+//!         .wait_finalized()
+//!         .await?
+//!         .value;
 //!     println!("increment returned {returned}");
 //!     Ok(())
 //! }

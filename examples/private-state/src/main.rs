@@ -100,8 +100,10 @@ async fn main() -> anyhow::Result<()> {
     // 1. Deploy the secret-counter contract.
     println!("1. Deploying secret-counter...");
     let contract = secret_counter::Contract::deploy(&provider)
-        .with_initial_state(secret_counter::LedgerInitialState::default())
         .with_zk_config(secret_counter::ZK_CONFIG_DIR)
+        .send()
+        .await?
+        .into_contract()
         .await?;
     println!("   address: {}", contract.address());
     println!(
@@ -117,12 +119,12 @@ async fn main() -> anyhow::Result<()> {
     for (call, expected_total) in [(1u16, 1u64), (2, 3)] {
         println!("{}. Calling contribute()...", call + 1);
         let mut circuits = contract.circuits().with_witnesses(&SecretWitness);
-        let returned: u16 = if call == 1 {
-            // `.send()` returns a `PendingCall` before the chain's verdict.
-            // `wait_finalized` then confirms the `Pending` snapshot of the call.
-            let pending = circuits.contribute().send().await?;
-            println!("   submitted transaction {}", pending.transaction_hash());
-            let returned = pending.wait_finalized().await?.value;
+        // `.send()` returns a `PendingCall` before the chain's verdict.
+        // `wait_finalized` then confirms the `Pending` snapshot of the call.
+        let pending = circuits.contribute().send().await?;
+        println!("   submitted transaction {}", pending.transaction_hash());
+        let returned: u16 = pending.wait_finalized().await?.value;
+        if call == 1 {
             let snapshots = store.snapshots(contract.address()).await?;
             let [head] = snapshots.as_slice() else {
                 bail!(
@@ -137,10 +139,7 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             println!("   finalized; the private-state snapshot is Confirmed");
-            returned
-        } else {
-            circuits.contribute().await?.value
-        };
+        }
         let total = contract.ledger().await?.total()?;
         println!("   witness disclosed {returned}; on-chain total = {total}");
         if returned != call {

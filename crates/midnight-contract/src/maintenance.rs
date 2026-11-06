@@ -8,9 +8,6 @@
 //! transaction with the collected signatures. See
 //! `docs/contract-maintenance-governance.md` for the protocol model.
 
-use std::future::{Future, IntoFuture};
-use std::pin::Pin;
-
 use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPointBuf};
 use midnight_provider::{Builds, PendingTx};
@@ -354,23 +351,16 @@ pub(crate) enum OpSpec {
 }
 
 /// An unsigned (or partially-signed) maintenance update. Collect the committee
-/// signatures with [`Self::sign`] / [`Self::add_signature`], then `.await`
-/// (build + submit → [`PendingTx`]) or [`Self::build`] (proven bytes only).
+/// signatures with [`Self::sign`] / [`Self::add_signature`], then
+/// [`Self::send`] (build + submit → [`PendingTx`]) or [`Self::build`] (proven
+/// bytes only).
 ///
-/// Unlike [`Contract::call_with`] and [`crate::DeployBuilder`], `.await` here
-/// returns the [`PendingTx`] **without** waiting for finality, so the caller chooses
-/// the wait semantics (as with transfers). The wait checks the verdict:
-/// [`PendingTx::wait_finalized`] fails with
+/// The caller chooses the wait on the [`PendingTx`] (as with transfers). The
+/// wait checks the verdict: [`PendingTx::wait_finalized`] fails with
 /// [`ProviderError::NotApplied`](midnight_provider::ProviderError::NotApplied)
-/// when the update did not apply. (`call_with` and deploy surface the same
+/// when the update did not apply. (A call and a deploy surface the same
 /// failure as [`ContractError::TransactionFailed`].)
-///
-/// `.await` submits with
-/// [`MidnightProvider::submit_reserved`](midnight_provider::MidnightProvider::submit_reserved),
-/// so the fee Dust goes back to the wallet when the node never gets the
-/// update, or when a wait on the [`PendingTx`] reads
-/// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid).
-#[must_use = "does nothing until awaited or built"]
+#[must_use = "does nothing until sent or built"]
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
     update: Update,
@@ -451,14 +441,35 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     ///
     /// The build reserves the Dust that pays the fee, and returns only the
     /// bytes. So when the bytes never land, nothing can hand that Dust back,
-    /// and it stays reserved until its TTL passes. `.await` submits with the
-    /// reservation instead.
+    /// and it stays reserved until its TTL passes. [`Self::send`] submits with
+    /// the reservation instead.
     pub async fn build(self) -> Result<Vec<u8>, ContractError>
     where
         P: AsMidnightProvider,
     {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
         Ok(Box::pin(self.build_inner()).await?.tx_bytes)
+    }
+
+    /// Build, prove, and balance the transaction as [`Self::build`] does, then
+    /// submit it and return the [`PendingTx`] to wait on.
+    ///
+    /// The submit goes through
+    /// [`MidnightProvider::submit_reserved`](midnight_provider::MidnightProvider::submit_reserved),
+    /// so the fee Dust goes back to the wallet when the node never gets the
+    /// update, or when a wait on the [`PendingTx`] reads
+    /// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid).
+    pub async fn send(self) -> Result<PendingTx, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        let provider = self.contract.provider().as_midnight_provider();
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(async move {
+            let transaction = self.build_inner().await?;
+            Ok(provider.submit_reserved(transaction).await?)
+        })
+        .await
     }
 
     async fn build_inner(self) -> Result<TransferResult, ContractError>
@@ -492,22 +503,6 @@ impl<'a, P> PreparedMaintenance<'a, P> {
                 },
             ))),
         }
-    }
-}
-
-impl<'a, P> IntoFuture for PreparedMaintenance<'a, P>
-where
-    P: AsMidnightProvider + Send + Sync + 'a,
-{
-    type Output = Result<PendingTx, ContractError>;
-    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let provider = self.contract.provider().as_midnight_provider();
-            let transaction = self.build_inner().await?;
-            Ok(provider.submit_reserved(transaction).await?)
-        })
     }
 }
 

@@ -74,10 +74,12 @@ pub enum ContractError {
     #[error("invalid contract address: {0}")]
     InvalidContractAddress(String),
 
-    /// The SDK submitted a circuit-call transaction, or tried to, and got no verdict.
+    /// The SDK submitted a circuit call or a deploy, or tried to, and got no
+    /// verdict.
     ///
     /// A failed submit or wait does **not** retract the transaction, so it can
-    /// still land. A wait that reads a verdict other than `Success` gives
+    /// still land. A deploy gives this error only from its submit. A wait that
+    /// reads a verdict other than `Success` gives
     /// [`TransactionFailed`](ContractError::TransactionFailed) instead. Match
     /// the [`SubmitError`] kind in `source` to choose the recovery:
     ///
@@ -89,8 +91,8 @@ pub enum ContractError {
     ///   transaction is unknown, and it can still land until its TTL passes. A
     ///   `SubmitRpc` comes from the submit call, before any wait. It does not
     ///   say whether the node holds the transaction (see
-    ///   [`SubmitRpc`](SubmitError::SubmitRpc)). The inputs that the call
-    ///   reserved stay reserved.
+    ///   [`SubmitRpc`](SubmitError::SubmitRpc)). The inputs that the call or
+    ///   the deploy reserved stay reserved.
     /// - [`VerdictFetch`]: the transaction is in a block, and only its verdict
     ///   is unknown. Do not resubmit. Find the verdict with the check below.
     ///
@@ -104,7 +106,9 @@ pub enum ContractError {
     /// is true, call `confirm` when it applied, or `mark_failed` when it did
     /// not, with `extrinsic_hash`. Until you reconcile the snapshot, the next
     /// call on this contract builds on it. A `mark_failed` of it then also
-    /// drops the snapshots of the later calls.
+    /// drops the snapshots of the later calls. A deploy's snapshot needs no
+    /// reconcile, because no contract exists at its address unless the deploy
+    /// lands.
     ///
     /// ```rust
     /// # use midnight_contract::{ContractError, SubmitError};
@@ -253,19 +257,20 @@ pub enum ContractError {
         in_block: Option<Box<TxInBlock>>,
     },
 
-    /// A circuit call could not record its pending private-state snapshot.
+    /// A circuit call or a deploy could not record its pending private-state
+    /// snapshot.
     ///
-    /// The call records the snapshot before it submits the transaction, so it
-    /// stopped before the submit. Nothing reached the chain, no snapshot
-    /// exists, and the wallet has the inputs that the call reserved back. Fix
-    /// the store error in `source`, then call again.
+    /// The call or the deploy records the snapshot before it submits the
+    /// transaction, so it stopped before the submit. Nothing reached the
+    /// chain, no snapshot exists, and the wallet has the inputs that the build
+    /// reserved back. Fix the store error in `source`, then try again.
     #[error(
         "`append_pending` failed for extrinsic {extrinsic_hash:x}: {source}. The \
          transaction was not submitted, and nothing reached the chain: fix the \
-         store error, then call again."
+         store error, then try again."
     )]
     PendingSnapshotFailed {
-        /// The extrinsic hash of the transaction that the call did not submit.
+        /// The extrinsic hash of the transaction that the SDK did not submit.
         extrinsic_hash: ExtrinsicHash,
         /// The private-state store error that prevented the snapshot.
         source: midnight_provider::PrivateStateError,
@@ -278,10 +283,10 @@ pub enum ContractError {
     /// [`Contract::build_call_with`](crate::Contract::build_call_with), give
     /// this error after the local run of the circuit. The call reserves no
     /// input, makes no proof, and writes no private-state snapshot. Submit the
-    /// call with `.await` or `.send()`, which record the new state.
+    /// call with `.send()`, which records the new state.
     #[error(
         "the witnesses of this call change the private state of contract {address}, and a \
-         build-only call does not record it: submit the call with `.await` or `.send()`"
+         build-only call does not record it: submit the call with `.send()`"
     )]
     UnrecordedPrivateState {
         /// The address of the contract whose private state the call changes.
