@@ -538,8 +538,17 @@ impl MidnightProvider {
     /// # ) -> anyhow::Result<()> {
     /// let a_half = alice.shielded_swap(token_x, dx, token_y, dy).await?;
     /// let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
+    /// let a_spent = a_half.spent().clone();
+    /// let b_spent = b_half.spent().clone();
     /// let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
-    /// let funded = sponsor.balance_transaction(&merged).await?;
+    /// let funded = match sponsor.balance_transaction(&merged).await {
+    ///     Ok(funded) => funded,
+    ///     Err(e) => {
+    ///         alice.release(&a_spent).await?;
+    ///         bob.release(&b_spent).await?;
+    ///         return Err(e.into());
+    ///     }
+    /// };
     /// sponsor.submit_reserved(funded).await?;
     /// # Ok(())
     /// # }

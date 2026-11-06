@@ -406,7 +406,7 @@ async fn shielded_transfer_spans_multiple_coins() {
 ///
 /// The half names the give-side coins it reserved, so a party whose swap
 /// never lands can release them. A half that drops its reservation releases
-/// nothing, and the coins stay out of the spendable reading until their TTL.
+/// nothing, and the coins stay out of `spendable_shielded_coins` until their TTL.
 #[tokio::test]
 async fn build_shielded_swap_half_has_mirror_deltas() {
     let Some((node, indexer)) = devnet_urls() else {
