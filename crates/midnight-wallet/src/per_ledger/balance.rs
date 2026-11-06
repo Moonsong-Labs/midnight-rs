@@ -21,14 +21,7 @@ impl Wallet {
 
     fn dust_balance(&self) -> DustBalance {
         let confirmed = self.dust_wallet().dust_local_state.as_deref();
-        let unreserved = confirmed.map(|state| {
-            self.reserved_dust_nullifiers()
-                .fold(state.clone(), |state, nullifier| {
-                    state
-                        .remove_utxo(nullifier)
-                        .expect("remove_utxo returns Ok in every ledger generation")
-                })
-        });
+        let unreserved = self.unreserved_dust();
         let now = self
             .block_context()
             .map(|bc| bc.tblock)

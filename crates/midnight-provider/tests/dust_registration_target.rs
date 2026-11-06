@@ -64,6 +64,7 @@ async fn a_registration_to_another_dust_address_funds_that_wallet() {
     let funder = common::synced_provider(&node_url, &indexer_url, common::DEV_WALLET_SEED).await;
     funder
         .transfer_unshielded(NIGHT, SEND, &cold_address)
+        .send()
         .await
         .expect("fund the cold address")
         .wait_finalized()
@@ -84,6 +85,7 @@ async fn a_registration_to_another_dust_address_funds_that_wallet() {
 
     cold.register_dust(None)
         .to(target)
+        .send()
         .await
         .expect("build and submit the registration")
         .wait_finalized()

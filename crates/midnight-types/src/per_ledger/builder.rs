@@ -59,9 +59,9 @@ pub struct PreparedTransfer {
     dust_batches: Vec<DustSpendBatch>,
     spent_unshielded_inputs: Vec<SpentUtxoKey>,
     spent_shielded_inputs: Vec<Nullifier>,
-    /// The block time of the build context that this build selected against.
-    /// The reservation carries the same stamp, so a release can name this
-    /// build's own entry.
+    /// The [`chain_time`] of the build context that this build selected
+    /// against. The reservation carries the same stamp, so a release can name
+    /// this build's own entry.
     reserved_at: Timestamp,
     /// The time after which the transaction can no longer land.
     expires_at: Timestamp,
@@ -82,7 +82,7 @@ impl PreparedTransfer {
     ) -> Self {
         // Read both from the context and the transaction this build made
         // rather than take them as arguments, so they cannot disagree.
-        let reserved_at = tx_info.context.latest_block_context().tblock;
+        let reserved_at = chain_time(&tx_info.context.latest_block_context());
         let expires_at = tx
             .intents()
             .map(|(_, intent)| intent.ttl)
@@ -124,9 +124,9 @@ impl PreparedTransfer {
         &self.spent_shielded_inputs
     }
 
-    /// The block time of the build context that this build selected against.
-    /// Reserve its inputs with this stamp, which [`Self::spent_inputs`] gives
-    /// each of them. It can trail the [`chain_time`] of the context.
+    /// The [`chain_time`] of the build context that this build selected
+    /// against. Reserve its inputs with this stamp, which
+    /// [`Self::spent_inputs`] gives each of them.
     pub fn reserved_at(&self) -> Timestamp {
         self.reserved_at
     }
@@ -1082,6 +1082,29 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
         .ok_or_else(|| WalletError::Transfer("no intent segment left for the fee".into()))
 }
 
+/// The TTL of the fee intent for `external`: the earliest TTL of its intents,
+/// kept between the chain time of `context` and [`longest_ttl`]. With no
+/// intent, it is [`longest_ttl`].
+///
+/// The upper bound: `external` comes from another party, and an uncapped TTL
+/// would let that party set how long the sponsor's Dust stays reserved.
+///
+/// The lower bound: a TTL that already passed would let the next build at the
+/// same chain time evict this reservation. That build would take the same Dust
+/// with the same stamp. A release of this build would then drop the
+/// reservation of that build too. The wallet keeps a reservation while its TTL
+/// is at or after the chain time. So a TTL at the chain time keeps the
+/// reservation through every build at that chain time.
+fn fee_ttl(external: &FinalizedTx, context: &BuildContext) -> Timestamp {
+    let longest = longest_ttl(context);
+    let Some(earliest) = external.intents().map(|(_, intent)| intent.ttl).min() else {
+        return longest;
+    };
+    earliest
+        .max(chain_time(&context.latest_block_context()))
+        .min(longest)
+}
+
 /// Draw the fee for a finished transaction this wallet did not build, and
 /// stop before proving.
 ///
@@ -1091,6 +1114,12 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 /// Each round prices the merge with a mock proof, which is exact here
 /// because the fee intent carries only Dust spends.
 ///
+/// The fee intent takes the earliest TTL of the intents of `external`, kept
+/// between the chain time of the build (see [`chain_time`]) and
+/// [`longest_ttl`]. So the Dust that the fee intent reserves expires when the
+/// merged transaction can no longer land. When `external` has no intent, the
+/// fee intent gets [`longest_ttl`].
+///
 /// `None` when `external` already balances its Dust. There is nothing to
 /// draw then, and an intent with no spends is one the ledger rejects.
 pub fn balance_external(
@@ -1098,7 +1127,7 @@ pub fn balance_external(
     external: &FinalizedTx,
 ) -> Result<Option<PreparedTransfer>, WalletError> {
     let now = tx_info.context.latest_block_context().tblock;
-    let ttl = longest_ttl(&tx_info.context);
+    let ttl = fee_ttl(external, &tx_info.context);
     let network_id = tx_info
         .context
         .with_ledger_state(|ls| ls.network_id.clone());
@@ -1665,6 +1694,51 @@ mod tests {
             prepared(unproven_expiring_at(&[])).expires_at(),
             Timestamp::from_secs(2_000) + global_ttl_of(&context)
         );
+    }
+
+    /// The sponsor's Dust must stay reserved no longer than the transaction
+    /// it pays for can land, and no longer than the chain's longest TTL,
+    /// whatever TTL the other party set. A TTL that already passed must not
+    /// make the reservation evictable at the chain time of its build.
+    #[test]
+    fn a_fee_intent_expires_with_the_transaction_it_pays_for() {
+        let context = context_at(1_000, 2_000);
+        let longest = Timestamp::from_secs(2_000) + global_ttl_of(&context);
+        let fee_ttl_for = |ttls: &[u64]| {
+            let external = unproven_expiring_at(ttls).mock_prove().expect("mock prove");
+            fee_ttl(&external, &context)
+        };
+
+        assert_eq!(fee_ttl_for(&[4_000, 3_000]), Timestamp::from_secs(3_000));
+        assert_eq!(fee_ttl_for(&[longest.to_secs() + 1]), longest);
+        assert_eq!(fee_ttl_for(&[]), longest);
+        assert_eq!(fee_ttl_for(&[1_500]), Timestamp::from_secs(2_000));
+    }
+
+    /// A release matches an entry by its input and its stamp. A build that
+    /// takes the inputs of an expired build must carry another stamp.
+    /// Otherwise the late release of the expired build drops the entry of the
+    /// later one. The Dust anchor can stay the same for hours, so a stamp from
+    /// it does not move between the two builds.
+    #[test]
+    fn a_build_after_an_expired_one_carries_a_later_stamp() {
+        let anchor = 1_000;
+        let t0 = 2_000;
+        let prepared = |context, tx| {
+            let tx_info = StandardTransactionInfo::new_from_context(
+                context,
+                Arc::new(helpers::LocalProofServer::default()),
+                None,
+            );
+            PreparedTransfer::new(tx_info, tx, Vec::new())
+        };
+
+        let a = prepared(context_at(anchor, t0), unproven_expiring_at(&[t0 + 60]));
+        let b = prepared(
+            context_at(anchor, t0 + 120),
+            unproven_expiring_at(&[t0 + 180]),
+        );
+        assert!(b.reserved_at() > a.expires_at());
     }
 
     /// A transaction sponsored once already carries a fee intent at the first

@@ -148,27 +148,63 @@ pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> Path
     base.join(network).join(wallet_id)
 }
 
-/// [`midnight_owner_only::create_dir_all`] for the wallet's storage directory.
+/// Creates the wallet's storage directory and its missing ancestors. On Unix,
+/// each directory that the call creates gets mode 0700, and an existing
+/// directory keeps its mode.
 ///
 /// The tree holds the key that spends the wallet's Dust, in
 /// `dust_wallet-N.bin`. It also holds the wallet's UTXO set, spend history and
 /// reserved nullifiers, a full picture of the wallet's activity. No other local
 /// user has a reason to read either.
-///
-/// Only the wallet's own directory is narrowed. An ancestor an earlier version
-/// or another tool created keeps its mode, so the set of wallet ids under a
-/// network may stay listable.
 fn create_private_dir(dir: &Path) -> Result<(), WalletError> {
-    midnight_owner_only::create_dir_all(dir)
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder
+        .create(dir)
         .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))
 }
 
 fn write_atomic(dir: &Path, filename: &str, contents: &[u8]) -> Result<(), WalletError> {
     let tmp = dir.join(format!("{filename}.tmp"));
-    midnight_owner_only::write(&tmp, contents)
+    create_owner_only_file(&tmp, contents)
         .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
     std::fs::rename(&tmp, dir.join(filename))
-        .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))
+        .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))?;
+    sync_dir(dir).map_err(|e| WalletError::Storage(format!("sync {}: {e}", dir.display())))
+}
+
+/// Writes `contents` to a new file at `path` and syncs it to disk. On Unix, the
+/// file gets mode 0600.
+///
+/// The call removes an existing file at `path`, and the create fails if one
+/// appears again. So the contents never go into a file or a symbolic link that
+/// another user put there.
+fn create_owner_only_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
+    file.write_all(contents)?;
+    file.sync_all()
+}
+
+/// Syncs the entries of `dir` to disk, so a rename or a removal in `dir`
+/// persists after a power loss. Other platforms skip it, because
+/// `File::open` fails on a directory on Windows.
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, WalletError> {
@@ -296,8 +332,9 @@ pub(crate) fn save_snapshot(
     // Atomic commit: from this point on, the wallet sees the new state.
     write_atomic(&dir, METADATA_FILE, meta_json.as_bytes())?;
 
-    // Best-effort: remove the previous generation's binary files. Failure
-    // here is non-fatal (the next save will retry or overwrite).
+    // Best-effort: a failed removal, or a save that fails after the metadata
+    // rename, leaves the previous generation on disk, and no later save
+    // removes it.
     if let Some(prev) = previous_generation {
         let _ = std::fs::remove_file(dir.join(zswap_file(prev)));
         let _ = std::fs::remove_file(dir.join(dust_wallet_file(prev)));
@@ -316,7 +353,7 @@ pub(crate) fn save_snapshot(
 }
 
 /// On-disk representation of a wallet's pending reservations. The hex fields
-/// hold the `tagged_serialize` bytes of the Dust spends and the shielded
+/// hold the `tagged_serialize` bytes of the Dust nullifiers and the shielded
 /// nullifiers, so the JSON schema stays free of the tagged codec.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredPending {
@@ -333,8 +370,8 @@ pub(crate) struct StoredPending {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredPendingDustBatch {
-    /// Tagged-serialized `Vec<DustSpend<ProofPreimageMarker, DefaultDB>>`, hex.
-    pub spends_hex: String,
+    /// Tagged-serialized `Vec<DustNullifier>`, hex.
+    pub nullifiers_hex: String,
     /// `Timestamp::to_secs()` value.
     pub reserved_at_secs: u64,
     /// `Timestamp::to_secs()` value.
@@ -555,21 +592,17 @@ mod tests {
         );
     }
 
-    /// A directory or file from an earlier version carries the old mode, and
-    /// creating with a mode does not touch what already exists.
     #[test]
-    fn existing_permissions_are_narrowed() {
+    fn a_save_does_not_follow_a_planted_link() {
         let base = tempfile::TempDir::new().unwrap();
         let dir = snapshot_path(base.path(), "undeployed", "testwallet");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let path = dir.join(PENDING_FILE);
-        std::fs::write(&path, b"{}").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let target = base.path().join("target");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, dir.join(format!("{PENDING_FILE}.tmp"))).unwrap();
 
         save_pending(base.path(), "undeployed", "testwallet", &some_pending()).unwrap();
 
-        assert_eq!(mode_of(&dir), 0o700);
-        assert_eq!(mode_of(&path), 0o600);
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
     }
 }

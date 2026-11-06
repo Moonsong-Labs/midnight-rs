@@ -282,8 +282,8 @@ impl WalletBuilder {
 
     /// Persist sync progress + recovered state under `dir`. Without this call,
     /// the wallet runs in-memory only. The directory is retained: every
-    /// successful resync re-saves the wallet and each transfer build
-    /// persists its pending reservation.
+    /// successful resync re-saves the wallet and each build persists its
+    /// reservation once its proof succeeds.
     ///
     /// See [`docs/wallet.md`](https://github.com/Moonsong-Labs/midnight-rs/blob/main/docs/wallet.md#persistence)
     /// for the on-disk layout.

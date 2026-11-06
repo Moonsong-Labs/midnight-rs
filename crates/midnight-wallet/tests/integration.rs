@@ -238,6 +238,7 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
 
     let pending = provider
         .transfer_shielded(DEFAULT_SHIELDED_TOKEN, AMOUNT, &recipient)
+        .send()
         .await
         .expect("shielded transfer should build + submit");
     let (_best, pending) = pending.wait_best().await.expect("wait_best");

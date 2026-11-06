@@ -69,9 +69,9 @@ pub struct SpentUtxoKey {
 ///
 /// Each input carries the stamp of its reservation, because the stamp is half
 /// of a reservation's identity. A release names both, so a build hands back
-/// its own entry, not one a later build made over the same input in a later
-/// block. Two reservations in one block share the stamp, which is why a
-/// reservation is released once.
+/// its own entry, not one a later build made over the same input at a later
+/// chain time. Two reservations at one chain time share the stamp, which is
+/// why a reservation is released once.
 ///
 /// One transaction can hold the inputs of two reservations with different
 /// stamps. A contract call or a deploy with a shielded offer reserves its
@@ -92,7 +92,7 @@ pub struct SpentInputs {
 pub struct ReservedInput<T> {
     /// The input: a nullifier, or the key of an unshielded UTXO.
     pub input: T,
-    /// The block time of the build context when the build selected the
+    /// The chain time of the build context when the build selected the
     /// input, which is what the reservation is stamped with.
     pub reserved_at: Timestamp,
 }

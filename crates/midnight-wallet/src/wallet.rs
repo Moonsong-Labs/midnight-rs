@@ -167,12 +167,18 @@ impl Wallet {
         each!(&mut self.state, w => w.release(spent))
     }
 
+    /// Keep the reservation of a proven build across a restart. See
+    /// [`WalletFacade::persist_reservation`](midnight_wallet_facade::WalletFacade::persist_reservation).
+    pub(crate) fn persist_reservation(&mut self, spent: &SpentInputs) {
+        each!(&mut self.state, w => w.persist_reservation(spent))
+    }
+
     /// Save the current wallet state to disk.
     ///
     /// Writes the confirmed-state files (`metadata.json`, `zswap-N.bin`,
-    /// `dust_wallet-N.bin`) and the in-flight reservations to a separate
-    /// `pending.json`. Confirmed and pending live in distinct files so a
-    /// failed save of one does not corrupt the other. Runs automatically at
+    /// `dust_wallet-N.bin`) and the reservations of proven builds to a
+    /// separate `pending.json`. Confirmed and pending live in distinct files
+    /// so a failed save of one does not corrupt the other. Runs automatically at
     /// the end of initial sync and after every successful resync when a
     /// storage directory is configured; calling it manually is only needed
     /// for extra checkpoints.
