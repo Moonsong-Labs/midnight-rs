@@ -1063,9 +1063,10 @@ async fn prepare_with_ttl(
 
 /// The first segment [`fee_segment`] offers a fee intent.
 ///
-/// A build puts its own intents at the low segments, and a later merge may
-/// need those, so the fee starts high. Dust balances across segments, so
-/// which one it lands on does not matter for the fee itself.
+/// The fee starts clear of segment 1, which a later merge may need, and
+/// [`fee_segment`] skips each segment that the transaction already uses.
+/// Dust balances across segments, so which one it lands on does not matter
+/// for the fee itself.
 const DUST_FEE_SEGMENT: u16 = 0xFEED;
 
 /// The first segment from [`DUST_FEE_SEGMENT`] up that `external` leaves

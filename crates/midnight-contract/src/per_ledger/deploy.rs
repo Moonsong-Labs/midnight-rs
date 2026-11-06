@@ -6,7 +6,7 @@ use std::sync::Arc;
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{CoinPublicKey, EncryptionPublicKey, TransferResult};
 
-use super::call::{INTENT_SEGMENT, prove_without_fee};
+use super::call::prove_without_fee;
 use super::helpers;
 use super::provider::Builds;
 use super::types::PreparedInput;
@@ -64,8 +64,12 @@ pub(crate) async fn deploy_funded(
     })
 }
 
-/// The transaction info for one intent, at [`INTENT_SEGMENT`], that holds
+/// The transaction info for one intent, at the fallible segment, that holds
 /// `action` alone.
+///
+/// The segment is fixed, as it is for a deploy and a maintenance update in
+/// midnight-js. A call draws its segment with
+/// [`call_segment`](super::call::call_segment) instead.
 pub(super) fn single_action_tx_info(
     builds: &Builds<'_>,
     context: Arc<BuildContext>,
@@ -74,7 +78,7 @@ pub(super) fn single_action_tx_info(
     let mut tx_info =
         StandardTransactionInfo::new_from_context(context, builds.proof_provider(), None);
     tx_info.add_intent(
-        INTENT_SEGMENT,
+        helpers::Segment::Fallible.into(),
         Box::new(IntentInfo {
             guaranteed_unshielded_offer: None,
             fallible_unshielded_offer: None,
