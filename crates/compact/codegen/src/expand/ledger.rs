@@ -115,9 +115,12 @@ pub(crate) fn emit_ledger_wrapper(
         /// ```rust,ignore
         /// let contract = Contract::deploy(&provider)
         ///     .with_zk_config("compiled")
+        ///     .send()
+        ///     .await?
+        ///     .into_contract()
         ///     .await?;
         ///
-        /// contract.circuits().increment().await?;
+        /// contract.circuits().increment().send().await?.wait_finalized().await?;
         /// let ledger = contract.ledger().await?;
         /// ```
         pub struct Contract<P>(midnight_contract::Contract<P>);
@@ -374,7 +377,7 @@ fn emit_deploy(
     let deploy_fn = quote! {
         /// Start building a deployment for this contract.
         ///
-        /// Returns a `DeployBuilder` that can be awaited directly. The
+        /// Returns a `DeployBuilder`. Its `send` submits the deploy. The
         /// provider must have a synced wallet attached via
         /// `MidnightProvider::with_wallet(...)`.
         ///
@@ -462,11 +465,12 @@ fn emit_deploy(
     });
 
     let deploy_builder = quote! {
-        /// Builder wrapper around `midnight_contract::DeployBuilder` that
-        /// yields the generated `Contract<P>` on deploy.
+        /// Builder wrapper around `midnight_contract::DeployBuilder`. Its
+        /// `send` returns the generated `PendingDeploy`, and
+        /// `PendingDeploy::into_contract` gives the generated `Contract<P>`.
         ///
         /// `Wp` is the witness provider that the constructor runs with.
-        #[must_use = "does nothing until awaited or sent"]
+        #[must_use = "does nothing until sent"]
         pub struct DeployBuilder<'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
             inner: midnight_contract::DeployBuilder<'a, P>,
             /// The first error of a setter, which `send` returns.
@@ -532,7 +536,7 @@ fn emit_deploy(
             where
                 P: midnight_contract::AsMidnightProvider + Send,
             {
-                // Boxed for the same reason the `IntoFuture` impl below is.
+                // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
                 Box::pin(async move {
                     if let ::core::option::Option::Some(error) = self.error {
                         return Err(error);
@@ -544,18 +548,6 @@ fn emit_deploy(
         }
 
         #witness_impls
-
-        impl<'a, P, Wp: 'a> std::future::IntoFuture for DeployBuilder<'a, P, Wp>
-        where
-            P: midnight_contract::AsMidnightProvider + Send + 'a,
-        {
-            type Output = Result<Contract<P>, midnight_contract::ContractError>;
-            type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
-
-            fn into_future(self) -> Self::IntoFuture {
-                Box::pin(async move { self.send().await?.into_contract().await })
-            }
-        }
     };
 
     (deploy_fn, deploy_builder)
@@ -1153,8 +1145,7 @@ fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
 
 fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) -> TokenStream {
     // Per circuit we emit a constructor on `Circuits` (returns a call builder)
-    // plus a standalone call struct with `build()`, `send()`, `simulate()` and
-    // an `IntoFuture` impl.
+    // plus a standalone call struct with `build()`, `send()` and `simulate()`.
     let mut constructors = Vec::new();
     let mut call_items = Vec::new();
     let send_bounds = quote! {
@@ -1178,9 +1169,9 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         let doc = format!(
             "Start a call to the `{}` circuit.\n\n\
-             Returns a call builder. `.await` it to submit the call, wait for finality \
-             and get the circuit's result. `.send().await` submits the call and returns \
-             a `PendingCall` before the chain's verdict. `.build().await` builds and \
+             Returns a call builder. `.send().await` submits the call and returns \
+             a `PendingCall` before the chain's verdict. Its `wait_finalized` waits for \
+             finality and returns the circuit's result. `.build().await` builds and \
              proves the transaction and returns its bytes *without* a submit, to merge \
              with other transactions. `.simulate().await` runs the circuit with no \
              proof, fee or transaction.",
@@ -1188,8 +1179,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         );
         let call_doc = format!(
             "Call builder for the `{}` circuit.\n\n\
-             `.await` submits the call, waits for finality and returns the circuit's \
-             result. [`send`](Self::send) submits the call and returns a `PendingCall` \
+             [`send`](Self::send) submits the call and returns a `PendingCall` \
              before the chain's verdict. [`build`](Self::build) returns the proven \
              transaction bytes without a submit. [`simulate`](Self::simulate) runs the \
              circuit and returns its value, the ledger after it and its events, with no \
@@ -1199,25 +1189,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         let (value_ty, decode) = circuit_decode(circuit);
 
-        // Submit path (`.await` via `IntoFuture`): call + return the circuit's
-        // typed result. `__circuits` is destructured from `self` at the call
-        // site below; `ir`, `program` and `__args` come from the shared `setup`.
+        // `__circuits` is destructured from `self` at the call site below;
+        // `ir`, `program` and `__args` come from the shared `setup`.
         let call_args = quote! {
             ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)
-        };
-        let ret_type = quote! {
-            ::core::result::Result<midnight_contract::CallOutcome<#value_ty>, midnight_contract::ContractError>
-        };
-        let submit_tail = quote! {
-            #decode
-            let __outcome = __circuits.contract.call_with(#call_args).await?;
-            ::core::result::Result::Ok(midnight_contract::CallOutcome {
-                value: __decode(__outcome.value)?,
-                extrinsic_hash: __outcome.extrinsic_hash,
-                transaction_hash: __outcome.transaction_hash,
-                block_hash: __outcome.block_hash,
-                logs: __outcome.logs,
-            })
         };
 
         // Constructor params / call-struct fields (identical syntax) and the
@@ -1246,13 +1221,9 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             }
         });
 
-        // The call builder: `.await` (via `IntoFuture`) submits and returns the
-        // circuit's result; `.send().await` returns the pending call;
-        // `.build().await` returns the proven bytes; `.simulate().await`
-        // returns the value and the post-call ledger.
         call_items.push(quote! {
             #[doc = #call_doc]
-            #[must_use = "does nothing until awaited, sent, built or simulated"]
+            #[must_use = "does nothing until sent, built or simulated"]
             pub struct #call_ty<'c, 'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
                 circuits: &'c mut Circuits<'a, P, Wp>
                 #params
@@ -1270,7 +1241,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// The build records no private-state snapshot. So it fails with
                 /// `ContractError::UnrecordedPrivateState` when the witnesses change the
                 /// private state, after the local run and before the build reserves an
-                /// input or makes a proof. Submit such a call with `.await` or `.send()`.
+                /// input or makes a proof. Submit such a call with `.send()`.
                 ///
                 /// The build reserves the wallet inputs that the transaction spends. The
                 /// bytes do not name them, so they stay reserved until a sync sees the chain
@@ -1349,16 +1320,13 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 #send_bounds
             {
                 type Error = midnight_contract::ContractError;
-                // Boxed for the same reason the `IntoFuture` impl below is: the
-                // build-and-prove future is large, and leaving it inline here
-                // makes the caller's frame big enough to overflow the stack on
-                // debug builds.
+                // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
                 /// Build and prove the call with no Dust fee, for another wallet to
                 /// sponsor with `MidnightProvider::balance_transaction`.
                 ///
                 /// As with `build`, it fails with `ContractError::UnrecordedPrivateState`
                 /// when the witnesses change the private state, before the build reserves
-                /// an input or makes a proof. Submit such a call with `.await` or `.send()`.
+                /// an input or makes a proof. Submit such a call with `.send()`.
                 /// As with `build`, the inputs that the build reserves stay reserved until
                 /// a sync sees the chain spend them, or until their TTL passes.
                 fn without_dust(
@@ -1373,24 +1341,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         #open
                         let __bytes = __circuits.contract.build_call_with(#call_args, false).await?;
                         ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_proven_bytes(__bytes))
-                    })
-                }
-            }
-
-            impl<'c, 'a, P, Wp> ::core::future::IntoFuture for #call_ty<'c, 'a, P, Wp>
-            where
-                #send_bounds
-            {
-                type Output = #ret_type;
-                type IntoFuture = ::core::pin::Pin<
-                    ::std::boxed::Box<
-                        dyn ::core::future::Future<Output = #ret_type> + ::core::marker::Send + 'c,
-                    >,
-                >;
-                fn into_future(self) -> Self::IntoFuture {
-                    ::std::boxed::Box::pin(async move {
-                        #open
-                        #submit_tail
                     })
                 }
             }
@@ -1410,7 +1360,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// then loads the contract's private state before execution,
                 /// threads it through the witnesses, and persists it after.
                 ///
-                /// Only a submitted call (`.await` or `.send()`) records the state.
+                /// Only a submitted call (`.send()`) records the state.
                 /// A call builder's `build` and `without_dust` refuse a call whose
                 /// witnesses change the state, with
                 /// `ContractError::UnrecordedPrivateState`. [`Witnesses`] says when
@@ -1433,9 +1383,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     quote! {
         /// On-chain circuit call methods.
         ///
-        /// Access via `contract.circuits()`. Each method executes the circuit
-        /// locally, builds a funded transaction, and submits it to the node.
-        /// The `simulate` method of a call builder stops after the local run.
+        /// Access via `contract.circuits()`. Each method returns a call
+        /// builder. Its `send` executes the circuit locally, builds a funded
+        /// transaction, and submits it to the node. Its `simulate` stops after
+        /// the local run.
         /// For circuits that call witnesses, chain [`Circuits::with_witnesses`]
         /// with a typed [`Witnesses`] impl. When a `PrivateStateProvider` is
         /// attached, the contract's private state is threaded automatically,

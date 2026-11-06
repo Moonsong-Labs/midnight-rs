@@ -111,6 +111,20 @@ pub trait WalletFacade: Send + Sync {
     /// reservation carries another stamp.
     async fn release(&self, spent: &SpentInputs);
 
+    /// Keep the reservation of a proven build across a restart.
+    ///
+    /// The build that reserved `spent` is proven, so its transaction can reach
+    /// the chain from any process. An implementation that keeps its state
+    /// across a restart keeps this reservation across it too. At a restart, it
+    /// may drop a reservation that never got this call: that build stopped
+    /// before its proof finished, so its transaction cannot reach the chain.
+    /// An implementation that keeps no state across a restart does nothing
+    /// here.
+    ///
+    /// It names each entry as [`Self::release`] does, by its input and its
+    /// stamp.
+    async fn persist_reservation(&self, spent: &SpentInputs);
+
     /// Resume the event streams from this wallet's cursors and apply what they
     /// deliver.
     ///
@@ -227,6 +241,10 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
 
     async fn release(&self, spent: &SpentInputs) {
         (**self).release(spent).await
+    }
+
+    async fn persist_reservation(&self, spent: &SpentInputs) {
+        (**self).persist_reservation(spent).await
     }
 
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {

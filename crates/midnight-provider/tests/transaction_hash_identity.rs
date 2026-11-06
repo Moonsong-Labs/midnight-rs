@@ -28,6 +28,7 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
     // A self-transfer is the cheapest transaction that reaches a block.
     let pending = provider
         .transfer_unshielded(NIGHT, 1, recipient)
+        .send()
         .await
         .expect("submit self-transfer");
     let transaction_hash = pending.transaction_hash();

@@ -70,7 +70,7 @@ Output:
 
 Step 1 uses the high-level builder's `.send().await?` method which returns a `PendingDeploy`. From there `wait_best()` and `wait_finalized()` drive subxt's watch stream so you can act on inclusion as soon as it lands in a block, and again once the chain finalizes it. Each wait fails with `ContractError::TransactionFailed` when the chain did not apply the deploy. `into_contract()` then reads the contract from the node at the block that applied the deploy, and yields the typed `Contract`. On the local dev chain best and finalized are usually the same hash because finalization is near-instant.
 
-For the simple case where you don't need to observe both states, `.await?` the builder directly. It submits the deploy, waits for the best block, fails there when the chain did not apply the deploy, and reads the contract from the node. `into_contract()` does the same when no wait ran before it. One deadline, set with `with_deploy_timeout` (60 s by default), bounds the wait for the block and the read together.
+For the simple case where you don't need to observe both states, call `into_contract()` directly after `.send().await?`. When no wait ran before it, it waits for the best block, fails there when the chain did not apply the deploy, and reads the contract from the node. One deadline, set with `with_deploy_timeout` (60 s by default), bounds the wait for the block and the read together.
 
 Stop the devnet (from the repo root):
 

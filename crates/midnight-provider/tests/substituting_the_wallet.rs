@@ -78,6 +78,8 @@ impl WalletFacade for StubWallet {
         released.extend(spent.shielded.iter().map(|reserved| reserved.input));
     }
 
+    async fn persist_reservation(&self, _spent: &SpentInputs) {}
+
     async fn resync(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
         Ok(())
     }

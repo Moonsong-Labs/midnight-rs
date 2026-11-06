@@ -55,11 +55,19 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(counter::ZK_CONFIG_DIR)
+        .send()
+        .await
+        .expect("submit deploy")
+        .into_contract()
         .await
         .expect("deploy on ledger 8");
     contract
         .circuits()
         .increment()
+        .send()
+        .await
+        .expect("submit increment")
+        .wait_finalized()
         .await
         .expect("call on ledger 8");
     // The snapshot as it stands on ledger 8, for two resumes after the fork
@@ -126,12 +134,17 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     contract
         .circuits()
         .increment()
+        .send()
+        .await
+        .expect("submit increment")
+        .wait_finalized()
         .await
         .expect("call a ledger 8 contract on ledger 9");
     let round = contract.ledger().await.unwrap().round().unwrap();
     assert_eq!(round, 2, "the contract keeps its ledger 8 state");
     provider
         .transfer_unshielded(NIGHT, 1_000_000, own_unshielded)
+        .send()
         .await
         .expect("submit an unshielded transfer on ledger 9")
         .wait_finalized()
@@ -144,6 +157,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .token_type;
     provider
         .transfer_shielded(token_type, 1, own_shielded)
+        .send()
         .await
         .expect("submit a shielded transfer on ledger 9")
         .wait_finalized()
@@ -201,6 +215,7 @@ async fn register_every_night_utxo(provider: &MidnightProvider) {
     while left > 0 {
         provider
             .register_dust(None)
+            .send()
             .await
             .expect("submit a Dust registration on ledger 9")
             .wait_finalized()

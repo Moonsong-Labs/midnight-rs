@@ -72,7 +72,7 @@ The "prove" and "balance" steps live together inside `build` because they're int
 
 What you *can* now do is stop before submission and get the proven bytes back: `.build()` on a transfer, or `contract.circuits().<circuit>().build().await` (equivalently `Contract::build_call_with`) for a contract call, returns a proven `Vec<u8>` without submitting. That is the hook the multi-party flows in the next section build on, and it closes most of the "you can't separate building from submitting" gap this section used to describe.
 
-Both the one-shot path (`provider.transfer_*.await`) and `Contract::deploy(...).await` collapse the whole pipeline into one.
+The one-shot paths (`provider.transfer_*(...).send().await` and `Contract::deploy(...).send().await`) collapse the build, the proof and the submit into one call. The wait is a call on the pending handle that `send` returns.
 
 ## Combining and balancing transactions (multi-party)
 
@@ -159,7 +159,7 @@ Practical consequences for SDK callers:
 `wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. Only `Success` reaches the caller as `Ok`. For `PartialSuccess` and `Failure`, the wait fails with `ProviderError::NotApplied`, so `?` stops on a transaction that did not apply:
 
 ```rust,ignore
-let pending = provider.transfer_unshielded(NIGHT, 100, recipient).await?;
+let pending = provider.transfer_unshielded(NIGHT, 100, recipient).send().await?;
 pending.wait_finalized().await?;
 ```
 
@@ -186,7 +186,7 @@ When `wait_best` / `wait_finalized` fail with no verdict, the error is `Provider
 
 A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes the payloads. Its ledger 8 result has no `logEvents`.
 
-midnight-rs returns the events as `logs` on `CallOutcome` (from `.await` or `PendingCall::wait_finalized`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
+midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::wait_finalized` or `Contract::call_with`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
 
 The differences:
 
@@ -226,7 +226,7 @@ The chain supports three governance operations on a deployed contract:
 
 midnight-js: see `packages/contracts/src/governance/` (`submit-insert-vk-tx.ts`, `submit-remove-vk-tx.ts`, `submit-replace-authority-tx.ts`).
 
-midnight-rs: exposed via `Contract::at(addr).maintenance()`, which returns a `ContractMaintenance` builder. Chain `insert_verifier_key`, `remove_verifier_key`, and `replace_authority` (applied in order, atomically, in one signed update), then `prepare()` for a `PreparedMaintenance`. Signing is caller-controlled: read `data_to_sign()`, attach signatures with `sign(committee_index, key)` / `add_signature(...)`, then await (or `build()`) to submit. The initial authority is set at deploy via `DeployBuilder::with_maintenance_authority`, and `Contract::maintenance_authority()` reads the current committee. The SDK never stores a key. See [`contract-maintenance-governance.md`](./contract-maintenance-governance.md).
+midnight-rs: exposed via `Contract::at(addr).maintenance()`, which returns a `ContractMaintenance` builder. Chain `insert_verifier_key`, `remove_verifier_key`, and `replace_authority` (applied in order, atomically, in one signed update), then `prepare()` for a `PreparedMaintenance`. Signing is caller-controlled: read `data_to_sign()`, attach signatures with `sign(committee_index, key)` / `add_signature(...)`, then call `send()` to submit, or `build()` for the proven bytes without a submit. The initial authority is set at deploy via `DeployBuilder::with_maintenance_authority`, and `Contract::maintenance_authority()` reads the current committee. The SDK never stores a key. See [`contract-maintenance-governance.md`](./contract-maintenance-governance.md).
 
 ## Per-contract private state
 

@@ -4,7 +4,7 @@ error: unused `__ledger_bindings::DeployBuilder` that must be used
 13 |     Contract::deploy(provider);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: does nothing until awaited or sent
+   = note: does nothing until sent
 note: the lint level is defined here
   --> tests/ui/fail/unused-builders.rs:4:9
    |
@@ -33,7 +33,7 @@ error: unused `IncrementCallBuilder` that must be used
 21 |     contract.circuits().increment();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: does nothing until awaited, sent, built or simulated
+   = note: does nothing until sent, built or simulated
 help: use `let _ = ...` to ignore the resulting value
    |
 21 |     let _ = contract.circuits().increment();

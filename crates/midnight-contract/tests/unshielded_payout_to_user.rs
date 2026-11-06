@@ -41,6 +41,10 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     let contract = Contract::deploy(provider)
         .with_initial_state(common::contract_state(vec![]))
         .with_zk_config(&keyed)
+        .send()
+        .await
+        .expect("submit deploy")
+        .into_contract()
         .await
         .expect("deploy");
     eprintln!("deployed at {}", contract.address());

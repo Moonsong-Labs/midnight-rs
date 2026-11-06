@@ -78,7 +78,7 @@ balance: ... SPECK, spendable UTXOs: ...
 - `Wallet::shielded_address`: the synced wallet's own address, which the example prints
 - `Wallet::shielded_recipient`: the synced wallet's own shielded keys, which receive the self-transfer
 - `MidnightProvider::balance`: shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))
-- `MidnightProvider::transfer_shielded(token_type, amount, recipient)`: builds a proven zswap transfer and submits it
+- `MidnightProvider::transfer_shielded(token_type, amount, recipient).send()`: builds a proven zswap transfer and submits it
 - `PendingTx::wait_best` + `wait_finalized`: the submission lifecycle
 - `LocalWallet::sync_in_background`: resync the attached wallet in a background task until the handle drops
 - `BackgroundSync::wait_until` with a balance check: wait until the wallet sees the outputs of the transfer

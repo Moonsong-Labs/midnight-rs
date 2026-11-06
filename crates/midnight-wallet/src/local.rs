@@ -244,6 +244,10 @@ impl WalletFacade for LocalWallet {
         self.inner.write().await.release(spent);
     }
 
+    async fn persist_reservation(&self, spent: &SpentInputs) {
+        self.inner.write().await.persist_reservation(spent);
+    }
+
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
         let _sync = self.sync.lock().await;
         self.resync_held(chain).await

@@ -82,8 +82,7 @@ impl WalletBuilds for LocalWallet {
         nullifiers: Vec<Nullifier>,
         rng: &mut StdRng,
     ) -> Result<(Vec<PreparedInput>, SpentInputs), WalletError> {
-        // Nothing to spend, so nothing to hold the wallet or rewrite the
-        // pending file for.
+        // Nothing to spend, so nothing to hold the wallet for.
         if nullifiers.is_empty() {
             return Ok((Vec::new(), SpentInputs::default()));
         }

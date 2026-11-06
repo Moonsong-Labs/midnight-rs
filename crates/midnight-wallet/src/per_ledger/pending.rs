@@ -22,9 +22,11 @@
 //!   longer land, and the entry is dropped. This is the backstop for
 //!   transactions that neither confirm nor get released.
 //!
-//! Pending state is persisted to its own file (`pending.json`) so that a
-//! process restart between submit and confirmation does not lose track of
-//! reservations. Confirmed state files (`metadata.json`, `zswap-N.bin`,
+//! A reservation reaches its own file (`pending.json`) once its build is
+//! proven ([`PendingReservations::mark_proven`]), so a process restart
+//! between the proof and the confirmation keeps it. A build whose proof never
+//! finished cannot reach the chain, so a restart drops its reservation and
+//! frees its inputs. Confirmed state files (`metadata.json`, `zswap-N.bin`,
 //! `dust_wallet-N.bin`) never carry pending entries.
 
 use std::path::Path;
@@ -56,9 +58,18 @@ pub(crate) struct PendingDustBatch {
     pub reserved_at: Timestamp,
     /// The TTL of the transaction, for TTL eviction.
     pub expires_at: Timestamp,
+    /// Whether the build is proven, so `pending.json` keeps the batch.
+    pub proven: bool,
 }
 
 impl PendingDustBatch {
+    /// Whether `named` names this batch: one of its spends, with its stamp.
+    fn named_by(&self, named: &[ReservedInput<DustNullifier>]) -> bool {
+        named
+            .iter()
+            .any(|d| d.reserved_at == self.reserved_at && self.spends(&d.input))
+    }
+
     /// Whether a spend of this batch has one of `nullifiers`.
     ///
     /// ANY, not ALL: one match stands for the whole batch, because a
@@ -79,6 +90,17 @@ pub(crate) struct PendingUnshieldedSpend {
     pub key: SpentUtxoKey,
     pub reserved_at: Timestamp,
     pub expires_at: Timestamp,
+    /// Whether the build is proven, so `pending.json` keeps the entry.
+    pub proven: bool,
+}
+
+impl PendingUnshieldedSpend {
+    /// Whether `named` names this entry: its key, with its stamp.
+    fn named_by(&self, named: &[ReservedInput<SpentUtxoKey>]) -> bool {
+        named
+            .iter()
+            .any(|u| u.reserved_at == self.reserved_at && u.input == self.key)
+    }
 }
 
 /// One pending shielded (Zswap) coin reservation, pinned by its nullifier.
@@ -87,6 +109,17 @@ pub(crate) struct PendingShieldedSpend {
     pub nullifier: Nullifier,
     pub reserved_at: Timestamp,
     pub expires_at: Timestamp,
+    /// Whether the build is proven, so `pending.json` keeps the entry.
+    pub proven: bool,
+}
+
+impl PendingShieldedSpend {
+    /// Whether `named` names this entry: its nullifier, with its stamp.
+    fn named_by(&self, named: &[ReservedInput<Nullifier>]) -> bool {
+        named
+            .iter()
+            .any(|s| s.reserved_at == self.reserved_at && s.input == self.nullifier)
+    }
 }
 
 /// In-memory + on-disk record of spends that recent builds have reserved
@@ -101,6 +134,9 @@ pub(crate) struct PendingReservations {
 impl PendingReservations {
     /// Append new reservations from a freshly-built transaction, stamped
     /// `reserved_at` and held until the chain time passes `expires_at`.
+    ///
+    /// The build is not proven yet, so `pending.json` leaves the new entries
+    /// out until [`Self::mark_proven`] names them.
     pub(crate) fn reserve(
         &mut self,
         dust_batches: Vec<DustSpendBatch>,
@@ -114,18 +150,21 @@ impl PendingReservations {
                 nullifiers: b.spends.iter().map(|s| s.old_nullifier).collect(),
                 reserved_at,
                 expires_at,
+                proven: false,
             }));
         self.unshielded
             .extend(unshielded.into_iter().map(|key| PendingUnshieldedSpend {
                 key,
                 reserved_at,
                 expires_at,
+                proven: false,
             }));
         self.shielded
             .extend(shielded.into_iter().map(|nullifier| PendingShieldedSpend {
                 nullifier,
                 reserved_at,
                 expires_at,
+                proven: false,
             }));
     }
 
@@ -212,21 +251,37 @@ impl PendingReservations {
         unshielded: &[ReservedInput<SpentUtxoKey>],
         shielded: &[ReservedInput<Nullifier>],
     ) {
-        self.dust.retain(|b| {
-            !dust
-                .iter()
-                .any(|d| d.reserved_at == b.reserved_at && b.spends(&d.input))
-        });
-        self.unshielded.retain(|p| {
-            !unshielded
-                .iter()
-                .any(|u| u.reserved_at == p.reserved_at && u.input == p.key)
-        });
-        self.shielded.retain(|p| {
-            !shielded
-                .iter()
-                .any(|s| s.reserved_at == p.reserved_at && s.input == p.nullifier)
-        });
+        self.dust.retain(|b| !b.named_by(dust));
+        self.unshielded.retain(|p| !p.named_by(unshielded));
+        self.shielded.retain(|p| !p.named_by(shielded));
+    }
+
+    /// Mark the reservations a specific build took as proven, so
+    /// `pending.json` keeps them across a restart.
+    ///
+    /// A proven build can reach the chain from any process. Matching is the
+    /// same as for [`Self::release`].
+    pub(crate) fn mark_proven(
+        &mut self,
+        dust: &[ReservedInput<DustNullifier>],
+        unshielded: &[ReservedInput<SpentUtxoKey>],
+        shielded: &[ReservedInput<Nullifier>],
+    ) {
+        for b in &mut self.dust {
+            if b.named_by(dust) {
+                b.proven = true;
+            }
+        }
+        for p in &mut self.unshielded {
+            if p.named_by(unshielded) {
+                p.proven = true;
+            }
+        }
+        for p in &mut self.shielded {
+            if p.named_by(shielded) {
+                p.proven = true;
+            }
+        }
     }
 
     /// Evict the entries outside [`within_ttl`] at the chain time `now`, so a
@@ -252,9 +307,10 @@ pub(crate) fn within_ttl(expires_at: Timestamp, now: Timestamp) -> bool {
 // ---------------------------------------------------------------------------
 
 impl PendingReservations {
+    /// What `pending.json` holds: the reservations of proven builds only.
     pub(crate) fn to_stored(&self) -> Result<StoredPending, WalletError> {
-        let mut dust = Vec::with_capacity(self.dust.len());
-        for p in &self.dust {
+        let mut dust = Vec::new();
+        for p in self.dust.iter().filter(|p| p.proven) {
             dust.push(StoredPendingDustBatch {
                 nullifiers_hex: tagged_to_hex(&p.nullifiers, "pending dust nullifiers")?,
                 reserved_at_secs: p.reserved_at.to_secs(),
@@ -265,6 +321,7 @@ impl PendingReservations {
         let unshielded = self
             .unshielded
             .iter()
+            .filter(|p| p.proven)
             .map(|p| StoredPendingUnshielded {
                 intent_hash: hex::encode(p.key.intent_hash.0),
                 output_index: p.key.output_index,
@@ -273,8 +330,8 @@ impl PendingReservations {
             })
             .collect();
 
-        let mut shielded = Vec::with_capacity(self.shielded.len());
-        for p in &self.shielded {
+        let mut shielded = Vec::new();
+        for p in self.shielded.iter().filter(|p| p.proven) {
             shielded.push(StoredPendingShielded {
                 nullifier_hex: tagged_to_hex(&p.nullifier, "pending shielded nullifier")?,
                 reserved_at_secs: p.reserved_at.to_secs(),
@@ -314,6 +371,9 @@ impl PendingReservations {
     /// Decode what a `pending.json` holds. Reservations another generation
     /// made are dropped: a transaction built for it cannot land on a chain
     /// that runs this one.
+    ///
+    /// Every entry loads as proven, because [`Self::to_stored`] writes only
+    /// proven entries.
     pub(crate) fn from_stored(stored: StoredPending) -> Result<Self, WalletError> {
         if stored.ledger_version != super::LEDGER {
             warn!(
@@ -328,6 +388,7 @@ impl PendingReservations {
                 nullifiers: tagged_from_hex(&s.nullifiers_hex, "pending dust nullifiers")?,
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
                 expires_at: Timestamp::from_secs(s.expires_at_secs),
+                proven: true,
             });
         }
 
@@ -343,6 +404,7 @@ impl PendingReservations {
                 },
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
                 expires_at: Timestamp::from_secs(s.expires_at_secs),
+                proven: true,
             });
         }
 
@@ -352,6 +414,7 @@ impl PendingReservations {
                 nullifier: tagged_from_hex(&s.nullifier_hex, "pending shielded nullifier")?,
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
                 expires_at: Timestamp::from_secs(s.expires_at_secs),
+                proven: true,
             });
         }
 
@@ -438,6 +501,7 @@ mod tests {
             Timestamp::from_secs(100),
             Timestamp::MAX,
         );
+        prove_all(&mut p);
         for version in [
             midnight_types::LedgerVersion::V8,
             midnight_types::LedgerVersion::V9,
@@ -499,6 +563,7 @@ mod tests {
             Timestamp::from_secs(100),
             Timestamp::from_secs(160),
         );
+        prove_all(&mut p);
         p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
         let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
@@ -595,6 +660,7 @@ mod tests {
             Timestamp::from_secs(100),
             Timestamp::MAX,
         );
+        prove_all(&mut p);
         p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
         let raw = std::fs::read_to_string(
@@ -625,8 +691,8 @@ mod tests {
 
     #[test]
     fn clear_confirmed_after_storage_round_trip() {
-        // Simulates a process restart between reserve and confirmation:
-        // reserve → save to disk → load → replay confirmed spends.
+        // Simulates a process restart between the proof and confirmation:
+        // reserve → prove → save to disk → load → replay confirmed spends.
         let dir = tempfile::TempDir::new().unwrap();
 
         let mut p = PendingReservations::default();
@@ -637,6 +703,7 @@ mod tests {
             Timestamp::from_secs(100),
             Timestamp::MAX,
         );
+        prove_all(&mut p);
         p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
         let mut loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
@@ -647,6 +714,69 @@ mod tests {
 
         loaded.clear_confirmed(&[ukey(0xab, 0)], &[nullifier(7)]);
         assert!(loaded.is_empty());
+    }
+
+    /// Only a proven build can reach the chain, so only its reservation
+    /// outlives the process. A save that ignores the mark keeps the inputs of
+    /// a build that stopped during its proof unspendable after a restart. A
+    /// mark that matches nothing loses a proven build's reservation at the
+    /// restart, and a load that forgets the mark loses it at the next one.
+    /// Only a restart shows each.
+    #[test]
+    fn only_a_proven_reservation_survives_a_restart() {
+        let mut p = PendingReservations::default();
+        // Build A, then build B in the same block. Only A finishes its proof.
+        p.reserve(
+            vec![dust_batch(&[1])],
+            vec![ukey(0xaa, 0)],
+            vec![shielded_nf(1)],
+            Timestamp::from_secs(100),
+            Timestamp::MAX,
+        );
+        p.reserve(
+            vec![dust_batch(&[2])],
+            vec![ukey(0xbb, 0)],
+            vec![shielded_nf(2)],
+            Timestamp::from_secs(100),
+            Timestamp::MAX,
+        );
+
+        p.mark_proven(
+            &[at(nullifier(1), 100)],
+            &[at(ukey(0xaa, 0), 100)],
+            &[at(shielded_nf(1), 100)],
+        );
+
+        let restarted = PendingReservations::from_stored(p.to_stored().unwrap()).unwrap();
+        let loaded = PendingReservations::from_stored(restarted.to_stored().unwrap()).unwrap();
+        assert_eq!(
+            loaded
+                .dust_batches()
+                .map(|b| b.nullifiers.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![nullifier(1)]]
+        );
+        assert_eq!(
+            loaded
+                .unshielded_spends()
+                .map(|spend| spend.key.clone())
+                .collect::<Vec<_>>(),
+            vec![ukey(0xaa, 0)]
+        );
+        assert_eq!(
+            loaded
+                .shielded_spends()
+                .map(|spend| spend.nullifier)
+                .collect::<Vec<_>>(),
+            vec![shielded_nf(1)]
+        );
+    }
+
+    /// Mark every entry of `p` proven, for a test of what the file keeps.
+    fn prove_all(p: &mut PendingReservations) {
+        p.dust.iter_mut().for_each(|b| b.proven = true);
+        p.unshielded.iter_mut().for_each(|u| u.proven = true);
+        p.shielded.iter_mut().for_each(|s| s.proven = true);
     }
 
     fn shielded_nf(n: u8) -> Nullifier {
@@ -665,6 +795,7 @@ mod tests {
             Timestamp::from_secs(100),
             Timestamp::MAX,
         );
+        prove_all(&mut p);
         p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
         let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
