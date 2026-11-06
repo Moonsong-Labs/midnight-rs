@@ -12,7 +12,9 @@ use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
+use crate::transfer::{
+    DustDeregistration, DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer,
+};
 use crate::{
     Health, PendingTx, ProofProviders, Provider, ProviderError, StateQuery, StateQueryResult,
     ledger_8, ledger_9, submit,
@@ -132,7 +134,8 @@ impl MidnightProvider {
     }
 
     /// Override the proof backend used by [`Self::transfer_shielded`],
-    /// [`Self::transfer_unshielded`], and [`Self::register_dust`].
+    /// [`Self::transfer_unshielded`], [`Self::register_dust`], and
+    /// [`Self::deregister_dust`].
     ///
     /// Defaults to [`ProofProviders::local`] if unset. Pass a
     /// [`RemoteProofServer`](crate::RemoteProofServer) to offload proving to an
@@ -584,6 +587,30 @@ impl MidnightProvider {
     /// [`TransferBuilder::prepare_register_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_register_dust
     pub fn register_dust(&self, utxo_ctime: Option<u64>) -> DustRegistration<'_> {
         DustRegistration::new(self, utxo_ctime)
+    }
+
+    /// Build a Dust deregistration transaction, which stops this wallet's
+    /// tNIGHT from generating Dust. See [`Self::transfer_shielded`] for
+    /// reservation semantics and the `.send()` vs `.build()` distinction.
+    ///
+    /// One call spends and re-creates every tNIGHT UTXO that generates Dust
+    /// and that no pending build reserves. The wallet's Dust pays the fee. A
+    /// wallet that registered its tNIGHT to another wallet's Dust address with
+    /// [`DustRegistration::to`] holds no Dust of its own. It builds with
+    /// [`DustlessBuilder::without_dust`], and the other wallet pays the fee
+    /// with [`Self::balance_transaction`].
+    ///
+    /// The build fails with a [`WalletError::Transfer`] when the transaction
+    /// exceeds a block limit, and with a [`WalletError::InsufficientDust`]
+    /// when the wallet's Dust cannot pay the fee. [Dust deregistration] in
+    /// `docs/dust-and-fees.md` gives the full rules.
+    ///
+    /// [`WalletError::Transfer`]: midnight_types::WalletError::Transfer
+    /// [`WalletError::InsufficientDust`]: midnight_types::WalletError::InsufficientDust
+    /// [`DustlessBuilder::without_dust`]: crate::DustlessBuilder::without_dust
+    /// [Dust deregistration]: https://github.com/Moonsong-Labs/midnight-rs/blob/main/docs/dust-and-fees.md#dust-deregistration
+    pub fn deregister_dust(&self) -> DustDeregistration<'_> {
+        DustDeregistration::new(self)
     }
 
     // -- Internal build paths driven by the transfer/register builders. --

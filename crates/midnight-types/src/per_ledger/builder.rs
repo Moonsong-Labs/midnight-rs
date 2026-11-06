@@ -19,7 +19,7 @@ use helpers::{
     ProofProvider, Segment, ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet,
     Signature, Sp, SplittableRng, StandardTransactionInfo, StdRng, Timestamp, TokenType,
     Transaction, TransactionSigningKey, UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType,
-    UnshieldedWallet, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo, WalletAddress,
+    UnshieldedWallet, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo, WalletAddress, WalletSeed,
 };
 
 use crate::hd::Seed;
@@ -430,6 +430,9 @@ impl<'a> TransferBuilder<'a> {
             }
             TransferKind::DustRegistration { utxo_ctime, target } => {
                 builder.prepare_register_dust(utxo_ctime, target).await
+            }
+            TransferKind::DustDeregistration { pay_fees } => {
+                builder.prepare_deregister_dust(pay_fees).await
             }
         }
     }
@@ -852,6 +855,132 @@ impl<'a> TransferBuilder<'a> {
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
         Ok(prepared)
     }
+
+    /// Build a Dust deregistration transaction, which stops the wallet's
+    /// tNIGHT from generating Dust.
+    ///
+    /// The ledger stops the generation of a tNIGHT UTXO only when a
+    /// transaction spends it. So the transaction spends every tNIGHT UTXO in
+    /// the funding view of the build context that generates Dust
+    /// ([`TrackedUtxo::is_registered_for_dust`]), and creates each one again
+    /// with the same value. The first UTXO goes in the guaranteed offer and
+    /// the others in the fallible offer. When no UTXO generates, the
+    /// transaction carries the deregistration with no unshielded offer.
+    ///
+    /// A deregistration claims no generationless Dust. When `pay_fees` is
+    /// true, the wallet's own Dust pays the fee. When `pay_fees` is false, the
+    /// build draws no Dust, and another wallet pays the fee with
+    /// `MidnightProvider::balance_transaction` (in `midnight-provider`).
+    ///
+    /// [Dust deregistration] in `docs/dust-and-fees.md` gives the rules for a
+    /// UTXO that still generates afterwards, for a partial success, and for
+    /// the block limit.
+    ///
+    /// # Errors
+    ///
+    /// - [`WalletError::Transfer`] when the transaction exceeds a block limit,
+    ///   because the wallet holds too many tNIGHT UTXOs that generate Dust.
+    /// - [`WalletError::InsufficientDust`] when `pay_fees` is true and the
+    ///   wallet's Dust cannot pay the fee.
+    ///
+    /// [Dust deregistration]: https://github.com/Moonsong-Labs/midnight-rs/blob/main/docs/dust-and-fees.md#dust-deregistration
+    pub async fn prepare_deregister_dust(
+        self,
+        pay_fees: bool,
+    ) -> Result<PreparedTransfer, WalletError> {
+        let seed = self.state.seed().into_ledger();
+
+        let unreserved: Vec<SpentUtxoKey> = self
+            .context
+            .unshielded_utxos(seed.clone())
+            .await
+            .into_iter()
+            .map(|(utxo, _ctime)| SpentUtxoKey {
+                intent_hash: utxo.intent_hash.0,
+                output_index: utxo.output_no,
+            })
+            .collect();
+        let night: Vec<&TrackedUtxo> = self
+            .state
+            .unshielded_utxos()
+            .iter()
+            .filter(|u| u.is_night() && unreserved.contains(&u.spent_key()))
+            .collect();
+        let spent = deregistration_inputs(&night);
+
+        let mut tx_info = StandardTransactionInfo::new_from_context(
+            self.context.clone(),
+            self.proof_provider.clone(),
+            None,
+        );
+        if let Some((first, rest)) = spent.split_first() {
+            let intent = IntentInfo {
+                guaranteed_unshielded_offer: Some(respend(std::slice::from_ref(first), &seed)),
+                fallible_unshielded_offer: (!rest.is_empty()).then(|| respend(rest, &seed)),
+                actions: vec![],
+            };
+            tx_info.add_intent(Segment::Fallible.into(), Box::new(intent));
+        }
+        tx_info.add_dust_registration(DustRegistrationBuilder {
+            wallet: UnshieldedWallet::default(seed.clone()),
+            dust_address: None,
+            allow_fee_payment: 0,
+        });
+        if pay_fees {
+            tx_info.set_funding_seeds(vec![seed]);
+        }
+        tx_info.use_mock_proofs_for_fees(true);
+
+        let spent_unshielded_inputs: Vec<SpentUtxoKey> =
+            spent.iter().map(|u| u.spent_key()).collect();
+
+        let mut prepared = prepare_with_ttl(tx_info, self.ttl).await?;
+        prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
+        Ok(prepared)
+    }
+}
+
+/// The tNIGHT UTXOs a deregistration spends: each one that generates Dust.
+///
+/// A spend of a UTXO that generates no Dust stops nothing, and the output that
+/// replaces it starts with no age.
+fn deregistration_inputs<'a>(night_utxos: &[&'a TrackedUtxo]) -> Vec<&'a TrackedUtxo> {
+    night_utxos
+        .iter()
+        .copied()
+        .filter(|u| u.is_registered_for_dust())
+        .collect()
+}
+
+/// An unshielded offer that spends `utxos` and pays each one back to `owner`
+/// with the same value and token.
+fn respend(
+    utxos: &[&TrackedUtxo],
+    owner: &WalletSeed,
+) -> UnshieldedOfferInfo<DefaultDB, BuildContext> {
+    let inputs = utxos
+        .iter()
+        .map(|utxo| {
+            Box::new(UtxoSpendInfo {
+                value: utxo.value,
+                owner: owner.clone(),
+                token_type: utxo.token_type.into_ledger(),
+                intent_hash: Some(helpers::IntentHash(utxo.intent_hash)),
+                output_number: Some(utxo.output_index),
+            }) as Box<dyn BuildUtxoSpend<DefaultDB, BuildContext>>
+        })
+        .collect();
+    let outputs = utxos
+        .iter()
+        .map(|utxo| {
+            Box::new(UtxoOutputInfo {
+                value: utxo.value,
+                owner: owner.clone(),
+                token_type: utxo.token_type.into_ledger(),
+            }) as Box<dyn BuildUtxoOutput<DefaultDB, BuildContext>>
+        })
+        .collect();
+    UnshieldedOfferInfo { inputs, outputs }
 }
 
 /// Pick the tNIGHT UTXO a registration should spend, or `None` when every one
@@ -955,13 +1084,17 @@ fn ttl_after(
 }
 
 /// Refuse `ttl` when the transaction that `tx_info` describes will have no
-/// intent to carry it: it has none of its own, and it pays no fee, which
-/// would add one.
+/// intent to carry it: it has none of its own, and it neither pays a fee nor
+/// carries a Dust registration, either of which adds one.
 fn refuse_ttl_without_intent(
     tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>,
     ttl: Option<std::time::Duration>,
 ) -> Result<(), WalletError> {
-    if ttl.is_some() && tx_info.intents.is_empty() && !pays_own_fee(tx_info) {
+    if ttl.is_some()
+        && tx_info.intents.is_empty()
+        && !pays_own_fee(tx_info)
+        && tx_info.dust_registrations.is_empty()
+    {
         return Err(WalletError::TtlWithoutIntent);
     }
     Ok(())
@@ -1011,13 +1144,23 @@ async fn assemble_unproven(
     Ok((tx, now, ttl))
 }
 
-/// Whether `tx_info` draws Dust for its own fee: it names a funding seed or
-/// registers a Dust address.
+/// Whether `tx_info` draws Dust for its own fee: it names a funding seed, or
+/// a Dust registration that names a Dust address. A deregistration names no
+/// Dust address, so it pays from a funding seed, or another wallet pays.
 fn pays_own_fee(tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>) -> bool {
-    !tx_info.funding_seeds.is_empty() || !tx_info.dust_registrations.is_empty()
+    !tx_info.funding_seeds.is_empty()
+        || tx_info
+            .dust_registrations
+            .iter()
+            .any(|registration| registration.dust_address.is_some())
 }
 
 /// Select the inputs and balance the fee, and stop before proving.
+///
+/// The build pays its own fee when `tx_info` names a funding seed or
+/// registers a Dust address. Otherwise the transaction carries no Dust
+/// spends, and another wallet pays its fee with [`balance_external`]. The
+/// Dust registrations of `tx_info` go into the transaction in both cases.
 ///
 /// Everything here reads the build context rather than the wallet, so a caller
 /// holding a wallet can prepare, record what the build will spend, release the
@@ -1044,9 +1187,17 @@ async fn prepare_with_ttl(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     ttl: Option<std::time::Duration>,
 ) -> Result<PreparedTransfer, WalletError> {
-    let (tx, now, ttl) = assemble_unproven(&mut tx_info, ttl).await?;
+    let (mut tx, now, ttl) = assemble_unproven(&mut tx_info, ttl).await?;
 
     let (tx, dust_batches) = if !pays_own_fee(&tx_info) {
+        apply_dust(
+            &tx_info,
+            &mut tx,
+            &[],
+            tx_info.rng.clone().split(),
+            ttl,
+            now,
+        );
         (tx, Vec::new())
     } else if tx_info.mock_proofs_for_fees {
         balance_fees_with_mocks(&mut tx_info, tx, now, ttl)?
@@ -1799,6 +1950,18 @@ mod tests {
             choose_registration_input(&all, by_value).map(|u| u.value),
             Some(1)
         );
+    }
+
+    #[test]
+    fn a_deregistration_spends_only_the_utxos_that_generate() {
+        let first = night_utxo(1, Some(100), true);
+        let idle = night_utxo(2, Some(100), false);
+        let last = night_utxo(3, Some(100), true);
+        let spent: Vec<u128> = deregistration_inputs(&[&first, &idle, &last])
+            .iter()
+            .map(|u| u.value)
+            .collect();
+        assert_eq!(spent, [1, 3]);
     }
 
     #[test]

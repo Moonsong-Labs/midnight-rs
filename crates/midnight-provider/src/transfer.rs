@@ -1,4 +1,4 @@
-//! Pending transfer / dust-registration builders.
+//! Pending transfer and Dust registration and deregistration builders.
 //!
 //! Each builder represents a wallet operation that has been *requested* but not
 //! yet executed. Call sites have two endpoints:
@@ -18,9 +18,9 @@
 //!   `result.spent`, or until their TTL passes.
 //!
 //! Constructors are sync methods on [`MidnightProvider`]: `transfer_unshielded`,
-//! `transfer_shielded`, `register_dust`. They borrow the provider and capture
-//! the operation's inputs; no work happens until the caller calls `.send()`
-//! or `.build()`.
+//! `transfer_shielded`, `register_dust`, `deregister_dust`. They borrow the
+//! provider and capture the operation's inputs; no work happens until the
+//! caller calls `.send()` or `.build()`.
 //!
 //! ```rust,no_run
 //! # use midnight_provider::{MidnightProvider, NIGHT, ShieldedTokenType};
@@ -295,8 +295,8 @@ impl<'a> IntoFuture for ShieldedSwap<'a> {
 /// A transaction builder that can drop its Dust (fees), so another wallet can
 /// sponsor them. `.without_dust()` is uniform across builder kinds because
 /// paying fees is a general transaction concern, not tied to any transaction
-/// kind. Implemented for shielded transfers, unshielded transfers, and
-/// generated contract-call builders.
+/// kind. Implemented for shielded transfers, unshielded transfers, Dust
+/// deregistrations, and generated contract-call builders.
 ///
 /// Bring this trait into scope to call [`without_dust`](Self::without_dust).
 pub trait DustlessBuilder: Sized {
@@ -437,6 +437,63 @@ impl<'a> DustRegistration<'a> {
         });
         request.ttl = self.ttl;
         request
+    }
+}
+
+/// Pending Dust deregistration. See [module docs](crate::transfer) for the
+/// `.send()` vs `.build()` distinction.
+#[derive(Debug)]
+#[must_use = "does nothing until sent or built"]
+pub struct DustDeregistration<'a> {
+    provider: &'a MidnightProvider,
+    ttl: Option<std::time::Duration>,
+}
+
+impl<'a> DustDeregistration<'a> {
+    pub(crate) fn new(provider: &'a MidnightProvider) -> Self {
+        Self {
+            provider,
+            ttl: None,
+        }
+    }
+
+    /// Make the transaction expire `ttl` after the chain time of the build.
+    /// See [`UnshieldedTransfer::with_ttl`].
+    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
+    /// Build the transaction, submit it with
+    /// [`MidnightProvider::submit_reserved`], and return the [`PendingTx`] to
+    /// wait on.
+    pub async fn send(self) -> Result<PendingTx, ProviderError> {
+        let provider = self.provider;
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(build_and_submit(provider, self.into_request(true))).await
+    }
+
+    /// Build the deregistration transaction without submitting. Spends and
+    /// re-creates every tNIGHT UTXO that generates Dust and that no pending
+    /// build reserves.
+    pub async fn build(self) -> Result<TransferResult, ProviderError> {
+        let provider = self.provider;
+        provider.build_then_prove(self.into_request(true)).await
+    }
+
+    fn into_request(self, pay_fees: bool) -> TransferRequest {
+        let mut request = TransferRequest::from(TransferKind::DustDeregistration { pay_fees });
+        request.ttl = self.ttl;
+        request
+    }
+}
+
+impl<'a> DustlessBuilder for DustDeregistration<'a> {
+    type Error = ProviderError;
+    async fn without_dust(self) -> Result<DustlessTransaction, ProviderError> {
+        let provider = self.provider;
+        let result = provider.build_then_prove(self.into_request(false)).await?;
+        Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
     }
 }
 
