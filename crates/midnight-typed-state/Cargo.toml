@@ -20,3 +20,6 @@ hex = { workspace = true }
 primitive-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+midnight-helpers = { workspace = true }

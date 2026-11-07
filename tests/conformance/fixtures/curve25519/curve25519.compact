@@ -2,8 +2,7 @@
 // between its fields and bytes, its curve natives, and the Ed25519 signature
 // check of the standard library. A ledger cell of each type pins the encoding
 // in the state, and every circuit writes one, because the driver runs only
-// circuits that need a proof. The Makefile compiles this fixture for ZKIR v3
-// (CONFORMANCE_ZKIR_V3_FIXTURES).
+// circuits that need a proof.
 
 import CompactStandardLibrary;
 
@@ -26,8 +25,6 @@ export circuit scalar_ops(a: Curve25519Scalar, b: Curve25519Scalar): Vector<5, C
   return disclose([a + b, a - b, a * b, neg(a), inv(b)]);
 }
 
-// No default<Curve25519*> in a circuit: the ZKIR v3 backend of the compiler
-// does not implement it (`(assert not-implemented)` in reduce-to-zkir.ss).
 export circuit curve_ops(p: Curve25519Point, k: Curve25519Scalar): [Curve25519Base, Curve25519Base, Boolean] {
   const q = ecAdd(ecMulGenerator(k), ecMul(p, k));
   point_cell = disclose(q);

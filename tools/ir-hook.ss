@@ -120,13 +120,14 @@
 (define (path-value pe)
   (if (record? pe) (Expr (field pe 'expr)) (make-align pe 1)))
 
-(define (expand-ops src path-elt* adt-formal* adt-arg* var-name* expr* vm-code)
+(define (expand-ops src path-elt* adt-formal* adt-arg* var-name* expr* result-type vm-code)
   (instructions->sexp
     (expand-vm-code src
       (map path-value path-elt*)
       #f
-      (append (map cons adt-formal* adt-arg*)
-              (map (lambda (vn ex) (cons (id-sym vn) (Expr ex))) var-name* expr*))
+      (cons (cons 'result_type result-type)
+        (append (map cons adt-formal* adt-arg*)
+                (map (lambda (vn ex) (cons (id-sym vn) (Expr ex))) var-name* expr*)))
       (field vm-code 'code))))
 
 ;; ---------------------------------------------------------------------
@@ -282,7 +283,7 @@
           (instructions ,@(expand-ops (field expr 'src) path-elt*
                                       (field adt-op 'adt-formal*) (field adt-op 'adt-arg*)
                                       (field adt-op 'var-name*) expr*
-                                      (field adt-op 'vm-code)))
+                                      (field adt-op 'type) (field adt-op 'vm-code)))
           ,@(map E expr*)))]
     [(return) `(return ,(E (field expr 'expr)))]
     [else (fail "expression" expr)]))

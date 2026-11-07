@@ -8,10 +8,6 @@
 
 mod common;
 
-mod counter {
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
-}
-
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -40,7 +36,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         "the fork devnet must still run ledger 8: recreate it with make fork-down fork-up"
     );
 
-    // Ledger 8: a stored wallet, and a contract it deploys and calls.
+    // Ledger 8: a stored wallet.
     let storage = tempfile::TempDir::new().unwrap();
     let wallet = Wallet::from_seed(common::DEV_WALLET_SEED)
         .unwrap()
@@ -52,24 +48,6 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     let own_unshielded = wallet.unshielded_recipient();
     let own_shielded = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
-    let contract = counter::Contract::deploy(&provider)
-        .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(counter::ZK_CONFIG_DIR)
-        .send()
-        .await
-        .expect("submit deploy")
-        .into_contract()
-        .await
-        .expect("deploy on ledger 8");
-    contract
-        .circuits()
-        .increment()
-        .send()
-        .await
-        .expect("submit increment")
-        .wait_finalized()
-        .await
-        .expect("call on ledger 8");
     // The snapshot as it stands on ledger 8, for two resumes after the fork
     // and for the probe that waits for the indexer to serve ledger 9.
     let stored = [(); 3].map(|()| tempfile::TempDir::new().unwrap());
@@ -131,17 +109,6 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     wait_for_dust(&provider).await;
 
     // What the wallet held on ledger 8 still spends on ledger 9.
-    contract
-        .circuits()
-        .increment()
-        .send()
-        .await
-        .expect("submit increment")
-        .wait_finalized()
-        .await
-        .expect("call a ledger 8 contract on ledger 9");
-    let round = contract.ledger().await.unwrap().round().unwrap();
-    assert_eq!(round, 2, "the contract keeps its ledger 8 state");
     provider
         .transfer_unshielded(NIGHT, 1_000_000, own_unshielded)
         .send()

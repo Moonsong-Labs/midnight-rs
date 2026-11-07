@@ -62,8 +62,8 @@ Ledger 9 adds `IrRemove` and `IrInsert`, which change the IR an entry point hold
 
 | Key | Ledger 8 | Ledger 9 |
 | --- | --- | --- |
-| `verifier-key[v6]` (compiled for ledger 8) | `V3`, as `ContractOperationVersionedVerifierKey::V3(VerifierKey)` | `V3`, the same |
-| `verifier-key[v7]` (compiled for ledger 9) | not accepted | `V4`, as `ContractOperationVersionedVerifierKey::V4(VerifierKey)` |
+| `verifier-key[v6]` (a ZKIR v2 circuit, from an older compactc) | `V3`, as `ContractOperationVersionedVerifierKey::V3(VerifierKey)` | `V3`, the same |
+| `verifier-key[v7]` (a ZKIR v3 circuit) | not accepted | `V4`, as `ContractOperationVersionedVerifierKey::V4(VerifierKey)` |
 
 A removal names the slot its key is in. The SDK reads the slot from the key's tag, and it refuses a `verifier-key[v7]` on a chain before ledger 9.
 

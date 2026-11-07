@@ -104,11 +104,13 @@ Run these commands from the root of your crate. They compile the counter contrac
 
 ```bash
 curl -O https://raw.githubusercontent.com/Moonsong-Labs/midnight-rs/main/devnet/contracts/counter/counter.compact
-docker run --rm -v "$PWD:/src" -w /src ghcr.io/romarq/compactc:fa2181fbc6dac2135defdb4f55ce10d8332185d5 \
+docker run --rm -v "$PWD:/src" -w /src ghcr.io/romarq/compactc:c7a8d2a21593d98d003a54bf5937375ba9aa8d66 \
   "compactc --analyzed-ir counter.compact compiled/counter"
 ```
 
 The container sees only the working directory, at `/src`. Give the source and the output directory as relative paths under it.
+
+The compiler writes only ZKIR v3, so each circuit gets a `verifier-key[v7]` key, which only a ledger 9 chain verifies.
 
 ## Deploy and call a contract
 

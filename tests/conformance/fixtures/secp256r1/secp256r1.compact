@@ -2,8 +2,7 @@
 // between its fields and bytes, its curve natives, and the standard library
 // circuit built on them. A ledger cell of each type pins the encoding in the
 // state, and every circuit writes one, because the driver runs only circuits
-// that need a proof. The Makefile compiles this fixture for ZKIR v3
-// (CONFORMANCE_ZKIR_V3_FIXTURES).
+// that need a proof.
 
 import CompactStandardLibrary;
 
