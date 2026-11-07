@@ -8,7 +8,7 @@ The SDK's wallet covers Midnight's three asset legs:
 
 `Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` or `Wallet::from_mnemonic` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts. The wallet can also resync itself in a background task (see [Background sync](#background-sync)).
 
-The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_core::provider::ledger_8::WalletBuilds` and `midnight_core::provider::ledger_9::WalletBuilds`). Such an implementation must serialize its own `resync`, `rescan_shielded`, `watch_for_coins` and `forget_coins` against each other, because the provider holds no lock across them. Its `rescan_shielded` and `watch_for_coins` take the chain view, as `resync` does. When its state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync. `watch_for_coins` registers the coins and then rescans.
+The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and `midnight_core::provider::ledger_9::WalletBuilds`. Such an implementation must serialize its own `resync`, `rescan_shielded`, `watch_for_coins` and `forget_coins` against each other, because the provider holds no lock across them. Its `rescan_shielded` and `watch_for_coins` take the chain view, as `resync` does. `watch_for_coins` registers the coins and then rescans.
 
 ```rust
 use std::sync::Arc;
@@ -164,6 +164,8 @@ A `WalletBuilder` holds no connection and does no work until a sync step runs. `
 
 Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress is checkpointed to disk after each batch when `with_storage(...)` is set, so subsequent runs resume from the last cursor.
 
+The SDK reads the data of a chain that runs ledger 9. On a chain that forked from ledger 8 to ledger 9, such as mainnet, the zswap stream starts with the ledger 8 events from before the fork. A sync or a rescan from event zero reads them, so the wallet keeps the shielded coins that it received before the fork. The Dust replay skips the ledger 8 Dust events, because the fork emptied the chain's Dust state (see [`dust-and-fees.md`](dust-and-fees.md#dust-after-the-fork-to-ledger-9)). A chain that runs ledger 8 fails the sync with `WalletError::UnknownLedger`, which names the tag of the data.
+
 The wallet keeps `indexer_url` for its later resyncs. The provider is the sync's source: its node reports the network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the node's network to the two-query `ChainView`.
 
 Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. The sync then fails with `WalletError::NetworkUnknown` when the node cannot answer, reports no network, or reports an id that the parse of a `Network` refuses (see [Address derivation](#address-derivation)).
@@ -257,16 +259,6 @@ The wait has no deadline, so wrap it in `tokio::time::timeout`. A failed pass do
 
 Dropping the handle stops the sync at the task's next await, and closes the subscriptions of a pass in flight. The wallet then keeps its state from before that pass, or the whole commit of the pass. Bind the handle to a named variable. `let _ = wallet.sync_in_background(..)` drops it at once, and `#[must_use]` does not warn about `let _ =`. The task holds the provider and the wallet until the handle drops. Start one background sync for each wallet.
 
-### Across a hard fork
-
-The wallet's state is in the ledger generation its chain runs, and `Wallet::ledger_version()` names it. A sync reads the generation from the chain. When the chain moves from ledger 8 to ledger 9, the wallet crosses with it in three cases:
-
-- A sync from genesis replays the ledger 8 history, then continues on ledger 9.
-- A wallet stored before the fork resumes from its snapshot and crosses on the way.
-- An attached wallet crosses at its next resync, and every build resyncs first.
-
-The shielded coins carry across. The Dust state starts empty, because the fork emptied the chain's Dust state and every Dust registration. So after the fork the wallet registers its NIGHT again before it can pay a fee. See [`ledger-generations.md`](ledger-generations.md) for the procedure and the errors a crossing can return.
-
 ### Indexer trust model
 
 The indexer is the wallet's sole data source: shielded state, dust state, the unshielded UTXO set, and the ledger parameters used for fee and TTL math are all rebuilt from indexer subscriptions and blocks. Nothing is cross-checked against a node. A hostile or compromised indexer can therefore fabricate UTXOs that do not exist on chain (the node rejects transactions built from them) or withhold real ones (funds look missing until you sync against an honest indexer). Point the provider at an indexer you trust as much as your node.
@@ -292,7 +284,7 @@ The directory holds the Dust secret key, so protect it as key material. On Unix,
 
 Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the old generation is cleaned up. A crash mid-write leaves the previous generation intact. The SDK syncs each file to disk before its rename and, on Unix, the directory after it, so a power loss mid-write also leaves it intact.
 
-A snapshot that names no ledger generation reads as ledger 8, the only generation an older build wrote. A snapshot of a later generation than the chain runs belongs to a replaced chain: the sync returns `WalletError::LedgerRegression`, which names the directory to remove.
+The sync refuses a snapshot that holds ledger 8 state. When the `ledger_version` field of `metadata.json` is `V8`, or the file has no such field, the sync fails with `WalletError::Ledger8Snapshot`, which names the directory. Delete the directory and sync again from genesis.
 
 Persistence is not a one-shot at initial sync: every successful `resync_wallet` re-saves the moved cursors, refreshed parameters, and pending set, and each build rewrites `pending.json` with its reservation once its proof succeeds. `pending.json` is removed once no reservations remain.
 
@@ -343,7 +335,30 @@ pending.wait_best().await?;
 
 `utxo_ctime` is a fallback creation time in seconds since the epoch. The build uses it only for a UTXO whose creation time the indexer did not report, and `None` makes that fallback `now - 1 hour`. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
 
-tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not: call `register_dust` again until `DustBalance::unregistered_night_utxos` is 0. [`ledger-generations.md`](ledger-generations.md#register-dust-again) shows that loop.
+tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not: call `register_dust` again until `DustBalance::unregistered_night_utxos` is 0. Each call registers one UTXO:
+
+```rust
+use std::time::{Duration, Instant};
+
+// A balance read does not resync.
+provider.resync_wallet().await?;
+let mut left = provider.balance().await?.dust.unregistered_night_utxos;
+while left > 0 {
+    provider.register_dust(None).send().await?.wait_finalized().await?;
+    // The indexer serves the registration a moment after the node finalizes it.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while provider.balance().await?.dust.unregistered_night_utxos == left {
+        if Instant::now() >= deadline {
+            return Err("the indexer did not serve the Dust registration".into());
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        provider.resync_wallet().await?;
+    }
+    left = provider.balance().await?.dust.unregistered_night_utxos;
+}
+```
+
+To send the Dust to another wallet, add `.to(target)` to each `register_dust` call in the loop (see [Registration to another Dust address](#registration-to-another-dust-address)).
 
 See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation rate, and how fees are balanced.
 
@@ -394,7 +409,7 @@ let pending = provider
 
 `recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network. A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
 
-1. Resyncs, then takes a write lock on the wallet and builds the context of the wallet's ledger generation.
+1. Resyncs, then takes a write lock on the wallet and builds the transaction context.
 2. Selects inputs from the wallet's local UTXO set.
 3. Balances Dust fees via a `speculative_spend` loop (mock proofs first, real proofs once balanced).
 4. Reserves the selected inputs so the next concurrent build can't re-pick the same coins. Once the transaction is proven, the reservation reaches `pending.json`.
@@ -421,7 +436,7 @@ let result = provider
     .transfer_shielded(token_type, amount, recipient)
     .build()
     .await?;
-// result: TransferResult { tx_bytes, ledger_version, spent, fee_speck }
+// result: TransferResult { tx_bytes, spent, fee_speck }
 println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / SPECKS_PER_DUST as f64);
 let pending = provider.submit_reserved(result).await?;
 ```
@@ -479,7 +494,7 @@ To check the outcome, look for the coin in `provider.spendable_shielded_coins()`
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-`provider.rescan_shielded()` runs the replay alone. A handle (`Arc<LocalWallet>`) has the same two methods: `watch_for_coins(coins, &provider)` and `rescan_shielded(&provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them. When the wallet's state is in an earlier ledger generation than the chain, a rescan first crosses the fork with a resync.
+`provider.rescan_shielded()` runs the replay alone. A handle (`Arc<LocalWallet>`) has the same two methods: `watch_for_coins(coins, &provider)` and `rescan_shielded(&provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them.
 
 ## Pending reservations
 
@@ -491,8 +506,6 @@ In-flight spends that have been built but not yet confirmed on-chain are tracked
 Each reservation expires at the earliest TTL of the intents that its build made (see [Transfers](#transfers)). The wallet drops the reservation once the time of the chain's latest block passes that TTL, because the transaction can no longer land.
 
 A reservation reaches `pending.json`, next to the wallet state, once its build is proven. A process that stops during a proof (Ctrl-C, a kill or a panic) leaves no reservation for that build in `pending.json`, so the next process can spend its inputs. A proven build keeps its reservation across a restart, also when its bytes never reach a node, because the wallet cannot know whether they left the process. `HeldInputs::keep_on_ok` tells the wallet that a build is proven with `WalletFacade::persist_reservation`. Every custom wallet implements it, and a wallet that keeps no state across a restart makes it a no-op.
-
-The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
 A release also drops a reservation, for a transaction that can never land. It matches each entry by its input and by the stamp of its reservation, so a late release cannot drop an entry that a later build made over the same input. These paths release:
 
@@ -525,7 +538,7 @@ provider.with_wallet(wallet)
   wallet.sync_in_background(provider, pause)   resync in a task until the handle drops (an Arc<LocalWallet>)
       sync.wait_until(done)              wait until done holds for the balance (at the call and after each pass)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext: register, then replay
-  provider.rescan_shielded()             replay the shielded stream (a resync first, to cross a fork)
+  provider.rescan_shielded()             replay the shielded stream from event zero
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None)                      registers one tNIGHT UTXO, self-funded
       .to(dust_key)                                 the Dust goes to another wallet's Dust address
@@ -541,4 +554,4 @@ provider.with_wallet(wallet)
 
 ## Examples
 
-- [`examples/wallet-sync`](../examples/wallet-sync): end-to-end sync, balance display, optional dust registration, optional unshielded self-transfer. Runs against preprod (with faucet funding) or a local devnet.
+- [`examples/wallet-sync`](../examples/wallet-sync): end-to-end sync, balance display, optional dust registration, optional unshielded self-transfer. Runs against the local devnet by default, or against another network that runs ledger 9.

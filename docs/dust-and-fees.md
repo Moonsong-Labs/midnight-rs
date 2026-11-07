@@ -89,8 +89,7 @@ network), and the replay enforces strict sequential insertion
 (`mt_index == expected_next`). Skipping events or starting from a non-zero
 index is not supported.
 
-On preprod, this takes ~30 minutes from genesis (~500k+ events). Subsequent
-syncs resume from the last saved cursor and are fast.
+A replay of about 500,000 Dust events from genesis takes about 30 minutes. Later syncs resume from the last saved cursor and are fast.
 
 Reverse-order replay (newest to oldest) is not possible because Merkle tree
 construction depends on prior insertions. The trees enforce sequential insertion
@@ -212,7 +211,7 @@ After registration, the on-chain `apply_registration` function:
 
 The dust public key of a registration can belong to another wallet. `register_dust(None).to(key)` names it, and `parse_dust_address` reads the key from a `mn_dust_*` address (see [`wallet.md`](wallet.md#registration-to-another-dust-address)). The ledger keeps one delegation per NIGHT address, and each registration replaces it. Every NIGHT output that the address gets later generates dust for the key that the last registration named. A UTXO that already generates dust keeps the key of its generation entry until it is spent. The fee still comes from the generationless availability of the NIGHT input, so the dust public key changes nothing in the fee.
 
-## Dust Across the Ledger 8 to 9 Fork
+## Dust After the Fork to Ledger 9
 
 The hard fork from ledger 8 to ledger 9 resets the chain's whole Dust state: every Dust UTXO, every address delegation and every entry in `night_indices`. The node's migration restores Dust generation for cNIGHT only.
 
@@ -223,11 +222,11 @@ So after the fork, no NIGHT that existed before it generates Dust, and a wallet 
 - NIGHT that arrives after the first registration generates Dust with no further call, because the address delegation exists again.
 - A wallet that sent its Dust to another Dust address passes `.to()` again, because the fork removed that delegation too.
 
-A wallet that crosses the fork resets the registration flags of the UTXOs it held, because the chain no longer holds those registrations. A wallet that syncs from genesis after the fork reads the same flags from the indexer.
+A wallet that syncs after the fork reads the reset registration flags of its UTXOs from the indexer. The Dust replay skips the ledger 8 Dust events, because the fork emptied the Dust state that they built.
 
 Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. A wallet with one registered UTXO has one Dust UTXO. Its first fee-paying transaction reserves that UTXO, and the next build fails with `WalletError::InsufficientDust` until a resync sees the Dust spend.
 
-Before a second fee-paying build, register every NIGHT UTXO, or wait until the wallet sees the first Dust spend. [`ledger-generations.md`](ledger-generations.md) shows the registration loop. To wait, call `BackgroundSync::wait_until` on the background sync of the wallet, with `|b| b.dust.spendable_speck == b.dust.balance_speck`. That condition is true when no build reserves Dust. [`wallet.md`](wallet.md#background-sync) shows the wait.
+Before a second fee-paying build, register every NIGHT UTXO, or wait until the wallet sees the first Dust spend. [`wallet.md`](wallet.md#dust-registration) shows the registration loop. To wait, call `BackgroundSync::wait_until` on the background sync of the wallet, with `|b| b.dust.spendable_speck == b.dust.balance_speck`. That condition is true when no build reserves Dust. [`wallet.md`](wallet.md#background-sync) shows the wait.
 
 ## Dust Shortfalls
 

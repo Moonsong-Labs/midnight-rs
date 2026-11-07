@@ -27,7 +27,7 @@ ContractProviders = {
 | `MidnightProvider.submitTx`   | `MidnightProvider::submit`                                                                          |
 | `PublicDataProvider`          | The `Provider` trait (`get_contract_state`), `StateQueryProvider` for the lazy reads, and `MidnightProvider`'s `get_*` reads |
 | `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers), plus `merge_transactions` / `balance_transaction` (see "Combining and balancing transactions") |
-| `ProofProvider`               | `ProofProviders` (one prover per ledger generation), set with `with_proof_provider`: local by default, or a `RemoteProofServer` |
+| `ProofProvider`               | `ProofProvider` (the `midnight_helpers::ledger_9` trait), set with `with_proof_provider`: local by default, or a `RemoteProofServer` |
 | `ZkConfigProvider`            | The `ZkConfigProvider` trait, set with `with_zk_config`, where a path gives the default `FsZkConfigProvider` |
 | `PrivateStateProvider`        | `midnight-private-state` crate (`FsPrivateStateProvider`); threaded through witnesses via `WitnessContext` — see below |
 | `LoggerProvider`              | The `tracing` crate facade — implicit, not a provider                                               |
@@ -58,9 +58,8 @@ provider.transfer_unshielded(...).build().await
        1. resync wallet against indexer
        2. select inputs from local state
        3. balance Dust fees (speculative_spend loop)
-       4. prove (with the prover of the wallet's ledger generation from the provider's
-          ProofProviders: in process by default, or a RemoteProofServer set with
-          with_proof_provider)
+       4. prove (with the provider's prover: in process by default, or a
+          RemoteProofServer set with with_proof_provider)
        5. tagged-serialize → TransferResult { tx_bytes, ... }
 
 provider.submit_reserved(result).await → PendingTx
@@ -184,7 +183,7 @@ When `wait_best` / `wait_finalized` fail with no verdict, the error is `Provider
 
 ## Contract events
 
-A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes the payloads. Its ledger 8 result has no `logEvents`.
+A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes the payloads.
 
 midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::wait_finalized` or `Contract::call_with`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
 
@@ -192,7 +191,7 @@ The differences:
 
 - An item carries no address. The interpreter refuses a cross-contract call, so every event comes from the called contract, and the caller has its address.
 - The SDK has no typed decoder like `ContractLog.decodeAll`.
-- The SDK returns the events on both ledger generations. The local run decodes each event as the ledger 9 VM does. A ledger 9 chain logs the same item, and a ledger 8 chain logs the `[version, type, payload]` array that the item comes from.
+- The local run decodes each event as the ledger 9 VM does, so the SDK returns the item that the chain logs.
 
 ## ZK artifacts
 
@@ -214,7 +213,7 @@ This lets a browser app or a no-filesystem environment ship the same SDK as a se
 
 **midnight-rs** abstracts them behind its own `ZkConfigProvider` trait, which `with_zk_config` takes. A path gives the default `FsZkConfigProvider`, which reads the `keys/` and `zkir/` subdirectories of that path. To serve the artifacts from an embedded bundle, memory or a remote service, implement the trait and pass an `Arc` of it.
 
-Before a call runs its circuit, midnight-rs compares the circuit's local verifier key with the key in the contract state. It refuses a difference with `ContractError::VerifierKeyMismatch`, before any proof. midnight-js checks every circuit when `findDeployedContract` connects. It throws `ContractTypeError` for a ledger 9 artifact, and `VerifierKeyMismatchError` or `BlankVerifierKeySlotError` for a ledger 8 artifact. For a ledger 8 artifact, `submitCallTx` also compares the called circuit's key before the circuit runs. For a ledger 9 artifact, `submitCallTx` refuses a missing operation or an operation with no verifier key before the proof. It does not compare the keys.
+Before a call runs its circuit, midnight-rs compares the circuit's local verifier key with the key in the contract state. It refuses a difference with `ContractError::VerifierKeyMismatch`, before any proof. midnight-js checks every circuit when `findDeployedContract` connects. For a ledger 9 artifact, a failed check throws `ContractTypeError`. `submitCallTx` refuses a missing operation or an operation with no verifier key before the proof. It does not compare the keys.
 
 ## Contract maintenance / governance
 

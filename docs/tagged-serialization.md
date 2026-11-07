@@ -24,7 +24,7 @@ pub trait Tagged {
 This returns a string that uniquely identifies the type and its version. Examples:
 
 - `StateValue` → `"impact-state-value[v2]"` (version may differ across ledger releases)
-- `ContractState` → `"contract-state[v6]"`
+- `ContractState` → `"contract-state[v8]"`
 - `u64` → `"u64"`
 - `Option<Foo>` → `"option(foo)"`
 
@@ -34,7 +34,7 @@ The tag is declared via the `#[tag = "..."]` attribute on the `#[derive(Storable
 
 `state::fetch_state()`:
 1. Hex-decode the string from the provider.
-2. Call `midnight_typed_state::decode_contract_state`, which reads the tag through `tagged_deserialize` and converts a ledger 8 state.
+2. Call `tagged_deserialize`, which refuses a value of another tag, such as the `contract-state[v6]` of a ledger 8 state.
 3. Return the `ContractState` for the interpreter.
 
 ## tagged_serialize
