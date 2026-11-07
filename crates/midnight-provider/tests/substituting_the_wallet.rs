@@ -14,10 +14,10 @@
 use std::sync::Arc;
 
 use midnight_provider::{
-    Builds, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, HashOutput,
-    LedgerVersion, MidnightProvider, Network, Nullifier, ProviderError, ShieldedTokenType,
-    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest, TransferResult,
-    WalletBalance, WalletError, WalletFacade,
+    Builds, ChainParameters, CoinInfo, HashOutput, LedgerVersion, MidnightProvider, Network,
+    Nullifier, ProviderError, ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin,
+    SpentInputs, SyncCursors, TrackedUtxo, TransferRequest, TransferResult, WalletBalance,
+    WalletError, WalletFacade,
 };
 use midnight_types::Timestamp;
 use midnight_wallet::chain_pin::ChainView;
@@ -53,7 +53,7 @@ impl WalletFacade for StubWallet {
         true
     }
 
-    async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
+    async fn shielded_recipient(&self) -> ShieldedRecipient {
         unimplemented!("this wallet holds no keys")
     }
 
@@ -77,6 +77,8 @@ impl WalletFacade for StubWallet {
         let mut released = self.released.lock().unwrap();
         released.extend(spent.shielded.iter().map(|reserved| reserved.input));
     }
+
+    async fn persist_reservation(&self, _spent: &SpentInputs) {}
 
     async fn resync(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
         Ok(())

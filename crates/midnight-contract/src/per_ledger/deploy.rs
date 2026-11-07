@@ -119,7 +119,10 @@ async fn offer_transaction(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     offer: &ShieldedOffer,
 ) -> Result<TransferResult, ContractError> {
-    let (change_cpk, change_epk) = builds.provider().shielded_public_keys().await?;
+    let midnight_types::ShieldedRecipient {
+        coin_public_key: change_cpk,
+        enc_public_key: change_epk,
+    } = builds.provider().shielded_recipient().await?;
 
     // The spends need the funding view in the context. Reserving before it
     // would hide these coins from it.

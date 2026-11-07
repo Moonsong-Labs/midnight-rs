@@ -45,8 +45,8 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .sync(&provider, &indexer_url)
         .await
         .expect("sync on ledger 8");
-    let own_unshielded = wallet.unshielded_address();
-    let own_shielded = wallet.shielded_address();
+    let own_unshielded = wallet.unshielded_recipient();
+    let own_shielded = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
     // The snapshot as it stands on ledger 8, for two resumes after the fork
     // and for the probe that waits for the indexer to serve ledger 9.
@@ -110,7 +110,8 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
 
     // What the wallet held on ledger 8 still spends on ledger 9.
     provider
-        .transfer_unshielded(NIGHT, 1_000_000, &own_unshielded)
+        .transfer_unshielded(NIGHT, 1_000_000, own_unshielded)
+        .send()
         .await
         .expect("submit an unshielded transfer on ledger 9")
         .wait_finalized()
@@ -122,7 +123,8 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .expect("a shielded coin from before the fork")
         .token_type;
     provider
-        .transfer_shielded(token_type, 1, &own_shielded)
+        .transfer_shielded(token_type, 1, own_shielded)
+        .send()
         .await
         .expect("submit a shielded transfer on ledger 9")
         .wait_finalized()
@@ -180,6 +182,7 @@ async fn register_every_night_utxo(provider: &MidnightProvider) {
     while left > 0 {
         provider
             .register_dust(None)
+            .send()
             .await
             .expect("submit a Dust registration on ledger 9")
             .wait_finalized()

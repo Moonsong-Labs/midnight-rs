@@ -10,7 +10,8 @@ use helpers::{Deserializable, Serializable};
 use crate::hd::{Seed, SeedBytes};
 use crate::{
     ChainParameters, CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustParameters,
-    DustPublicKey, EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, UnshieldedTokenType,
+    DustPublicKey, EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, UnshieldedRecipient,
+    UnshieldedTokenType,
 };
 
 /// An SDK value that has a counterpart in this generation.
@@ -57,6 +58,7 @@ hash_newtype! {
     Nonce => Nonce,
     CoinPublicKey => CoinPublicKey,
     ContractAddress => ContractAddress,
+    UnshieldedRecipient => UserAddress,
 }
 
 impl IntoLedger for CoinInfo {

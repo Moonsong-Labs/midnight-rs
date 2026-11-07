@@ -142,6 +142,9 @@ let contract = Contract::deploy(provider)
     .with_initial_state(state)
     .with_zk_config("compiled/counter")
     .with_maintenance_authority(vec![authority.verifying_key()], 1)
+    .send()
+    .await?
+    .into_contract()
     .await?;
 
 // k-of-n: collect the members' public keys, pick a threshold.
@@ -165,7 +168,8 @@ contract.maintenance()
     .insert_verifier_key("new_circuit", vk_bytes)
     .prepare().await?      // fetch counter + build unsigned update
     .sign(0, &authority)   // sign data_to_sign() with the committee key at index 0
-    .await?;               // build + submit -> PendingTx
+    .send()                // build + submit -> PendingTx
+    .await?;
 
 // Batch: rotate a verifier key atomically (insert never replaces, so remove
 // first — both land in one transaction).
@@ -175,6 +179,7 @@ contract.maintenance()
     .insert_verifier_key("increment", new_vk)
     .prepare().await?
     .sign(0, &authority)
+    .send()
     .await?;
 
 // Hand control to a new committee.
@@ -182,6 +187,7 @@ contract.maintenance()
     .replace_authority(vec![new_vk_a, new_vk_b], 2)
     .prepare().await?
     .sign(0, &authority)
+    .send()
     .await?;
 ```
 
@@ -196,14 +202,15 @@ let payload = prepared.data_to_sign();           // send to each member
 let pending = prepared
     .add_signature(0, sig_from_member_0)
     .add_signature(2, sig_from_member_2)         // any >= threshold members, by committee index
-    .await?;                                     // build + submit
+    .send()                                      // build + submit
+    .await?;
 ```
 
-`prepare()` fetches the current authority `counter` (the update must carry it) and runs the precondition check (`insert` fails if the circuit already exists; `remove` fails if it doesn't). The returned [`PreparedMaintenance`] exposes `ledger_version()` (the generation the update is for), `data_to_sign()` (the exact bytes a member signs, in that generation's form above: the prefix, then the serialized contract address, the ordered update list, and the replay `counter` last; the `signatures` are not part of it), `add_signature(index, sig)` (attach an externally-produced signature at the signer's committee position), and `sign(index, &key)` (the local convenience). `.await` builds + submits (returning a `PendingTx`); `.build().await` returns the proven bytes without submitting. The signed update rides the same dust-balancing path as a deploy. `.await` submits with `submit_reserved`, so the fee Dust goes back to the wallet when the node never gets the update or rejects it as `Invalid`. The bytes of `.build()` keep that Dust reserved until its TTL when they never land.
+`prepare()` fetches the current authority `counter` (the update must carry it) and runs the precondition check (`insert` fails if the circuit already exists; `remove` fails if it doesn't). The returned [`PreparedMaintenance`] exposes `ledger_version()` (the generation the update is for), `data_to_sign()` (the exact bytes a member signs, in that generation's form above: the prefix, then the serialized contract address, the ordered update list, and the replay `counter` last; the `signatures` are not part of it), `add_signature(index, sig)` (attach an externally-produced signature at the signer's committee position), and `sign(index, &key)` (the local convenience). `.send().await` builds + submits (returning a `PendingTx`); `.build().await` returns the proven bytes without submitting. The signed update rides the same dust-balancing path as a deploy. `.send()` submits with `submit_reserved`, so the fee Dust goes back to the wallet when the node never gets the update or rejects it as `Invalid`. The bytes of `.build()` keep that Dust reserved until its TTL when they never land.
 
 Before building, the attached signatures are checked against the committee captured at `prepare()`: indices must be **distinct** and in range, each signature must **verify** over `data_to_sign`, and the count must meet the threshold. A duplicate index, an out-of-range index, a wrong-key signature, or too few all fail here with a specific `ContractError::Maintenance`, rather than after paying to build and submit a transaction the chain would reject. At most one `replace_authority` is allowed per update (a second would silently overwrite the first on apply).
 
-**Confirming success.** Like any contract action, a maintenance update runs in the fallible phase: a *well-formed* update (valid signatures, threshold met, correct counter) is included even if its effect can't apply. For example, an insert of a key for a circuit that was concurrently defined lands as a *partial success* (fees paid, no change). So `.await` returning a `PendingTx` that reaches a block does not by itself prove the rotation applied. Wait for it: [`PendingTx::wait_finalized`](../crates/midnight-provider/src/submit.rs) fails with `ProviderError::NotApplied` when the update did not apply.
+**Confirming success.** Like any contract action, a maintenance update runs in the fallible phase: a *well-formed* update (valid signatures, threshold met, correct counter) is included even if its effect can't apply. For example, an insert of a key for a circuit that was concurrently defined lands as a *partial success* (fees paid, no change). So `.send()` returning a `PendingTx` that reaches a block does not by itself prove the rotation applied. Wait for it: [`PendingTx::wait_finalized`](../crates/midnight-provider/src/submit.rs) fails with `ProviderError::NotApplied` when the update did not apply.
 
 Replacing the authority does **not** touch any local state — the SDK has none. The new committee's members keep their new keys; pass their verifying keys to `replace_authority`.
 

@@ -41,15 +41,20 @@ async fn a_call_spends_the_callers_coin_and_returns_the_change() {
     let provider = MidnightProvider::new(&node_url);
     let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
-    let (own_coin_public_key, _) = provider
-        .shielded_public_keys()
+    let own_coin_public_key = provider
+        .shielded_recipient()
         .await
-        .expect("shielded keys of the dev wallet");
+        .expect("shielded keys of the dev wallet")
+        .coin_public_key;
 
     // A fresh mint contract mints a fresh token: `tokenType(domain_sep, contract_addr)`.
     let mint_contract = shielded_mint::Contract::deploy(&provider)
         .with_initial_state(shielded_mint::LedgerInitialState)
         .with_zk_config(shielded_mint::ZK_CONFIG_DIR)
+        .send()
+        .await
+        .expect("submit deploy")
+        .into_contract()
         .await
         .expect("deploy mint contract");
     let domain_sep = [0x11u8; 32];
@@ -62,6 +67,10 @@ async fn a_call_spends_the_callers_coin_and_returns_the_change() {
             Bytes([0x55u8; 32]),
             own_coin_public_key.into(),
         )
+        .send()
+        .await
+        .expect("submit mint")
+        .wait_finalized()
         .await
         .expect("mint to the dev wallet");
     let token_type = midnight_contract::parse_contract_address(mint_contract.address())
@@ -78,6 +87,10 @@ async fn a_call_spends_the_callers_coin_and_returns_the_change() {
     let receiver = receive_shielded::Contract::deploy(&provider)
         .with_initial_state(receive_shielded::LedgerInitialState)
         .with_zk_config(receive_shielded::ZK_CONFIG_DIR)
+        .send()
+        .await
+        .expect("submit deploy")
+        .into_contract()
         .await
         .expect("deploy receive-shielded contract");
     let received: u128 = 400;
@@ -91,6 +104,10 @@ async fn a_call_spends_the_callers_coin_and_returns_the_change() {
         .circuits()
         .with_shielded_inputs([coin])
         .deposit(deposited)
+        .send()
+        .await
+        .expect("submit deposit")
+        .wait_finalized()
         .await
         .expect("a deposit that spends the caller's own coin");
 

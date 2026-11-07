@@ -8,8 +8,8 @@ use midnight_indexer_client::SubscriptionClient;
 use midnight_types::chain_pin::ChainPin;
 use midnight_types::hd::Seed;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
-    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
+    ChainParameters, CoinInfo, LedgerVersion, Network, ShieldedRecipient, SpendableShieldedCoin,
+    SpentInputs, SyncCursors, TrackedUtxo, UnshieldedRecipient, WalletBalance, WalletError,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -167,12 +167,18 @@ impl Wallet {
         each!(&mut self.state, w => w.release(spent))
     }
 
+    /// Keep the reservation of a proven build across a restart. See
+    /// [`WalletFacade::persist_reservation`](midnight_wallet_facade::WalletFacade::persist_reservation).
+    pub(crate) fn persist_reservation(&mut self, spent: &SpentInputs) {
+        each!(&mut self.state, w => w.persist_reservation(spent))
+    }
+
     /// Save the current wallet state to disk.
     ///
     /// Writes the confirmed-state files (`metadata.json`, `zswap-N.bin`,
-    /// `dust_wallet-N.bin`) and the in-flight reservations to a separate
-    /// `pending.json`. Confirmed and pending live in distinct files so a
-    /// failed save of one does not corrupt the other. Runs automatically at
+    /// `dust_wallet-N.bin`) and the reservations of proven builds to a
+    /// separate `pending.json`. Confirmed and pending live in distinct files
+    /// so a failed save of one does not corrupt the other. Runs automatically at
     /// the end of initial sync and after every successful resync when a
     /// storage directory is configured; calling it manually is only needed
     /// for extra checkpoints.
@@ -223,8 +229,8 @@ impl Wallet {
     /// Public material, so anything that only needs to address a coin to this
     /// wallet can take these instead of the seed. A signer that never releases
     /// its seed can still supply them.
-    pub fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
-        each!(&self.state, w => w.shielded_public_keys())
+    pub fn shielded_recipient(&self) -> ShieldedRecipient {
+        each!(&self.state, w => w.shielded_recipient())
     }
 
     /// The network this wallet derives addresses for. [`Network::as_str`]
@@ -236,6 +242,12 @@ impl Wallet {
     /// The wallet's unshielded receiving address.
     pub fn unshielded_address(&self) -> String {
         each!(&self.state, w => w.unshielded_address())
+    }
+
+    /// The wallet's user address, the recipient of an unshielded transfer to
+    /// this wallet. See [`Seed::unshielded_recipient`].
+    pub fn unshielded_recipient(&self) -> UnshieldedRecipient {
+        self.seed.unshielded_recipient()
     }
 
     /// The wallet's shielded receiving address, e.g. `mn_shield-addr_undeployed1...`.

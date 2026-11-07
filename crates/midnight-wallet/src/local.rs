@@ -8,8 +8,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use midnight_types::chain_pin::{ChainView, current_pin};
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
-    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
+    ChainParameters, CoinInfo, LedgerVersion, Network, ShieldedRecipient, SpendableShieldedCoin,
+    SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 use tokio::sync::{Mutex, RwLock};
@@ -212,8 +212,8 @@ impl WalletFacade for LocalWallet {
         self.inner.read().await.ledger_version()
     }
 
-    async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
-        self.inner.read().await.shielded_public_keys()
+    async fn shielded_recipient(&self) -> ShieldedRecipient {
+        self.inner.read().await.shielded_recipient()
     }
 
     async fn balance(&self) -> WalletBalance {
@@ -242,6 +242,10 @@ impl WalletFacade for LocalWallet {
 
     async fn release(&self, spent: &SpentInputs) {
         self.inner.write().await.release(spent);
+    }
+
+    async fn persist_reservation(&self, spent: &SpentInputs) {
+        self.inner.write().await.persist_reservation(spent);
     }
 
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {

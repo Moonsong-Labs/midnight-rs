@@ -74,6 +74,9 @@ async fn main() -> anyhow::Result<()> {
     let contract = counter::Contract::deploy(&provider)
         .with_zk_config(counter::ZK_CONFIG_DIR)
         .with_maintenance_authority(committee, 2)
+        .send()
+        .await?
+        .into_contract()
         .await?;
     println!("   address: {}", contract.address());
     print_authority(&contract).await?;
@@ -104,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
     prepared
         .add_signature(0, sig0)
         .add_signature(2, sig2)
+        .send()
         .await?
         .wait_best()
         .await?;
@@ -131,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
     prepared
         .add_signature(0, sig0)
         .add_signature(1, sig1)
+        .send()
         .await?
         .wait_best()
         .await?;

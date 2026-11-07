@@ -62,6 +62,9 @@ let contract = Contract::deploy(&provider)
     .with_initial_state(state)
     .with_zk_config("compiled")
     .with_shielded_offer(offer)
+    .send()
+    .await?
+    .into_contract()
     .await?;
 ```
 
@@ -146,7 +149,7 @@ use std::time::{Duration, Instant};
 provider.resync_wallet().await?;
 let mut left = provider.balance().await?.dust.unregistered_night_utxos;
 while left > 0 {
-    provider.register_dust(None).await?.wait_finalized().await?;
+    provider.register_dust(None).send().await?.wait_finalized().await?;
     // The indexer serves the registration a moment after the node finalizes it.
     let deadline = Instant::now() + Duration::from_secs(60);
     while provider.balance().await?.dust.unregistered_night_utxos == left {

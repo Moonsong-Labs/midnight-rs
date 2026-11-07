@@ -68,9 +68,4 @@ make dev-down
 
 ## How a multi-party committee works
 
-For a k-of-n committee, deploy with `with_maintenance_authority(committee, k)`
-where `committee` is the members' verifying keys. To run an update, one party
-calls `.prepare()`, distributes `prepared.data_to_sign()` to the members, and
-collects their signatures via `prepared.add_signature(committee_index, sig)`
-until at least `k` distinct members have signed, then `.await`s to submit. See
-`docs/contract-maintenance-governance.md`.
+For a k-of-n committee, deploy with `with_maintenance_authority(committee, k)` where `committee` is the members' verifying keys. To run an update, one party calls `.prepare()`, distributes `prepared.data_to_sign()` to the members, and collects their signatures via `prepared.add_signature(committee_index, sig)` until at least `k` distinct members have signed, then calls `.send()` to submit. See `docs/contract-maintenance-governance.md`.

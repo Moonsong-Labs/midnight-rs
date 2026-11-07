@@ -19,9 +19,9 @@ use crate::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
-    BlockHash, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion,
-    Network, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
+    BlockHash, ChainParameters, CoinInfo, LedgerVersion, Network, ShieldedRecipient,
+    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
+    TransferRequest, TransferResult, UnshieldedRecipient, UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
@@ -494,18 +494,23 @@ impl MidnightProvider {
 
     /// Build a shielded (Zswap) transfer transaction.
     ///
-    /// Returns a pending builder. `.await?` builds + submits and returns the
-    /// resulting [`PendingTx`]; `.build().await?` returns the raw
+    /// Returns a pending builder. `.send().await?` builds + submits and returns
+    /// the resulting [`PendingTx`]; `.build().await?` returns the raw
     /// [`TransferResult`] without submitting (e.g. for inspection or custom
     /// routing). Either path selects the inputs and records them in the
     /// wallet's pending list as one transition, so a second build in this
     /// process cannot draw the same input. Proving runs after that, with the
     /// wallet free.
+    ///
+    /// Read `recipient` from a shielded address with
+    /// [`parse_shielded_recipient`](midnight_types::address::parse_shielded_recipient),
+    /// or derive it from a seed with
+    /// [`Seed::shielded_recipient`](midnight_types::hd::Seed::shielded_recipient).
     pub fn transfer_shielded<'a>(
         &'a self,
         token_type: ShieldedTokenType,
         amount: u128,
-        recipient: &str,
+        recipient: ShieldedRecipient,
     ) -> ShieldedTransfer<'a> {
         ShieldedTransfer::new(self, token_type, amount, recipient)
     }
@@ -560,19 +565,24 @@ impl MidnightProvider {
 
     /// Build an unshielded (UTXO) transfer transaction. See
     /// [`Self::transfer_shielded`] for reservation semantics and the
-    /// `.await` vs `.build()` distinction.
+    /// `.send()` vs `.build()` distinction.
+    ///
+    /// Read `recipient` from an unshielded address with
+    /// [`parse_unshielded_recipient`](midnight_types::address::parse_unshielded_recipient),
+    /// or derive it from a seed with
+    /// [`Seed::unshielded_recipient`](midnight_types::hd::Seed::unshielded_recipient).
     pub fn transfer_unshielded<'a>(
         &'a self,
         token_type: UnshieldedTokenType,
         amount: u128,
-        recipient: &str,
+        recipient: UnshieldedRecipient,
     ) -> UnshieldedTransfer<'a> {
         UnshieldedTransfer::new(self, token_type, amount, recipient)
     }
 
     /// Build a dust-address registration transaction. See
     /// [`Self::transfer_shielded`] for reservation semantics and the
-    /// `.await` vs `.build()` distinction.
+    /// `.send()` vs `.build()` distinction.
     ///
     /// One call registers one tNIGHT UTXO and pays its own fee from that
     /// UTXO. Call it again until [`DustBalance::unregistered_night_utxos`]
@@ -748,8 +758,11 @@ impl MidnightProvider {
     /// The result holds the merged transaction, the Dust it reserved in
     /// `spent`, and the fee of the merged transaction in `fee_speck`. Submit
     /// it with [`Self::submit_reserved`], which hands the Dust back when the
-    /// node never gets the transaction or rejects it. A transaction that
-    /// already pays its own fee comes back unchanged, with nothing reserved.
+    /// node never gets the transaction or rejects it. The reservation of the
+    /// Dust expires at the earliest TTL of the intents of the transaction.
+    /// When the transaction has no intent, the reservation expires the chain's
+    /// `global_ttl` after the chain time. A transaction that already pays its
+    /// own fee comes back unchanged, with nothing reserved.
     pub async fn balance_transaction(
         &self,
         tx_bytes: &[u8],
@@ -823,13 +836,11 @@ impl MidnightProvider {
     }
 
     /// The attached wallet's shielded public keys. See
-    /// `Wallet::shielded_public_keys` on the implementing wallet.
+    /// `Wallet::shielded_recipient` on the implementing wallet.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn shielded_public_keys(
-        &self,
-    ) -> Result<(CoinPublicKey, EncryptionPublicKey), ProviderError> {
-        Ok(self.attached()?.facade.shielded_public_keys().await)
+    pub async fn shielded_recipient(&self) -> Result<ShieldedRecipient, ProviderError> {
+        Ok(self.attached()?.facade.shielded_recipient().await)
     }
 
     /// Get or create the node connection.
@@ -1318,10 +1329,11 @@ fn transaction_ledger_version(tx_bytes: &[u8]) -> Result<LedgerVersion, Provider
 /// early has to hand the inputs back or they stay unusable until their TTL
 /// elapses. Run the rest of the build through [`Self::keep_on_ok`], which
 /// keeps the reservation when the build succeeds and awaits the release when
-/// it fails. A caller can drop the build future (a `timeout`, a `select!`, an
-/// aborted task) before the release runs. `Drop` cannot await, so under a
-/// Tokio runtime it hands the release to the runtime. With no runtime, the
-/// inputs wait for their TTL.
+/// it fails. On success it also tells the wallet to keep the reservation
+/// across a restart ([`WalletFacade::persist_reservation`]). A caller can drop
+/// the build future (a `timeout`, a `select!`, an aborted task) before the
+/// release runs. `Drop` cannot await, so under a Tokio runtime it hands the
+/// release to the runtime. With no runtime, the inputs wait for their TTL.
 pub struct HeldInputs {
     wallet: Option<Arc<dyn WalletFacade>>,
     spent: SpentInputs,
@@ -1343,9 +1355,10 @@ impl HeldInputs {
     /// Run `work` and keep the inputs reserved only if it succeeds.
     ///
     /// `work` is the rest of the build. On `Ok` the build can reach the chain,
-    /// so the reservation stands. On `Err` the release completes before the
-    /// error returns, so a caller that observes the error also observes the
-    /// inputs back.
+    /// so the reservation stands, and the wallet keeps it across a restart
+    /// ([`WalletFacade::persist_reservation`]) before the result returns. On
+    /// `Err` the release completes before the error returns, so a caller that
+    /// observes the error also observes the inputs back.
     ///
     /// # Errors
     ///
@@ -1354,22 +1367,35 @@ impl HeldInputs {
     /// # Cancellation
     ///
     /// Under a Tokio runtime, dropping the returned future while `work` runs
-    /// releases the inputs in the background, as dropping `self` does. A
-    /// release that has started runs to its end, even when the returned
-    /// future is dropped during it.
+    /// releases the inputs in the background, as dropping `self` does. A drop
+    /// while the wallet persists the reservation also releases the inputs
+    /// that the result of `work` names. A release that has started runs to its
+    /// end, even when the returned future is dropped during it.
     ///
     /// With no Tokio runtime, a drop releases nothing, and the release on
     /// `Err` runs inline. Inputs that a drop leaves reserved stay unusable
     /// until their TTL elapses.
-    pub fn keep_on_ok<T, E>(
+    pub fn keep_on_ok<E>(
         mut self,
-        work: impl Future<Output = Result<T, E>>,
-    ) -> impl Future<Output = Result<T, E>> {
+        work: impl Future<Output = Result<TransferResult, E>>,
+    ) -> impl Future<Output = Result<TransferResult, E>> {
         // Boxed before the returned future exists: an `async fn` stores its
         // arguments, so a caller's future would carry the whole build inline.
         let work = Box::pin(work);
         async move {
             let result = work.await;
+            if let Ok(transaction) = &result
+                && !self.spent.is_empty()
+                && let Some(wallet) = &self.wallet
+            {
+                // Hold what the result names too: a guard inside `work` may
+                // have left its inputs to the result, and a drop during the
+                // persist drops it. A release drops each named entry once, so
+                // an input named twice is harmless.
+                let own = self.spent.clone();
+                self.spent.merge(transaction.spent.clone());
+                wallet.persist_reservation(&own).await;
+            }
             // Disarm `Drop` on both paths: `Ok` keeps the reservation, and
             // `Err` releases it here.
             let wallet = self.wallet.take();

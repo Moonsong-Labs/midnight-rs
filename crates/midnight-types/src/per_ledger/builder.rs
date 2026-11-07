@@ -4,7 +4,6 @@
 //! with a [`TransferBuilder`]; proving it ([`PreparedTransfer::prove`]) needs
 //! the build context alone.
 
-use std::str::FromStr;
 use std::sync::Arc;
 
 use futures_util::FutureExt;
@@ -19,15 +18,15 @@ use helpers::{
     ProofProvider, Segment, ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet,
     Signature, Sp, SplittableRng, StandardTransactionInfo, StdRng, Timestamp, TokenType,
     Transaction, TransactionSigningKey, UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType,
-    UnshieldedWallet, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo, WalletAddress,
+    UnshieldedWallet, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo,
 };
 
 use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
 use crate::transfer::panic_message;
 use crate::{
-    DustPublicKey, Network, ReservedInput, SpentInputs, SpentUtxoKey, TransferKind,
-    TransferRequest, TransferResult, WalletError,
+    DustPublicKey, ReservedInput, ShieldedRecipient, SpentInputs, SpentUtxoKey, TransferKind,
+    TransferRequest, TransferResult, UnshieldedRecipient, WalletError,
 };
 
 type UnprovenTx = helpers::UnprovenTransaction<DefaultDB>;
@@ -316,11 +315,10 @@ async fn prove_tx_no_validate(
 
 /// What a transfer build reads from the wallet that funds it.
 ///
-/// A build signs with the seed and checks a recipient address against the
-/// network. A dust registration also reads the ledger parameters and the
-/// tNIGHT UTXOs to choose one from. Everything else a build needs is in its
-/// [`BuildContext`]. These readings are the whole of the wallet that a build
-/// depends on.
+/// A build signs with the seed. A dust registration also reads the ledger
+/// parameters and the tNIGHT UTXOs to choose one from. Everything else a
+/// build needs is in its [`BuildContext`]. These readings are the whole of
+/// the wallet that a build depends on.
 ///
 /// A dust registration names the Dust public key of the seed's default Dust
 /// path (`m/44'/2400'/0'/2/0`). A wallet that tracks its Dust under another
@@ -328,9 +326,6 @@ async fn prove_tx_no_validate(
 pub trait BuildInputs: Send + Sync {
     /// The seed the build signs and derives with.
     fn seed(&self) -> &Seed;
-
-    /// The network a recipient address must belong to.
-    fn network(&self) -> &Network;
 
     /// The ledger parameters a dust registration computes its fee allowance
     /// from.
@@ -400,7 +395,7 @@ impl<'a> TransferBuilder<'a> {
                 pay_fees,
             } => {
                 builder
-                    .prepare_shielded(token_type.into_ledger(), amount, &recipient, pay_fees)
+                    .prepare_shielded(token_type.into_ledger(), amount, recipient, pay_fees)
                     .await
             }
             TransferKind::Unshielded {
@@ -410,7 +405,7 @@ impl<'a> TransferBuilder<'a> {
                 pay_fees,
             } => {
                 builder
-                    .prepare_unshielded(token_type.into_ledger(), amount, &recipient, pay_fees)
+                    .prepare_unshielded(token_type.into_ledger(), amount, recipient, pay_fees)
                     .await
             }
             TransferKind::ShieldedSwap {
@@ -436,9 +431,7 @@ impl<'a> TransferBuilder<'a> {
 
     /// Build a shielded (ZSwap) transfer transaction.
     ///
-    /// `recipient` is a bech32 shielded address (e.g.
-    /// `mn_shield-addr_undeployed1...`). Only the public material is needed:
-    /// the address carries the recipient's `coin_public_key` and
+    /// `recipient` holds the recipient's `coin_public_key` and
     /// `enc_public_key`, which is all the chain needs to construct the output
     /// coin commitment and encrypt the coin info for them.
     ///
@@ -460,12 +453,14 @@ impl<'a> TransferBuilder<'a> {
         self,
         token_type: ShieldedTokenType,
         amount: u128,
-        recipient: &str,
+        recipient: ShieldedRecipient,
         pay_fees: bool,
     ) -> Result<PreparedTransfer, WalletError> {
-        let recipient_wallet = shielded_destination(recipient, self.state.network())?;
         let payment = OutputInfo {
-            destination: recipient_wallet,
+            destination: ShieldedWallet::<DefaultDB>::from_pub_keys(
+                recipient.coin_public_key.into_ledger(),
+                recipient.enc_public_key.into_ledger(),
+            ),
             token_type,
             value: amount,
         };
@@ -598,11 +593,8 @@ impl<'a> TransferBuilder<'a> {
 
     /// Build an unshielded (UTXO) transfer transaction.
     ///
-    /// `recipient` is a bech32 unshielded address (e.g.
-    /// `mn_addr_undeployed1...`). Only the recipient's `user_address` (the
-    /// public part) is needed; the chain derives the output's owner field
-    /// directly from it. The change output, if any, goes back to the
-    /// sender's own seed-derived address.
+    /// `recipient` is the user address that owns the output. The change
+    /// output, if any, goes back to the sender's own seed-derived address.
     ///
     /// When `pay_fees` is false the build skips Dust entirely, yielding a
     /// fee-unbalanced transaction for another wallet to sponsor (the
@@ -611,11 +603,10 @@ impl<'a> TransferBuilder<'a> {
         self,
         token_type: UnshieldedTokenType,
         amount: u128,
-        recipient: &str,
+        recipient: UnshieldedRecipient,
         pay_fees: bool,
     ) -> Result<PreparedTransfer, WalletError> {
         let from_seed = self.state.seed().into_ledger();
-        let recipient_wallet = parse_unshielded_recipient(recipient, self.state.network())?;
 
         let selected = UtxoSpendInfo::utxos_to_cover_value(
             self.context.clone(),
@@ -645,7 +636,7 @@ impl<'a> TransferBuilder<'a> {
         let mut outputs: Vec<Box<dyn helpers::BuildUtxoOutput<DefaultDB, BuildContext>>> =
             vec![Box::new(UtxoOutputInfo {
                 value: amount,
-                owner: recipient_wallet,
+                owner: UnshieldedWallet::from(recipient.into_ledger()),
                 token_type,
             })];
 
@@ -1082,6 +1073,29 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
         .ok_or_else(|| WalletError::Transfer("no intent segment left for the fee".into()))
 }
 
+/// The TTL of the fee intent for `external`: the earliest TTL of its intents,
+/// kept between the chain time of `context` and [`longest_ttl`]. With no
+/// intent, it is [`longest_ttl`].
+///
+/// The upper bound: `external` comes from another party, and an uncapped TTL
+/// would let that party set how long the sponsor's Dust stays reserved.
+///
+/// The lower bound: a TTL that already passed would let the next build at the
+/// same chain time evict this reservation. That build would take the same Dust
+/// with the same stamp. A release of this build would then drop the
+/// reservation of that build too. The wallet keeps a reservation while its TTL
+/// is at or after the chain time. So a TTL at the chain time keeps the
+/// reservation through every build at that chain time.
+fn fee_ttl(external: &FinalizedTx, context: &BuildContext) -> Timestamp {
+    let longest = longest_ttl(context);
+    let Some(earliest) = external.intents().map(|(_, intent)| intent.ttl).min() else {
+        return longest;
+    };
+    earliest
+        .max(chain_time(&context.latest_block_context()))
+        .min(longest)
+}
+
 /// Draw the fee for a finished transaction this wallet did not build, and
 /// stop before proving.
 ///
@@ -1091,6 +1105,12 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 /// Each round prices the merge with a mock proof, which is exact here
 /// because the fee intent carries only Dust spends.
 ///
+/// The fee intent takes the earliest TTL of the intents of `external`, kept
+/// between the chain time of the build (see [`chain_time`]) and
+/// [`longest_ttl`]. So the Dust that the fee intent reserves expires when the
+/// merged transaction can no longer land. When `external` has no intent, the
+/// fee intent gets [`longest_ttl`].
+///
 /// `None` when `external` already balances its Dust. There is nothing to
 /// draw then, and an intent with no spends is one the ledger rejects.
 pub fn balance_external(
@@ -1098,7 +1118,7 @@ pub fn balance_external(
     external: &FinalizedTx,
 ) -> Result<Option<PreparedTransfer>, WalletError> {
     let now = tx_info.context.latest_block_context().tblock;
-    let ttl = longest_ttl(&tx_info.context);
+    let ttl = fee_ttl(external, &tx_info.context);
     let network_id = tx_info
         .context
         .with_ledger_state(|ls| ls.network_id.clone());
@@ -1451,78 +1471,6 @@ fn resign_offer(
     })
 }
 
-/// Payload length of a shielded address: a 32-byte coin public key followed by
-/// the 32-byte serialized encryption public key.
-const SHIELDED_ADDRESS_DATA_LEN: usize = 64;
-
-pub(crate) fn parse_wallet_address(
-    s: &str,
-    network: &Network,
-) -> Result<WalletAddress, WalletError> {
-    let addr = WalletAddress::from_str(s)
-        .map_err(|e| WalletError::InvalidAddress(format!("bech32 decode: {e}")))?;
-    check_address_network(&addr, network)?;
-    Ok(addr)
-}
-
-/// Reject an address minted for a different network.
-///
-/// The HRP carries the network as a third `_`-separated segment, which mainnet
-/// omits entirely (`mn_shield-addr1…`, per upstream `network_suffix`). The
-/// upstream `TryFrom<&WalletAddress>` impls check the `mn` prefix and the
-/// credential segment but never the network, so without this an address for
-/// another chain decodes cleanly and builds a transfer to a key nobody here
-/// controls.
-fn check_address_network(addr: &WalletAddress, expected: &Network) -> Result<(), WalletError> {
-    let hrp = addr.human_readable_part();
-    // The network is everything after the credential segment, not just the
-    // next segment: upstream appends `_{network_id}` verbatim, and a custom
-    // network name may itself contain underscores.
-    let actual = hrp.splitn(3, '_').nth(2);
-    let want = match expected {
-        Network::Mainnet => None,
-        other => Some(other.as_str()),
-    };
-    if actual != want {
-        return Err(WalletError::AddressNetworkMismatch {
-            expected: expected.as_str().to_string(),
-            actual: actual.unwrap_or(Network::Mainnet.as_str()).to_string(),
-        });
-    }
-    Ok(())
-}
-
-fn parse_unshielded_recipient(s: &str, network: &Network) -> Result<UnshieldedWallet, WalletError> {
-    let addr = parse_wallet_address(s, network)?;
-    UnshieldedWallet::try_from(&addr)
-        .map_err(|e| WalletError::InvalidAddress(format!("not an unshielded address: {e:?}")))
-}
-
-/// Decode a `mn_shield-addr_*` bech32 string into the shielded wallet whose
-/// keys it carries.
-///
-/// `network` is the network that the address must belong to, usually the
-/// network of the wallet that spends. The function returns
-/// [`WalletError::AddressNetworkMismatch`] for an address of any other
-/// network, and [`WalletError::InvalidAddress`] for a string that is not a
-/// shielded address.
-pub(crate) fn shielded_destination(
-    s: &str,
-    network: &Network,
-) -> Result<ShieldedWallet<DefaultDB>, WalletError> {
-    let addr = parse_wallet_address(s, network)?;
-    // Upstream asserts this length rather than returning its `InvalidCoinKeyLen`
-    // variant, so a truncated address would abort the process.
-    let len = addr.data().len();
-    if len != SHIELDED_ADDRESS_DATA_LEN {
-        return Err(WalletError::InvalidAddress(format!(
-            "shielded address payload is {len} bytes, expected {SHIELDED_ADDRESS_DATA_LEN}"
-        )));
-    }
-    ShieldedWallet::<DefaultDB>::try_from(&addr)
-        .map_err(|e| WalletError::InvalidAddress(format!("not a shielded address: {e:?}")))
-}
-
 #[cfg(test)]
 mod tests {
     /// A fee-only transaction at a segment.
@@ -1665,6 +1613,25 @@ mod tests {
             prepared(unproven_expiring_at(&[])).expires_at(),
             Timestamp::from_secs(2_000) + global_ttl_of(&context)
         );
+    }
+
+    /// The sponsor's Dust must stay reserved no longer than the transaction
+    /// it pays for can land, and no longer than the chain's longest TTL,
+    /// whatever TTL the other party set. A TTL that already passed must not
+    /// make the reservation evictable at the chain time of its build.
+    #[test]
+    fn a_fee_intent_expires_with_the_transaction_it_pays_for() {
+        let context = context_at(1_000, 2_000);
+        let longest = Timestamp::from_secs(2_000) + global_ttl_of(&context);
+        let fee_ttl_for = |ttls: &[u64]| {
+            let external = unproven_expiring_at(ttls).mock_prove().expect("mock prove");
+            fee_ttl(&external, &context)
+        };
+
+        assert_eq!(fee_ttl_for(&[4_000, 3_000]), Timestamp::from_secs(3_000));
+        assert_eq!(fee_ttl_for(&[longest.to_secs() + 1]), longest);
+        assert_eq!(fee_ttl_for(&[]), longest);
+        assert_eq!(fee_ttl_for(&[1_500]), Timestamp::from_secs(2_000));
     }
 
     /// A release matches an entry by its input and its stamp. A build that

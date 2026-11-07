@@ -22,12 +22,13 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
 
     let provider = MidnightProvider::new(&node_url);
     let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
-    let recipient = wallet.unshielded_address();
+    let recipient = wallet.unshielded_recipient();
     let provider = provider.with_wallet(wallet);
 
     // A self-transfer is the cheapest transaction that reaches a block.
     let pending = provider
-        .transfer_unshielded(NIGHT, 1, &recipient)
+        .transfer_unshielded(NIGHT, 1, recipient)
+        .send()
         .await
         .expect("submit self-transfer");
     let transaction_hash = pending.transaction_hash();

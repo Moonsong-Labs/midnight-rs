@@ -40,6 +40,9 @@ mod counter {
 
 let contract = counter::Contract::deploy(&provider)
     .with_zk_config(counter::ZK_CONFIG_DIR)
+    .send()
+    .await?
+    .into_contract()
     .await?;
 ```
 

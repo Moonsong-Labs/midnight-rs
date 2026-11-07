@@ -49,7 +49,7 @@ Run the example:
 make run-private-state   # from the repo root
 ```
 
-The first call uses `.send()`. It returns a `PendingCall`, which shows the transaction hash before the chain's verdict. Its `wait_finalized` then confirms the private-state snapshot.
+Each call uses `.send()`, which returns a `PendingCall`. The example prints the transaction hash from it before the chain's verdict. Its `wait_finalized` then confirms the private-state snapshot, and the first call checks that snapshot in the journal.
 
 Output:
 
@@ -68,6 +68,7 @@ Output:
    finalized; the private-state snapshot is Confirmed
    witness disclosed 1; on-chain total = 1
 3. Calling contribute()...
+   submitted transaction ...
    witness disclosed 2; on-chain total = 3
 
 The calls disclosed [1, 2] because the SDK loaded and persisted the

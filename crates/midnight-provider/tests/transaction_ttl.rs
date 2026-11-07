@@ -72,12 +72,12 @@ async fn a_transfer_with_a_short_ttl_lands() {
         global_ttl > i128::from(TTL.as_secs()),
         "the devnet's global_ttl of {global_ttl}s leaves no room for a shorter TTL"
     );
-    let recipient = wallet.unshielded_address();
+    let recipient = wallet.unshielded_recipient();
     let provider = provider.with_wallet(wallet);
 
     // A transfer that pays its own fee: its intent and its fee intent are one.
     let paid = provider
-        .transfer_unshielded(NIGHT, 1, &recipient)
+        .transfer_unshielded(NIGHT, 1, recipient)
         .with_ttl(TTL)
         .build()
         .await

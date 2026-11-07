@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
     if env::var("REGISTER_DUST").is_ok() {
         println!("\n--- Dust Registration ---");
         println!("Building + submitting dust registration transaction...");
-        let pending = provider.register_dust(None).await?;
+        let pending = provider.register_dust(None).send().await?;
         println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
         pending.wait_best().await?;
         println!("Included in best block.");
@@ -186,13 +186,13 @@ async fn main() -> anyhow::Result<()> {
             bail!("Dust sync required for transfers. Run a full sync first.");
         }
 
-        let recipient = seed.unshielded_address(&network);
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
-        println!("Recipient: {recipient}");
+        println!("Recipient: {}", seed.unshielded_address(&network));
         println!("Building + submitting unshielded transfer (fees paid with real dust UTXOs)...");
         let pending = provider
-            .transfer_unshielded(NIGHT, amount, &recipient)
+            .transfer_unshielded(NIGHT, amount, seed.unshielded_recipient())
+            .send()
             .await?;
         println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
         pending.wait_best().await?;

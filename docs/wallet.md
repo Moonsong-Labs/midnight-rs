@@ -237,7 +237,8 @@ use std::time::Duration;
 provider.resync_wallet().await?;
 let before = provider.balance().await?.shielded_value(token);
 provider
-    .transfer_shielded(token, amount, &recipient)
+    .transfer_shielded(token, amount, recipient)
+    .send()
     .await?
     .wait_finalized()
     .await?;
@@ -293,7 +294,7 @@ Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are gener
 
 A snapshot that names no ledger generation reads as ledger 8, the only generation an older build wrote. A snapshot of a later generation than the chain runs belongs to a replaced chain: the sync returns `WalletError::LedgerRegression`, which names the directory to remove.
 
-Persistence is not a one-shot at initial sync: every successful `resync_wallet` re-saves the moved cursors, refreshed parameters, and pending set, and each transfer build rewrites `pending.json` with its new reservation. `pending.json` is removed once no reservations remain.
+Persistence is not a one-shot at initial sync: every successful `resync_wallet` re-saves the moved cursors, refreshed parameters, and pending set, and each build rewrites `pending.json` with its reservation once its proof succeeds. `pending.json` is removed once no reservations remain.
 
 ## Balance
 
@@ -336,7 +337,7 @@ Every reading returns an owned value taken under a short read lock, so nothing a
 Before NIGHT holdings can generate spendable Dust, the wallet must publish a **dust registration** that binds its dust address to its unshielded address. One `register_dust` call registers one tNIGHT UTXO and pays its own fee from that UTXO, so a wallet with no Dust can register. The rustdoc of [`register_dust`](../crates/midnight-provider/src/provider.rs) gives the full rule.
 
 ```rust
-let pending = provider.register_dust(None).await?;     // None = now - 1 hour for a UTXO with no ctime
+let pending = provider.register_dust(None).send().await?;     // None = now - 1 hour for a UTXO with no ctime
 pending.wait_best().await?;
 ```
 
@@ -355,7 +356,7 @@ use midnight_core::wallet::parse_dust_address;
 
 let hot_address = hot_wallet.dust_address(); // mn_dust_undeployed1...
 let target = parse_dust_address(&hot_address, provider.network().await?)?;
-provider.register_dust(None).to(target).await?.wait_finalized().await?;
+provider.register_dust(None).to(target).send().await?.wait_finalized().await?;
 ```
 
 The registration sets the Dust address of the whole NIGHT address, not only of the UTXO it spends:
@@ -368,29 +369,35 @@ The cold wallet gets no Dust of its own. Its registrations still pay their own f
 
 ## Transfers
 
-Two flavors, same shape. Each method returns a builder, and `.await?` builds and submits in one step:
+Two flavors, same shape. Each method returns a builder, and `.send().await?` builds and submits in one step:
 
 ```rust
-use midnight_core::wallet::NIGHT;
+use midnight_core::wallet::{NIGHT, parse_unshielded_recipient};
 
+let recipient = parse_unshielded_recipient(&recipient_address, provider.network().await?)?;
 let pending = provider
-    .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
+    .transfer_unshielded(NIGHT, amount_in_star, recipient)
+    .send()
     .await?;
 pending.wait_best().await?;
 ```
 
 ```rust
+use midnight_core::wallet::parse_shielded_recipient;
+
+let recipient = parse_shielded_recipient(&recipient_shielded_address, provider.network().await?)?;
 let pending = provider
-    .transfer_shielded(token_type, amount, &recipient_shielded_address)
+    .transfer_shielded(token_type, amount, recipient)
+    .send()
     .await?;
 ```
 
-`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
+`recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network. A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
 
 1. Resyncs, then takes a write lock on the wallet and builds the context of the wallet's ledger generation.
 2. Selects inputs from the wallet's local UTXO set.
 3. Balances Dust fees via a `speculative_spend` loop (mock proofs first, real proofs once balanced).
-4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
+4. Reserves the selected inputs so the next concurrent build can't re-pick the same coins. Once the transaction is proven, the reservation reaches `pending.json`.
 5. Submits the proven bytes to the node and returns a `PendingTx`.
 
 Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the chain's latest block that the resync read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships), and `Wallet::parameters().global_ttl` gives the value of the connected chain. To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
@@ -399,18 +406,19 @@ Each intent of the transaction carries a TTL. The chain does not apply a transac
 use std::time::Duration;
 
 let pending = provider
-    .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
+    .transfer_unshielded(NIGHT, amount_in_star, recipient)
     .with_ttl(Duration::from_secs(300))
+    .send()
     .await?;
 ```
 
 `transfer_shielded`, `transfer_unshielded` and `register_dust` take it. The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the build with `WalletError::TtlOutOfRange`, before it spends or proves anything. A Dustless shielded transfer (`.without_dust()`) is a Zswap offer with no intent, so it cannot carry a TTL, and its build fails with `WalletError::TtlWithoutIntent`. A shielded swap half has no `with_ttl` for the same reason.
 
-To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder instead of awaiting it:
+To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder in place of `.send()`:
 
 ```rust
 let result = provider
-    .transfer_shielded(token_type, amount, &recipient)
+    .transfer_shielded(token_type, amount, recipient)
     .build()
     .await?;
 // result: TransferResult { tx_bytes, ledger_version, spent, fee_speck }
@@ -418,7 +426,7 @@ println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64
 let pending = provider.submit_reserved(result).await?;
 ```
 
-`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved. `submit_reserved` hands them back when the node never gets the transaction or rejects it (see [Pending reservations](#pending-reservations)).
+`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like `.send()`; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved. `submit_reserved` hands them back when the node never gets the transaction or rejects it (see [Pending reservations](#pending-reservations)).
 
 ## Submission and waiting
 
@@ -475,12 +483,14 @@ The registration is recorded and persisted before the replay starts. If the repl
 
 ## Pending reservations
 
-In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`, persisted as `pending.json` next to the wallet state. They serve two purposes:
+In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`. They serve two purposes:
 
 - **Prevent double-spending across builds.** Input selection skips reserved coins.
 - **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL passed, as a backstop for transactions that never confirm.
 
 Each reservation expires at the earliest TTL of the intents that its build made (see [Transfers](#transfers)). The wallet drops the reservation once the time of the chain's latest block passes that TTL, because the transaction can no longer land.
+
+A reservation reaches `pending.json`, next to the wallet state, once its build is proven. A process that stops during a proof (Ctrl-C, a kill or a panic) leaves no reservation for that build in `pending.json`, so the next process can spend its inputs. A proven build keeps its reservation across a restart, also when its bytes never reach a node, because the wallet cannot know whether they left the process. `HeldInputs::keep_on_ok` tells the wallet that a build is proven with `WalletFacade::persist_reservation`. Every custom wallet implements it, and a wallet that keeps no state across a restart makes it a no-op.
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
@@ -517,10 +527,11 @@ provider.with_wallet(wallet)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext: register, then replay
   provider.rescan_shielded()             replay the shielded stream (a resync first, to cross a fork)
   provider.forget_coin(coin)             drop a registration that matched nothing
-  provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
-      .to(dust_key)                          the Dust goes to another wallet's Dust address
-  provider.transfer_unshielded(...).await    builds + submits → PendingTx
-  provider.transfer_shielded(...).await      builds + submits → PendingTx
+  provider.register_dust(None)                      registers one tNIGHT UTXO, self-funded
+      .to(dust_key)                                 the Dust goes to another wallet's Dust address
+      .send().await                                 builds + submits → PendingTx
+  provider.transfer_unshielded(...).send().await    builds + submits → PendingTx
+  provider.transfer_shielded(...).send().await      builds + submits → PendingTx
        │     .build().await → TransferResult (escape hatch, no submit)
        │
        └─ PendingTx

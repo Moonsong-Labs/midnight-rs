@@ -59,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
         .sync(&provider, &indexer_url)
         .await?;
     let address = wallet.shielded_address();
+    let recipient = wallet.shielded_recipient();
     let wallet = Arc::new(LocalWallet::new(wallet));
     let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));
     println!("Sync complete.");
@@ -84,7 +85,8 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Building + submitting...");
     let pending = provider
-        .transfer_shielded(coin.token_type, 1, &address)
+        .transfer_shielded(coin.token_type, 1, recipient)
+        .send()
         .await?;
     println!("Submitted: ext hash {}", pending.extrinsic_hash_hex());
     let (best, pending) = pending.wait_best().await?;
