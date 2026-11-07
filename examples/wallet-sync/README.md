@@ -1,38 +1,28 @@
 # Wallet Sync Example
 
-The example connects to any Midnight network. It syncs the wallet's three legs (zswap shielded coins, unshielded UTXOs, Dust) with progress reporting. It prints the addresses, the balances and the Dust parameters. As an option, it registers Dust or submits an unshielded self-transfer.
+The example syncs a wallet against the local devnet, or another network that runs ledger 9. It syncs the wallet's three legs (zswap shielded coins, unshielded UTXOs, Dust) with progress reporting. It prints the addresses, the balances and the Dust parameters. As an option, it registers Dust or submits an unshielded self-transfer.
 
-The example uses a hard-coded seed, so its addresses stay the same across runs. Do **not** reuse it.
+By default, the example uses the dev seed (`0000…0001`), which the local devnet funds at genesis. Do **not** use it on a public network.
 
 ## Setup
 
-Pick a network and export its URLs once:
+Start the local devnet from the repo root:
 
 ```bash
-# Preprod
-export MIDNIGHT_NODE_URL="wss://rpc.preprod.midnight.network"
-export MIDNIGHT_INDEXER_URL="https://indexer.preprod.midnight.network"
-export MIDNIGHT_NETWORK="preprod"   # defaults to preprod if unset
-
-# OR a local devnet: run `make dev-up` from the repo root.
-# Override the seed to point at the dev preset's prefunded wallet (`0000…0001`)
-# so the balance + dust output is non-empty.
-export MIDNIGHT_NODE_URL="ws://127.0.0.1:9944"
-export MIDNIGHT_INDEXER_URL="http://127.0.0.1:8088"
-export MIDNIGHT_NETWORK="undeployed"
-export MIDNIGHT_WALLET_SEED="0000000000000000000000000000000000000000000000000000000000000001"
+make dev-up
 ```
 
-The example's default seed targets preprod. Set `MIDNIGHT_WALLET_SEED` to any format `Seed`'s `FromStr` accepts:
+The example connects to the local devnet. To sync against another network that runs ledger 9, or another wallet, set these environment variables:
 
-- 16-, 32- or 64-byte hex (e.g. the devnet prefunded seed above)
+- `MIDNIGHT_NODE_URL`: the node, by default `ws://127.0.0.1:9944`
+- `MIDNIGHT_INDEXER_URL`: the indexer, by default `http://127.0.0.1:8088`
+- `MIDNIGHT_NETWORK`: the network, by default `undeployed`
+- `MIDNIGHT_WALLET_SEED`: the seed, by default the dev seed
+
+`MIDNIGHT_WALLET_SEED` takes any format that `Seed`'s `FromStr` accepts:
+
+- 16-, 32- or 64-byte hex
 - A BIP-39 mnemonic phrase (12/15/18/21/24 words), derived via the standard `Mnemonic::to_seed("")`. For a 25th-word passphrase, switch the example to call `Seed::from_mnemonic_with_passphrase(...)` directly.
-
-For preprod, fund the example's unshielded address via [the preprod faucet](https://faucet.preprod.midnight.network/):
-
-```
-mn_addr_preprod1cu74c4snt48ztvvjfhlgjx64ydqy25y682ujtjde034l36umcxfsg697rj
-```
 
 ## Run
 

@@ -41,29 +41,16 @@ COMPACTC ?= docker run --rm --user $$(id -u):$$(id -g) -v "$(CURDIR):$(CURDIR)" 
 	-v "$(ZK_PARAMS):/zk-params" -e MIDNIGHT_PP=/zk-params \
 	--entrypoint compactc $(COMPACTC_IMAGE)
 
-# The ledger generation the devnet runs: 9 (devnet/docker-compose.ledger-9.yml)
-# or 8 (devnet/docker-compose.yml). Both listen on the same ports, so run one at
-# a time. Only ledger 9 verifies the keys of the compiled contracts.
-DEVNET_LEDGER ?= 9
-ifeq ($(DEVNET_LEDGER),9)
-DEVNET_COMPOSE := devnet/docker-compose.ledger-9.yml
-NODE_CONTAINER := midnight-example-node-l9
-else ifeq ($(DEVNET_LEDGER),8)
 DEVNET_COMPOSE := devnet/docker-compose.yml
 NODE_CONTAINER := midnight-example-node
-else
-$(error DEVNET_LEDGER must be 8 or 9, not '$(DEVNET_LEDGER)')
-endif
 NODE_HEALTH    := http://localhost:9944/health
 NODE_RPC       := http://127.0.0.1:9944
 NODE_WS        := ws://127.0.0.1:9944
 INDEXER_URL    := http://127.0.0.1:8088
 INDEXER_GQL    := $(INDEXER_URL)/api/v3/graphql
 PROOF_SERVER_URL := http://127.0.0.1:6300
-DEV_SEED       := 0000000000000000000000000000000000000000000000000000000000000001
 
-# Examples that run against the devnet with no extra env.
-# wallet-sync gets its devnet env from a dedicated target.
+# The examples that `make examples` runs against the devnet.
 EXAMPLES  := counter private-state contract-maintenance shielded-transfer combine-and-sponsor shielded-swap
 CONTRACTS := call-context counter events owned-counter receive-shielded secret-counter shielded-mint unshielded-payout
 # The fingerprint of contract $$c: its source under the compiler at COMPACT_REV.
@@ -120,7 +107,6 @@ GOLDENS_CKSUM = { echo $(COMPACT_REV); \
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
         dev-up dev-wait proof-server-wait dev-settle dev-down dev-status dev-logs \
         test-e2e test-e2e-node-restart examples e2e run-wallet-sync \
-        fork-up fork-upgrade fork-test fork-down \
         contracts compile-contracts fixtures goldens conformance \
         vendor-compact-runtime check-natives
 
@@ -139,17 +125,12 @@ help:
 	@echo "    audit         cargo audit (fails on vulnerabilities; warnings allowed)"
 	@echo "    ci            fmt-check + clippy + doc + test + audit (the CI gates)"
 	@echo ""
-	@echo "  Devnet (node, indexer and proof server via $(DEVNET_COMPOSE); DEVNET_LEDGER=8 for ledger 8)"
+	@echo "  Devnet (node, indexer and proof server via $(DEVNET_COMPOSE))"
 	@echo "    dev-up        start the devnet and wait until it is ready"
 	@echo "    dev-settle    wait until the indexer has every block the node calls best"
 	@echo "    dev-down      stop the devnet"
 	@echo "    dev-status    show container state, restart counts and recent logs"
 	@echo "    dev-logs      follow devnet logs"
-	@echo ""
-	@echo "  Fork devnet (starts on ledger 8 and forks to ledger 9; the devnet's ports)"
-	@echo "    fork-up       write a ledger 8 chain spec and start the fork devnet"
-	@echo "    fork-test     run the fork crossing test, which forks the chain (fork-upgrade)"
-	@echo "    fork-down     stop the fork devnet"
 	@echo ""
 	@echo "  Against a running devnet ('make dev-up' first)"
 	@echo "    test-e2e      run the devnet integration tests"
@@ -237,7 +218,6 @@ dev-wait:
 	docker compose -f $(DEVNET_COMPOSE) logs; \
 	exit 1
 
-# Not part of dev-wait: the fork devnet reuses dev-wait and has no proof server.
 proof-server-wait:
 	@echo "Waiting for the proof server..."
 	@for _ in $$(seq 1 60); do \
@@ -284,46 +264,11 @@ dev-logs:
 	docker compose -f $(DEVNET_COMPOSE) logs -f
 
 # ============================================================
-# Fork devnet: a chain that starts on ledger 8 and forks to ledger 9
-# ============================================================
-
-FORK_COMPOSE := devnet/fork/docker-compose.yml
-# The ledger 8 release the chain starts from, and the toolkit of the ledger 9
-# release it forks to (the node image devnet/fork/docker-compose.yml runs).
-FORK_FROM_NODE := midnightntwrk/midnight-node:1.0.1
-FORK_TO_NODE   := midnightntwrk/midnight-node:2.1.0-rc.3
-FORK_TOOLKIT   := midnightntwrk/midnight-node-toolkit:2.1.0-rc.3
-FORK_ARCH      := $(if $(filter arm64 aarch64,$(shell uname -m)),arm64,amd64)
-
-fork-up:
-	docker run --rm -e CFG_PRESET=dev $(FORK_FROM_NODE) build-spec > devnet/fork/chainspec.json
-	docker compose -f $(FORK_COMPOSE) up -d
-	@$(MAKE) --no-print-directory dev-wait DEVNET_COMPOSE=$(FORK_COMPOSE)
-
-# Fork the chain: apply the ledger 9 runtime through the dev chain's
-# governance, as the node's own fork test does.
-fork-upgrade:
-	docker run --rm --entrypoint cat $(FORK_TO_NODE) \
-		/artifacts-$(FORK_ARCH)/midnight_node_runtime.compact.compressed.wasm > devnet/fork/runtime.wasm
-	docker run --rm --network midnight-fork_default \
-		-v $(CURDIR)/devnet/fork/runtime.wasm:/runtime.wasm:ro $(FORK_TOOLKIT) \
-		runtime-upgrade --wasm-file /runtime.wasm -c //Dave -c //Eve -t //Alice -t //Bob \
-		--rpc-url ws://node:9944 --signer-key //Alice
-
-# The crossing test forks the chain itself, so it runs once per `fork-up`.
-fork-test:
-	$(E2E_ENV) MIDNIGHT_FORK_UPGRADE_CMD="$(MAKE) -C $(CURDIR) --no-print-directory fork-upgrade" \
-		$(CARGO) test -p midnight-contract --test fork_crossing -- --show-output
-
-fork-down:
-	docker compose -f $(FORK_COMPOSE) down
-
-# ============================================================
 # Against a running devnet
 # ============================================================
 
 E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-	MIDNIGHT_LEDGER=$(DEVNET_LEDGER) MIDNIGHT_PROOF_SERVER_URL=$(PROOF_SERVER_URL)
+	MIDNIGHT_PROOF_SERVER_URL=$(PROOF_SERVER_URL)
 
 # The devnet integration tests.
 test-e2e: contracts fixtures
@@ -338,9 +283,6 @@ test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test deploy_shielded_offer -- --show-output
-# Every compiled contract has `verifier-key[v7]` keys, which only a ledger 9
-# chain verifies, so the tests that deploy or call one run only there.
-ifeq ($(DEVNET_LEDGER),9)
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test balance_bare_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test prove_once_per_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
@@ -355,7 +297,6 @@ ifeq ($(DEVNET_LEDGER),9)
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test receive_shielded_coin -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test failed_submit_hands_back -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test e2e_contracts -- --show-output --test-threads=1
-endif
 
 # Restarts the node container, so it disrupts every other test talking to it.
 # Kept out of test-e2e; run it last, on its own.
@@ -363,11 +304,10 @@ test-e2e-node-restart:
 	$(E2E_ENV) MIDNIGHT_NODE_CONTAINER=$(NODE_CONTAINER) \
 		$(CARGO) test -p midnight-provider --test devnet -- --ignored --show-output
 
-# wallet-sync needs devnet env; this explicit target sets it (and overrides the
-# run-% pattern below).
+# wallet-sync uses no contract, so it skips the `contracts` step of run-%,
+# which needs Docker when the compiled contracts are missing.
 run-wallet-sync:
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_NETWORK=undeployed \
-		MIDNIGHT_WALLET_SEED=$(DEV_SEED) $(CARGO) run -p example-wallet-sync
+	$(CARGO) run -p example-wallet-sync
 
 # Run any other example: `make run-counter`, `make run-private-state`, ...
 run-%: contracts

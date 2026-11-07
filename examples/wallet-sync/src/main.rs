@@ -1,5 +1,6 @@
-//! Wallet sync example: connect to any Midnight network, display balances, and
-//! optionally register Dust or submit a self-transfer. See README.md for usage.
+//! Wallet sync example: sync a wallet against the local devnet, or another
+//! ledger 9 network, display balances, and optionally register Dust or submit
+//! a self-transfer. See README.md for usage.
 
 use std::env;
 
@@ -9,22 +10,12 @@ use midnight_core::wallet::NIGHT;
 use midnight_core::{MidnightProvider, Network, Seed, SyncProgress, Wallet, WalletBuilder};
 use tracing_subscriber::EnvFilter;
 
-// Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`
-// to point at a different wallet. For example, use the local dev devnet's
-// prefunded seed (`0000…0001`) to see non-empty balances and dust generation.
-//
-// `MIDNIGHT_WALLET_SEED` is parsed through `Seed`'s `FromStr` impl, which
-// accepts a 16/32/64-byte hex string or a BIP-39 mnemonic phrase (12/15/18/21/24
-// words). For a mnemonic with a passphrase, use `Seed::from_mnemonic_with_passphrase`
-// directly. Hard-coded here as the default for dev/example purposes only; do
-// NOT use in production.
-const DEFAULT_SEED: &str = "13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f";
+/// Hardcoded dev seed, funded at genesis on the local devnet. Do NOT use in
+/// production.
+const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
-fn required_env(name: &str) -> String {
-    env::var(name).unwrap_or_else(|_| {
-        eprintln!("error: {name} environment variable is required");
-        std::process::exit(1);
-    })
+fn env_or(name: &str, default: &str) -> String {
+    env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
 #[tokio::main]
@@ -38,14 +29,10 @@ async fn main() -> anyhow::Result<()> {
         .with_target(true)
         .init();
 
-    let node_url = required_env("MIDNIGHT_NODE_URL");
-    let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
-    let network: Network = env::var("MIDNIGHT_NETWORK")
-        .unwrap_or_else(|_| "preprod".into())
-        .parse()?;
-
-    let seed_input = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
-    let seed: Seed = seed_input.parse()?;
+    let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
+    let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
+    let network: Network = env_or("MIDNIGHT_NETWORK", "undeployed").parse()?;
+    let seed: Seed = env_or("MIDNIGHT_WALLET_SEED", DEV_SEED).parse()?;
 
     println!("=== Midnight Wallet Sync ===\n");
     println!("Network:             {network}");
