@@ -1,6 +1,4 @@
 //! The transfer machinery on a chain that runs ledger 9.
-//!
-//! The same source as [`crate::ledger_8`], compiled against ledger 9's types.
 
 pub(crate) use midnight_helpers::ledger_9 as helpers;
 
@@ -16,6 +14,3 @@ pub use builder::{
     fee_speck, longest_ttl, prepare_no_validate,
 };
 pub use inputs::{PreparedInput, prepare_shielded_inputs};
-
-/// The generation this module builds for.
-pub const LEDGER: crate::LedgerVersion = crate::LedgerVersion::V9;

@@ -1,4 +1,4 @@
-//! A wallet's builds on one ledger generation.
+//! A wallet's builds on ledger 9.
 
 use std::sync::Arc;
 
@@ -36,12 +36,8 @@ impl ReservedBuild {
     }
 }
 
-/// A wallet's builds on this generation: the selection, funding and
-/// reservation steps that name its transaction types.
-///
-/// A wallet whose state is on another generation fails each with
-/// [`WalletError::LedgerMismatch`]. That happens only between a chain's hard
-/// fork and the wallet's next resync, and a build after that resync succeeds.
+/// A wallet's builds: the selection, funding and reservation steps that name
+/// the ledger's transaction types.
 #[async_trait]
 pub trait WalletBuilds: WalletFacade {
     /// The half of a [`BuildContext`] a transaction executes against. It

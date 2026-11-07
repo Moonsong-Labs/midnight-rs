@@ -7,8 +7,8 @@
 //!   MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 MIDNIGHT_INDEXER_URL=http://127.0.0.1:8088 \
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
-use midnight_provider::{Builds, MidnightProvider};
-use midnight_wallet::{LedgerVersion, Wallet};
+use midnight_provider::MidnightProvider;
+use midnight_wallet::Wallet;
 
 const DEFAULT_SHIELDED_TOKEN: midnight_wallet::ShieldedTokenType =
     midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0; 32]));
@@ -125,22 +125,18 @@ async fn provider_build_context_succeeds() {
     let seed = wallet.seed().clone();
     let provider = provider.with_wallet(wallet);
 
-    let builds = provider.builds().await.expect("the provider should build");
-    macro_rules! funds_our_wallet {
-        ($builds:expr, $ledger:ident) => {{
-            let context = $builds
-                .build_context()
-                .await
-                .expect("build_context should succeed");
-            let seed = midnight_types::$ledger::convert::IntoLedger::into_ledger(&seed);
-            context.wallets.lock().unwrap().contains_key(&seed)
-        }};
-    }
-    let funded = match builds {
-        Builds::Ledger8(builds) => funds_our_wallet!(builds, ledger_8),
-        Builds::Ledger9(builds) => funds_our_wallet!(builds, ledger_9),
-    };
-    assert!(funded, "context should contain our wallet");
+    let context = provider
+        .builds()
+        .await
+        .expect("the provider should build")
+        .build_context()
+        .await
+        .expect("build_context should succeed");
+    let seed = midnight_types::ledger_9::convert::IntoLedger::into_ledger(&seed);
+    assert!(
+        context.wallets.lock().unwrap().contains_key(&seed),
+        "context should contain our wallet"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -270,24 +266,16 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
 
 /// Sum the signed deltas a proven transaction carries for one shielded token.
 fn shielded_delta(tx_bytes: &[u8], token: midnight_wallet::ShieldedTokenType) -> i128 {
-    macro_rules! delta_in {
-        ($ledger:ident) => {{
-            use midnight_helpers::$ledger as l;
-            let tx: l::FinalizedTransaction<l::DefaultDB> =
-                l::midnight_serialize::tagged_deserialize(&mut &tx_bytes[..])
-                    .expect("deserialize proven transaction");
-            tx.balance(None)
-                .expect("token balance")
-                .iter()
-                .filter(|((tt, _seg), _)| matches!(tt, l::TokenType::Shielded(s) if s.0 == token.0))
-                .map(|(_, v)| *v)
-                .sum()
-        }};
-    }
-    match LedgerVersion::of_transaction(tx_bytes).expect("a proven transaction") {
-        LedgerVersion::V8 => delta_in!(ledger_8),
-        LedgerVersion::V9 => delta_in!(ledger_9),
-    }
+    use midnight_helpers::ledger_9 as l;
+    let tx: l::FinalizedTransaction<l::DefaultDB> =
+        l::midnight_serialize::tagged_deserialize(&mut &tx_bytes[..])
+            .expect("deserialize proven transaction");
+    tx.balance(None)
+        .expect("token balance")
+        .iter()
+        .filter(|((tt, _seg), _)| matches!(tt, l::TokenType::Shielded(s) if s.0 == token.0))
+        .map(|(_, v)| *v)
+        .sum()
 }
 
 /// A self-funded transfer must conserve the transferred token: whatever the

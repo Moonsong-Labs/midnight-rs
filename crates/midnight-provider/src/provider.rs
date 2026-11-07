@@ -14,14 +14,15 @@ use tracing::{debug, info, warn};
 
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
 use crate::{
-    Health, PendingTx, ProofProviders, Provider, ProviderError, StateQuery, StateQueryResult,
-    ledger_8, ledger_9, submit,
+    Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, ledger_9, submit,
 };
+use midnight_helpers::DefaultDB;
+use midnight_helpers::ledger_9::ProofProvider;
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
-    BlockHash, ChainParameters, CoinInfo, LedgerVersion, Network, ShieldedRecipient,
-    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    TransferRequest, TransferResult, UnshieldedRecipient, UnshieldedTokenType, WalletBalance,
+    BlockHash, ChainParameters, CoinInfo, Network, ShieldedRecipient, ShieldedTokenType,
+    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest, TransferResult,
+    UnshieldedRecipient, UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 
@@ -77,11 +78,10 @@ struct NodeConnection {
 pub struct MidnightProvider {
     node_url: String,
     wallet: Option<AttachedWallet>,
-    /// Proof backends for transaction building, one per ledger generation.
-    /// Defaults to the local provers on first use; override with
-    /// [`Self::with_proof_provider`] to use a remote prover or a custom
-    /// implementation.
-    proof_provider: Option<ProofProviders>,
+    /// Proof backend for transaction building. Defaults to the local prover
+    /// on first use; override with [`Self::with_proof_provider`] to use a
+    /// remote prover or a custom implementation.
+    proof_provider: Option<Arc<dyn ProofProvider<DefaultDB>>>,
     /// Optional store for per-contract private state and maintenance signing
     /// keys. Set with [`Self::with_private_state`]; absent for contracts whose
     /// witnesses are stateless.
@@ -94,7 +94,7 @@ impl std::fmt::Debug for MidnightProvider {
         f.debug_struct("MidnightProvider")
             .field("node_url", &self.node_url)
             .field("wallet_attached", &self.wallet.is_some())
-            .field("proof_provider", &self.proof_provider)
+            .field("proof_provider_set", &self.proof_provider.is_some())
             .field("private_state_attached", &self.private_state.is_some())
             .finish_non_exhaustive()
     }
@@ -134,9 +134,21 @@ impl MidnightProvider {
     /// Override the proof backend used by [`Self::transfer_shielded`],
     /// [`Self::transfer_unshielded`], and [`Self::register_dust`].
     ///
-    /// Defaults to [`ProofProviders::local`] if unset. Pass a
-    /// [`RemoteProofServer`](crate::RemoteProofServer) to offload proving to an
-    /// HTTP proof server, or any custom prover for each generation:
+    /// Without this call, the provider proves locally, in this process. The
+    /// local prover proves circuits compiled for ZKIR v2 and for ZKIR v3.
+    ///
+    /// The first local proof of each circuit size downloads its public
+    /// parameters when the cache does not hold them. The first proof with a
+    /// built-in Zswap or Dust key downloads that key in the same way. The
+    /// source is `MIDNIGHT_PARAM_SOURCE` (default
+    /// `https://srs.midnight.network/`). The cache is the directory that
+    /// upstream `MidnightDataProvider` picks, `MIDNIGHT_PP` first. For offline
+    /// or container use, fill that cache once with network access. Then point
+    /// `MIDNIGHT_PP` at it.
+    ///
+    /// Pass a [`RemoteProofServer`](crate::RemoteProofServer) to offload
+    /// proving to an HTTP proof server, which downloads none of these files,
+    /// or any custom prover:
     ///
     /// ```rust,no_run
     /// # fn f() -> anyhow::Result<()> {
@@ -149,8 +161,11 @@ impl MidnightProvider {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_proof_provider(mut self, proof_provider: impl Into<ProofProviders>) -> Self {
-        self.proof_provider = Some(proof_provider.into());
+    pub fn with_proof_provider(
+        mut self,
+        proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
+    ) -> Self {
+        self.proof_provider = Some(proof_provider);
         self
     }
 
@@ -158,13 +173,12 @@ impl MidnightProvider {
     /// provider (transfers, dust registration, and every contract deploy /
     /// call / maintenance op driven by a `Contract` built on it).
     ///
-    /// Returns the backends set via [`Self::with_proof_provider`], or
-    /// [`ProofProviders::local`] when none was configured. Cheap to clone
-    /// (`Arc`).
-    pub fn proof_provider(&self) -> ProofProviders {
+    /// Returns the backend set via [`Self::with_proof_provider`], or the local
+    /// prover when none was configured. Cheap to clone (`Arc`).
+    pub fn proof_provider(&self) -> Arc<dyn ProofProvider<DefaultDB>> {
         self.proof_provider
             .clone()
-            .unwrap_or_else(ProofProviders::local)
+            .unwrap_or_else(|| Arc::new(crate::local_prover::LocalProver))
     }
 
     /// Attach a [`PrivateStateProvider`] for per-contract private state (and an
@@ -211,10 +225,10 @@ impl MidnightProvider {
     /// Attach a wallet, and build transaction contexts from it.
     ///
     /// A synced `Wallet` from `midnight-wallet` goes in behind a `LocalWallet`.
-    /// Anything else that implements [`WalletFacade`],
-    /// [`ledger_8::WalletBuilds`] and [`ledger_9::WalletBuilds`] goes in as
-    /// itself. To keep a handle on the attached wallet, attach an
-    /// `Arc<LocalWallet>`, or an `Arc` of your own wallet:
+    /// Anything else that implements [`WalletFacade`] and
+    /// [`ledger_9::WalletBuilds`] goes in as itself. To keep a handle on the
+    /// attached wallet, attach an `Arc<LocalWallet>`, or an `Arc` of your own
+    /// wallet:
     ///
     /// ```rust,no_run
     /// use std::sync::Arc;
@@ -243,8 +257,7 @@ impl MidnightProvider {
         let wallet = Arc::new(wallet.into_facade());
         self.wallet = Some(AttachedWallet {
             facade: wallet.clone(),
-            ledger_8: wallet.clone(),
-            ledger_9: wallet,
+            builds: wallet,
         });
         self
     }
@@ -259,49 +272,20 @@ impl MidnightProvider {
         self.wallet.as_ref().ok_or(ProviderError::NoWallet)
     }
 
-    /// The ledger generation the chain runs at the current finalized block.
-    ///
-    /// The node answers through its `MidnightRuntimeApi::get_ledger_parameters`
-    /// runtime API, and the tag of those parameters names the generation. It
-    /// needs no wallet and runs no resync.
-    ///
-    /// # Errors
-    ///
-    /// [`ProviderError::Rpc`] when the node cannot be reached, when the runtime
-    /// returns an error, or when it returns parameters of a generation this
-    /// build does not link.
-    pub async fn ledger_version(&self) -> Result<LedgerVersion, ProviderError> {
-        let parameters = self
-            .call_runtime_api::<Result<Vec<u8>, subxt::dynamic::Value>>("get_ledger_parameters")
-            .await?
-            .map_err(|e| ProviderError::Rpc(format!("get_ledger_parameters failed: {e}")))?;
-        LedgerVersion::of_ledger_parameters(&parameters)
-            .map_err(|e| ProviderError::Rpc(format!("decoding the ledger parameters: {e}")))
-    }
-
-    /// Resync the attached wallet, then hand out its builds for the generation
-    /// its state is in.
+    /// Resync the attached wallet, then hand out its builds.
     ///
     /// The resync lets the builds see the chain's current view: the proof
-    /// root, the TTL anchor, and, after a hard fork, the new generation.
+    /// root and the TTL anchor.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn builds(&self) -> Result<Builds<'_>, ProviderError> {
+    pub async fn builds(&self) -> Result<ledger_9::Builds<'_>, ProviderError> {
         self.resync_wallet().await?;
         let wallet = self.attached()?;
-        let provers = self.proof_provider();
-        Ok(match wallet.facade.ledger_version().await {
-            LedgerVersion::V8 => Builds::Ledger8(ledger_8::Builds::new(
-                self,
-                wallet.ledger_8.clone(),
-                provers.ledger_8(),
-            )),
-            LedgerVersion::V9 => Builds::Ledger9(ledger_9::Builds::new(
-                self,
-                wallet.ledger_9.clone(),
-                provers.ledger_9(),
-            )),
-        })
+        Ok(ledger_9::Builds::new(
+            self,
+            wallet.builds.clone(),
+            self.proof_provider(),
+        ))
     }
 
     /// Return the wallet balance. [`Self::with_wallet`] says how fresh it is.
@@ -483,9 +467,6 @@ impl MidnightProvider {
     /// Call this directly to rebuild shielded state that a resync cannot
     /// repair because its cursor has moved past the events in question.
     /// Dust state, unshielded state, and their cursors are left alone.
-    ///
-    /// A wallet whose state is in an earlier ledger generation than the chain
-    /// crosses the fork first, with a resync against this provider.
     pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
         let wallet = &self.attached()?.facade;
         wallet.rescan_shielded(self).await?;
@@ -598,8 +579,7 @@ impl MidnightProvider {
 
     // -- Internal build paths driven by the transfer/register builders. --
 
-    /// Prepare a build under the attached wallet, then prove without it, on
-    /// the generation the wallet's state is in.
+    /// Prepare a build under the attached wallet, then prove without it.
     pub(crate) async fn build_then_prove(
         &self,
         request: TransferRequest,
@@ -612,12 +592,7 @@ impl MidnightProvider {
         &self,
         request: TransferRequest,
     ) -> Result<TransferResult, ProviderError> {
-        // Each arm is boxed so the caller's frame holds one future, not both
-        // generations' (see the frame-size note on `resync_wallet`).
-        match self.builds().await? {
-            Builds::Ledger8(builds) => Box::pin(builds.build_then_prove(request)).await,
-            Builds::Ledger9(builds) => Box::pin(builds.build_then_prove(request)).await,
-        }
+        self.builds().await?.build_then_prove(request).await
     }
 
     /// Submit proven transaction bytes to the node over the WebSocket RPC.
@@ -711,29 +686,11 @@ impl MidnightProvider {
     /// at all (pure Zswap), so it always merges cleanly.
     ///
     /// Errors ([`ProviderError::Transaction`]) when given no transactions, when
-    /// a byte string fails to deserialize, when the transactions are of
-    /// different ledger generations, or when two transactions cannot be
+    /// a byte string fails to deserialize, or when two transactions cannot be
     /// merged (colliding intent segments or mismatched network ids). Purely
     /// local; nothing is sent to the node.
     pub fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
-        let first = txs.first().ok_or_else(|| {
-            ProviderError::Transaction(
-                "merge_transactions requires at least one transaction".into(),
-            )
-        })?;
-        let ledger = transaction_ledger_version(first)?;
-        for tx in &txs[1..] {
-            let other = transaction_ledger_version(tx)?;
-            if other != ledger {
-                return Err(ProviderError::Transaction(format!(
-                    "cannot merge a {ledger} transaction with a {other} transaction"
-                )));
-            }
-        }
-        match ledger {
-            LedgerVersion::V8 => ledger_8::merge_transactions(txs),
-            LedgerVersion::V9 => ledger_9::merge_transactions(txs),
-        }
+        ledger_9::merge_transactions(txs)
     }
 
     /// Pay the fees for an external party's proven, fee-less transaction from
@@ -775,20 +732,13 @@ impl MidnightProvider {
         &self,
         tx_bytes: &[u8],
     ) -> Result<TransferResult, ProviderError> {
-        let ledger = transaction_ledger_version(tx_bytes)?;
-        match self.builds().await? {
-            Builds::Ledger8(builds) if ledger == LedgerVersion::V8 => {
-                builds.balance_transaction(tx_bytes).await
-            }
-            Builds::Ledger9(builds) if ledger == LedgerVersion::V9 => {
-                builds.balance_transaction(tx_bytes).await
-            }
-            builds => Err(midnight_types::WalletError::LedgerMismatch {
-                expected: builds.ledger_version(),
-                found: ledger,
-            }
-            .into()),
-        }
+        // Decode before the resync, so bytes that are no transaction fail
+        // with no node access.
+        let external = ledger_9::deserialize_transaction(tx_bytes)?;
+        self.builds()
+            .await?
+            .balance_decoded(tx_bytes, external)
+            .await
     }
 
     /// Hand back the inputs a build reserved, because that build will never
@@ -1285,42 +1235,15 @@ impl MidnightProvider {
     }
 }
 
-/// The attached wallet's builds, on the generation its state is in. See
-/// [`MidnightProvider::builds`].
-#[derive(Debug)]
-pub enum Builds<'a> {
-    /// The builds of a wallet whose state is on ledger 8.
-    Ledger8(ledger_8::Builds<'a>),
-    /// The builds of a wallet whose state is on ledger 9.
-    Ledger9(ledger_9::Builds<'a>),
-}
-
-impl Builds<'_> {
-    /// The generation these builds build for.
-    pub fn ledger_version(&self) -> LedgerVersion {
-        match self {
-            Self::Ledger8(_) => LedgerVersion::V8,
-            Self::Ledger9(_) => LedgerVersion::V9,
-        }
-    }
-}
-
 /// The attached wallet, reached only through its API: as the facade, and as
-/// the builds of each generation.
+/// its builds.
 ///
 /// How its state is shared is the implementation's business: every method
 /// on [`WalletFacade`] returns an owned value or covers one transition, so
 /// nothing here holds a lock. Cloning an `Arc` is cheap and safe.
 struct AttachedWallet {
     facade: Arc<dyn WalletFacade>,
-    ledger_8: Arc<dyn midnight_wallet_facade::ledger_8::WalletBuilds>,
-    ledger_9: Arc<dyn midnight_wallet_facade::ledger_9::WalletBuilds>,
-}
-
-/// The generation of a proven transaction, from its tag.
-fn transaction_ledger_version(tx_bytes: &[u8]) -> Result<LedgerVersion, ProviderError> {
-    LedgerVersion::of_transaction(tx_bytes)
-        .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))
+    builds: Arc<dyn ledger_9::WalletBuilds>,
 }
 
 /// The inputs a build has reserved, released if the build does not finish.
@@ -1691,7 +1614,6 @@ mod tests {
         };
 
         let outcomes = join_all([
-            ended("ledger_version", provider.ledger_version(), gave_no_answer).boxed_local(),
             ended(
                 "get_block_number",
                 provider.get_block_number(),

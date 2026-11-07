@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use midnight_base_crypto::time::Timestamp;
 use midnight_onchain_runtime::state::EntryPointBuf;
-use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_typed_state::{ContractState, InMemoryDB, tagged_deserialize};
 use midnight_types::BlockHash;
 
 use crate::error::{ContractError, KeyMismatch};
@@ -18,42 +18,27 @@ use crate::error::{ContractError, KeyMismatch};
 /// Fetch a contract's state through a provider and deserialize it.
 ///
 /// The read is at `at_block_hash` when given, else at the node's best block.
-/// Returns [`ContractError::NotFound`] when no contract exists at `address`.
+/// Returns [`ContractError::NotFound`] when no contract exists at `address`,
+/// and [`ContractError::StateFetch`] when the state does not decode.
 pub async fn fetch_state<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
     at_block_hash: Option<BlockHash>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
-    Ok(node_state(provider, address, at_block_hash).await?.1)
-}
-
-/// The contract's state that `provider` serves, at `at_block_hash` when
-/// given, with the bytes it was served in alongside the view: a transaction
-/// carries the state in the chain's own encoding.
-pub(crate) async fn node_state<P: midnight_provider::Provider>(
-    provider: &P,
-    address: &str,
-    at_block_hash: Option<BlockHash>,
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     let hex = provider
         .get_contract_state(address, at_block_hash)
         .await?
         .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
     let bytes =
         hex::decode(&hex).map_err(|e| ContractError::StateFetch(format!("hex decode: {e}")))?;
-    let view = midnight_typed_state::decode_contract_state(&bytes)
-        .map_err(|e| ContractError::StateFetch(format!("deserialize: {e}")))?;
-    Ok((bytes, view))
+    tagged_deserialize(bytes.as_slice())
+        .map_err(|e| ContractError::StateFetch(format!("deserialize: {e}")))
 }
 
 /// A contract's state and the time of the block it was read at: what a call
 /// runs its circuit against.
 pub(crate) struct StateAtBlock {
-    /// The state in the encoding the chain served, which a transaction
-    /// carries.
-    pub(crate) bytes: Vec<u8>,
-    /// The Compact side's view of `bytes`.
-    pub(crate) view: ContractState<InMemoryDB>,
+    pub(crate) contract_state: ContractState<InMemoryDB>,
     /// The block's time in whole seconds, the unit of the chain's clock
     /// checks.
     pub(crate) time: Timestamp,
@@ -75,11 +60,10 @@ pub(crate) async fn state_at_block(
         Some(hash) => hash,
         None => provider.best_block_hash().await?,
     };
-    let (bytes, view) = node_state(provider, address, Some(hash)).await?;
+    let contract_state = fetch_state(provider, address, Some(hash)).await?;
     let time = provider.get_block_timestamp(hash).await?;
     Ok(StateAtBlock {
-        bytes,
-        view,
+        contract_state,
         time: Timestamp::from_secs(time.as_secs()),
         hash,
     })
@@ -100,40 +84,10 @@ pub(crate) async fn populate_verifier_keys(
     })
     .await?;
     for (circuit, key) in keys {
-        // The Compact side's view is ledger 9's state, whose operation holds
-        // either key version.
         let op = crate::ledger_9::state::operation(&circuit, &key)?;
         state.operations = state.operations.insert(circuit.as_bytes().into(), op);
     }
     Ok(state)
-}
-
-/// The encoding of a verifier key, which decides the generations that can
-/// verify proofs against it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum VerifierKeyVersion {
-    /// `verifier-key[v6]`, which every generation verifies.
-    V6,
-    /// `verifier-key[v7]`, from ledger 9 on.
-    V7,
-}
-
-/// The encoding of the verifier key in `bytes`, which must decode in full.
-pub(crate) fn verifier_key_version(bytes: &[u8]) -> Result<VerifierKeyVersion, String> {
-    use midnight_helpers::{Tagged, ledger_8, ledger_9};
-    use midnight_serialize::tagged_deserialize;
-    let tag = midnight_serialize::peek_tag(&mut std::io::Cursor::new(bytes))
-        .map_err(|e| format!("not a tagged verifier key: {e}"))?;
-    let decoded = if tag == ledger_8::VerifierKey::tag() {
-        tagged_deserialize::<ledger_8::VerifierKey>(&mut &bytes[..]).map(|_| VerifierKeyVersion::V6)
-    } else if tag == ledger_9::VerifierKey::tag() {
-        tagged_deserialize::<ledger_9::VerifierKey>(&mut &bytes[..]).map(|_| VerifierKeyVersion::V7)
-    } else {
-        return Err(format!(
-            "`{tag}` is not a verifier key encoding this SDK knows"
-        ));
-    };
-    decoded.map_err(|e| format!("`{tag}` does not decode: {e}"))
 }
 
 /// The verifier key of each circuit a deploy registers, as the bytes of its
@@ -261,7 +215,7 @@ mod tests {
     fn v6_key() -> Vec<u8> {
         let mut bytes = Vec::new();
         midnight_serialize::tagged_serialize(
-            &*midnight_helpers::ledger_8::mn_ledger::dust::SPEND_VK,
+            &*midnight_helpers::ledger_9::mn_ledger::dust::SPEND_VK,
             &mut bytes,
         )
         .unwrap();
@@ -337,29 +291,20 @@ mod tests {
             .iter()
             .find(|(circuit, _)| circuit == "increment")
             .expect("increment verifier key");
-        assert_eq!(verifier_key_version(key), Ok(VerifierKeyVersion::V7));
+        assert!(key.starts_with(b"midnight:verifier-key[v7]:"));
     }
 
-    /// A deploy of a `verifier-key[v7]` on ledger 8 otherwise fails at the
-    /// node, after the proof and with no word about the key.
+    /// The upstream constructors panic on a key of any other tag, and this
+    /// check is what keeps such an artifact away from them.
     #[test]
-    fn ledger_8_refuses_a_v7_key_before_the_build() {
-        let v7 = verifier_key_file("counter", "increment");
-        match crate::ledger_8::state::accepted_key("increment", &v7) {
+    fn a_verifier_key_of_an_unknown_tag_is_refused() {
+        let key = b"midnight:verifier-key[v5]:\x00\x01";
+        match crate::ledger_9::state::operation("increment", key) {
             Err(ContractError::Construction(message)) => {
-                assert!(message.contains("verifier-key[v7]"), "{message}");
+                assert!(message.contains("verifier-key[v5]"), "{message}");
             }
             other => panic!("expected a Construction error, got {other:?}"),
         }
-        crate::ledger_9::state::accepted_key("increment", &v7).unwrap();
-    }
-
-    /// The generations' own constructors panic on a key that does not decode,
-    /// and this check is what keeps a bad artifact away from them.
-    #[test]
-    fn a_verifier_key_that_does_not_decode_is_refused() {
-        let key = std::fs::read(counter_compiled_dir().join("keys/increment.verifier")).unwrap();
-        assert!(verifier_key_version(&key[..key.len() - 1]).is_err());
     }
 
     /// A mistyped `with_zk_config` path used to enumerate zero circuits and

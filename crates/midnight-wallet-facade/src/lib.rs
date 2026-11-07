@@ -7,11 +7,9 @@
 //! vocabulary, so it depends on no wallet implementation; `midnight-wallet`
 //! implements them with `LocalWallet`, over a `Wallet` that process owns.
 //!
-//! [`WalletFacade`] is the same for every ledger generation. The builds are
-//! not, because they name a generation's transaction types:
-//! [`ledger_8::WalletBuilds`] and [`ledger_9::WalletBuilds`] carry them, one
-//! source compiled for each generation. A wallet that serves both implements
-//! both, and a build dispatches on [`WalletFacade::ledger_version`].
+//! The builds, which name the ledger's transaction types, are in
+//! [`ledger_9::WalletBuilds`]. A wallet that a provider builds with
+//! implements both traits.
 //!
 //! An implementation must serialize [`WalletFacade::resync`],
 //! [`WalletFacade::rescan_shielded`], [`WalletFacade::watch_for_coins`] and
@@ -19,24 +17,18 @@
 //! releases the wallet between what it reads and what it commits. A sync
 //! method that runs in that window can lose its work, or the work of the
 //! other one. No caller holds a lock across them: `MidnightProvider` and every
-//! handle on a shared wallet call them directly. So when a rescan needs a
-//! resync first, or a coin watch needs a rescan, the implementation runs both
-//! steps under one hold.
+//! handle on a shared wallet call them directly. So when a coin watch needs a
+//! rescan, the implementation runs both steps under one hold.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_types::chain_pin::ChainView;
 use midnight_types::{
-    ChainParameters, CoinInfo, LedgerVersion, Network, ShieldedRecipient, SpendableShieldedCoin,
-    SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
+    ChainParameters, CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, SpentInputs,
+    SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 
-pub mod ledger_8;
-#[expect(
-    clippy::duplicate_mod,
-    reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
-)]
 pub mod ledger_9;
 
 /// One wallet, as the API its consumers program against.
@@ -49,13 +41,6 @@ pub mod ledger_9;
 pub trait WalletFacade: Send + Sync {
     /// The network this wallet derives addresses for.
     async fn network(&self) -> Network;
-
-    /// The ledger generation this wallet's state is in, which is the one its
-    /// chain ran at the last sync or resync.
-    ///
-    /// A build dispatches on it to this wallet's `WalletBuilds` of that
-    /// generation.
-    async fn ledger_version(&self) -> LedgerVersion;
 
     /// The public keys a coin addressed to this wallet commits to.
     async fn shielded_recipient(&self) -> ShieldedRecipient;
@@ -146,10 +131,6 @@ pub trait WalletFacade: Send + Sync {
     ///
     /// `chain` answers the queries of a chain pin, as in [`Self::resync`]. An
     /// implementation that pins its snapshot checks the pin before the replay.
-    /// When the state is in an earlier ledger generation than the chain, the
-    /// implementation first crosses the fork with a resync against `chain`.
-    /// A replay in the earlier generation cannot apply the events of the
-    /// later one.
     async fn rescan_shielded(&self, chain: &dyn ChainView) -> Result<(), WalletError>;
 
     /// Register coins this wallet owns but cannot discover, persist the
@@ -173,12 +154,12 @@ pub trait WalletFacade: Send + Sync {
 
 /// A value that `MidnightProvider::with_wallet` attaches as its wallet.
 ///
-/// A wallet that serves the builds of both ledger generations goes in as
-/// itself. `midnight-wallet` also implements it for its synced `Wallet`,
-/// which goes in behind the lock of a `LocalWallet`.
+/// A wallet that implements [`ledger_9::WalletBuilds`] goes in as itself.
+/// `midnight-wallet` also implements it for its synced `Wallet`, which goes
+/// in behind the lock of a `LocalWallet`.
 pub trait IntoWalletFacade {
     /// The wallet the provider holds.
-    type Facade: ledger_8::WalletBuilds + ledger_9::WalletBuilds + 'static;
+    type Facade: ledger_9::WalletBuilds + 'static;
 
     /// Convert into the wallet the provider holds.
     fn into_facade(self) -> Self::Facade;
@@ -186,7 +167,7 @@ pub trait IntoWalletFacade {
 
 impl<W> IntoWalletFacade for W
 where
-    W: ledger_8::WalletBuilds + ledger_9::WalletBuilds + 'static,
+    W: ledger_9::WalletBuilds + 'static,
 {
     type Facade = W;
 
@@ -205,10 +186,6 @@ where
 impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
     async fn network(&self) -> Network {
         (**self).network().await
-    }
-
-    async fn ledger_version(&self) -> LedgerVersion {
-        (**self).ledger_version().await
     }
 
     async fn shielded_recipient(&self) -> ShieldedRecipient {

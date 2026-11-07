@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use midnight_provider::{Builds, MidnightProvider, TxInBlock};
+use midnight_provider::{MidnightProvider, TxInBlock};
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{ContractAddress, TransferResult};
 
@@ -40,11 +40,10 @@ impl DeployResult {
 
 /// Deploy a contract with Dust fee payment from the provider's funded wallet.
 ///
-/// Builds the deploy for the ledger generation the wallet's state is in,
-/// runs the helpers' fee-balancing / proving pipeline, and returns a
-/// [`DeployResult`] containing the contract address and the proven
-/// transaction with the inputs its build reserved. A
-/// `shielded_offer` rides in the same transaction, as
+/// Builds the deploy, runs the helpers' fee-balancing / proving pipeline,
+/// and returns a [`DeployResult`] containing the contract address and the
+/// proven transaction with the inputs its build reserved. A `shielded_offer`
+/// rides in the same transaction, as
 /// [`DeployBuilder::with_shielded_offer`](crate::DeployBuilder::with_shielded_offer)
 /// describes.
 ///
@@ -59,27 +58,14 @@ pub async fn deploy_funded(
     provider: &midnight_provider::MidnightProvider,
     shielded_offer: Option<ShieldedOffer>,
 ) -> Result<DeployResult, ContractError> {
-    let initial_state = &recharged(initial_state);
-    let offer = shielded_offer.as_ref();
-    // Each arm is boxed so this frame holds one generation's future, not both.
-    match provider.builds().await? {
-        Builds::Ledger8(builds) => {
-            Box::pin(crate::ledger_8::deploy::deploy_funded(
-                &builds,
-                initial_state,
-                offer,
-            ))
-            .await
-        }
-        Builds::Ledger9(builds) => {
-            Box::pin(crate::ledger_9::deploy::deploy_funded(
-                &builds,
-                initial_state,
-                offer,
-            ))
-            .await
-        }
-    }
+    let builds = provider.builds().await?;
+    // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+    Box::pin(crate::ledger_9::deploy::deploy_funded(
+        &builds,
+        recharged(initial_state),
+        shielded_offer.as_ref(),
+    ))
+    .await
 }
 
 /// `state` with the charged keys of its data, as the ledger computes them for
@@ -87,8 +73,7 @@ pub async fn deploy_funded(
 ///
 /// The charged keys of a state that the interpreter or a simulator updated
 /// come from each update in turn, and they can differ from the keys of the
-/// data. The ledger, on both generations, refuses such a deploy with
-/// `IncorrectChargedState`.
+/// data. The ledger refuses such a deploy with `IncorrectChargedState`.
 fn recharged(state: &ContractState<InMemoryDB>) -> ContractState<InMemoryDB> {
     ContractState {
         balance: state.balance.clone(),

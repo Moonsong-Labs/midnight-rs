@@ -495,9 +495,10 @@ pub(crate) async fn require_same_chain(
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use midnight_types::{BlockHash, LedgerVersion};
+    use midnight_types::BlockHash;
 
     use super::*;
+    use crate::generation::Generation;
     use crate::storage::{StoredMetadata, read_metadata, save_snapshot, wallet_storage_id};
 
     /// Never dialed: these tests stop at `prepare`.
@@ -520,7 +521,7 @@ mod tests {
         let address = seed().unshielded_address(Network::Undeployed);
         let metadata = StoredMetadata {
             generation: 0,
-            ledger_version: LedgerVersion::V9,
+            ledger_version: Generation::V9,
             zswap_event_id: 0,
             dust_event_id: 0,
             last_block_height: 0,

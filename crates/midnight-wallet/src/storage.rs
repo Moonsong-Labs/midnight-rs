@@ -1,21 +1,20 @@
 //! A wallet's snapshot directory: its layout, `metadata.json`, and
 //! `pending.json`.
 //!
-//! What goes in the binary state files is per ledger generation (see the
-//! per-ledger `snapshot` modules). The metadata names the ledger generation
-//! that wrote them, because their tags are the same in every ledger
-//! generation.
+//! The binary state files hold ledger 9 state (see `ledger_9::snapshot`). The
+//! metadata names the ledger generation that wrote them, because their tags
+//! are the same in ledger 8 and ledger 9.
 
 use std::path::{Path, PathBuf};
 
 use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
-use midnight_types::LedgerVersion;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::WalletError;
 use crate::chain_pin::ChainPin;
+use crate::generation::Generation;
 use hex::FromHex;
 use midnight_types::{HashOutput, TrackedUtxo, UnshieldedTokenType};
 
@@ -49,10 +48,10 @@ pub(crate) fn wallet_storage_id(address: &str) -> String {
     hex::encode(sha2::Sha256::digest(address.as_bytes()))
 }
 
-/// Every snapshot and pending file written before the SDK carried ledger 9
-/// came from a ledger 8 chain, and carries no `ledger_version`.
-fn ledger_8() -> LedgerVersion {
-    LedgerVersion::V8
+/// A snapshot or pending file that carries no `ledger_version` came from a
+/// ledger 8 chain.
+fn ledger_8() -> Generation {
+    Generation::V8
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,14 +66,15 @@ pub(crate) struct StoredMetadata {
     pub generation: u64,
     /// The ledger generation whose types wrote the binary files.
     #[serde(default = "ledger_8")]
-    pub ledger_version: LedgerVersion,
+    pub ledger_version: Generation,
     pub zswap_event_id: i64,
     pub dust_event_id: i64,
     pub last_block_height: i64,
     pub last_tx_id: Option<i64>,
     /// The finalized block this snapshot last saw, so a resume can ask the
     /// node whether it is still on that chain. Absent in snapshots written
-    /// before the pin existed, which simply skips the check.
+    /// before the pin existed. Ledger 8 wrote those, and the default lets
+    /// them parse, so that [`read_metadata`] refuses them by name.
     #[serde(default)]
     pub chain_pin: Option<ChainPin>,
     pub unshielded_utxos: Vec<StoredUtxo>,
@@ -275,8 +275,23 @@ pub(crate) fn tagged_from_hex<
 }
 
 /// Read a snapshot's `metadata.json`, or `None` when there is no snapshot.
+///
+/// # Errors
+///
+/// [`WalletError::Ledger8Snapshot`] when ledger 8 wrote the snapshot. Its
+/// state files carry the same tags as those of ledger 9, so no later read
+/// refuses them.
 pub(crate) fn read_metadata(dir: &Path) -> Result<Option<StoredMetadata>, WalletError> {
-    read_json(&dir.join(METADATA_FILE))
+    let metadata: Option<StoredMetadata> = read_json(&dir.join(METADATA_FILE))?;
+    if metadata
+        .as_ref()
+        .is_some_and(|m| m.ledger_version == Generation::V8)
+    {
+        return Err(WalletError::Ledger8Snapshot {
+            path: dir.display().to_string(),
+        });
+    }
+    Ok(metadata)
 }
 
 /// Read only the chain pin from a snapshot, without loading the wallet state
@@ -290,17 +305,6 @@ pub(crate) fn load_chain_pin(
 ) -> Result<Option<ChainPin>, WalletError> {
     let dir = snapshot_path(base, network, wallet_id);
     Ok(read_metadata(&dir)?.and_then(|m| m.chain_pin))
-}
-
-/// The ledger generation of a snapshot's state files, or `None` when there
-/// is no snapshot.
-pub(crate) fn load_ledger_version(
-    base: &Path,
-    network: &str,
-    wallet_id: &str,
-) -> Result<Option<LedgerVersion>, WalletError> {
-    let dir = snapshot_path(base, network, wallet_id);
-    Ok(read_metadata(&dir)?.map(|m| m.ledger_version))
 }
 
 /// Commit one snapshot. `write_state` writes the state files for the
@@ -318,7 +322,11 @@ pub(crate) fn save_snapshot(
 
     // Read the current metadata (if any) so we can bump the generation and
     // clean up the previous binary files only after the new metadata commit.
-    let previous_generation = read_metadata(&dir).ok().flatten().map(|m| m.generation);
+    // Read past the ledger 8 refusal: a save replaces a ledger 8 snapshot too.
+    let previous_generation = read_json::<StoredMetadata>(&dir.join(METADATA_FILE))
+        .ok()
+        .flatten()
+        .map(|m| m.generation);
     let generation = previous_generation.map(|g| g + 1).unwrap_or(1);
 
     // Write the new generation's binary files first. They are referenced only
@@ -342,7 +350,6 @@ pub(crate) fn save_snapshot(
 
     info!(
         generation,
-        ledger_version = %metadata.ledger_version,
         zswap_event_id = metadata.zswap_event_id,
         dust_event_id = metadata.dust_event_id,
         path = %dir.display(),
@@ -359,7 +366,7 @@ pub(crate) fn save_snapshot(
 pub(crate) struct StoredPending {
     /// The ledger generation whose types encoded the hex fields.
     #[serde(default = "ledger_8")]
-    pub ledger_version: LedgerVersion,
+    pub ledger_version: Generation,
     #[serde(default)]
     pub dust: Vec<StoredPendingDustBatch>,
     #[serde(default)]
@@ -468,7 +475,7 @@ mod tests {
     /// A non-empty set, since saving an empty one removes the file.
     fn some_pending() -> StoredPending {
         StoredPending {
-            ledger_version: LedgerVersion::V9,
+            ledger_version: Generation::V9,
             dust: Vec::new(),
             unshielded: vec![StoredPendingUnshielded {
                 intent_hash: "abcd".to_string(),
@@ -478,24 +485,6 @@ mod tests {
             }],
             shielded: Vec::new(),
         }
-    }
-
-    /// A snapshot written before the chain pin existed has no such key, and
-    /// it has to keep loading: the alternative is every persisted wallet
-    /// refusing to resume after an upgrade.
-    #[test]
-    fn a_snapshot_without_a_chain_pin_still_loads() {
-        let json = r#"{
-            "generation": 3,
-            "zswap_event_id": 178,
-            "dust_event_id": 179,
-            "last_block_height": 0,
-            "last_tx_id": 9,
-            "unshielded_utxos": []
-        }"#;
-        let metadata: StoredMetadata = serde_json::from_str(json).expect("parse");
-        assert_eq!(metadata.chain_pin, None, "an absent pin skips the check");
-        assert_eq!(metadata.zswap_event_id, 178, "the rest still parses");
     }
 
     /// A stored UTXO keeps its hashes as hex and its value as a decimal
@@ -531,6 +520,7 @@ mod tests {
     fn a_snapshot_reads_the_chain_pin_back_by_name() {
         let json = r#"{
             "generation": 1,
+            "ledger_version": "V9",
             "zswap_event_id": 1,
             "dust_event_id": 1,
             "last_block_height": 0,
@@ -546,28 +536,38 @@ mod tests {
         assert_eq!(pin.hash, "0xd886b98e");
     }
 
-    /// The field's name and its default are the on-disk contract. A default
-    /// of ledger 9 would decode every snapshot an earlier build wrote with
-    /// the wrong ledger generation's types.
+    /// A save over a ledger 8 snapshot replaces it. A save that read the old
+    /// metadata through the ledger 8 refusal would start again at number 1
+    /// and leave the old state files, Dust secret key included, on disk.
     #[test]
-    fn a_snapshot_names_the_ledger_that_wrote_it() {
-        let written_before = r#"{
-            "generation": 1,
+    fn a_save_over_a_ledger_8_snapshot_removes_its_state_files() {
+        let base = tempfile::TempDir::new().unwrap();
+        let dir = snapshot_path(base.path(), "undeployed", "testwallet");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ledger_8_metadata = r#"{
+            "generation": 4,
             "zswap_event_id": 1,
             "dust_event_id": 1,
             "last_block_height": 0,
             "last_tx_id": null,
             "unshielded_utxos": []
         }"#;
-        let metadata: StoredMetadata = serde_json::from_str(written_before).expect("parse");
-        assert_eq!(metadata.ledger_version, LedgerVersion::V8);
+        std::fs::write(dir.join(METADATA_FILE), ledger_8_metadata).unwrap();
+        let old_files = [zswap_file(4), dust_wallet_file(4)];
+        for file in &old_files {
+            std::fs::write(dir.join(file), b"ledger 8").unwrap();
+        }
 
-        let written_on_ledger_9 = written_before.replace(
-            r#""generation": 1,"#,
-            r#""generation": 1, "ledger_version": "V9","#,
-        );
-        let metadata: StoredMetadata = serde_json::from_str(&written_on_ledger_9).expect("parse");
-        assert_eq!(metadata.ledger_version, LedgerVersion::V9);
+        let mut metadata: StoredMetadata = serde_json::from_str(ledger_8_metadata).unwrap();
+        metadata.ledger_version = Generation::V9;
+        save_snapshot(base.path(), "undeployed", "testwallet", metadata, |_, _| {
+            Ok(())
+        })
+        .unwrap();
+
+        for file in &old_files {
+            assert!(!dir.join(file).exists(), "{file} stays on disk");
+        }
     }
 
     fn mode_of(path: &Path) -> u32 {

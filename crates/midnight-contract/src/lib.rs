@@ -5,11 +5,6 @@ mod constructor;
 mod contract;
 pub mod deploy;
 mod error;
-mod ledger_8;
-#[expect(
-    clippy::duplicate_mod,
-    reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
-)]
 mod ledger_9;
 // The Compact IR interpreter now lives in the `compact-interpreter` crate;
 // aliased here so `midnight_contract::interpreter::*` paths keep resolving.

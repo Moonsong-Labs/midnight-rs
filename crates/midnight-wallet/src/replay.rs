@@ -11,7 +11,8 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::{LedgerVersion, SpentUtxoKey, SyncProgress, WalletError};
+use crate::generation::{Generation, require_ledger_9_parameters};
+use crate::{SpentUtxoKey, SyncProgress, WalletError};
 
 // ---------------------------------------------------------------------------
 // Subscription event types — internal to the sync loop.
@@ -225,13 +226,15 @@ pub(crate) async fn latest_block(
     }
 }
 
-/// The generation that `block` ran, from the ledger parameters the indexer
-/// serves on it.
-pub(crate) fn ledger_of(
-    block: &midnight_indexer_client::Block,
-) -> Result<LedgerVersion, WalletError> {
-    LedgerVersion::of_ledger_parameters(&encoded_ledger_parameters(block)?)
-        .map_err(WalletError::from)
+/// Refuse `block` unless it runs ledger 9, from the tag of the ledger
+/// parameters that the indexer serves on it.
+///
+/// # Errors
+///
+/// [`WalletError::UnknownLedger`] that names the tag, for example on a chain
+/// that runs ledger 8.
+pub(crate) fn require_ledger_9(block: &midnight_indexer_client::Block) -> Result<(), WalletError> {
+    require_ledger_9_parameters(&encoded_ledger_parameters(block)?)
 }
 
 /// The encoded ledger parameters that the indexer serves on `block`.
@@ -319,7 +322,7 @@ pub(crate) struct LedgerReplay {
     pub last_id: i64,
     /// Where the stream moved to a later ledger generation: the id of that
     /// generation's first event, which the replay did not consume.
-    pub later_ledger: Option<(i64, LedgerVersion)>,
+    pub later_ledger: Option<(i64, Generation)>,
 }
 
 /// Hex-decode the event a `LedgerEventMessage` carries.
@@ -337,11 +340,11 @@ fn event_bytes(msg: &LedgerEventMessage, kind: &str) -> Result<Vec<u8>, WalletEr
 pub(crate) async fn replay_ledger_events(
     sub_client: &SubscriptionClient,
     stream: LedgerStream,
-    ledger: LedgerVersion,
+    ledger: Generation,
     start_id: i64,
     resuming: bool,
     progress: Option<mpsc::Sender<SyncProgress>>,
-    mut apply: impl FnMut(i64, &[u8], LedgerVersion) -> Result<(), WalletError>,
+    mut apply: impl FnMut(i64, &[u8], Generation) -> Result<(), WalletError>,
 ) -> Result<LedgerReplay, WalletError> {
     let kind = stream.kind();
     let mut last_id: i64 = last_applied_before(start_id);
@@ -400,9 +403,9 @@ pub(crate) async fn replay_ledger_events(
                     }
 
                     let raw = event_bytes(msg, kind)?;
-                    let event_ledger = LedgerVersion::of_event(&raw)?;
+                    let event_ledger = Generation::of_event(&raw)?;
                     if event_ledger > ledger {
-                        info!(id = msg.id, ledger = %event_ledger, "{kind} events move to a later ledger");
+                        info!(id = msg.id, ledger = ?event_ledger, "{kind} events move to a later ledger");
                         later_ledger = Some((msg.id, event_ledger));
                         break 'reconnect;
                     }

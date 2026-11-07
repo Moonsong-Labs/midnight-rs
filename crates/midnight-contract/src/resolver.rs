@@ -1,13 +1,12 @@
 //! Proving keys for contract circuits, found by the hash of their verifier key.
 //!
 //! The ledger helpers hold the resolver a build proves with as a `&'static`
-//! borrow, so one resolver per ledger generation serves every contract this
-//! process calls (see the generation modules' `resolver`). It finds a
-//! circuit's keys through the registry here, which both share: a call registers the zk config
-//! it proves with under the SHA-256 of the circuit's verifier key, and names
-//! that hash in the key location it hands the prover. The location has the
-//! `contract:<address>/<circuit>?vk=<hash>` shape the upstream helpers and
-//! compact-js resolve.
+//! borrow, so one resolver serves every contract this process calls (see
+//! `ledger_9::resolver`). It finds a circuit's keys through the registry here:
+//! a call registers the zk config it proves with under the SHA-256 of the
+//! circuit's verifier key, and names that hash in the key location it hands
+//! the prover. The location has the `contract:<address>/<circuit>?vk=<hash>`
+//! shape the upstream helpers and compact-js resolve.
 //!
 //! The registry holds each zk config weakly, so a registration lives exactly
 //! as long as the contract handle that made it.

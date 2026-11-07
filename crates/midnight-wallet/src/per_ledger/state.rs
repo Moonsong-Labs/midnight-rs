@@ -20,6 +20,7 @@ use super::pending::{PendingReservations, within_ttl};
 use super::types::chain_time;
 use super::types::convert::{IntoLedger, IntoSdk};
 use crate::chain_pin::ChainPin;
+use crate::generation::Generation;
 use crate::replay::{
     LedgerStream, UnshieldedReplay, replay_ledger_events, replay_unshielded_events,
 };
@@ -34,8 +35,8 @@ use crate::{Network, ReservedInput, Seed, SpentUtxoKey, SyncProgress, WalletErro
 /// - `dustLedgerEvents` → dust/fee UTXO tracking
 /// - `unshieldedTransactions` → unshielded UTXO balance
 ///
-/// The state of the SDK's `Wallet` on this generation. Transaction building
-/// uses it directly (no full-chain replay).
+/// The state of the SDK's `Wallet`. Transaction building uses it directly (no
+/// full-chain replay).
 pub struct Wallet {
     seed: Seed,
     secret_keys: SecretKeys,
@@ -209,20 +210,7 @@ fn dust_anchor(
     }
 }
 
-/// Refuse `found` with [`WalletError::LedgerMismatch`] unless it is this
-/// generation.
-pub(super) fn expect_ledger(found: crate::LedgerVersion) -> Result<(), WalletError> {
-    if found == super::LEDGER {
-        Ok(())
-    } else {
-        Err(WalletError::LedgerMismatch {
-            expected: super::LEDGER,
-            found,
-        })
-    }
-}
-
-/// Tagged-deserialize an event of this generation.
+/// Tagged-deserialize a ledger 9 event.
 fn decode_event(raw: &[u8], kind: &str) -> Result<Event<DefaultDB>, WalletError> {
     tagged_deserialize(raw).map_err(|e| WalletError::Sync(format!("deserialize {kind} event: {e}")))
 }
@@ -294,24 +282,21 @@ fn validate_ledger_parameters(p: &LedgerParameters) -> Result<(), WalletError> {
     Ok(())
 }
 
-/// This generation's half of [`crate::wallet::ResyncPlan`].
-#[derive(Clone)]
+/// The wallet's half of [`crate::wallet::ResyncPlan`].
 pub struct ResyncPlan {
-    pub(crate) secret_keys: SecretKeys,
-    pub(crate) unshielded_address: String,
-    pub(crate) dust_wallet: DustWallet<DefaultDB>,
-    pub(crate) dust_event_id: i64,
-    pub(crate) zswap_state: ZswapLocalState<DefaultDB>,
-    pub(crate) zswap_event_id: i64,
-    pub(crate) unshielded_utxos: Vec<TrackedUtxo>,
-    pub(crate) last_tx_id: Option<i64>,
-    pub(crate) last_block_height: i64,
+    secret_keys: SecretKeys,
+    unshielded_address: String,
+    dust_wallet: DustWallet<DefaultDB>,
+    dust_event_id: i64,
+    zswap_state: ZswapLocalState<DefaultDB>,
+    zswap_event_id: i64,
+    unshielded_utxos: Vec<TrackedUtxo>,
+    last_tx_id: Option<i64>,
+    last_block_height: i64,
 }
 
 impl ResyncPlan {
-    /// The replay phase of [`crate::wallet::ResyncPlan::run`] on this
-    /// generation. It returns [`WalletError::LedgerMismatch`] when the chain
-    /// moved to a later generation, for the caller to cross.
+    /// The replay phase of [`crate::wallet::ResyncPlan::run`].
     pub async fn run(self, indexer_url: &str) -> Result<ResyncCommit, WalletError> {
         let ResyncPlan {
             secret_keys,
@@ -374,26 +359,16 @@ impl ResyncPlan {
             spent: spent_unshielded,
         } = unshielded_res?;
         let block = block_res?;
-        // A chain that moved to a later generation since the plan was taken
-        // needs the wallet to cross, which is not this generation's to do.
-        expect_ledger(crate::replay::ledger_of(&block)?)?;
-        if let Some((_, found)) = zswap.later_ledger {
-            expect_ledger(found)?;
-        }
-        if let Some((_, found)) = dust.later_ledger {
-            expect_ledger(found)?;
-        }
+        crate::replay::require_ledger_9(&block)?;
         let DustReplay {
             wallet: dust_wallet,
             last_id: dust_event_id,
             last_block_time: last_dust_block_time,
             spend_nullifiers: dust_nullifiers,
-            ..
         } = dust;
         let ZswapReplay {
             state: zswap_state,
             last_id: zswap_event_id,
-            ..
         } = zswap;
         let chain_tblock = block_time(&block)?;
         let parameters = decode_ledger_parameters(&block)?;
@@ -415,7 +390,14 @@ impl ResyncPlan {
     }
 }
 
-/// This generation's half of [`crate::wallet::ResyncCommit`].
+/// Validated results of a resync's replay tasks and latest-block fetch,
+/// ready to be committed into a [`crate::Wallet`] via
+/// [`crate::Wallet::commit_resync`].
+///
+/// Produced only by [`ResyncPlan::run`]; the fields are private so a commit
+/// can't be forged from un-validated data. Grouping the commit inputs also
+/// makes the commit-and-persist sequence unit-testable without a live
+/// indexer.
 #[must_use = "apply with Wallet::commit_resync, or the completed replay is discarded"]
 pub struct ResyncCommit {
     dust_wallet: DustWallet<DefaultDB>,
@@ -432,43 +414,19 @@ pub struct ResyncCommit {
     parameters: LedgerParameters,
 }
 
-/// This generation's half of [`crate::wallet::ShieldedRescanPlan`].
+/// The wallet's half of [`crate::wallet::ShieldedRescanPlan`]: who the
+/// rescan is for, and the coins it claims on the way.
 pub struct ShieldedRescanPlan {
-    pub(crate) secret_keys: SecretKeys,
-    pub(crate) initial_state: ZswapLocalState<DefaultDB>,
+    seed: Seed,
+    coins: Vec<crate::CoinInfo>,
 }
 
 impl ShieldedRescanPlan {
-    /// A rescan for `seed`'s wallet that claims `coins` on the way.
-    pub(crate) fn new(seed: &Seed, coins: &[crate::CoinInfo]) -> Self {
-        let secret_keys = zswap_keys(seed);
-        let coin_public_key = secret_keys.coin_public_key();
-        let initial_state = coins.iter().fold(ZswapLocalState::new(), |state, coin| {
-            state.watch_for(&coin_public_key, &coin.into_ledger())
-        });
-        Self {
-            secret_keys,
-            initial_state,
-        }
-    }
-
-    /// The replay of [`crate::wallet::ShieldedRescanPlan::run`] on this
-    /// generation. It returns [`WalletError::LedgerMismatch`] when the stream
-    /// holds another generation's events.
+    /// The replay of [`crate::wallet::ShieldedRescanPlan::run`], from the
+    /// first event of the stream.
     pub async fn run(self, indexer_url: &str) -> Result<ShieldedRescanCommit, WalletError> {
         let sub_client = SubscriptionClient::new(indexer_url);
-        let replay = replay_zswap_events(
-            &sub_client,
-            &self.secret_keys,
-            self.initial_state,
-            0,
-            false,
-            None,
-        )
-        .await?;
-        if let Some((_, found)) = replay.later_ledger {
-            expect_ledger(found)?;
-        }
+        let replay = replay_zswap_from_genesis(&sub_client, &self.seed, &self.coins, None).await?;
         Ok(ShieldedRescanCommit {
             zswap_state: replay.state,
             zswap_event_id: replay.last_id,
@@ -476,11 +434,15 @@ impl ShieldedRescanPlan {
     }
 }
 
-/// This generation's half of [`crate::wallet::ShieldedRescanCommit`].
+/// Validated result of a shielded rescan's replay, ready to be committed into
+/// a [`crate::Wallet`] via [`crate::Wallet::commit_shielded_rescan`].
+///
+/// Produced only by [`ShieldedRescanPlan::run`]; the fields are private so a
+/// commit can't be forged from un-replayed state.
 #[must_use = "apply with Wallet::commit_shielded_rescan, or the completed replay is discarded"]
 pub struct ShieldedRescanCommit {
-    pub(crate) zswap_state: ZswapLocalState<DefaultDB>,
-    pub(crate) zswap_event_id: i64,
+    zswap_state: ZswapLocalState<DefaultDB>,
+    zswap_event_id: i64,
 }
 
 /// What a sync replayed before its Dust replay.
@@ -501,13 +463,11 @@ pub(crate) enum DustStart {
         wallet: Box<DustWallet<DefaultDB>>,
         next_id: i64,
     },
-    /// From an empty Dust state, at `next_id`: a sync with no snapshot, or
-    /// one whose snapshot predates the hard fork that emptied the chain's
-    /// Dust state.
-    Fresh { next_id: i64 },
+    /// From an empty Dust state, at the first event: a sync with no snapshot.
+    Fresh,
 }
 
-/// The shielded keys `seed` derives in this generation.
+/// The shielded keys `seed` derives.
 pub(crate) fn zswap_keys(seed: &Seed) -> SecretKeys {
     ShieldedWallet::<DefaultDB>::default(seed.into_ledger())
         .secret_keys()
@@ -541,13 +501,11 @@ impl Wallet {
         self.chain_pin = Some(pin);
     }
 
-    /// Finish a sync on this generation: replay the Dust stream from the
-    /// cursor `start` carries, and assemble the wallet.
+    /// Finish a sync: replay the Dust stream from the cursor `start` carries,
+    /// and assemble the wallet.
     ///
-    /// The neutral sync has replayed the shielded and unshielded streams
-    /// already, crossing each hard fork it met, and hands over the shielded
-    /// state in this generation. `block` is the chain's latest block, whose
-    /// ledger parameters are in this generation.
+    /// The sync has replayed the shielded and unshielded streams already.
+    /// `block` is the chain's latest block.
     pub(crate) async fn finish_sync(
         sync: ChainSync<'_>,
         block: &midnight_indexer_client::Block,
@@ -560,10 +518,8 @@ impl Wallet {
             address,
             network,
             storage_dir,
-            save,
             chain_pin,
         } = sync;
-        let save_dir = storage_dir.filter(|_| save);
         let SyncStart {
             zswap_state,
             zswap_event_id,
@@ -581,15 +537,15 @@ impl Wallet {
 
         let (dust_wallet, start_dust_id) = match dust {
             DustStart::Resume { wallet, next_id } => (*wallet, next_id),
-            DustStart::Fresh { next_id } => (
+            DustStart::Fresh => (
                 DustWallet::default(seed.into_ledger(), Some(&parameters)),
-                next_id,
+                0,
             ),
         };
 
         let sub_client = SubscriptionClient::new(indexer_url);
         let dust_checkpoint = make_dust_checkpoint(
-            save_dir,
+            storage_dir,
             network.as_str(),
             CheckpointState {
                 wallet_id: wallet_id.clone(),
@@ -611,15 +567,11 @@ impl Wallet {
             progress.clone(),
         )
         .await?;
-        if let Some((_, found)) = dust.later_ledger {
-            expect_ledger(found)?;
-        }
         let DustReplay {
             wallet: dust_wallet,
             last_id: dust_event_id,
             last_block_time: last_dust_block_time,
             spend_nullifiers: dust_nullifiers,
-            ..
         } = dust;
 
         let tblock = dust_anchor(last_dust_block_time, None, block_timestamp, &parameters);
@@ -634,14 +586,13 @@ impl Wallet {
             dust_event_id,
             unshielded_utxos = unshielded_utxos.len(),
             height = last_block_height,
-            ledger = %super::LEDGER,
             "wallet synced"
         );
 
         // Load any pre-existing pending reservations from disk so they
         // survive process restarts. Confirmed-state files never carry
         // pending entries; this is a separate file.
-        let pending = match save_dir {
+        let pending = match storage_dir {
             Some(dir) => {
                 PendingReservations::load(dir, network.as_str(), &wallet_id)?.unwrap_or_default()
             }
@@ -683,7 +634,7 @@ impl Wallet {
             state.pending.evict_expired(chain_time(bc));
         }
 
-        if let Some(dir) = save_dir {
+        if let Some(dir) = storage_dir {
             state.save(dir)?;
         }
 
@@ -846,7 +797,7 @@ impl Wallet {
                 .fold(confirmed.clone(), |state, nullifier| {
                     state
                         .remove_utxo(nullifier)
-                        .expect("remove_utxo returns Ok in every ledger generation")
+                        .expect("the ledger's remove_utxo always returns Ok")
                 }),
         )
     }
@@ -877,7 +828,7 @@ impl Wallet {
     ///
     /// A failed save leaves the memory ahead of the disk, so the next call
     /// retries it even when nothing changed.
-    pub(crate) fn persist(&mut self, changed: bool) -> Result<(), WalletError> {
+    fn persist(&mut self, changed: bool) -> Result<(), WalletError> {
         if !(changed || self.save_failed) {
             return Ok(());
         }
@@ -1090,7 +1041,7 @@ impl Wallet {
         &self.parameters
     }
 
-    /// The parts of [`Self::parameters`] every generation shares.
+    /// The parts of [`Self::parameters`] that the SDK's own types hold.
     pub fn chain_parameters(&self) -> crate::ChainParameters {
         (&self.parameters).into_sdk()
     }
@@ -1286,24 +1237,22 @@ impl Wallet {
             .collect()
     }
 
+    /// Where this wallet persists its state, when it persists one.
+    fn storage_dir(&self) -> Option<&Path> {
+        self.storage_dir.as_deref()
+    }
+
     /// Snapshot the inputs of a shielded rescan's replay phase. See
     /// [`ShieldedRescanPlan`] for the intended plan → run → commit flow.
     pub fn shielded_rescan_plan(&self) -> ShieldedRescanPlan {
-        ShieldedRescanPlan::new(&self.seed, &self.rescan_coins())
-    }
-
-    /// Every coin a rescan must register before its replay; see
-    /// `coins_to_register`.
-    pub(crate) fn rescan_coins(&self) -> Vec<crate::CoinInfo> {
-        self.coins_to_register()
-            .into_iter()
-            .map(IntoSdk::into_sdk)
-            .collect()
-    }
-
-    /// Where this wallet persists its state, when it persists one.
-    pub(crate) fn storage_dir(&self) -> Option<&Path> {
-        self.storage_dir.as_deref()
+        ShieldedRescanPlan {
+            seed: self.seed.clone(),
+            coins: self
+                .coins_to_register()
+                .into_iter()
+                .map(IntoSdk::into_sdk)
+                .collect(),
+        }
     }
 
     /// See [`crate::Wallet::commit_shielded_rescan`].
@@ -1330,11 +1279,40 @@ pub(crate) struct ZswapReplay {
     pub state: ZswapLocalState<DefaultDB>,
     /// The id of the last event applied.
     pub last_id: i64,
-    /// Where the stream moved to a later ledger generation. See
-    /// [`crate::replay::LedgerReplay::later_ledger`].
-    pub later_ledger: Option<(i64, crate::LedgerVersion)>,
 }
 
+/// Replay the zswap stream of `seed`'s wallet from its first event, and claim
+/// `coins` on the way.
+///
+/// The events before the hard fork to ledger 9 go through
+/// [`crate::pre_fork`], which carries its state across the fork. The replay
+/// goes on from the first ledger 9 event.
+pub(crate) async fn replay_zswap_from_genesis(
+    sub_client: &SubscriptionClient,
+    seed: &Seed,
+    coins: &[crate::CoinInfo],
+    progress: Option<mpsc::Sender<SyncProgress>>,
+) -> Result<ZswapReplay, WalletError> {
+    let pre_fork = crate::pre_fork::replay(sub_client, seed, coins, progress.clone()).await?;
+    let Some(fork_id) = pre_fork.fork_id else {
+        return Ok(ZswapReplay {
+            state: pre_fork.state,
+            last_id: pre_fork.last_id,
+        });
+    };
+    info!(fork_id, "the shielded stream continues in ledger 9");
+    replay_zswap_events(
+        sub_client,
+        &zswap_keys(seed),
+        pre_fork.state,
+        fork_id,
+        false,
+        progress,
+    )
+    .await
+}
+
+/// Replay the ledger 9 events of the zswap stream from `start_id`.
 pub(crate) async fn replay_zswap_events(
     sub_client: &SubscriptionClient,
     secret_keys: &SecretKeys,
@@ -1347,12 +1325,16 @@ pub(crate) async fn replay_zswap_events(
     let replay = replay_ledger_events(
         sub_client,
         LedgerStream::Zswap,
-        super::LEDGER,
+        Generation::V9,
         start_id,
         resuming,
         progress,
         |id, raw, ledger| {
-            expect_ledger(ledger)?;
+            if ledger != Generation::V9 {
+                return Err(WalletError::Sync(format!(
+                    "zswap event id={id} is ledger 8 data after the fork"
+                )));
+            }
             let ev = decode_event(raw, "zswap")?;
             state = state
                 .replay_events(secret_keys, [&ev])
@@ -1365,7 +1347,6 @@ pub(crate) async fn replay_zswap_events(
     Ok(ZswapReplay {
         state,
         last_id: replay.last_id,
-        later_ledger: replay.later_ledger,
     })
 }
 
@@ -1378,16 +1359,13 @@ pub(crate) struct DustReplay {
     pub last_block_time: Option<Timestamp>,
     /// The nullifiers of the Dust spends the replay saw processed.
     pub spend_nullifiers: Vec<DustNullifier>,
-    /// Where the stream moved to a later ledger generation. See
-    /// [`crate::replay::LedgerReplay::later_ledger`].
-    pub later_ledger: Option<(i64, crate::LedgerVersion)>,
 }
 
 /// Replay the Dust event stream from `start_id` into `dust_wallet`.
 ///
-/// The replay consumes the events of an earlier generation without applying
-/// them. The hard fork to this generation replaced the chain's Dust state
-/// with an empty one, so these events describe Dust that no longer exists.
+/// The replay consumes the ledger 8 events without applying them. The hard
+/// fork to ledger 9 replaced the chain's Dust state with an empty one, so
+/// these events describe Dust that no longer exists.
 pub(crate) async fn replay_dust_events(
     sub_client: &SubscriptionClient,
     mut dust_wallet: DustWallet<DefaultDB>,
@@ -1412,12 +1390,12 @@ pub(crate) async fn replay_dust_events(
     let replay = replay_ledger_events(
         sub_client,
         LedgerStream::Dust,
-        super::LEDGER,
+        Generation::V9,
         start_id,
         resuming,
         progress,
         move |id, raw, ledger| {
-            if ledger == super::LEDGER {
+            if ledger == Generation::V9 {
                 let ev = decode_event(raw, "dust")?;
                 wallet
                     .replay_events([&ev])
@@ -1445,7 +1423,6 @@ pub(crate) async fn replay_dust_events(
         last_id: replay.last_id,
         last_block_time,
         spend_nullifiers,
-        later_ledger: replay.later_ledger,
     })
 }
 
@@ -1499,7 +1476,7 @@ pub(crate) mod test_support {
         }
     }
 
-    /// The hex of this generation's event for an output of `coin` to `seed`'s
+    /// The hex of a ledger 9 event for an output of `coin` to `seed`'s
     /// wallet that carries no discovery ciphertext. The commitment lands in
     /// the Merkle tree and nothing else identifies the coin, so only a
     /// registration claims it.
@@ -1523,7 +1500,7 @@ pub(crate) mod test_support {
     }
 }
 
-/// `entry`, with its input in this generation's type.
+/// `entry`, with its input in the ledger's type.
 fn into_ledger_entry<T: IntoLedger + Copy>(entry: &ReservedInput<T>) -> ReservedInput<T::Ledger> {
     ReservedInput {
         input: entry.input.into_ledger(),
@@ -2032,11 +2009,11 @@ mod tests {
         );
     }
 
-    /// The plan replays from nothing: the events rebuild every coin the
-    /// wallet held, and the registrations ride along so the replay can claim
-    /// the outputs it could not decrypt.
+    /// The plan replays from nothing, so it must carry every coin the replay
+    /// claims by registration: the registrations no replay has claimed, and
+    /// the coins the wallet holds, whose own registrations a replay consumed.
     #[test]
-    fn shielded_rescan_plan_starts_empty_and_carries_the_registrations() {
+    fn shielded_rescan_plan_carries_the_registrations_and_the_held_coins() {
         let mut wallet = test_wallet(None);
         insert_shielded_coin(&mut wallet, 7, 100);
         let coin = unreachable_coin(9, 42);
@@ -2044,12 +2021,10 @@ mod tests {
 
         let plan = wallet.shielded_rescan_plan();
 
-        assert_eq!(plan.initial_state.first_free, 0);
-        assert!(plan.initial_state.coins.is_empty());
+        assert!(plan.coins.contains(&coin), "the registration rides along");
         assert!(
-            plan.initial_state
-                .pending_outputs
-                .contains_key(&commitment_of(&wallet, &coin))
+            plan.coins.iter().any(|held| held.value == 100),
+            "the held coin rides along"
         );
     }
 
@@ -2446,9 +2421,11 @@ mod tests {
             let raw = ciphertextless_output(&wallet.seed, &coin, 0);
 
             let server = tokio::spawn(async move {
-                // The same one-event stream twice: once for the replay that
-                // stands in for the original sync, once for the rescan.
-                for _ in 0..2 {
+                // The same one-event stream for each of the two rescans. A
+                // rescan subscribes twice: the reader of the events before
+                // the fork stops at the ledger 9 event, and the ledger 9
+                // replay goes on from it.
+                for _ in 0..4 {
                     let (mut ws, sub) = accept_subscriber(&listener).await;
                     assert_eq!(
                         subscription_variable(&sub, "id"),
@@ -2518,8 +2495,10 @@ mod tests {
             ];
 
             let server = tokio::spawn(async move {
-                // One two-output stream, replayed once per rescan.
-                for _ in 0..2 {
+                // One two-output stream, which each of the two rescans reads
+                // twice: once in the reader of the events before the fork,
+                // and once in ledger 9.
+                for _ in 0..4 {
                     let (mut ws, sub) = accept_subscriber(&listener).await;
                     assert_eq!(subscription_variable(&sub, "id"), 0);
                     for (index, raw) in stream.iter().enumerate() {
@@ -2551,6 +2530,30 @@ mod tests {
             values.sort_unstable();
             assert_eq!(values, vec![42, 77], "the first coin must survive");
 
+            server.await.unwrap();
+        }
+
+        /// The stream of a chain that crossed the fork starts with ledger 8
+        /// events. A rescan that started in ledger 9 would fail on the first
+        /// one, which is every rescan of such a chain.
+        #[tokio::test]
+        async fn a_rescan_reads_a_stream_that_starts_with_a_ledger_8_event() {
+            let (listener, url) = bind().await;
+            let mut wallet = test_wallet(None);
+            let coin = unreachable_coin(9, 42);
+            let raw = crate::pre_fork::test_support::ciphertextless_output(&wallet.seed, &coin, 0);
+            let server = tokio::spawn(async move {
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                assert_eq!(subscription_variable(&sub, "id"), 0);
+                send_next(&mut ws, &sub, ledger_event("zswapLedgerEvents", 1, &raw, 1)).await;
+                while next_json(&mut ws).await.is_some() {}
+            });
+
+            wallet.watch_for_coin(coin).unwrap();
+            rescan(&mut wallet, &url).await;
+
+            assert_eq!(wallet.sync_cursors().zswap_event_id, 1);
+            assert_eq!(wallet.spendable_shielded_coins().len(), 1);
             server.await.unwrap();
         }
     }

@@ -10,9 +10,9 @@
 
 use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPointBuf};
-use midnight_provider::{Builds, PendingTx};
+use midnight_provider::PendingTx;
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
-use midnight_types::{LedgerVersion, TransferResult, WalletError};
+use midnight_types::TransferResult;
 
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
@@ -269,7 +269,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
 
         // Read the current authority at latest (the signed counter must match
         // what the chain will check at submission — not any pinned block).
-        let (state_bytes, state) = crate::state::node_state(provider, address_hex, None).await?;
+        let state = crate::state::fetch_state(provider, address_hex, None).await?;
         let counter = state.maintenance_authority.counter;
         let threshold = state.maintenance_authority.threshold;
         let committee = schnorr_committee(&state.maintenance_authority)?;
@@ -307,24 +307,8 @@ impl<'a, P> ContractMaintenance<'a, P> {
             ));
         }
 
-        // The update is built for the generation the wallet's state is in,
-        // because the bytes the committee signs differ per generation.
-        let update = match provider.builds().await? {
-            Builds::Ledger8(_) => Update::Ledger8(crate::ledger_8::maintenance::prepare_update(
-                &state,
-                &state_bytes,
-                address,
-                &self.specs,
-                counter,
-            )?),
-            Builds::Ledger9(_) => Update::Ledger9(crate::ledger_9::maintenance::prepare_update(
-                &state,
-                &state_bytes,
-                address,
-                &self.specs,
-                counter,
-            )?),
-        };
+        let update =
+            crate::ledger_9::maintenance::prepare_update(&state, address, &self.specs, counter)?;
         Ok(PreparedMaintenance {
             contract: self.contract,
             update,
@@ -335,7 +319,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
     }
 }
 
-/// One step of a maintenance update, before it takes a generation's types.
+/// One step of a maintenance update, before it takes the ledger's types.
 pub(crate) enum OpSpec {
     Insert {
         circuit: String,
@@ -363,7 +347,7 @@ pub(crate) enum OpSpec {
 #[must_use = "does nothing until sent or built"]
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
-    update: Update,
+    update: midnight_helpers::ledger_9::MaintenanceUpdate<midnight_helpers::DefaultDB>,
     /// The signatures collected so far, as `(committee index, signature)`.
     signatures: Vec<(u32, Signature)>,
     /// The on-chain committee at prepare time — used to verify attached
@@ -372,37 +356,13 @@ pub struct PreparedMaintenance<'a, P> {
     required_threshold: u32,
 }
 
-/// An unsigned maintenance update, in the generation it was prepared for.
-enum Update {
-    Ledger8(midnight_helpers::ledger_8::MaintenanceUpdate<midnight_helpers::DefaultDB>),
-    Ledger9(midnight_helpers::ledger_9::MaintenanceUpdate<midnight_helpers::DefaultDB>),
-}
-
-impl Update {
-    fn ledger_version(&self) -> LedgerVersion {
-        match self {
-            Self::Ledger8(_) => LedgerVersion::V8,
-            Self::Ledger9(_) => LedgerVersion::V9,
-        }
-    }
-}
-
 impl<'a, P> PreparedMaintenance<'a, P> {
-    /// The ledger generation the update was prepared for. Its signatures are
-    /// valid on that generation only.
-    pub fn ledger_version(&self) -> LedgerVersion {
-        self.update.ledger_version()
-    }
-
     /// The exact bytes each committee member signs (with
     /// [`SigningKey::sign`](midnight_base_crypto::signatures::SigningKey::sign)).
     /// Distribute these to the members; collect their signatures via
     /// [`Self::add_signature`].
     pub fn data_to_sign(&self) -> Vec<u8> {
-        match &self.update {
-            Update::Ledger8(update) => update.data_to_sign(),
-            Update::Ledger9(update) => update.data_to_sign(),
-        }
+        self.update.data_to_sign()
     }
 
     /// Attach a signature produced (anywhere) over [`Self::data_to_sign`], at the
@@ -434,10 +394,6 @@ impl<'a, P> PreparedMaintenance<'a, P> {
 
     /// Build, prove, and balance the transaction without submitting it. Errors if
     /// fewer than the authority threshold of signatures have been attached.
-    ///
-    /// An update prepared before the chain's hard fork cannot be built after
-    /// it: its signatures cover the earlier generation's bytes. Prepare it
-    /// again and collect new signatures.
     ///
     /// The build reserves the Dust that pays the fee, and returns only the
     /// bytes. So when the bytes never land, nothing can hand that Dust back,
@@ -479,30 +435,13 @@ impl<'a, P> PreparedMaintenance<'a, P> {
         self.check_signatures()?;
         let provider = self.contract.provider().as_midnight_provider();
         let builds = provider.builds().await?;
-        match (builds, self.update) {
-            (Builds::Ledger8(builds), Update::Ledger8(update)) => {
-                Box::pin(crate::ledger_8::maintenance::maintenance_funded(
-                    &builds,
-                    update,
-                    &self.signatures,
-                ))
-                .await
-            }
-            (Builds::Ledger9(builds), Update::Ledger9(update)) => {
-                Box::pin(crate::ledger_9::maintenance::maintenance_funded(
-                    &builds,
-                    update,
-                    &self.signatures,
-                ))
-                .await
-            }
-            (builds, update) => Err(ContractError::from(midnight_provider::ProviderError::from(
-                WalletError::LedgerMismatch {
-                    expected: builds.ledger_version(),
-                    found: update.ledger_version(),
-                },
-            ))),
-        }
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(crate::ledger_9::maintenance::maintenance_funded(
+            &builds,
+            self.update,
+            &self.signatures,
+        ))
+        .await
     }
 }
 

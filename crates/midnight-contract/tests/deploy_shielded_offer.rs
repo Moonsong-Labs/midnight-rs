@@ -12,6 +12,9 @@ mod common;
 
 use compact_bindgen::{AlignedValue, StateValue};
 use midnight_contract::{ShieldedOffer, ShieldedPayment, ShieldedTokenType};
+use midnight_helpers::DefaultDB;
+use midnight_helpers::ledger_9::{FinalizedTransaction, Transaction};
+use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_provider::MidnightProvider;
 
 /// The offer's coin and payment must reach the guaranteed Zswap offer of the
@@ -68,40 +71,24 @@ async fn deploy_funded_with_shielded_offer() {
         .await
         .unwrap();
 
-    // The guaranteed offer's input and output counts, read with the types of
-    // the transaction's generation.
-    macro_rules! guaranteed_counts {
-        ($ledger:ident) => {{
-            use midnight_helpers::$ledger as l;
-            let tx: l::FinalizedTransaction<midnight_helpers::DefaultDB> =
-                midnight_helpers::midnight_serialize::tagged_deserialize(
-                    &mut &result.transaction.tx_bytes[..],
-                )
-                .expect("deserialize the proven deploy");
-            let l::Transaction::Standard(stx) = &tx else {
-                panic!("a deploy must be a standard transaction");
-            };
-            let guaranteed = stx
-                .guaranteed_coins
-                .as_ref()
-                .expect("the deploy must carry the attached shielded offer");
-            (guaranteed.inputs.len(), guaranteed.outputs.len())
-        }};
-    }
-    let (inputs, outputs) = match midnight_types::LedgerVersion::of_transaction(
-        &result.transaction.tx_bytes,
-    )
-    .unwrap()
-    {
-        midnight_types::LedgerVersion::V8 => guaranteed_counts!(ledger_8),
-        midnight_types::LedgerVersion::V9 => guaranteed_counts!(ledger_9),
+    let tx: FinalizedTransaction<DefaultDB> =
+        tagged_deserialize(&mut &result.transaction.tx_bytes[..])
+            .expect("deserialize the proven deploy");
+    let Transaction::Standard(stx) = &tx else {
+        panic!("a deploy must be a standard transaction");
     };
+    let guaranteed = stx
+        .guaranteed_coins
+        .as_ref()
+        .expect("the deploy must carry the attached shielded offer");
     assert_eq!(
-        inputs, 1,
+        guaranteed.inputs.len(),
+        1,
         "the guaranteed offer must carry the attached coin"
     );
     assert_eq!(
-        outputs, expected_outputs,
+        guaranteed.outputs.len(),
+        expected_outputs,
         "the guaranteed offer must carry the payment, and the change when the coin holds more"
     );
 

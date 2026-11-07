@@ -3559,10 +3559,6 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "midnight-base-crypto",
- "midnight-coin-structure 2.0.2",
- "midnight-coin-structure 3.0.0",
- "midnight-helpers",
- "midnight-onchain-state 3.0.1",
  "midnight-onchain-state 4.0.0",
  "midnight-serialize",
  "midnight-storage",

@@ -1,4 +1,4 @@
-//! A contract maintenance update on this generation.
+//! A contract maintenance update.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,16 +20,13 @@ use crate::error::ContractError;
 use crate::maintenance::OpSpec;
 
 /// The unsigned update that applies `specs`, in order, to the contract at
-/// `address`, whose state the chain served as `state_bytes` (viewed as
-/// `state`).
+/// `address`, whose state is `state`.
 pub(crate) fn prepare_update(
     state: &ContractState<InMemoryDB>,
-    state_bytes: &[u8],
     address: midnight_types::ContractAddress,
     specs: &[OpSpec],
     counter: u32,
 ) -> Result<MaintenanceUpdate<DefaultDB>, ContractError> {
-    let native = super::state::native_state(state, state_bytes)?;
     // A removal names the slot its key is in. A key inserted earlier in the
     // same update is the one in that slot, whatever the chain holds.
     let mut inserted: HashMap<&str, helpers::ContractOperation> = HashMap::new();
@@ -47,7 +44,7 @@ pub(crate) fn prepare_update(
                 let entry_point: EntryPointBuf = circuit.as_bytes().into();
                 let version = match inserted.get(circuit.as_str()) {
                     Some(op) => helpers::contract_operation_version_of(op),
-                    None => native
+                    None => state
                         .operations
                         .get(&entry_point)
                         .map(|op| helpers::contract_operation_version_of(&op))
@@ -74,7 +71,7 @@ pub(crate) fn prepare_update(
 
 /// The raw bytes of a compiled `*.verifier` key, in the versioned form the
 /// ledger expects for `VerifierKeyInsert`. Callers check the key with
-/// [`super::state::accepted_key`] first.
+/// [`super::state::operation`] first.
 fn versioned_verifier_key(
     bytes: &[u8],
 ) -> Result<ContractOperationVersionedVerifierKey, ContractError> {

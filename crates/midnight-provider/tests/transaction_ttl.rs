@@ -12,28 +12,22 @@ mod common;
 
 use std::time::Duration;
 
-use midnight_provider::{LedgerVersion, MidnightProvider, NIGHT};
+use midnight_helpers::DefaultDB;
+use midnight_helpers::ledger_9::FinalizedTransaction;
+use midnight_helpers::midnight_serialize::tagged_deserialize;
+use midnight_provider::{MidnightProvider, NIGHT};
 
 /// Long enough for a build, its proof and its inclusion, and well short of
 /// the devnet's `global_ttl`.
 const TTL: Duration = Duration::from_secs(15 * 60);
 
 /// The TTL of each intent of the proven transaction `bytes`, in seconds.
-fn intent_ttls(bytes: &[u8], ledger: LedgerVersion) -> Vec<u64> {
-    macro_rules! ttls {
-        ($ledger:ident) => {{
-            let tx: midnight_helpers::$ledger::FinalizedTransaction<midnight_helpers::DefaultDB> =
-                midnight_helpers::$ledger::midnight_serialize::tagged_deserialize(&mut &bytes[..])
-                    .expect("a proven transaction");
-            tx.intents()
-                .map(|(_, intent)| intent.ttl.to_secs())
-                .collect()
-        }};
-    }
-    match ledger {
-        LedgerVersion::V8 => ttls!(ledger_8),
-        LedgerVersion::V9 => ttls!(ledger_9),
-    }
+fn intent_ttls(bytes: &[u8]) -> Vec<u64> {
+    let tx: FinalizedTransaction<DefaultDB> =
+        tagged_deserialize(&mut &bytes[..]).expect("a proven transaction");
+    tx.intents()
+        .map(|(_, intent)| intent.ttl.to_secs())
+        .collect()
 }
 
 /// The time of the node's best block, in seconds.
@@ -83,7 +77,7 @@ async fn a_transfer_with_a_short_ttl_lands() {
         .await
         .expect("build a transfer with a short TTL");
     assert_short(
-        &intent_ttls(&paid.tx_bytes, paid.ledger_version),
+        &intent_ttls(&paid.tx_bytes),
         chain_now(&provider).await,
         "the self-funded transfer",
     );

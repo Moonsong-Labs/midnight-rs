@@ -6,27 +6,11 @@
 mod common;
 
 use midnight_indexer_client::{BlockOffset, IndexerClient};
-use midnight_provider::{BlockHash, LedgerVersion, MidnightProvider, Provider};
+use midnight_provider::{BlockHash, MidnightProvider, Provider};
 
 fn provider() -> Option<MidnightProvider> {
     let (node, _indexer) = common::devnet_urls()?;
     Some(MidnightProvider::new(&node))
-}
-
-/// Each CI leg names the ledger generation its devnet runs. A leg whose
-/// devnet ran another one would pass while testing nothing it claims to.
-#[tokio::test]
-async fn the_devnet_runs_the_ledger_its_leg_names() {
-    let Some(p) = provider() else { return };
-    let Ok(expected) = std::env::var("MIDNIGHT_LEDGER") else {
-        return common::skip("MIDNIGHT_LEDGER");
-    };
-    let expected = match expected.as_str() {
-        "8" => LedgerVersion::V8,
-        "9" => LedgerVersion::V9,
-        other => panic!("MIDNIGHT_LEDGER={other} names no ledger this SDK runs"),
-    };
-    assert_eq!(p.ledger_version().await.unwrap(), expected);
 }
 
 #[tokio::test]

@@ -1,11 +1,8 @@
 //! Contract transactions on a chain that runs ledger 9.
-//!
-//! The same source as `ledger_8`, compiled against ledger 9's types.
 
 use midnight_helpers::ledger_9 as helpers;
 use midnight_provider::ledger_9 as provider;
 use midnight_types::ledger_9 as types;
-use types::LEDGER;
 
 #[path = "per_ledger/call.rs"]
 pub(crate) mod call;

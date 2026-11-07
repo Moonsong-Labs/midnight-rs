@@ -193,7 +193,6 @@ impl PreparedTransfer {
 
         Ok(TransferResult {
             tx_bytes: bytes,
-            ledger_version: super::LEDGER,
             spent,
             fee_speck,
         })
@@ -692,7 +691,7 @@ impl<'a> TransferBuilder<'a> {
     /// One UTXO per call, because a second unshielded input in the same
     /// transaction costs more verification than its bytes buy in dismissal
     /// allowance, and the ledger refuses it with
-    /// `FeeCalculation(OutsideTimeToDismiss)`, custom error 168.
+    /// `FeeCalculation(OutsideTimeToDismiss)`, custom error 231.
     ///
     /// A registration covers the UTXO it spends, and it registers the address,
     /// so tNIGHT arriving afterwards generates dust with no further call. It
@@ -765,7 +764,7 @@ impl<'a> TransferBuilder<'a> {
         // unshielded input costs more verification than its bytes buy in
         // dismissal allowance, and the ledger refuses the transaction with
         // `FeeCalculation(OutsideTimeToDismiss)`, which reaches a client as
-        // custom error 168.
+        // custom error 231.
         //
         // A UTXO whose creation time the indexer left out is ranked below
         // every UTXO that has one. Its age is a guess, and a guess that runs

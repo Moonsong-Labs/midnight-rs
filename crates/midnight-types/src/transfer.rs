@@ -2,8 +2,7 @@
 //! ([`TransferRequest`]), what it spends ([`SpentInputs`]), and its result
 //! ([`TransferResult`]).
 //!
-//! The builds themselves are per ledger generation, in
-//! [`crate::ledger_8`] and [`crate::ledger_9`].
+//! The builds themselves are in [`crate::ledger_9`].
 
 use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 
@@ -11,15 +10,12 @@ use crate::coin::{
     DustNullifier, DustPublicKey, Nullifier, ShieldedRecipient, ShieldedTokenType,
     UnshieldedRecipient, UnshieldedTokenType,
 };
-use crate::ledger_version::LedgerVersion;
 
 /// A proven transaction a build made, and the inputs the build reserved for
 /// it.
 pub struct TransferResult {
-    /// The proven transaction, tagged with its generation's encoding.
+    /// The proven transaction, in its tagged encoding.
     pub tx_bytes: Vec<u8>,
-    /// The generation the transaction is built for.
-    pub ledger_version: LedgerVersion,
     /// The inputs of this transaction that the builds of this wallet
     /// reserved. `WalletFacade::release` takes them back if the transaction
     /// never reaches the chain. A transaction that pays the fee of another
@@ -47,7 +43,6 @@ impl std::fmt::Debug for TransferResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransferResult")
             .field("tx_bytes", &format_args!("{} bytes", self.tx_bytes.len()))
-            .field("ledger_version", &self.ledger_version)
             .field("spent", &self.spent)
             .field("fee_speck", &self.fee_speck)
             .finish()

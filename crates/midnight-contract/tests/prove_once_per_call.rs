@@ -29,8 +29,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use midnight_contract::{
     ContractError, FsZkConfigProvider, KeyMismatch, ZkConfigError, ZkConfigProvider,
 };
+use midnight_helpers::ledger_9::{
+    CostModel, ProofProvider, ProvenTransaction, Resolver, Transaction, UnprovenTransaction,
+};
 use midnight_helpers::{DefaultDB, StdRng};
-use midnight_provider::{MidnightProvider, ProofProviders, ProviderError, WalletError};
+use midnight_provider::{MidnightProvider, ProviderError, WalletError};
 
 /// The message of every proof that [`ProofCounter`] fails.
 const MARKER: &str = "the test prover fails on purpose";
@@ -43,24 +46,11 @@ const MARKER: &str = "the test prover fails on purpose";
 ///
 /// While `fail` is set, every proof fails with [`MARKER`].
 struct ProofCounter {
-    ledger_8: midnight_helpers::ledger_8::LocalProofServer,
     /// The SDK's prover, which proves the ZKIR v3 circuits of the counter.
-    ledger_9: Arc<dyn midnight_helpers::ledger_9::ProofProvider<DefaultDB>>,
+    prover: Arc<dyn ProofProvider<DefaultDB>>,
     with_contract_action: AtomicUsize,
     dust_only: AtomicUsize,
     fail: AtomicBool,
-}
-
-impl Default for ProofCounter {
-    fn default() -> Self {
-        Self {
-            ledger_8: Default::default(),
-            ledger_9: ProofProviders::local().ledger_9(),
-            with_contract_action: AtomicUsize::default(),
-            dust_only: AtomicUsize::default(),
-            fail: AtomicBool::default(),
-        }
-    }
 }
 
 /// The counter's artifacts, with the `increment_by` verifier key in place of
@@ -85,6 +75,15 @@ impl ZkConfigProvider for SwappedKey {
 }
 
 impl ProofCounter {
+    fn new(prover: Arc<dyn ProofProvider<DefaultDB>>) -> Self {
+        Self {
+            prover,
+            with_contract_action: AtomicUsize::default(),
+            dust_only: AtomicUsize::default(),
+            fail: AtomicBool::default(),
+        }
+    }
+
     fn circuit_proofs(&self) -> usize {
         self.with_contract_action.load(Ordering::Relaxed)
     }
@@ -99,42 +98,32 @@ impl ProofCounter {
     }
 }
 
-/// The counter for each generation; the body is the same on each.
-macro_rules! proof_counter {
-    ($ledger:ident) => {
-        #[async_trait::async_trait]
-        impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ProofCounter {
-            async fn prove(
-                &self,
-                tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
-                rng: StdRng,
-                resolver: &'static midnight_helpers::$ledger::Resolver,
-                cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
-                if self.fail.load(Ordering::Relaxed) {
-                    // `resume_unwind`, not `panic!`: it skips the panic hook,
-                    // so the log shows no panic for an expected failure.
-                    std::panic::resume_unwind(Box::new(MARKER.to_string()));
-                }
-                let carries_contract_action = match &tx {
-                    midnight_helpers::$ledger::Transaction::Standard(stx) => {
-                        stx.intents.iter().any(|kv| !kv.1.actions.is_empty())
-                    }
-                    _ => false,
-                };
-                if carries_contract_action {
-                    self.with_contract_action.fetch_add(1, Ordering::Relaxed);
-                } else {
-                    self.dust_only.fetch_add(1, Ordering::Relaxed);
-                }
-                self.$ledger.prove(tx, rng, resolver, cost_model).await
-            }
+#[async_trait::async_trait]
+impl ProofProvider<DefaultDB> for ProofCounter {
+    async fn prove(
+        &self,
+        tx: UnprovenTransaction<DefaultDB>,
+        rng: StdRng,
+        resolver: &'static Resolver,
+        cost_model: CostModel,
+    ) -> ProvenTransaction<DefaultDB> {
+        if self.fail.load(Ordering::Relaxed) {
+            // `resume_unwind`, not `panic!`: it skips the panic hook, so the
+            // log shows no panic for an expected failure.
+            std::panic::resume_unwind(Box::new(MARKER.to_string()));
         }
-    };
+        let carries_contract_action = match &tx {
+            Transaction::Standard(stx) => stx.intents.iter().any(|kv| !kv.1.actions.is_empty()),
+            _ => false,
+        };
+        if carries_contract_action {
+            self.with_contract_action.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.dust_only.fetch_add(1, Ordering::Relaxed);
+        }
+        self.prover.prove(tx, rng, resolver, cost_model).await
+    }
 }
-
-proof_counter!(ledger_8);
-proof_counter!(ledger_9);
 
 #[tokio::test]
 async fn a_funded_call_proves_its_circuit_exactly_once() {
@@ -142,8 +131,9 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         return;
     };
 
-    let counter_proofs = Arc::new(ProofCounter::default());
-    let provider = MidnightProvider::new(&node_url).with_proof_provider(counter_proofs.clone());
+    let provider = MidnightProvider::new(&node_url);
+    let counter_proofs = Arc::new(ProofCounter::new(provider.proof_provider()));
+    let provider = provider.with_proof_provider(counter_proofs.clone());
     let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 

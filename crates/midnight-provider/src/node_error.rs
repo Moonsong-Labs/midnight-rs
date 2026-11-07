@@ -25,9 +25,8 @@
 //! `midnight-node-ledger`, pulls `frame-support`, `sp-runtime` and several
 //! ledger generations, which this SDK does not depend on. More to the point,
 //! the pinned fork in `Cargo.toml` and the node image in
-//! `devnet/docker-compose.yml` move independently, and today they disagree on
-//! 52 codes: 168 has no meaning in the fork while the image we run returns it.
-//! A generated table would be right for the fork and wrong for the node.
+//! `devnet/docker-compose.yml` move independently. A generated table follows
+//! the fork, and the node that a caller talks to can run another table.
 //!
 //! ## So this names only what we have seen
 //!
@@ -42,17 +41,17 @@
 //! A code with no entry renders as the number the node sent, which is what a
 //! caller had before this module existed. Adding one takes two files in
 //! midnight-node, at the tag matching the image in
-//! `devnet/docker-compose.yml`. `ledger/src/versions/common/types.rs` holds
-//! the numbers, in `From<LedgerApiError> for u8`. Beside it,
-//! `ledger/src/versions/common/conversions.rs` maps each ledger failure onto
-//! the node enum variant that number names, which is where a qualifier like
+//! `devnet/docker-compose.yml`. `ledger/src/ledger_9/types.rs` holds the
+//! numbers, in `From<LedgerApiError> for u8`. Beside it,
+//! `ledger/src/ledger_9/conversions.rs` maps each ledger failure onto the
+//! node enum variant that number names, which is where a qualifier like
 //! `InvalidError` or `MalformedError` comes from.
 //!
 //! Codes are not stable across node releases, which was measured rather than
-//! feared. Between the tag we pin and a midnight-node revision four months
-//! later, the table grows from 119 assignments to 154, three codes change
-//! meaning, and 168 is withdrawn entirely. Treat a name as a reading aid,
-//! never as a protocol constant.
+//! feared. Between two midnight-node revisions four months apart, the table
+//! grows from 119 assignments to 154, three codes change meaning, and 168 is
+//! withdrawn: the later revision splits `FeeCalculation` into 231 and 232.
+//! Treat a name as a reading aid, never as a protocol constant.
 
 /// `(code, name)`, sorted by code. Qualified as the node writes them, so a
 /// name says which enum it came from.
@@ -63,14 +62,6 @@ static CODES: &[(u8, &str)] = &[
     // A transaction that carries an empty Dust intent, which the ledger treats
     // as non-canonical (`balance_bare_call`).
     (117, "MalformedError::NotNormalized"),
-    // Registering with two unshielded inputs, which puts the transaction
-    // outside its time to dismiss (`dust_registration_submit`).
-    //
-    // This one is version-bound, and it is the reason the module says a name
-    // is a reading aid. The node of the ledger 8 devnet image emits it. The
-    // later node of the ledger 9 image retires the assignment and gives 168
-    // no meaning. Every other entry has the same code in both.
-    (168, "MalformedError::FeeCalculation"),
     // Transferring a pre-allocated dev token with chain-side restrictions
     // (`midnight-wallet` integration tests).
     (171, "MalformedError::OutOfDustValidityWindow"),
@@ -81,6 +72,11 @@ static CODES: &[(u8, &str)] = &[
     (195, "InvalidError::InputNotInUtxos"),
     // Two wallets on one seed drawing the same Dust note.
     (196, "InvalidError::DustDoubleSpend"),
+    // A transaction outside its time to dismiss: a registration with two
+    // unshielded inputs (`dust_registration_submit`), or a transfer whose fee
+    // intent draws two Dust spends. The other `FeeCalculation` code, 232, is
+    // `BlockLimitExceeded`.
+    (231, "MalformedError::FeeCalculation(OutsideTimeToDismiss)"),
 ];
 
 /// The name midnight-node gives `code`, or `None` when this build has never

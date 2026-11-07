@@ -8,10 +8,8 @@
 //! on, so a wallet, a provider, and a contract builder can all share this
 //! vocabulary without sharing an implementation.
 //!
-//! The vocabulary is the same for every ledger generation. The transfer
-//! machinery is per generation: [`ledger_8`] and [`ledger_9`] compile one
-//! source against each generation's types, and [`LedgerVersion`] names the
-//! generation a chain runs.
+//! The transfer machinery, which names the ledger's transaction types, is in
+//! [`ledger_9`].
 //!
 //! The API a consumer programs a wallet against is the `WalletFacade` trait in
 //! `midnight-wallet-facade`, which speaks in this crate's types.
@@ -19,18 +17,12 @@
 pub mod address;
 pub mod chain_pin;
 pub mod hd;
-pub mod ledger_8;
-#[expect(
-    clippy::duplicate_mod,
-    reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
-)]
 pub mod ledger_9;
 
 mod balance;
 mod coin;
 mod error;
 mod hash;
-mod ledger_version;
 mod network;
 mod parameters;
 mod sync;
@@ -47,7 +39,6 @@ pub use coin::{
 };
 pub use error::{WalletError, refuse_repeated_nullifiers};
 pub use hash::{BlockHash, ExtrinsicHash};
-pub use ledger_version::{LedgerVersion, UnknownLedger};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::{InvalidNetworkName, Network, NetworkName};
 pub use parameters::{ChainParameters, DustParameters};
