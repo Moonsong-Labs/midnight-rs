@@ -12,14 +12,14 @@ use midnight_types::{
 use tokio::sync::mpsc;
 use tracing::info;
 
-use crate::ledger_9::snapshot::LoadedState;
 use crate::replay::{
     UnshieldedReplay, latest_block, progress_cancelled, replay_unshielded_events, require_ledger_9,
     send_progress,
 };
+use crate::snapshot::LoadedState;
 use crate::storage::wallet_storage_id;
 use crate::sync::SyncPlan;
-use crate::{SyncProgress, ledger_9};
+use crate::{SyncProgress, state};
 
 /// A Midnight wallet: identity (seed, addresses) and synced ledger state.
 ///
@@ -33,15 +33,15 @@ use crate::{SyncProgress, ledger_9};
 /// fork to ledger 9, so the wallet keeps the coins it received before the
 /// fork.
 pub struct Wallet {
-    state: ledger_9::Wallet,
+    state: state::Wallet,
 }
 
 impl Wallet {
-    pub(crate) fn state(&self) -> &ledger_9::Wallet {
+    pub(crate) fn state(&self) -> &state::Wallet {
         &self.state
     }
 
-    pub(crate) fn state_mut(&mut self) -> &mut ledger_9::Wallet {
+    pub(crate) fn state_mut(&mut self) -> &mut state::Wallet {
         &mut self.state
     }
 
@@ -106,11 +106,9 @@ impl Wallet {
 
         info!("loading cached state from disk");
         let snapshot = match sync.storage_dir {
-            Some(dir) => ledger_9::snapshot::load(
-                dir,
-                sync.network.as_str(),
-                &wallet_storage_id(sync.address),
-            )?,
+            Some(dir) => {
+                crate::snapshot::load(dir, sync.network.as_str(), &wallet_storage_id(sync.address))?
+            }
             None => None,
         };
         let sync = match &snapshot {
@@ -390,10 +388,7 @@ impl Wallet {
     ///   spends cannot have been observed by a replay that started earlier).
     /// - `parameters` and `block_context` are refreshed from the chain view
     ///   the replay fetched.
-    pub(crate) fn commit_resync(
-        &mut self,
-        commit: ledger_9::ResyncCommit,
-    ) -> Result<(), WalletError> {
+    pub(crate) fn commit_resync(&mut self, commit: state::ResyncCommit) -> Result<(), WalletError> {
         self.state.commit_resync(commit)
     }
 
@@ -419,7 +414,7 @@ impl Wallet {
     /// left alone here.
     pub(crate) fn commit_shielded_rescan(
         &mut self,
-        commit: ledger_9::ShieldedRescanCommit,
+        commit: state::ShieldedRescanCommit,
     ) -> Result<(), WalletError> {
         self.state.commit_shielded_rescan(commit)
     }
@@ -441,7 +436,7 @@ impl Wallet {
 #[must_use = "run the plan with ResyncPlan::run, then apply it with Wallet::commit_resync"]
 pub(crate) struct ResyncPlan {
     indexer_url: String,
-    plan: ledger_9::ResyncPlan,
+    plan: state::ResyncPlan,
 }
 
 impl ResyncPlan {
@@ -449,7 +444,7 @@ impl ResyncPlan {
     /// from the snapshotted cursors and fetch the latest block (chain time +
     /// ledger parameters), all without touching the wallet.
     ///
-    /// Returns the validated [`ledger_9::ResyncCommit`] to apply with
+    /// Returns the validated [`state::ResyncCommit`] to apply with
     /// [`Wallet::commit_resync`]. On any replay or fetch error nothing was
     /// committed anywhere, so the wallet the plan was taken from is
     /// untouched.
@@ -459,7 +454,7 @@ impl ResyncPlan {
     /// the same cursors and race their commits).
     /// [`LocalWallet`](crate::LocalWallet) holds a mutex across plan → run →
     /// commit for this.
-    pub(crate) async fn run(self) -> Result<ledger_9::ResyncCommit, WalletError> {
+    pub(crate) async fn run(self) -> Result<state::ResyncCommit, WalletError> {
         self.plan.run(&self.indexer_url).await
     }
 }
@@ -482,14 +477,14 @@ impl ResyncPlan {
 #[must_use = "run the plan with ShieldedRescanPlan::run, then apply it with Wallet::commit_shielded_rescan"]
 pub(crate) struct ShieldedRescanPlan {
     indexer_url: String,
-    plan: ledger_9::ShieldedRescanPlan,
+    plan: state::ShieldedRescanPlan,
 }
 
 impl ShieldedRescanPlan {
     /// Run the rescan's replay phase: replay the whole shielded event stream
     /// from its first event, without touching the wallet.
     ///
-    /// Returns the [`ledger_9::ShieldedRescanCommit`] to apply with
+    /// Returns the [`state::ShieldedRescanCommit`] to apply with
     /// [`Wallet::commit_shielded_rescan`]. On a replay error nothing was
     /// committed anywhere, so the wallet the plan was taken from is
     /// untouched.
@@ -502,7 +497,7 @@ impl ShieldedRescanPlan {
     ///
     /// The replay reads the events before the chain's hard fork to ledger 9
     /// in ledger 8, and carries the state across the fork.
-    pub(crate) async fn run(self) -> Result<ledger_9::ShieldedRescanCommit, WalletError> {
+    pub(crate) async fn run(self) -> Result<state::ShieldedRescanCommit, WalletError> {
         self.plan.run(&self.indexer_url).await
     }
 }
@@ -529,14 +524,14 @@ async fn sync_on_chain(
     block: &midnight_indexer_client::Block,
     snapshot: Option<LoadedState>,
     progress: Option<mpsc::Sender<SyncProgress>>,
-) -> Result<ledger_9::Wallet, WalletError> {
+) -> Result<state::Wallet, WalletError> {
     // Where each stream starts. When resuming, start from the next event
     // after the last one applied; the subscription is inclusive, so the
     // last one itself would be delivered again.
     let (zswap_resume, dust, utxos, start_tx_id, height) = match snapshot {
         Some(s) => (
             Some((s.zswap_state, s.zswap_event_id + 1)),
-            ledger_9::state::DustStart::Resume {
+            state::DustStart::Resume {
                 wallet: Box::new(s.dust_wallet),
                 next_id: s.dust_event_id + 1,
             },
@@ -544,7 +539,7 @@ async fn sync_on_chain(
             s.last_tx_id.map(|id| id + 1).unwrap_or(0),
             s.last_block_height,
         ),
-        None => (None, ledger_9::state::DustStart::Fresh, Vec::new(), 0, 0),
+        None => (None, state::DustStart::Fresh, Vec::new(), 0, 0),
     };
     let resuming = zswap_resume.is_some();
 
@@ -556,9 +551,9 @@ async fn sync_on_chain(
     let zswap = async {
         match zswap_resume {
             Some((state, next_id)) => {
-                ledger_9::state::replay_zswap_events(
+                crate::state::replay_zswap_events(
                     &sub_client,
-                    &ledger_9::state::zswap_keys(sync.seed),
+                    &crate::state::zswap_keys(sync.seed),
                     state,
                     next_id,
                     true,
@@ -567,13 +562,8 @@ async fn sync_on_chain(
                 .await
             }
             None => {
-                ledger_9::state::replay_zswap_from_genesis(
-                    &sub_client,
-                    sync.seed,
-                    &[],
-                    progress.clone(),
-                )
-                .await
+                state::replay_zswap_from_genesis(&sub_client, sync.seed, &[], progress.clone())
+                    .await
             }
         }
     };
@@ -597,10 +587,10 @@ async fn sync_on_chain(
         spent: spent_unshielded,
     } = unshielded?;
 
-    ledger_9::Wallet::finish_sync(
+    state::Wallet::finish_sync(
         sync,
         block,
-        ledger_9::state::SyncStart {
+        state::SyncStart {
             zswap_state: zswap.state,
             zswap_event_id: zswap.last_id,
             unshielded_utxos,
@@ -636,7 +626,7 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use midnight_helpers::{DefaultDB, Tagged, ledger_8, ledger_9};
+    use midnight_helpers::{DefaultDB, Tagged, ledger_8};
     use midnight_indexer_client::testutil::{
         accept_subscriber, bind, ledger_event, next_json, send_next, subscription_variable,
     };
@@ -663,7 +653,7 @@ mod tests {
             ),
             (
                 2,
-                crate::ledger_9::state::test_support::ciphertextless_output(
+                crate::state::test_support::ciphertextless_output(
                     &test_seed(),
                     &unreachable_coin(2, 42),
                     1,
@@ -684,7 +674,7 @@ mod tests {
             }
         });
 
-        let replayed = crate::ledger_9::state::replay_zswap_from_genesis(
+        let replayed = crate::state::replay_zswap_from_genesis(
             &SubscriptionClient::new(&url),
             &test_seed(),
             &[unreachable_coin(1, 42), unreachable_coin(2, 42)],
@@ -728,16 +718,16 @@ mod tests {
             while next_json(&mut ws).await.is_some() {}
         });
 
-        let wallet = ledger_9::DustWallet::default(
-            midnight_types::ledger_9::convert::IntoLedger::into_ledger(&test_seed()),
-            Some(&ledger_9::INITIAL_PARAMETERS),
+        let wallet = midnight_helpers::DustWallet::default(
+            midnight_types::convert::IntoLedger::into_ledger(&test_seed()),
+            Some(&midnight_helpers::INITIAL_PARAMETERS),
         );
-        let replay = crate::ledger_9::state::replay_dust_events(
+        let replay = crate::state::replay_dust_events(
             &SubscriptionClient::new(&url),
             wallet,
             0,
             false,
-            None::<fn(&ledger_9::DustWallet<DefaultDB>, i64)>,
+            None::<fn(&midnight_helpers::DustWallet<DefaultDB>, i64)>,
             None,
         )
         .await
@@ -781,7 +771,7 @@ mod tests {
             std::fs::write(dir.join("metadata.json"), metadata(ledger_version)).unwrap();
             let pin_read = Wallet::stored_chain_pin(base.path(), Network::Undeployed, address)
                 .expect_err("a ledger 8 snapshot must not give its pin");
-            let load = crate::ledger_9::snapshot::load(
+            let load = crate::snapshot::load(
                 base.path(),
                 Network::Undeployed.as_str(),
                 &wallet_storage_id(address),

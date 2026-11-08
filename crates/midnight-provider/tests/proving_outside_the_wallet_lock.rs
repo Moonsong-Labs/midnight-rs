@@ -28,16 +28,16 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use midnight_helpers::ledger_9::{
-    CostModel, LocalProofServer, ProofProvider, ProvenTransaction, Resolver, UnprovenTransaction,
+use midnight_helpers::{
+    CostModel, DefaultDB, LocalProofServer, ProofProvider, ProvenTransaction, Resolver, StdRng,
+    UnprovenTransaction,
 };
-use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{
     MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, SpentInputs, TransferKind,
     TransferRequest, UnshieldedRecipient, WalletError, WalletFacade,
 };
 use midnight_wallet::LocalWallet;
-use midnight_wallet_facade::ledger_9::WalletBuilds;
+use midnight_wallet_facade::WalletBuilds;
 use tokio::sync::Notify;
 
 fn night() -> ShieldedTokenType {

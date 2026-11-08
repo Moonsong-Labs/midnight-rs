@@ -17,24 +17,30 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── state.rs             state fetch (node RPC) + deserialization
   │     ├── zk_config.rs         ZkConfigProvider: where prover/verifier keys come from
   │     ├── offer.rs             ShieldedOffer: coins and payments a deploy carries
-  │     ├── ledger_9             (private) the ledger 9 build of a call, deploy and
-  │     │                        maintenance update, and the shielded outputs and change
-  │     │                        that calls and deploys share
+  │     ├── ledger/              (private) the ledger 9 build of a call, deploy and
+  │     │     │                  maintenance update
+  │     │     ├── call.rs        a circuit call's transaction: transcripts, offers, proof, funding
+  │     │     ├── deploy.rs      a deploy's transaction
+  │     │     ├── maintenance.rs a maintenance update's transaction
+  │     │     ├── resolver.rs    the resolver that contract calls prove with
+  │     │     └── state.rs       a circuit's operation, from the verifier key of its artifact
   │     └── interpreter / runtime  re-exports of compact-interpreter and compact-runtime
   │
   ├── midnight-provider          network entrypoint; wallet reached only through the facade
   │     ├── MidnightProvider     Provider impl; transfer_*, register_dust, resync, submit
-  │     ├── ledger_9             Builds: the attached wallet's builds
-  │     ├── remote_prover        RemoteProofServer (ProofProvider over an HTTP proof server)
-  │     ├── submit               PendingTx, PreparedTx, TxInBlock, Verdict, NotApplied
+  │     ├── builds.rs            Builds: the attached wallet's builds
+  │     ├── remote_prover.rs     RemoteProofServer (ProofProvider over an HTTP proof server)
+  │     ├── proving.rs           RemoteProofServer's ProofProvider impl and its proof server client
+  │     ├── submit.rs            PendingTx, PreparedTx, TxInBlock, Verdict, NotApplied
   │     └── (deps) midnight-types, midnight-wallet-facade, subxt (node RPC)
   │
   ├── midnight-types       implementation-free vocabulary and toolkit; a function of
   │     │                        midnight-helpers + H256 + BIP-32/BIP-39
   │     ├── coin.rs              token types, nullifiers, coins, keys
   │     ├── transfer.rs          TransferRequest, SpentInputs, TransferResult
-  │     ├── ledger_9             TransferBuilder + PreparedTransfer + prove, PreparedInput,
-  │     │                        and the conversions to and from the ledger's types
+  │     ├── builder.rs           TransferBuilder + PreparedTransfer + prove, BuildInputs
+  │     ├── inputs.rs            PreparedInput: the shielded inputs that the wallet spends
+  │     ├── convert.rs           the conversions to and from the ledger's types
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
   │     ├── sync.rs              TrackedUtxo, SyncCursors
   │     ├── hd.rs                Seed and its addresses, mnemonic, Role and the BIP-32 role keys
@@ -45,7 +51,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     └── error.rs             WalletError
   │
   ├── midnight-wallet-facade     the WalletFacade trait, IntoWalletFacade (what
-  │                              with_wallet takes), and in ledger_9 the
+  │                              with_wallet takes), and in builds.rs the
   │                              WalletBuilds trait and ReservedBuild, in
   │                              midnight-types's vocabulary; nothing else
   │
@@ -55,7 +61,12 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── sync.rs              Wallet::from_seed / from_mnemonic / from_mnemonic_with_passphrase or
   │     │                        WalletBuilder::new → WalletBuilder → sync(source), pinned by default
   │     ├── wallet.rs            Wallet { state }
-  │     ├── ledger_9             the state, balance and pending reservations
+  │     ├── state.rs             the synced state, and the plan and commit of a resync or a rescan
+  │     ├── balance.rs           the balances and the spendable shielded coins
+  │     ├── pending.rs           pending reservations
+  │     ├── builds.rs            LocalWallet's WalletBuilds impl
+  │     ├── transfer.rs          the state as the BuildInputs of a transfer
+  │     ├── snapshot.rs          the state files, under the layout of storage.rs
   │     ├── (private)            the reader of the shielded events from before the fork
   │     │                        to ledger 9, in ledger 8 types
   │     └── storage.rs           generation-based atomic persistence
@@ -76,9 +87,9 @@ midnight-core                    meta-crate; re-exports the public API
   │
   ├── midnight-crypto            facade over base-crypto / transient-crypto / curves
   │
-  └── midnight-helpers           a ledger_9 module over the upstream node helpers; a
-                                 ledger_8 module and fork::old_to_new_ser for the
-                                 wallet's reader of the shielded events before the fork
+  └── midnight-helpers           the ledger 9 surface of the upstream node helpers at its
+                                 root, plus a ledger_8 module and fork::old_to_new_ser for
+                                 the wallet's reader of the shielded events before the fork
                                  (single pinning point for the upstream deps)
 ```
 
@@ -98,9 +109,9 @@ midnight-core                    meta-crate; re-exports the public API
 | `PendingCall<T>` | contract | A submitted circuit call and its decoded result. `wait_finalized()` waits with no SDK deadline and settles the private-state snapshot by the verdict. A drop leaves the snapshot `Pending`. |
 | `Constructor` | contract | A contract's constructor as an `ir::Circuit`, the declarations it calls and the state it starts from. The generated `Contract::deploy` sets it, and the deploy runs it before any proof. |
 | `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. `wait_finalized` settles the deploy's private-state snapshot as a call's wait does, and a best-block wait leaves it `Pending`. |
-| `ProofProvider` | helpers | Proof backend trait (`midnight_helpers::ledger_9`). Set on the provider as an `Arc<dyn ProofProvider<DefaultDB>>` with `with_proof_provider`. The in-process prover is the default. |
+| `ProofProvider` | helpers | Proof backend trait (`midnight_helpers::ProofProvider`). Set on the provider as an `Arc<dyn ProofProvider<DefaultDB>>` with `with_proof_provider`. The in-process prover is the default. |
 | `RemoteProofServer` | provider | `ProofProvider` that delegates to an HTTP proof server (`/check` + `/prove`). |
-| `Builds` | provider | The attached wallet's builds (`midnight_provider::ledger_9::Builds`), from `MidnightProvider::builds`. |
+| `Builds` | provider | The attached wallet's builds (`midnight_provider::Builds`), from `MidnightProvider::builds`. |
 
 ## Provider ↔ Wallet model
 
@@ -129,7 +140,7 @@ provider
   .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext: register, then rescan
   .forget_coin(coin).await                          // drop a registration that matched nothing
   .rescan_shielded().await                          // replay the shielded stream from event zero
-  .builds().await                  → ledger_9::Builds (resyncs first)
+  .builds().await                  → Builds (resyncs first)
       b.build_context().await      → Arc<BuildContext> (evicts expired pending)
       b.execution_context().await  → the half a circuit runs against, with no funding view
       b.add_funding(&ctx) / b.build_funded(tx_info) / b.prepare_shielded_inputs(..)
@@ -376,7 +387,7 @@ provider.transfer_shielded(token_type, amount, recipient)       // a typed recip
 
 provider.builds()                    // resync_wallet, then the wallet's builds
   ↓
-ledger_9::WalletBuilds::prepare_transfer(request, proof_provider)   // one hold of the wallet
+WalletBuilds::prepare_transfer(request, proof_provider)   // one hold of the wallet
   build_context_inner (execution context + add_funding, which evicts expired pending)
   TransferBuilder::prepare(request)
     └─ select inputs from wallet's local state

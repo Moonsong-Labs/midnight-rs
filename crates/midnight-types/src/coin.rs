@@ -1,7 +1,7 @@
 //! The coin, key and address values the SDK's API carries.
 //!
 //! Each mirrors the coin-structure type of the same name, field for field.
-//! [`crate::ledger_9::convert`] converts them.
+//! [`crate::convert`] converts them.
 
 use std::fmt;
 
@@ -39,7 +39,7 @@ impl fmt::Display for UnshieldedTokenType {
 pub const NIGHT: UnshieldedTokenType = UnshieldedTokenType(HashOutput([0; 32]));
 
 // `1 DUST = 10^15 SPECK` and `1 NIGHT = 10^6 STAR`.
-pub use midnight_helpers::ledger_9::{SPECKS_PER_DUST, STARS_PER_NIGHT};
+pub use midnight_helpers::{SPECKS_PER_DUST, STARS_PER_NIGHT};
 
 /// The nullifier that marks a shielded coin as spent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -136,22 +136,20 @@ pub struct ContractAddress(pub HashOutput);
 impl ContractAddress {
     /// The shielded token this contract mints under `domain_sep`.
     pub fn custom_shielded_token_type(&self, domain_sep: HashOutput) -> ShieldedTokenType {
-        let address = midnight_helpers::ledger_9::ContractAddress(self.0);
+        let address = midnight_helpers::ContractAddress(self.0);
         ShieldedTokenType(address.custom_shielded_token_type(domain_sep).0)
     }
 
     /// The unshielded token this contract mints under `domain_sep`.
     pub fn custom_unshielded_token_type(&self, domain_sep: HashOutput) -> UnshieldedTokenType {
-        let address = midnight_helpers::ledger_9::ContractAddress(self.0);
+        let address = midnight_helpers::ContractAddress(self.0);
         UnshieldedTokenType(address.custom_unshielded_token_type(domain_sep).0)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use midnight_helpers::ledger_9;
-
-    use crate::ledger_9::convert::{IntoLedger as _, IntoSdk as _};
+    use crate::convert::{IntoLedger as _, IntoSdk as _};
 
     /// The `Display` docs promise the form the indexer reports, and
     /// `UnshieldedUtxoInfo::token_type_hex` gives it to callers. The inner
@@ -167,9 +165,12 @@ mod tests {
     /// back as another element.
     #[test]
     fn a_dust_nullifier_round_trips_through_the_sdk() {
-        for value in [ledger_9::Fr::from(7u64), -ledger_9::Fr::from(1u64)] {
-            let nullifier = ledger_9::DustNullifier(value).into_sdk();
-            let back: ledger_9::DustNullifier = nullifier.into_ledger();
+        for value in [
+            midnight_helpers::Fr::from(7u64),
+            -midnight_helpers::Fr::from(1u64),
+        ] {
+            let nullifier = midnight_helpers::DustNullifier(value).into_sdk();
+            let back: midnight_helpers::DustNullifier = nullifier.into_ledger();
             assert_eq!(back.0, value);
         }
     }

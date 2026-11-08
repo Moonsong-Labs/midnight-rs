@@ -14,17 +14,16 @@ use tracing::{debug, info, warn};
 
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
 use crate::{
-    Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, ledger_9, submit,
+    Builds, Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit,
 };
-use midnight_helpers::DefaultDB;
-use midnight_helpers::ledger_9::ProofProvider;
+use midnight_helpers::{DefaultDB, ProofProvider};
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
     BlockHash, ChainParameters, CoinInfo, Network, ShieldedRecipient, ShieldedTokenType,
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest, TransferResult,
     UnshieldedRecipient, UnshieldedTokenType, WalletBalance,
 };
-use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
+use midnight_wallet_facade::{IntoWalletFacade, WalletBuilds, WalletFacade};
 
 /// The bound of a node query, its connect included.
 ///
@@ -226,7 +225,7 @@ impl MidnightProvider {
     ///
     /// A synced `Wallet` from `midnight-wallet` goes in behind a `LocalWallet`.
     /// Anything else that implements [`WalletFacade`] and
-    /// [`ledger_9::WalletBuilds`] goes in as itself. To keep a handle on the
+    /// [`WalletBuilds`] goes in as itself. To keep a handle on the
     /// attached wallet, attach an `Arc<LocalWallet>`, or an `Arc` of your own
     /// wallet:
     ///
@@ -278,10 +277,10 @@ impl MidnightProvider {
     /// root and the TTL anchor.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn builds(&self) -> Result<ledger_9::Builds<'_>, ProviderError> {
+    pub async fn builds(&self) -> Result<Builds<'_>, ProviderError> {
         self.resync_wallet().await?;
         let wallet = self.attached()?;
-        Ok(ledger_9::Builds::new(
+        Ok(Builds::new(
             self,
             wallet.builds.clone(),
             self.proof_provider(),
@@ -572,7 +571,7 @@ impl MidnightProvider {
     /// Dust address, or to another wallet's with [`DustRegistration::to`].
     ///
     /// [`DustBalance::unregistered_night_utxos`]: midnight_types::DustBalance::unregistered_night_utxos
-    /// [`TransferBuilder::prepare_register_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_register_dust
+    /// [`TransferBuilder::prepare_register_dust`]: midnight_types::TransferBuilder::prepare_register_dust
     pub fn register_dust(&self, utxo_ctime: Option<u64>) -> DustRegistration<'_> {
         DustRegistration::new(self, utxo_ctime)
     }
@@ -690,7 +689,7 @@ impl MidnightProvider {
     /// merged (colliding intent segments or mismatched network ids). Purely
     /// local; nothing is sent to the node.
     pub fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
-        ledger_9::merge_transactions(txs)
+        crate::builds::merge_transactions(txs)
     }
 
     /// Pay the fees for an external party's proven, fee-less transaction from
@@ -734,7 +733,7 @@ impl MidnightProvider {
     ) -> Result<TransferResult, ProviderError> {
         // Decode before the resync, so bytes that are no transaction fail
         // with no node access.
-        let external = ledger_9::deserialize_transaction(tx_bytes)?;
+        let external = crate::builds::deserialize_transaction(tx_bytes)?;
         self.builds()
             .await?
             .balance_decoded(tx_bytes, external)
@@ -1243,7 +1242,7 @@ impl MidnightProvider {
 /// nothing here holds a lock. Cloning an `Arc` is cheap and safe.
 struct AttachedWallet {
     facade: Arc<dyn WalletFacade>,
-    builds: Arc<dyn ledger_9::WalletBuilds>,
+    builds: Arc<dyn WalletBuilds>,
 }
 
 /// The inputs a build has reserved, released if the build does not finish.

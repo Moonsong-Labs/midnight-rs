@@ -1,7 +1,7 @@
 //! A wallet's snapshot directory: its layout, `metadata.json`, and
 //! `pending.json`.
 //!
-//! The binary state files hold ledger 9 state (see `ledger_9::snapshot`). The
+//! The binary state files hold ledger 9 state (see `crate::snapshot`). The
 //! metadata names the ledger generation that wrote them, because their tags
 //! are the same in ledger 8 and ledger 9.
 

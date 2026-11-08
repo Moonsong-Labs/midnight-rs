@@ -8,21 +8,24 @@
 //! on, so a wallet, a provider, and a contract builder can all share this
 //! vocabulary without sharing an implementation.
 //!
-//! The transfer machinery, which names the ledger's transaction types, is in
-//! [`ledger_9`].
+//! The transfer machinery names the ledger's transaction types:
+//! [`TransferBuilder`] builds a [`PreparedTransfer`], and [`convert`] converts
+//! between the SDK's values and the ledger's.
 //!
 //! The API a consumer programs a wallet against is the `WalletFacade` trait in
 //! `midnight-wallet-facade`, which speaks in this crate's types.
 
 pub mod address;
 pub mod chain_pin;
+pub mod convert;
 pub mod hd;
-pub mod ledger_9;
 
 mod balance;
+mod builder;
 mod coin;
 mod error;
 mod hash;
+mod inputs;
 mod network;
 mod parameters;
 mod sync;
@@ -32,6 +35,10 @@ pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, UnshieldedUtxoInfo,
     WalletBalance,
 };
+pub use builder::{
+    BuildInputs, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external, chain_time,
+    fee_speck, longest_ttl, prepare_no_validate,
+};
 pub use coin::{
     CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustPublicKey, EncryptionPublicKey,
     NIGHT, Nonce, Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient,
@@ -39,6 +46,7 @@ pub use coin::{
 };
 pub use error::{WalletError, refuse_repeated_nullifiers};
 pub use hash::{BlockHash, ExtrinsicHash};
+pub use inputs::{PreparedInput, prepare_shielded_inputs};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::{InvalidNetworkName, Network, NetworkName};
 pub use parameters::{ChainParameters, DustParameters};

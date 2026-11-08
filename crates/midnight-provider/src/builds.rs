@@ -2,15 +2,16 @@
 
 use std::sync::Arc;
 
-use midnight_types::{SpendableShieldedCoin, SpentInputs, TransferRequest, TransferResult};
-
-use super::facade::{ReservedBuild, WalletBuilds};
-use super::helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
-use super::helpers::{
+use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+use midnight_helpers::{
     BuildContext, DefaultDB, FinalizedTransaction, FromContext, ProofProvider,
     StandardTransactionInfo, StdRng, TokenType,
 };
-use super::types::{PreparedInput, fee_speck};
+use midnight_types::{
+    PreparedInput, SpendableShieldedCoin, SpentInputs, TransferRequest, TransferResult, fee_speck,
+};
+use midnight_wallet_facade::{ReservedBuild, WalletBuilds};
+
 use crate::{HeldInputs, MidnightProvider, ProviderError};
 
 /// The attached wallet's builds.
@@ -221,7 +222,7 @@ impl<'a> Builds<'a> {
 
 /// Merge proven transactions into one. See
 /// [`MidnightProvider::merge_transactions`].
-pub fn merge_transactions(txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
+pub(crate) fn merge_transactions(txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
     let mut iter = txs.iter();
     let first = iter.next().ok_or_else(|| {
         ProviderError::Transaction("merge_transactions requires at least one transaction".into())

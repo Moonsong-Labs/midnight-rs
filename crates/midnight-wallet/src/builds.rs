@@ -3,21 +3,21 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use midnight_types::{Nullifier, SpentInputs, TransferRequest, WalletError};
-
-use super::facade::{ReservedBuild, WalletBuilds};
-use super::helpers::{
+use midnight_helpers::{
     BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo, StdRng,
 };
-use super::types::convert::IntoLedger;
-use super::types::{
-    PreparedInput, PreparedTransfer, TransferBuilder, balance_external, chain_time, longest_ttl,
-    prepare_no_validate, prepare_shielded_inputs,
+use midnight_types::convert::IntoLedger;
+use midnight_types::{
+    Nullifier, PreparedInput, PreparedTransfer, SpentInputs, TransferBuilder, TransferRequest,
+    WalletError, balance_external, chain_time, longest_ttl, prepare_no_validate,
+    prepare_shielded_inputs,
 };
+use midnight_wallet_facade::{ReservedBuild, WalletBuilds};
+
 use crate::LocalWallet;
 
 /// Reserve what `prepared` spends, and hand it over as reserved.
-fn reserve(wallet: &mut super::Wallet, prepared: PreparedTransfer) -> ReservedBuild {
+fn reserve(wallet: &mut crate::state::Wallet, prepared: PreparedTransfer) -> ReservedBuild {
     wallet.reserve_pending(
         prepared.dust_batches().to_vec(),
         prepared.spent_unshielded_inputs().to_vec(),
@@ -29,9 +29,9 @@ fn reserve(wallet: &mut super::Wallet, prepared: PreparedTransfer) -> ReservedBu
 }
 
 /// Fund `tx_info` from `wallet`, and name `wallet`'s seed as the one the
-/// build draws on, as [`super::Wallet::add_funding`] requires.
+/// build draws on, as [`crate::state::Wallet::add_funding`] requires.
 fn fund_from(
-    wallet: &mut super::Wallet,
+    wallet: &mut crate::state::Wallet,
     tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
 ) -> Result<(), WalletError> {
     wallet.add_funding(&tx_info.context)?;

@@ -1,9 +1,8 @@
-use midnight_types::TrackedUtxo;
+use midnight_helpers::LedgerParameters;
 use midnight_types::hd::Seed;
+use midnight_types::{BuildInputs, TrackedUtxo};
 
-use super::helpers::LedgerParameters;
 use super::state::Wallet;
-use super::types::BuildInputs;
 
 impl BuildInputs for Wallet {
     fn seed(&self) -> &Seed {

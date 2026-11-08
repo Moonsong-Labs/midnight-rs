@@ -27,7 +27,7 @@ ContractProviders = {
 | `MidnightProvider.submitTx`   | `MidnightProvider::submit`                                                                          |
 | `PublicDataProvider`          | The `Provider` trait (`get_contract_state`), `StateQueryProvider` for the lazy reads, and `MidnightProvider`'s `get_*` reads |
 | `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers), plus `merge_transactions` / `balance_transaction` (see "Combining and balancing transactions") |
-| `ProofProvider`               | `ProofProvider` (the `midnight_helpers::ledger_9` trait), set with `with_proof_provider`: local by default, or a `RemoteProofServer` |
+| `ProofProvider`               | `midnight_helpers::ProofProvider`, set with `with_proof_provider`: local by default, or a `RemoteProofServer` |
 | `ZkConfigProvider`            | The `ZkConfigProvider` trait, set with `with_zk_config`, where a path gives the default `FsZkConfigProvider` |
 | `PrivateStateProvider`        | `midnight-private-state` crate (`FsPrivateStateProvider`); threaded through witnesses via `WitnessContext` — see below |
 | `LoggerProvider`              | The `tracing` crate facade — implicit, not a provider                                               |

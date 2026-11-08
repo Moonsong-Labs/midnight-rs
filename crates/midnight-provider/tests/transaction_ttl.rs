@@ -12,9 +12,8 @@ mod common;
 
 use std::time::Duration;
 
-use midnight_helpers::DefaultDB;
-use midnight_helpers::ledger_9::FinalizedTransaction;
 use midnight_helpers::midnight_serialize::tagged_deserialize;
+use midnight_helpers::{DefaultDB, FinalizedTransaction};
 use midnight_provider::{MidnightProvider, NIGHT};
 
 /// Long enough for a build, its proof and its inclusion, and well short of

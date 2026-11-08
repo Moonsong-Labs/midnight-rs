@@ -32,12 +32,9 @@
 use std::path::Path;
 
 use hex::FromHex;
-use midnight_types::HashOutput;
+use midnight_helpers::{DustNullifier, Nullifier, Timestamp};
+use midnight_types::{DustSpendBatch, HashOutput};
 
-use super::helpers;
-use helpers::{DustNullifier, Nullifier, Timestamp};
-
-use super::types::DustSpendBatch;
 use crate::generation::Generation;
 use crate::storage::{
     StoredPending, StoredPendingDustBatch, StoredPendingShielded, StoredPendingUnshielded,
@@ -239,7 +236,7 @@ impl PendingReservations {
     /// the chain time passes the TTL of the reservation. A TTL is never before
     /// the chain time of its build. So after that TTL, a later build carries a
     /// later stamp when its context is as new as the wallet's chain view.
-    /// [`super::Wallet::add_funding`] re-anchors the context of a funded build
+    /// [`crate::state::Wallet::add_funding`] re-anchors the context of a funded build
     /// on that view.
     ///
     /// Release each reservation once. Two builds at one chain time share a
@@ -421,8 +418,8 @@ impl PendingReservations {
 pub(super) mod test_support {
     use super::*;
     use crate::Seed;
-    use helpers::mn_ledger::dust::DustCommitment;
-    use helpers::{
+    use midnight_helpers::mn_ledger::dust::DustCommitment;
+    use midnight_helpers::{
         DefaultDB, DustLocalState, DustSpend, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage,
         ProofPreimageMarker, Sp,
     };
@@ -476,7 +473,7 @@ mod tests {
     use super::test_support::{dust_batch, dust_spend, nullifier, ukey};
     use super::*;
     use crate::Seed;
-    use helpers::{DustLocalState, INITIAL_PARAMETERS, Sp};
+    use midnight_helpers::{DustLocalState, INITIAL_PARAMETERS, Sp};
 
     #[test]
     fn evict_expired_drops_entries_past_ttl() {
@@ -740,7 +737,7 @@ mod tests {
     }
 
     fn shielded_nf(n: u8) -> Nullifier {
-        Nullifier(helpers::HashOutput([n; 32]))
+        Nullifier(midnight_helpers::HashOutput([n; 32]))
     }
 
     #[test]

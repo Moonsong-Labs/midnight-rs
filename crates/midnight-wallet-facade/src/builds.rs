@@ -1,14 +1,15 @@
-//! A wallet's builds on ledger 9.
+//! A wallet's builds.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use midnight_types::{Nullifier, SpentInputs, TransferRequest, WalletError};
-
-use super::helpers::{
+use midnight_helpers::{
     BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo, StdRng,
 };
-use super::types::{PreparedInput, PreparedTransfer};
+use midnight_types::{
+    Nullifier, PreparedInput, PreparedTransfer, SpentInputs, TransferRequest, WalletError,
+};
+
 use crate::WalletFacade;
 
 /// A prepared build whose inputs the wallet already holds.

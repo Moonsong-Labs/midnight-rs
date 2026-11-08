@@ -13,19 +13,17 @@
 
 use std::sync::Arc;
 
-use midnight_helpers::ledger_9::{
-    BuildContext, FinalizedTransaction, ProofProvider, StandardTransactionInfo,
+use midnight_helpers::{
+    BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo, StdRng,
 };
-use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{
     ChainParameters, CoinInfo, HashOutput, MidnightProvider, Network, Nullifier, ProviderError,
     ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors,
     TrackedUtxo, TransferRequest, TransferResult, WalletBalance, WalletError, WalletFacade,
 };
-use midnight_types::Timestamp;
-use midnight_types::ledger_9::PreparedInput;
+use midnight_types::{PreparedInput, Timestamp};
 use midnight_wallet::chain_pin::ChainView;
-use midnight_wallet_facade::ledger_9::{ReservedBuild, WalletBuilds};
+use midnight_wallet_facade::{ReservedBuild, WalletBuilds};
 
 /// A wallet that answers the three readings this test makes and refuses the
 /// rest. Everything it refuses would need chain state to answer honestly. It
@@ -171,7 +169,7 @@ async fn the_provider_reads_whatever_wallet_it_was_given() {
 /// that leaves the check to the wallet fails here.
 #[tokio::test]
 async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
-    use midnight_helpers::ledger_9::SeedableRng;
+    use midnight_helpers::SeedableRng;
 
     let provider = MidnightProvider::new("ws://test").with_wallet(StubWallet::default());
     let builds = provider.builds().await.expect("the stub resyncs");

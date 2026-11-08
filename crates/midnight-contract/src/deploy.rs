@@ -60,7 +60,7 @@ pub async fn deploy_funded(
 ) -> Result<DeployResult, ContractError> {
     let builds = provider.builds().await?;
     // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-    Box::pin(crate::ledger_9::deploy::deploy_funded(
+    Box::pin(crate::ledger::deploy::deploy_funded(
         &builds,
         recharged(initial_state),
         shielded_offer.as_ref(),

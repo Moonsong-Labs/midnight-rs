@@ -308,7 +308,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
         }
 
         let update =
-            crate::ledger_9::maintenance::prepare_update(&state, address, &self.specs, counter)?;
+            crate::ledger::maintenance::prepare_update(&state, address, &self.specs, counter)?;
         Ok(PreparedMaintenance {
             contract: self.contract,
             update,
@@ -347,7 +347,7 @@ pub(crate) enum OpSpec {
 #[must_use = "does nothing until sent or built"]
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
-    update: midnight_helpers::ledger_9::MaintenanceUpdate<midnight_helpers::DefaultDB>,
+    update: midnight_helpers::MaintenanceUpdate<midnight_helpers::DefaultDB>,
     /// The signatures collected so far, as `(committee index, signature)`.
     signatures: Vec<(u32, Signature)>,
     /// The on-chain committee at prepare time — used to verify attached
@@ -436,7 +436,7 @@ impl<'a, P> PreparedMaintenance<'a, P> {
         let provider = self.contract.provider().as_midnight_provider();
         let builds = provider.builds().await?;
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(crate::ledger_9::maintenance::maintenance_funded(
+        Box::pin(crate::ledger::maintenance::maintenance_funded(
             &builds,
             self.update,
             &self.signatures,

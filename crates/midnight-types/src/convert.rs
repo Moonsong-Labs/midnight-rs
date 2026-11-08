@@ -1,7 +1,6 @@
 //! Conversions between the SDK's own values and the ledger's.
 
-use super::helpers;
-use helpers::{Deserializable, Serializable};
+use midnight_helpers::{Deserializable, Serializable};
 
 use crate::hd::{Seed, SeedBytes};
 use crate::{
@@ -32,13 +31,13 @@ pub trait IntoSdk {
 macro_rules! hash_newtype {
     ($($sdk:ident => $ledger:ident),* $(,)?) => {$(
         impl IntoLedger for $sdk {
-            type Ledger = helpers::$ledger;
+            type Ledger = midnight_helpers::$ledger;
             fn into_ledger(self) -> Self::Ledger {
-                helpers::$ledger(self.0)
+                midnight_helpers::$ledger(self.0)
             }
         }
 
-        impl IntoSdk for helpers::$ledger {
+        impl IntoSdk for midnight_helpers::$ledger {
             type Sdk = $sdk;
             fn into_sdk(self) -> Self::Sdk {
                 $sdk(self.0)
@@ -58,9 +57,9 @@ hash_newtype! {
 }
 
 impl IntoLedger for CoinInfo {
-    type Ledger = helpers::CoinInfo;
+    type Ledger = midnight_helpers::CoinInfo;
     fn into_ledger(self) -> Self::Ledger {
-        helpers::CoinInfo {
+        midnight_helpers::CoinInfo {
             nonce: self.nonce.into_ledger(),
             type_: self.type_.into_ledger(),
             value: self.value,
@@ -68,7 +67,7 @@ impl IntoLedger for CoinInfo {
     }
 }
 
-impl IntoSdk for helpers::CoinInfo {
+impl IntoSdk for midnight_helpers::CoinInfo {
     type Sdk = CoinInfo;
     fn into_sdk(self) -> Self::Sdk {
         CoinInfo {
@@ -80,14 +79,14 @@ impl IntoSdk for helpers::CoinInfo {
 }
 
 impl IntoLedger for EncryptionPublicKey {
-    type Ledger = helpers::EncryptionPublicKey;
+    type Ledger = midnight_helpers::EncryptionPublicKey;
     fn into_ledger(self) -> Self::Ledger {
-        helpers::EncryptionPublicKey::deserialize(&mut self.0.as_slice(), 0)
+        midnight_helpers::EncryptionPublicKey::deserialize(&mut self.0.as_slice(), 0)
             .expect("the SDK holds only encryption keys that the ledger encoded")
     }
 }
 
-impl IntoSdk for helpers::EncryptionPublicKey {
+impl IntoSdk for midnight_helpers::EncryptionPublicKey {
     type Sdk = EncryptionPublicKey;
     fn into_sdk(self) -> Self::Sdk {
         EncryptionPublicKey(encoding(&self))
@@ -95,16 +94,16 @@ impl IntoSdk for helpers::EncryptionPublicKey {
 }
 
 impl IntoLedger for DustNullifier {
-    type Ledger = helpers::DustNullifier;
+    type Ledger = midnight_helpers::DustNullifier;
     fn into_ledger(self) -> Self::Ledger {
-        helpers::DustNullifier(
-            helpers::Fr::from_le_bytes(&self.0)
+        midnight_helpers::DustNullifier(
+            midnight_helpers::Fr::from_le_bytes(&self.0)
                 .expect("the SDK holds only Dust nullifiers that the ledger encoded"),
         )
     }
 }
 
-impl IntoSdk for helpers::DustNullifier {
+impl IntoSdk for midnight_helpers::DustNullifier {
     type Sdk = DustNullifier;
     fn into_sdk(self) -> Self::Sdk {
         DustNullifier(
@@ -117,16 +116,16 @@ impl IntoSdk for helpers::DustNullifier {
 }
 
 impl IntoLedger for DustPublicKey {
-    type Ledger = helpers::DustPublicKey;
+    type Ledger = midnight_helpers::DustPublicKey;
     fn into_ledger(self) -> Self::Ledger {
-        helpers::DustPublicKey(
-            helpers::Fr::from_le_bytes(&self.0)
+        midnight_helpers::DustPublicKey(
+            midnight_helpers::Fr::from_le_bytes(&self.0)
                 .expect("the SDK holds only Dust public keys that the ledger encoded"),
         )
     }
 }
 
-impl IntoSdk for helpers::DustPublicKey {
+impl IntoSdk for midnight_helpers::DustPublicKey {
     type Sdk = DustPublicKey;
     fn into_sdk(self) -> Self::Sdk {
         DustPublicKey(
@@ -139,12 +138,12 @@ impl IntoSdk for helpers::DustPublicKey {
 }
 
 impl IntoLedger for &Seed {
-    type Ledger = helpers::WalletSeed;
+    type Ledger = midnight_helpers::WalletSeed;
     fn into_ledger(self) -> Self::Ledger {
         match &self.0 {
-            SeedBytes::Short(bytes) => helpers::WalletSeed::Short(*bytes),
-            SeedBytes::Medium(bytes) => helpers::WalletSeed::Medium(*bytes),
-            SeedBytes::Long(bytes) => helpers::WalletSeed::Long(*bytes),
+            SeedBytes::Short(bytes) => midnight_helpers::WalletSeed::Short(*bytes),
+            SeedBytes::Medium(bytes) => midnight_helpers::WalletSeed::Medium(*bytes),
+            SeedBytes::Long(bytes) => midnight_helpers::WalletSeed::Long(*bytes),
         }
     }
 }
@@ -153,15 +152,15 @@ impl IntoLedger for &Seed {
 ///
 /// A crate-private function, not an `IntoSdk` impl: the `IntoLedger` impl for
 /// `&Seed` is the only public item that names the upstream seed.
-pub(crate) fn sdk_seed(seed: &helpers::WalletSeed) -> Seed {
+pub(crate) fn sdk_seed(seed: &midnight_helpers::WalletSeed) -> Seed {
     Seed(match seed {
-        helpers::WalletSeed::Short(bytes) => SeedBytes::Short(*bytes),
-        helpers::WalletSeed::Medium(bytes) => SeedBytes::Medium(*bytes),
-        helpers::WalletSeed::Long(bytes) => SeedBytes::Long(*bytes),
+        midnight_helpers::WalletSeed::Short(bytes) => SeedBytes::Short(*bytes),
+        midnight_helpers::WalletSeed::Medium(bytes) => SeedBytes::Medium(*bytes),
+        midnight_helpers::WalletSeed::Long(bytes) => SeedBytes::Long(*bytes),
     })
 }
 
-impl IntoSdk for &helpers::LedgerParameters {
+impl IntoSdk for &midnight_helpers::LedgerParameters {
     type Sdk = ChainParameters;
     fn into_sdk(self) -> Self::Sdk {
         ChainParameters {

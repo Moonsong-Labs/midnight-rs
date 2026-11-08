@@ -2,14 +2,12 @@
 
 use std::sync::LazyLock;
 
-use super::helpers;
-
 /// The resolver every contract call proves with: the builtin Zswap and Dust
 /// keys, then whatever [`register`](crate::resolver::register) made
 /// resolvable.
-pub(crate) fn shared() -> &'static helpers::Resolver {
-    static RESOLVER: LazyLock<helpers::Resolver> = LazyLock::new(|| {
-        use helpers::{
+pub(crate) fn shared() -> &'static midnight_helpers::Resolver {
+    static RESOLVER: LazyLock<midnight_helpers::Resolver> = LazyLock::new(|| {
+        use midnight_helpers::{
             DUST_EXPECTED_FILES, DustResolver, FetchMode, KeyLocation, MidnightDataProvider,
             OutputMode, PUBLIC_PARAMS, ProvingKeyMaterial, Resolver,
         };

@@ -10,7 +10,7 @@ use midnight_onchain_runtime::ops::Op;
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
 use midnight_serialize::tagged_serialize;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
-use midnight_types::ledger_9::convert::IntoLedger;
+use midnight_types::convert::IntoLedger;
 
 use crate::error::ContractError;
 use crate::interpreter;
@@ -113,7 +113,7 @@ pub(crate) async fn call_transaction(
 ) -> Result<midnight_types::TransferResult, ContractError> {
     let builds = provider.builds().await?;
     // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-    Box::pin(crate::ledger_9::call::call_transaction(
+    Box::pin(crate::ledger::call::call_transaction(
         &builds,
         circuit,
         args,
