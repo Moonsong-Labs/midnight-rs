@@ -19,9 +19,9 @@ use crate::{
 use midnight_helpers::{DefaultDB, ProofProvider};
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
-    BlockHash, ChainParameters, CoinInfo, Network, ShieldedRecipient, ShieldedTokenType,
-    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest, TransferResult,
-    UnshieldedRecipient, UnshieldedTokenType, WalletBalance,
+    BlockHash, CoinInfo, Network, ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin,
+    SpentInputs, TransferRequest, TransferResult, UnshieldedRecipient, UnshieldedTokenType,
+    WalletBalance,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletBuilds, WalletFacade};
 
@@ -243,8 +243,8 @@ impl MidnightProvider {
     /// # }
     /// ```
     ///
-    /// The wallet serializes its own resyncs, rescans, coin watches and
-    /// forgets, so the handle can run them too.
+    /// The wallet serializes its own resyncs and coin watches, so the handle
+    /// can run them too.
     ///
     /// Every read of the wallet, such as [`Self::balance`], returns the state
     /// of the last sync or resync and does not resync. [`Self::builds`], and
@@ -308,36 +308,6 @@ impl MidnightProvider {
         Ok(self.attached()?.facade.spendable_shielded_coins().await)
     }
 
-    /// Whether the attached wallet has completed dust sync.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn dust_synced(&self) -> Result<bool, ProviderError> {
-        Ok(self.attached()?.facade.dust_synced().await)
-    }
-
-    /// The unshielded UTXOs the attached wallet tracks.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn unshielded_utxos(&self) -> Result<Vec<TrackedUtxo>, ProviderError> {
-        Ok(self.attached()?.facade.unshielded_utxos().await)
-    }
-
-    /// The chain's Dust and TTL parameters, as the attached wallet last synced
-    /// them.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn parameters(&self) -> Result<ChainParameters, ProviderError> {
-        Ok(self.attached()?.facade.parameters().await)
-    }
-
-    /// How far the attached wallet's sync has reached. See
-    /// `Wallet::sync_cursors` on the implementing wallet.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn sync_cursors(&self) -> Result<SyncCursors, ProviderError> {
-        Ok(self.attached()?.facade.sync_cursors().await)
-    }
-
     /// Re-sync the wallet against the indexer.
     ///
     /// Resumes from the wallet's current event cursors, applies any new
@@ -347,10 +317,11 @@ impl MidnightProvider {
     /// attached.
     ///
     /// Locking: the slow replay I/O runs **without** the wallet lock, so
-    /// concurrent reads ([`Self::balance`], [`Self::dust_synced`], ...) keep
-    /// completing while a resync is in flight; the wallet lock is only taken
-    /// briefly to snapshot the replay inputs (read) and to commit the result
-    /// (write). The wallet serializes concurrent resyncs.
+    /// concurrent reads ([`Self::balance`],
+    /// [`Self::spendable_shielded_coins`]) keep completing while a resync is
+    /// in flight; the wallet lock is only taken briefly to snapshot the
+    /// replay inputs (read) and to commit the result (write). The wallet
+    /// serializes concurrent resyncs.
     pub async fn resync_wallet(&self) -> Result<(), ProviderError> {
         // Boxed so the replay stays off the caller's frame. A debug build
         // makes this future tens of kilobytes, and an inlined one is carried
@@ -409,12 +380,13 @@ impl MidnightProvider {
     /// about in one call rather than calling this per coin, and treat it as a
     /// recovery step, not a routine one. Coins already recovered keep their
     /// place: each replay re-registers what the wallet holds. To check the
-    /// outcome, look for the coin in [`Self::spendable_shielded_coins`]. If
-    /// the rebuilt coin was wrong, drop the registration with
-    /// [`Self::forget_coin`].
+    /// outcome, look for the coin in [`Self::spendable_shielded_coins`]. A
+    /// rebuilt coin that is wrong matches no output, and every later replay
+    /// carries its registration.
     ///
-    /// If the replay fails, retry with [`Self::rescan_shielded`]: the wallet
-    /// keeps the registration (see [`WalletFacade::watch_for_coins`]).
+    /// If the replay fails, the wallet keeps the registration, so call this
+    /// again with the same coin to retry (see
+    /// [`WalletFacade::watch_for_coins`]).
     ///
     /// Locking matches [`Self::resync_wallet`]: the replay runs without the
     /// wallet lock, and the wallet serializes the registration and the replay
@@ -436,39 +408,6 @@ impl MidnightProvider {
         wallet
             .watch_for_coins(coins.into_iter().collect(), self)
             .await?;
-        Ok(())
-    }
-
-    /// Drop a registration [`Self::watch_for_coin`] made, for a coin that
-    /// turned out to be wrong.
-    ///
-    /// A registration whose rebuilt `CoinInfo` matches no on-chain output
-    /// rides along on every later replay. This removes one. A coin the wallet
-    /// already claimed is untouched, and no replay runs.
-    pub async fn forget_coin(&self, coin: CoinInfo) -> Result<(), ProviderError> {
-        self.forget_coins([coin]).await
-    }
-
-    /// [`Self::forget_coin`] for several coins, with one write.
-    pub async fn forget_coins(
-        &self,
-        coins: impl IntoIterator<Item = CoinInfo> + Send,
-    ) -> Result<(), ProviderError> {
-        let wallet = &self.attached()?.facade;
-        wallet.forget_coins(coins.into_iter().collect()).await?;
-        Ok(())
-    }
-
-    /// Replay the shielded event stream from its first event and rebuild the
-    /// wallet's shielded state from it.
-    ///
-    /// [`Self::watch_for_coin`] already does this for the coins it registers.
-    /// Call this directly to rebuild shielded state that a resync cannot
-    /// repair because its cursor has moved past the events in question.
-    /// Dust state, unshielded state, and their cursors are left alone.
-    pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
-        let wallet = &self.attached()?.facade;
-        wallet.rescan_shielded(self).await?;
         Ok(())
     }
 
@@ -1063,9 +1002,9 @@ impl MidnightProvider {
     ///
     /// This is a human-readable label, **not** the ledger network id. It is not
     /// interchangeable with [`Network`], and a label such as the one above is
-    /// not even a valid network name. The address prefixes come from
-    /// [`MidnightProvider::network`]. The network the node runs comes from
-    /// [`MidnightProvider::ledger_network_id`].
+    /// not even a valid network name. The address prefixes come from the
+    /// wallet's network (`Wallet::network`). The network the node runs comes
+    /// from [`MidnightProvider::ledger_network_id`].
     pub async fn system_chain(&self) -> Result<String, ProviderError> {
         query_within(QUERY_TIMEOUT, async {
             let conn = self.get_or_connect().await?;
@@ -1087,10 +1026,9 @@ impl MidnightProvider {
     ///
     /// The node answers through its `MidnightRuntimeApi::get_network_id`
     /// runtime API. This is the network the chain runs, so it can differ from
-    /// [`MidnightProvider::network`], which is the network the attached wallet
-    /// derives addresses for. Before its replay, a pinned wallet sync (the
-    /// default) compares this network with the one it syncs as, and fails
-    /// with
+    /// the network a wallet derives addresses for (`Wallet::network`). Before
+    /// its replay, a pinned wallet sync (the default) compares this network
+    /// with the one it syncs as, and fails with
     /// [`WalletError::NetworkMismatch`](midnight_types::WalletError::NetworkMismatch)
     /// when they differ. A sync with no network takes this one, and fails
     /// when there is none. An error here does not fail a sync that names its
@@ -1105,15 +1043,6 @@ impl MidnightProvider {
         let id = self.call_runtime_api::<String>("get_network_id").await?;
         id.parse()
             .map_err(|e| ProviderError::Rpc(format!("get_network_id: {e}")))
-    }
-
-    /// The [`Network`] this provider's wallet derives addresses for.
-    ///
-    /// The network the node runs comes from
-    /// [`MidnightProvider::ledger_network_id`]. Errors if no wallet is
-    /// attached.
-    pub async fn network(&self) -> Result<Network, ProviderError> {
-        Ok(self.attached()?.facade.network().await)
     }
 
     /// Best-effort health status of the node.

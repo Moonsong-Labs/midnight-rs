@@ -69,10 +69,10 @@ async fn sync_replays_events() {
         return;
     };
 
-    let provider = synced_provider(&node, &indexer, DEV_SEED).await;
+    let wallet = synced_wallet(&MidnightProvider::new(&node), &indexer, DEV_SEED).await;
 
-    let cursors = provider.sync_cursors().await.expect("wallet attached");
-    let utxos = provider.unshielded_utxos().await.expect("wallet attached");
+    let cursors = wallet.sync_cursors();
+    let utxos = wallet.unshielded_utxos();
     eprintln!(
         "synced: height={}, utxos={}, zswap_event_id={}, dust_event_id={}",
         cursors.last_block_height,

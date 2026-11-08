@@ -58,8 +58,8 @@ async fn main() -> anyhow::Result<()> {
     let wallet = Wallet::from_seed(MINTER_SEED)?
         .sync(&provider, &indexer_url)
         .await?;
+    let network = wallet.network().clone();
     let provider = provider.with_wallet(wallet);
-    let network = provider.network().await?;
     println!("   synced.\n");
 
     // 1. The recipient's coin public key (coin ownership) and encryption public

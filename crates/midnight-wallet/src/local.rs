@@ -7,8 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use midnight_types::chain_pin::{ChainView, current_pin};
 use midnight_types::{
-    ChainParameters, CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, SpentInputs,
-    SyncCursors, TrackedUtxo, WalletBalance, WalletError,
+    CoinInfo, ShieldedRecipient, SpendableShieldedCoin, SpentInputs, WalletBalance, WalletError,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 use tokio::sync::{Mutex, RwLock};
@@ -22,14 +21,12 @@ use crate::sync::require_same_chain;
 /// The lock is a private field and no method hands it out, so a consumer that
 /// holds a `LocalWallet` cannot block a sync by keeping a guard alive.
 ///
-/// `LocalWallet` serializes its resyncs, rescans, coin watches and forgets
-/// against each other. [`Self::sync_in_background`] resyncs it in a
-/// background task.
+/// `LocalWallet` serializes its resyncs and coin watches against each other.
+/// [`Self::sync_in_background`] resyncs it in a background task.
 pub struct LocalWallet {
     inner: RwLock<Wallet>,
-    /// Held across each resync, rescan, coin watch and forget. Take it before
-    /// `inner`. Reads and builds take `inner` alone, so the order cannot
-    /// invert.
+    /// Held across each resync and coin watch. Take it before `inner`. Reads
+    /// and builds take `inner` alone, so the order cannot invert.
     sync: Mutex<()>,
 }
 
@@ -157,8 +154,8 @@ impl LocalWallet {
         Ok(())
     }
 
-    /// [`WalletFacade::rescan_shielded`], for a caller that holds
-    /// `self.sync`.
+    /// The rescan of [`WalletFacade::watch_for_coins`], for a caller that
+    /// holds `self.sync`.
     async fn rescan_held(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
         let (pin, snapshot) = {
             let wallet = self.inner.read().await;
@@ -191,10 +188,6 @@ impl IntoWalletFacade for Wallet {
 
 #[async_trait]
 impl WalletFacade for LocalWallet {
-    async fn network(&self) -> Network {
-        self.inner.read().await.network().clone()
-    }
-
     async fn shielded_recipient(&self) -> ShieldedRecipient {
         self.inner.read().await.shielded_recipient()
     }
@@ -205,22 +198,6 @@ impl WalletFacade for LocalWallet {
 
     async fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
         self.inner.read().await.spendable_shielded_coins()
-    }
-
-    async fn unshielded_utxos(&self) -> Vec<TrackedUtxo> {
-        self.inner.read().await.unshielded_utxos().to_vec()
-    }
-
-    async fn parameters(&self) -> ChainParameters {
-        self.inner.read().await.parameters()
-    }
-
-    async fn sync_cursors(&self) -> SyncCursors {
-        self.inner.read().await.sync_cursors()
-    }
-
-    async fn dust_synced(&self) -> bool {
-        self.inner.read().await.dust_synced()
     }
 
     async fn release(&self, spent: &SpentInputs) {
@@ -236,11 +213,6 @@ impl WalletFacade for LocalWallet {
         self.resync_held(chain).await
     }
 
-    async fn rescan_shielded(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
-        let _sync = self.sync.lock().await;
-        self.rescan_held(chain).await
-    }
-
     async fn watch_for_coins(
         &self,
         coins: Vec<CoinInfo>,
@@ -252,13 +224,5 @@ impl WalletFacade for LocalWallet {
         let _sync = self.sync.lock().await;
         self.inner.write().await.watch_for_coins(coins)?;
         self.rescan_held(chain).await
-    }
-
-    async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {
-        // Wait for a resync in flight, although this is one write. That resync
-        // commits the state its plan read, so a registration dropped here would
-        // come back.
-        let _sync = self.sync.lock().await;
-        self.inner.write().await.forget_coins(coins)
     }
 }

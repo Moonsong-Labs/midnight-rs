@@ -23,6 +23,7 @@ use crate::error::ContractError;
 /// #     provider: &midnight_provider::MidnightProvider,
 /// #     token_type: ShieldedTokenType,
 /// #     address: &str,
+/// #     network: &midnight_types::Network,
 /// # ) -> Result<ShieldedOffer, Box<dyn std::error::Error>> {
 /// let coin = provider
 ///     .spendable_shielded_coins()
@@ -33,7 +34,7 @@ use crate::error::ContractError;
 /// let offer = ShieldedOffer {
 ///     coins: vec![coin],
 ///     outputs: vec![ShieldedPayment {
-///         recipient: parse_shielded_recipient(address, provider.network().await?)?,
+///         recipient: parse_shielded_recipient(address, network)?,
 ///         token_type,
 ///         value: 10,
 ///     }],
