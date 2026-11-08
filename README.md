@@ -93,7 +93,7 @@ use midnight_core::provider::RemoteProofServer;
 let provider = provider.with_proof_provider(Arc::new(RemoteProofServer::new(proof_url)));
 ```
 
-`with_proof_provider` takes any `Arc<dyn ProofProvider<DefaultDB>>`, where `ProofProvider` and `DefaultDB` come from `midnight_helpers::ledger_9`. `MidnightProvider::proof_provider` returns the prover that the provider uses. The proof server must prove ledger 9 transactions, as the `proof-server` image of the devnet does.
+`with_proof_provider` takes any `Arc<dyn ProofProvider<DefaultDB>>`, where `ProofProvider` and `DefaultDB` come from `midnight_helpers`. `MidnightProvider::proof_provider` returns the prover that the provider uses. The proof server must prove ledger 9 transactions, as the `proof-server` image of the devnet does.
 
 The local prover downloads the public parameters for the first proof of each circuit size, when the cache does not hold them. It downloads a built-in Zswap or Dust key for the first proof that uses that key, in the same way. The source is `MIDNIGHT_PARAM_SOURCE` (default `https://srs.midnight.network/`). The cache is the directory that upstream `MidnightDataProvider` picks, `MIDNIGHT_PP` first. For offline or container use, fill that cache once with network access. Then point `MIDNIGHT_PP` at it. A `RemoteProofServer` proves on the server and downloads none of these files.
 
