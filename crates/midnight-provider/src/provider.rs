@@ -421,6 +421,10 @@ impl MidnightProvider {
     /// process cannot draw the same input. Proving runs after that, with the
     /// wallet free.
     ///
+    /// Submit the result of `.build()` with [`Self::submit_reserved`]. Bytes
+    /// that never reach the chain keep their inputs reserved until
+    /// [`Self::release`] gets `result.spent`, or until their TTL passes.
+    ///
     /// Read `recipient` from a shielded address with
     /// [`parse_shielded_recipient`](midnight_types::address::parse_shielded_recipient),
     /// or derive it from a seed with
