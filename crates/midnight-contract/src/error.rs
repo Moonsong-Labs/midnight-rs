@@ -29,7 +29,7 @@ pub enum ContractError {
     /// `ProviderError::Wallet(WalletError::InputsReserved { .. })`. When it
     /// names a shielded coin twice, the error is
     /// `ProviderError::Wallet(WalletError::DuplicateInput { .. })`. See
-    /// [`WalletError`](midnight_provider::WalletError) for the other wallet
+    /// [`WalletError`](midnight_types::WalletError) for the other wallet
     /// failures.
     #[error(transparent)]
     Provider(ProviderError),

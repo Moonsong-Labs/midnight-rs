@@ -18,12 +18,14 @@ use midnight_helpers::{
 };
 use midnight_provider::{
     CoinInfo, HashOutput, MidnightProvider, Nullifier, ProviderError, ShieldedRecipient,
-    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, TransferRequest, TransferResult,
-    WalletBalance, WalletError, WalletFacade,
+    ShieldedTokenType,
 };
-use midnight_types::{PreparedInput, Timestamp};
+use midnight_types::{
+    PreparedInput, SpendableShieldedCoin, SpentInputs, Timestamp, TransferRequest, TransferResult,
+    WalletBalance, WalletError,
+};
 use midnight_wallet::chain_pin::ChainView;
-use midnight_wallet_facade::{ReservedBuild, WalletBuilds};
+use midnight_wallet_facade::{ReservedBuild, WalletBuilds, WalletFacade};
 
 /// A wallet that resyncs as a no-op and refuses everything that would need
 /// chain state to answer honestly. It records the shielded inputs that the

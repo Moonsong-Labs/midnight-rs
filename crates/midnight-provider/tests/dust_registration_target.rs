@@ -11,8 +11,8 @@ mod common;
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use midnight_provider::{DustlessBuilder, MidnightProvider, Network, ProviderError, Seed};
-use midnight_wallet::{DustBalance, NIGHT, WalletError, parse_dust_address};
+use midnight_provider::{DustlessBuilder, MidnightProvider, ProviderError};
+use midnight_wallet::{DustBalance, NIGHT, Network, Seed, WalletError, parse_dust_address};
 
 /// Enough tNIGHT that the coin carries real generationless dust.
 const SEND: u128 = 5_000_000_000_000;

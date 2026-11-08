@@ -1,7 +1,7 @@
 //! Devnet setup for the devnet tests of this crate.
 
-use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::Wallet;
+use midnight_provider::MidnightProvider;
+use midnight_wallet::{Network, Wallet};
 
 /// The seed of the devnet genesis wallet, which holds tNIGHT, dust and
 /// shielded coins.

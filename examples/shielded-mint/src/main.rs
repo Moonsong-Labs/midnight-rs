@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use anyhow::bail;
 use midnight_core::contract::parse_contract_address;
-use midnight_core::provider::{HashOutput, ShieldedCoinBalance};
-use midnight_core::wallet::LocalWallet;
+use midnight_core::provider::HashOutput;
+use midnight_core::wallet::{LocalWallet, ShieldedCoinBalance};
 use midnight_core::{MidnightProvider, Seed, Wallet};
 
 mod shielded_mint {

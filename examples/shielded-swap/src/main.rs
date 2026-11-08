@@ -31,8 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
-use midnight_core::provider::WalletBalance;
-use midnight_core::wallet::{BackgroundSync, LocalWallet};
+use midnight_core::wallet::{BackgroundSync, LocalWallet, WalletBalance};
 use midnight_core::{MidnightProvider, Seed, Wallet};
 
 fn env_or(name: &str, default: &str) -> String {

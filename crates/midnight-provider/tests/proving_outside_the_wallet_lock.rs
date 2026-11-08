@@ -33,10 +33,11 @@ use midnight_helpers::{
     UnprovenTransaction,
 };
 use midnight_provider::{
-    MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, SpentInputs, TransferKind,
-    TransferRequest, UnshieldedRecipient, WalletError, WalletFacade,
+    MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, UnshieldedRecipient,
 };
-use midnight_wallet::LocalWallet;
+use midnight_wallet::{
+    LocalWallet, SpentInputs, TransferKind, TransferRequest, WalletError, WalletFacade,
+};
 use midnight_wallet_facade::WalletBuilds;
 use tokio::sync::Notify;
 

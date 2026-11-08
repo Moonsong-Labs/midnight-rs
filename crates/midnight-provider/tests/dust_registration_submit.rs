@@ -12,8 +12,10 @@
 
 mod common;
 
-use midnight_provider::{ProviderError, Seed};
-use midnight_wallet::{HashOutput, NIGHT, ShieldedTokenType, UnshieldedTokenType, WalletError};
+use midnight_provider::ProviderError;
+use midnight_wallet::{
+    HashOutput, NIGHT, Seed, ShieldedTokenType, UnshieldedTokenType, WalletError,
+};
 
 /// Enough tNIGHT that the coin carries real generationless dust.
 const SEND: u128 = 5_000_000_000_000;

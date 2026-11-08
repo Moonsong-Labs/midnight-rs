@@ -88,12 +88,12 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let wallet = common::synced_wallet(&recip_provider, &indexer_url, common::RECIPIENT_SEED).await;
     let recip_provider = recip_provider.with_wallet(wallet);
 
-    let holds = |coins: &[midnight_provider::SpendableShieldedCoin], nonce: [u8; 32], value| {
+    let holds = |coins: &[midnight_contract::SpendableShieldedCoin], nonce: [u8; 32], value| {
         coins
             .iter()
             .any(|c| c.token_type == token_type && c.value == u128::from(value) && c.nonce == nonce)
     };
-    let seen = |coins: &[midnight_provider::SpendableShieldedCoin]| {
+    let seen = |coins: &[midnight_contract::SpendableShieldedCoin]| {
         coins
             .iter()
             .map(|c| (c.token_type_hex(), c.value))

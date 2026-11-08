@@ -17,9 +17,9 @@ use midnight_base_crypto::time::Timestamp;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::WitnessProvider;
 use midnight_contract::{ShieldedTokenType, SpendableShieldedCoin};
-use midnight_provider::{MidnightProvider, Network};
+use midnight_provider::MidnightProvider;
 use midnight_transient_crypto::fab::ValueReprAlignedValue;
-use midnight_wallet::Wallet;
+use midnight_wallet::{Network, Wallet};
 
 /// The seed of the wallet that the dev devnet funds at genesis.
 pub(crate) const DEV_WALLET_SEED: &str =

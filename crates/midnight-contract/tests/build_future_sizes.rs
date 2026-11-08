@@ -17,8 +17,9 @@ use midnight_contract::interpreter::Program;
 use midnight_contract::runtime::NoWitnesses;
 use midnight_contract::{Contract, ShieldedInputs};
 use midnight_provider::{
-    DustlessBuilder, HashOutput, MidnightProvider, Seed, ShieldedTokenType, UnshieldedTokenType,
+    DustlessBuilder, HashOutput, MidnightProvider, ShieldedTokenType, UnshieldedTokenType,
 };
+use midnight_wallet::Seed;
 
 /// Room for a builder to gain a field, far below the tens of kilobytes an
 /// inlined build frame costs.
