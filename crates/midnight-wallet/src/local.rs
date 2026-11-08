@@ -153,22 +153,6 @@ impl LocalWallet {
         }
         Ok(())
     }
-
-    /// The rescan of [`WalletFacade::watch_for_coins`], for a caller that
-    /// holds `self.sync`.
-    async fn rescan_held(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
-        let (pin, snapshot) = {
-            let wallet = self.inner.read().await;
-            (wallet.chain_pin().cloned(), wallet.snapshot_dir())
-        };
-        if let Some(pin) = &pin {
-            require_same_chain(chain, pin, snapshot.as_deref()).await?;
-        }
-
-        let plan = self.inner.read().await.shielded_rescan_plan();
-        let commit = plan.run().await?;
-        self.inner.write().await.commit_shielded_rescan(commit)
-    }
 }
 
 impl std::fmt::Debug for LocalWallet {
@@ -223,6 +207,17 @@ impl WalletFacade for LocalWallet {
         }
         let _sync = self.sync.lock().await;
         self.inner.write().await.watch_for_coins(coins)?;
-        self.rescan_held(chain).await
+
+        let (pin, snapshot) = {
+            let wallet = self.inner.read().await;
+            (wallet.chain_pin().cloned(), wallet.snapshot_dir())
+        };
+        if let Some(pin) = &pin {
+            require_same_chain(chain, pin, snapshot.as_deref()).await?;
+        }
+
+        let plan = self.inner.read().await.shielded_rescan_plan();
+        let commit = plan.run().await?;
+        self.inner.write().await.commit_shielded_rescan(commit)
     }
 }
