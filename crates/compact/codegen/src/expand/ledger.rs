@@ -1410,10 +1410,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             /// shielded deficit of the call. Attach coins to name the ones it
             /// spends, and it selects coins of its own only for what they
             /// leave. It spends each attached coin whole, at the segment of the
-            /// largest deficit of its token that is left, or at the guaranteed
-            /// segment when none is left. Whatever the spent coins carry beyond
-            /// the deficit returns to this wallet as a change output, so a coin
-            /// whose token has no deficit comes back whole.
+            /// largest deficit of its token that is left. When no deficit of
+            /// its token is left, the coin goes to the guaranteed segment.
+            /// Whatever the spent coins carry beyond the deficit returns to
+            /// this wallet as a change output. A coin whose token has no
+            /// deficit comes back whole.
             ///
             /// Every coin must be attached in a single call, since this replaces
             /// the set rather than extending it. The attached inputs apply to

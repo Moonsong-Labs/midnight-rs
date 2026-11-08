@@ -1091,9 +1091,9 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 }
 
 /// The TTL of the cover's fee intent for `external`, and the expiry of
-/// everything that the cover reserves: the earliest TTL of the intents of
-/// `external`, kept between the chain time of `context` and [`longest_ttl`].
-/// With no intent, it is [`longest_ttl`].
+/// everything that the cover reserves. It is the earliest TTL of the intents
+/// of `external`, kept between the chain time of `context` and
+/// [`longest_ttl`]. With no intent, it is [`longest_ttl`].
 ///
 /// The upper bound: `external` comes from another party, and an uncapped TTL
 /// would let that party set how long the inputs of the wallet stay reserved.
