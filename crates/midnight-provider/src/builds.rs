@@ -84,7 +84,7 @@ impl<'a> Builds<'a> {
         )?;
         let time = Timestamp::from_secs(time.as_secs());
         Ok(midnight_types::execution_context(
-            network.as_str(),
+            network,
             parameters,
             Some(make_block_context(time, Default::default(), time)),
         )?)

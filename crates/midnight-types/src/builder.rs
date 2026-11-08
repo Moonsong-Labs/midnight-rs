@@ -28,8 +28,8 @@ use crate::inputs::prepare_shielded_inputs;
 use crate::sync::TrackedUtxo;
 use crate::transfer::panic_message;
 use crate::{
-    DustPublicKey, ReservedInput, ShieldedRecipient, SpentInputs, SpentUtxoKey, TransferKind,
-    TransferRequest, TransferResult, UnshieldedRecipient, WalletError,
+    DustPublicKey, Network, ReservedInput, ShieldedRecipient, SpentInputs, SpentUtxoKey,
+    TransferKind, TransferRequest, TransferResult, UnshieldedRecipient, WalletError,
 };
 
 type UnprovenTx = midnight_helpers::UnprovenTransaction<DefaultDB>;
@@ -921,17 +921,19 @@ pub fn longest_ttl(context: &BuildContext) -> Timestamp {
 ///
 /// [`WalletError::Transfer`] when the ledger refuses the genesis settings.
 pub fn execution_context(
-    network: &str,
+    network: impl Into<Network>,
     parameters: LedgerParameters,
     block_context: Option<BlockContext>,
 ) -> Result<Arc<BuildContext>, WalletError> {
+    let network = network.into();
     // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
-    let ledger_state = LedgerState::with_genesis_settings(network, parameters, 0, MAX_SUPPLY, 0)
-        .map_err(transfer_err("construct ledger state"))?;
+    let ledger_state =
+        LedgerState::with_genesis_settings(network.as_str(), parameters, 0, MAX_SUPPLY, 0)
+            .map_err(transfer_err("construct ledger state"))?;
     Ok(Arc::new(LedgerContext {
         ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
         latest_block_context: std::sync::Mutex::new(block_context),
-        ..LedgerContext::new(network)
+        ..LedgerContext::new(network.as_str())
     }))
 }
 

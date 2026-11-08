@@ -855,7 +855,7 @@ impl Wallet {
     /// transaction TTL.
     pub fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
         midnight_types::execution_context(
-            self.network.as_str(),
+            &self.network,
             self.parameters.clone(),
             self.block_context.clone(),
         )
