@@ -27,10 +27,10 @@ pub use types::{Health, TransactionHash};
 // (`Wallet`, `LocalWallet`, `WalletBuilder`) live in midnight-wallet; this
 // crate never names them.
 pub use midnight_types::{
-    BlockHash, ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
-    DustParameters, DustPublicKey, EncryptionPublicKey, ExtrinsicHash, HashOutput, NIGHT, Nonce,
-    Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType,
-    UnshieldedRecipient, UnshieldedTokenType,
+    BlockHash, ChainParameters, CoinInfo, CoinPublicKey, ContractAddress, DustParameters,
+    DustPublicKey, EncryptionPublicKey, ExtrinsicHash, HashOutput, NIGHT, Nonce, Nullifier,
+    SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, UnshieldedRecipient,
+    UnshieldedTokenType,
 };
 
 // The wallet's API, so a caller attaching one (or implementing one) needs no
