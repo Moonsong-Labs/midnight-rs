@@ -132,6 +132,11 @@ pub enum WalletError {
     /// When a pending build spends coins of this token, wait for its
     /// transaction to finalize, then build again. Otherwise the wallet must
     /// receive more of the token.
+    ///
+    /// A [`Cover`](crate::Cover) spends each coin at one segment. When a
+    /// transaction lacks the token at more than one segment, the cover can
+    /// fail with `available` at or above `required`, because the coins do not
+    /// divide across those segments.
     #[error("insufficient shielded token {token_type}: need {required}, {available} spendable")]
     InsufficientShielded {
         /// The token the transfer spends.

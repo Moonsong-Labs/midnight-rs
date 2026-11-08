@@ -35,11 +35,12 @@ pub struct ShieldedInputs {
     /// Wallet coins to spend, each named exactly by its nullifier. See
     /// [`SpendableShieldedCoin`](midnight_types::SpendableShieldedCoin).
     ///
-    /// The call spends each coin whole, at the segment of a deficit of its
-    /// token. Zswap balances each token at each segment rather than each coin,
+    /// The call spends each coin whole, at the segment of the largest deficit
+    /// of its token that is left, or at the guaranteed segment when none is
+    /// left. Zswap balances each token at each segment rather than each coin,
     /// so several coins may fund one larger `receiveShielded`. Whatever the
     /// spent coins carry beyond the deficit returns to this wallet as a
-    /// change output.
+    /// change output, so a coin whose token has no deficit comes back whole.
     pub coins: Vec<midnight_types::SpendableShieldedCoin>,
 }
 

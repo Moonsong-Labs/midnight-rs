@@ -67,8 +67,8 @@ pub struct PreparedTransfer {
     reserved_at: Timestamp,
     /// The time after which the transaction can no longer land.
     expires_at: Timestamp,
-    /// The finished transaction whose fee this build pays, which
-    /// [`Self::prove`] merges the proven fee into.
+    /// The finished transaction that this build covers, which
+    /// [`Self::prove`] merges the proven part into.
     external: Option<FinalizedTx>,
 }
 
@@ -137,7 +137,9 @@ impl PreparedTransfer {
     /// land: the earliest TTL of its intents. Reserve its inputs until then.
     ///
     /// A transaction with no intent carries no TTL, and it gets the chain's
-    /// `global_ttl` after the chain time of the build.
+    /// `global_ttl` after the chain time of the build. A build from
+    /// [`balance_external`] expires with the transaction that it covers, as
+    /// that function describes.
     pub fn expires_at(&self) -> Timestamp {
         self.expires_at
     }
@@ -185,7 +187,7 @@ impl PreparedTransfer {
         let finalized = match external {
             Some(external) => external
                 .merge(&proven)
-                .map_err(transfer_err("merge fee intent"))?,
+                .map_err(transfer_err("merge the part"))?,
             None => proven,
         };
 
@@ -1088,16 +1090,17 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
         .ok_or_else(|| WalletError::Transfer("no intent segment left for the fee".into()))
 }
 
-/// The TTL of the fee intent for `external`: the earliest TTL of its intents,
-/// kept between the chain time of `context` and [`longest_ttl`]. With no
-/// intent, it is [`longest_ttl`].
+/// The TTL of the cover's fee intent for `external`, and the expiry of
+/// everything that the cover reserves: the earliest TTL of the intents of
+/// `external`, kept between the chain time of `context` and [`longest_ttl`].
+/// With no intent, it is [`longest_ttl`].
 ///
 /// The upper bound: `external` comes from another party, and an uncapped TTL
-/// would let that party set how long the sponsor's Dust stays reserved.
+/// would let that party set how long the inputs of the wallet stay reserved.
 ///
 /// The lower bound: a TTL that already passed would let the next build at the
-/// same chain time evict this reservation. That build would take the same Dust
-/// with the same stamp. A release of this build would then drop the
+/// same chain time evict this reservation. That build would take the same
+/// inputs with the same stamp. A release of this build would then drop the
 /// reservation of that build too. The wallet keeps a reservation while its TTL
 /// is at or after the chain time. So a TTL at the chain time keeps the
 /// reservation through every build at that chain time.
