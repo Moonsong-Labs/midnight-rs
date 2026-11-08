@@ -4,9 +4,8 @@ use midnight_helpers::{Deserializable, Serializable};
 
 use crate::hd::{Seed, SeedBytes};
 use crate::{
-    ChainParameters, CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustParameters,
-    DustPublicKey, EncryptionPublicKey, Nonce, Nullifier, ShieldedTokenType, UnshieldedRecipient,
-    UnshieldedTokenType,
+    CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustPublicKey, EncryptionPublicKey,
+    Nonce, Nullifier, ShieldedTokenType, UnshieldedRecipient, UnshieldedTokenType,
 };
 
 /// An SDK value that has a counterpart in the ledger.
@@ -158,20 +157,6 @@ pub(crate) fn sdk_seed(seed: &midnight_helpers::WalletSeed) -> Seed {
         midnight_helpers::WalletSeed::Medium(bytes) => SeedBytes::Medium(*bytes),
         midnight_helpers::WalletSeed::Long(bytes) => SeedBytes::Long(*bytes),
     })
-}
-
-impl IntoSdk for &midnight_helpers::LedgerParameters {
-    type Sdk = ChainParameters;
-    fn into_sdk(self) -> Self::Sdk {
-        ChainParameters {
-            dust: DustParameters {
-                night_dust_ratio: self.dust.night_dust_ratio,
-                generation_decay_rate: self.dust.generation_decay_rate,
-                dust_grace_period: self.dust.dust_grace_period,
-            },
-            global_ttl: self.global_ttl,
-        }
-    }
 }
 
 /// The untagged encoding of a curve point: its 32-byte compressed form.

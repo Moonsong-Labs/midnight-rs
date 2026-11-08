@@ -1,25 +1,8 @@
-//! What a wallet's sync maintains, as its consumers read it: the unshielded
-//! UTXOs it tracks and the cursors that say how far it has reached.
+//! The unshielded UTXOs a wallet's sync tracks.
 
 use midnight_helpers::HashOutput;
 
 use crate::{NIGHT, SpentUtxoKey, UnshieldedTokenType};
-
-/// How far a wallet's sync has reached. See `Wallet::sync_cursors`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SyncCursors {
-    /// Height of the latest block seen in an unshielded transaction event.
-    ///
-    /// This is NOT a general chain-sync cursor. It only advances when the
-    /// wallet's unshielded address appears in a transaction.
-    pub last_block_height: i64,
-    /// Indexer id of the latest transaction the wallet applied.
-    pub last_tx_id: Option<i64>,
-    /// Highest zswap event id the wallet applied.
-    pub zswap_event_id: i64,
-    /// Highest dust event id the wallet applied.
-    pub dust_event_id: i64,
-}
 
 /// A tracked unshielded UTXO from the indexer.
 #[derive(Debug, Clone)]

@@ -42,7 +42,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── inputs.rs            PreparedInput: the shielded inputs that the wallet spends
   │     ├── convert.rs           the conversions to and from the ledger's types
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
-  │     ├── sync.rs              TrackedUtxo, SyncCursors
+  │     ├── sync.rs              TrackedUtxo
   │     ├── hd.rs                Seed and its addresses, mnemonic, Role and the BIP-32 role keys
   │     ├── address.rs           parse_shielded_recipient, parse_unshielded_recipient,
   │     │                        parse_dust_address
