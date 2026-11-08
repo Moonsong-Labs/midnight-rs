@@ -27,9 +27,9 @@ use midnight_types::{
 use midnight_wallet::chain_pin::ChainView;
 use midnight_wallet_facade::{ReservedBuild, WalletBuilds, WalletFacade};
 
-/// A wallet that resyncs as a no-op and refuses everything that would need
-/// chain state to answer honestly. It records the shielded inputs that the
-/// provider hands back.
+/// A wallet whose resync, coin watch and reservation persist do nothing, and
+/// that refuses everything that would need chain state to answer honestly.
+/// It records the shielded inputs that the provider hands back.
 #[derive(Default)]
 struct StubWallet {
     released: std::sync::Mutex<Vec<Nullifier>>,
