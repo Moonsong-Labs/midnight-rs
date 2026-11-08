@@ -2,9 +2,10 @@
 
 use std::path::Path;
 
+use midnight_helpers::{DefaultDB, DustWallet, WalletState as ZswapLocalState};
+use midnight_types::TrackedUtxo;
 use tracing::info;
 
-use super::helpers::{DefaultDB, DustWallet, WalletState as ZswapLocalState};
 use crate::WalletError;
 use crate::chain_pin::ChainPin;
 use crate::generation::Generation;
@@ -12,7 +13,6 @@ use crate::storage::{
     StoredMetadata, StoredUtxo, dust_wallet_file, read_metadata, snapshot_path, tagged_from_file,
     tagged_to_file, zswap_file,
 };
-use midnight_types::TrackedUtxo;
 
 pub(crate) struct LoadedState {
     pub zswap_state: ZswapLocalState<DefaultDB>,

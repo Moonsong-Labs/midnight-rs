@@ -29,10 +29,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use midnight_contract::{
     ContractError, FsZkConfigProvider, KeyMismatch, ZkConfigError, ZkConfigProvider,
 };
-use midnight_helpers::ledger_9::{
-    CostModel, ProofProvider, ProvenTransaction, Resolver, Transaction, UnprovenTransaction,
+use midnight_helpers::{
+    CostModel, DefaultDB, ProofProvider, ProvenTransaction, Resolver, StdRng, Transaction,
+    UnprovenTransaction,
 };
-use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{MidnightProvider, ProviderError, WalletError};
 
 /// The message of every proof that [`ProofCounter`] fails.

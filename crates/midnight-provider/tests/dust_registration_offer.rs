@@ -14,10 +14,10 @@ mod common;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use midnight_helpers::ledger_9::{
-    CostModel, LocalProofServer, ProofProvider, ProvenTransaction, Resolver, UnprovenTransaction,
+use midnight_helpers::{
+    CostModel, DefaultDB, LocalProofServer, ProofProvider, ProvenTransaction, Resolver, StdRng,
+    UnprovenTransaction,
 };
-use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::MidnightProvider;
 
 /// Wraps the real prover and records whether it ran.

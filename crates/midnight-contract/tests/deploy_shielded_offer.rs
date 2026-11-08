@@ -12,9 +12,8 @@ mod common;
 
 use compact_bindgen::{AlignedValue, StateValue};
 use midnight_contract::{ShieldedOffer, ShieldedPayment, ShieldedTokenType};
-use midnight_helpers::DefaultDB;
-use midnight_helpers::ledger_9::{FinalizedTransaction, Transaction};
 use midnight_helpers::midnight_serialize::tagged_deserialize;
+use midnight_helpers::{DefaultDB, FinalizedTransaction, Transaction};
 use midnight_provider::MidnightProvider;
 
 /// The offer's coin and payment must reach the guaranteed Zswap offer of the

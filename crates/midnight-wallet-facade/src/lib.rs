@@ -8,8 +8,8 @@
 //! implements them with `LocalWallet`, over a `Wallet` that process owns.
 //!
 //! The builds, which name the ledger's transaction types, are in
-//! [`ledger_9::WalletBuilds`]. A wallet that a provider builds with
-//! implements both traits.
+//! [`WalletBuilds`]. A wallet that a provider builds with implements both
+//! traits.
 //!
 //! An implementation must serialize [`WalletFacade::resync`],
 //! [`WalletFacade::rescan_shielded`], [`WalletFacade::watch_for_coins`] and
@@ -29,7 +29,9 @@ use midnight_types::{
     SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 
-pub mod ledger_9;
+mod builds;
+
+pub use builds::{ReservedBuild, WalletBuilds};
 
 /// One wallet, as the API its consumers program against.
 ///
@@ -154,12 +156,12 @@ pub trait WalletFacade: Send + Sync {
 
 /// A value that `MidnightProvider::with_wallet` attaches as its wallet.
 ///
-/// A wallet that implements [`ledger_9::WalletBuilds`] goes in as itself.
+/// A wallet that implements [`WalletBuilds`] goes in as itself.
 /// `midnight-wallet` also implements it for its synced `Wallet`, which goes
 /// in behind the lock of a `LocalWallet`.
 pub trait IntoWalletFacade {
     /// The wallet the provider holds.
-    type Facade: ledger_9::WalletBuilds + 'static;
+    type Facade: WalletBuilds + 'static;
 
     /// Convert into the wallet the provider holds.
     fn into_facade(self) -> Self::Facade;
@@ -167,7 +169,7 @@ pub trait IntoWalletFacade {
 
 impl<W> IntoWalletFacade for W
 where
-    W: ledger_9::WalletBuilds + 'static,
+    W: WalletBuilds + 'static,
 {
     type Facade = W;
 

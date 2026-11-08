@@ -7,10 +7,7 @@
 use std::sync::Arc;
 
 use futures_util::FutureExt;
-
-use super::convert::{IntoLedger, IntoSdk, sdk_seed};
-use super::helpers;
-use helpers::{
+use midnight_helpers::{
     BlockContext, BuildContext, BuildUtxoOutput, BuildUtxoSpend, BuilderContext,
     CoinSelectionStrategy, DefaultDB, DustActions, DustLocalState, DustRegistration,
     DustRegistrationBuilder, DustSpend, DustWallet, FromContext, HashMapStorage, InputInfo, Intent,
@@ -21,6 +18,7 @@ use helpers::{
     UnshieldedWallet, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo,
 };
 
+use super::convert::{IntoLedger, IntoSdk, sdk_seed};
 use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
 use crate::transfer::panic_message;
@@ -29,8 +27,8 @@ use crate::{
     TransferRequest, TransferResult, UnshieldedRecipient, WalletError,
 };
 
-type UnprovenTx = helpers::UnprovenTransaction<DefaultDB>;
-type FinalizedTx = helpers::FinalizedTransaction<DefaultDB>;
+type UnprovenTx = midnight_helpers::UnprovenTransaction<DefaultDB>;
+type FinalizedTx = midnight_helpers::FinalizedTransaction<DefaultDB>;
 
 /// One funding seed's Dust contribution to a transaction.
 ///
@@ -187,7 +185,7 @@ impl PreparedTransfer {
         };
 
         let mut bytes = Vec::new();
-        helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
+        midnight_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
             .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
         let fee_speck = fee_speck(&context, &finalized)?;
 
@@ -513,7 +511,7 @@ impl<'a> TransferBuilder<'a> {
         self,
         spend_token: ShieldedTokenType,
         spend_amount: u128,
-        payment: Box<dyn helpers::BuildOutput<DefaultDB, BuildContext>>,
+        payment: Box<dyn midnight_helpers::BuildOutput<DefaultDB, BuildContext>>,
         pay_fees: bool,
     ) -> Result<PreparedTransfer, WalletError> {
         let seed = self.state.seed();
@@ -573,7 +571,9 @@ impl<'a> TransferBuilder<'a> {
         tx_info.set_guaranteed_offer(OfferInfo {
             inputs: prepared
                 .into_iter()
-                .map(|i| Box::new(i) as Box<dyn helpers::BuildInput<DefaultDB, BuildContext>>)
+                .map(|i| {
+                    Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB, BuildContext>>
+                })
                 .collect(),
             outputs,
             transients: vec![],
@@ -632,7 +632,7 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect();
 
-        let mut outputs: Vec<Box<dyn helpers::BuildUtxoOutput<DefaultDB, BuildContext>>> =
+        let mut outputs: Vec<Box<dyn midnight_helpers::BuildUtxoOutput<DefaultDB, BuildContext>>> =
             vec![Box::new(UtxoOutputInfo {
                 value: amount,
                 owner: UnshieldedWallet::from(recipient.into_ledger()),
@@ -650,7 +650,10 @@ impl<'a> TransferBuilder<'a> {
         let unshielded_offer = UnshieldedOfferInfo {
             inputs: spend_infos
                 .into_iter()
-                .map(|s| Box::new(s) as Box<dyn helpers::BuildUtxoSpend<DefaultDB, BuildContext>>)
+                .map(|s| {
+                    Box::new(s)
+                        as Box<dyn midnight_helpers::BuildUtxoSpend<DefaultDB, BuildContext>>
+                })
                 .collect(),
             outputs,
         };
@@ -783,7 +786,7 @@ impl<'a> TransferBuilder<'a> {
                     value: utxo.value,
                     owner: seed.clone(),
                     token_type: NIGHT,
-                    intent_hash: Some(helpers::IntentHash(utxo.intent_hash)),
+                    intent_hash: Some(midnight_helpers::IntentHash(utxo.intent_hash)),
                     output_number: Some(utxo.output_index),
                 };
                 Box::new(info) as Box<dyn BuildUtxoSpend<DefaultDB, BuildContext>>
@@ -926,7 +929,7 @@ pub fn longest_ttl(context: &BuildContext) -> Timestamp {
 /// [`intent_ttl`].
 fn ttl_after(
     chain_time: Timestamp,
-    global_ttl: helpers::Duration,
+    global_ttl: midnight_helpers::Duration,
     ttl: Option<std::time::Duration>,
 ) -> Result<Timestamp, WalletError> {
     let Some(requested) = ttl else {
@@ -941,7 +944,7 @@ fn ttl_after(
             ),
         });
     }
-    Ok(chain_time + helpers::Duration::from_secs(secs))
+    Ok(chain_time + midnight_helpers::Duration::from_secs(secs))
 }
 
 /// Refuse `ttl` when the transaction that `tx_info` describes will have no
@@ -984,7 +987,8 @@ async fn assemble_unproven(
     }
     let fallible_offer = fallible_offers_vec.into_iter().collect();
 
-    let mut intents = HashMapStorage::<u16, helpers::UnprovenIntent<DefaultDB>, DefaultDB>::new();
+    let mut intents =
+        HashMapStorage::<u16, midnight_helpers::UnprovenIntent<DefaultDB>, DefaultDB>::new();
     for (segment_id, intent_info) in tx_info.intents.iter_mut() {
         let intent = intent_info
             .build(&mut tx_info.rng, ttl, tx_info.context.clone(), *segment_id)
@@ -1130,7 +1134,7 @@ pub fn balance_external(
 
         // The first round draws nothing and prices `external` as it is.
         let fee_tx: Option<UnprovenTx> = (!spends.is_empty()).then(|| {
-            let mut intent: helpers::UnprovenIntent<DefaultDB> =
+            let mut intent: midnight_helpers::UnprovenIntent<DefaultDB> =
                 Intent::empty(&mut tx_info.rng, ttl);
             intent.dust_actions = Some(Sp::new(DustActions {
                 spends: spends.into(),
@@ -1362,7 +1366,7 @@ fn compute_missing_dust(
 fn apply_dust(
     tx_info: &StandardTransactionInfo<DefaultDB, BuildContext>,
     tx: &mut UnprovenTx,
-    spends: &[helpers::DustSpend<ProofPreimageMarker, DefaultDB>],
+    spends: &[midnight_helpers::DustSpend<ProofPreimageMarker, DefaultDB>],
     mut rng: StdRng,
     ttl: Timestamp,
     now: Timestamp,
@@ -1474,9 +1478,9 @@ fn resign_offer(
 mod tests {
     /// A fee-only transaction at a segment.
     fn intent_at(segment: u16) -> FinalizedTx {
-        use helpers::SeedableRng;
+        use midnight_helpers::SeedableRng;
         let mut rng = StdRng::seed_from_u64(7);
-        let intent: helpers::UnprovenIntent<DefaultDB> =
+        let intent: midnight_helpers::UnprovenIntent<DefaultDB> =
             Intent::empty(&mut rng, Timestamp::from_secs(1));
         let tx: UnprovenTx =
             Transaction::from_intents("undeployed", HashMapStorage::new().insert(segment, intent));
@@ -1485,10 +1489,10 @@ mod tests {
 
     /// An unproven transaction with one empty intent per TTL, in seconds.
     fn unproven_expiring_at(ttls: &[u64]) -> UnprovenTx {
-        use helpers::SeedableRng;
+        use midnight_helpers::SeedableRng;
         let mut rng = StdRng::seed_from_u64(7);
         let intents = ttls.iter().zip(1u16..).fold(
-            HashMapStorage::<u16, helpers::UnprovenIntent<DefaultDB>, DefaultDB>::new(),
+            HashMapStorage::<u16, midnight_helpers::UnprovenIntent<DefaultDB>, DefaultDB>::new(),
             |intents, (&ttl, segment)| {
                 intents.insert(segment, Intent::empty(&mut rng, Timestamp::from_secs(ttl)))
             },
@@ -1509,7 +1513,7 @@ mod tests {
         Arc::new(context)
     }
 
-    fn global_ttl_of(context: &BuildContext) -> helpers::Duration {
+    fn global_ttl_of(context: &BuildContext) -> midnight_helpers::Duration {
         context.with_ledger_state(|ls| ls.parameters.global_ttl)
     }
 
@@ -1547,7 +1551,7 @@ mod tests {
     fn a_ttl_is_a_whole_second_up_to_global_ttl() {
         use std::time::Duration;
         let now = Timestamp::from_secs(1_000);
-        let global_ttl = helpers::Duration::from_secs(3_600);
+        let global_ttl = midnight_helpers::Duration::from_secs(3_600);
         let after = |ttl| ttl_after(now, global_ttl, Some(ttl));
 
         assert_eq!(after(Duration::from_secs(3_600)).unwrap(), now + global_ttl);
@@ -1575,7 +1579,7 @@ mod tests {
         let ttl = Some(std::time::Duration::from_secs(60));
         let mut tx_info = StandardTransactionInfo::new_from_context(
             context_at(1_000, 1_000),
-            Arc::new(helpers::LocalProofServer::default()),
+            Arc::new(midnight_helpers::LocalProofServer::default()),
             None,
         );
         assert!(matches!(
@@ -1598,7 +1602,7 @@ mod tests {
         let prepared = |tx| {
             let tx_info = StandardTransactionInfo::new_from_context(
                 context.clone(),
-                Arc::new(helpers::LocalProofServer::default()),
+                Arc::new(midnight_helpers::LocalProofServer::default()),
                 None,
             );
             PreparedTransfer::new(tx_info, tx, Vec::new())
@@ -1645,7 +1649,7 @@ mod tests {
         let prepared = |context, tx| {
             let tx_info = StandardTransactionInfo::new_from_context(
                 context,
-                Arc::new(helpers::LocalProofServer::default()),
+                Arc::new(midnight_helpers::LocalProofServer::default()),
                 None,
             );
             PreparedTransfer::new(tx_info, tx, Vec::new())

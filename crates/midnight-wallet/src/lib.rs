@@ -67,13 +67,18 @@
 //! ```
 
 mod background;
+mod balance;
+mod builds;
 mod generation;
-mod ledger_9;
 mod local;
+mod pending;
 mod pre_fork;
 mod replay;
+mod snapshot;
+mod state;
 mod storage;
 mod sync;
+mod transfer;
 mod wallet;
 
 // The vocabulary this crate's own signatures name, so a consumer of the

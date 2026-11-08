@@ -4,17 +4,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use midnight_base_crypto::signatures::{Signature, VerifyingKey};
-use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::TransferResult;
-
-use super::deploy::{build_with_mock_fee_proofs, single_action_tx_info};
-use super::helpers;
-use super::provider::Builds;
-use super::types::convert::IntoLedger;
-use helpers::{
+use midnight_helpers::{
     BuildContext, ContractOperationVersion, ContractOperationVersionedVerifierKey, DefaultDB,
     EntryPointBuf, MaintenanceUpdate, SingleUpdate,
 };
+use midnight_provider::Builds;
+use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::TransferResult;
+use midnight_types::convert::IntoLedger;
+
+use super::deploy::{build_with_mock_fee_proofs, single_action_tx_info};
 
 use crate::error::ContractError;
 use crate::maintenance::OpSpec;
@@ -29,7 +28,7 @@ pub(crate) fn prepare_update(
 ) -> Result<MaintenanceUpdate<DefaultDB>, ContractError> {
     // A removal names the slot its key is in. A key inserted earlier in the
     // same update is the one in that slot, whatever the chain holds.
-    let mut inserted: HashMap<&str, helpers::ContractOperation> = HashMap::new();
+    let mut inserted: HashMap<&str, midnight_helpers::ContractOperation> = HashMap::new();
     let mut singles = Vec::with_capacity(specs.len());
     for spec in specs {
         singles.push(match spec {
@@ -43,11 +42,11 @@ pub(crate) fn prepare_update(
             OpSpec::Remove { circuit } => {
                 let entry_point: EntryPointBuf = circuit.as_bytes().into();
                 let version = match inserted.get(circuit.as_str()) {
-                    Some(op) => helpers::contract_operation_version_of(op),
+                    Some(op) => midnight_helpers::contract_operation_version_of(op),
                     None => state
                         .operations
                         .get(&entry_point)
-                        .map(|op| helpers::contract_operation_version_of(&op))
+                        .map(|op| midnight_helpers::contract_operation_version_of(&op))
                         .ok_or_else(|| {
                             ContractError::Maintenance(format!(
                                 "circuit '{circuit}' has no verifier key to remove"
@@ -75,7 +74,7 @@ pub(crate) fn prepare_update(
 fn versioned_verifier_key(
     bytes: &[u8],
 ) -> Result<ContractOperationVersionedVerifierKey, ContractError> {
-    helpers::contract_operation_versioned_verifier_key(bytes.to_vec())
+    midnight_helpers::contract_operation_versioned_verifier_key(bytes.to_vec())
         .map_err(|e| ContractError::Maintenance(format!("invalid verifier key: {e}")))
 }
 
@@ -94,10 +93,10 @@ fn single_replace_authority(
     threshold: u32,
     current_counter: u32,
 ) -> SingleUpdate {
-    SingleUpdate::ReplaceAuthority(helpers::ContractMaintenanceAuthority {
+    SingleUpdate::ReplaceAuthority(midnight_helpers::ContractMaintenanceAuthority {
         committee: committee
             .into_iter()
-            .map(helpers::maintenance_verifying_key)
+            .map(midnight_helpers::maintenance_verifying_key)
             .collect(),
         threshold,
         // saturating to match the ledger's apply path (it caps at u32::MAX).
@@ -105,20 +104,20 @@ fn single_replace_authority(
     })
 }
 
-/// A [`BuildContractAction`](helpers::BuildContractAction) that attaches an
+/// A [`BuildContractAction`](midnight_helpers::BuildContractAction) that attaches an
 /// already-signed `MaintenanceUpdate` to the intent (no signing of its own).
 struct AttachMaintenance {
     update: MaintenanceUpdate<DefaultDB>,
 }
 
 #[async_trait::async_trait]
-impl helpers::BuildContractAction<DefaultDB, BuildContext> for AttachMaintenance {
+impl midnight_helpers::BuildContractAction<DefaultDB, BuildContext> for AttachMaintenance {
     async fn build(
         &mut self,
-        _rng: &mut helpers::StdRng,
+        _rng: &mut midnight_helpers::StdRng,
         _context: Arc<BuildContext>,
-        intent: &helpers::UnprovenIntent<DefaultDB>,
-    ) -> helpers::UnprovenIntent<DefaultDB> {
+        intent: &midnight_helpers::UnprovenIntent<DefaultDB>,
+    ) -> midnight_helpers::UnprovenIntent<DefaultDB> {
         intent.add_maintenance_update(self.update.clone())
     }
 }
@@ -135,7 +134,10 @@ pub(crate) async fn maintenance_funded(
     let update = signatures
         .iter()
         .fold(update, |update, (index, signature)| {
-            update.add_signature(*index, helpers::transaction_signature(signature.clone()))
+            update.add_signature(
+                *index,
+                midnight_helpers::transaction_signature(signature.clone()),
+            )
         });
 
     let context = builds.execution_context().await?;
@@ -163,7 +165,7 @@ mod tests {
                 assert_eq!(auth.threshold, 2);
                 let expected: Vec<_> = committee
                     .into_iter()
-                    .map(helpers::maintenance_verifying_key)
+                    .map(midnight_helpers::maintenance_verifying_key)
                     .collect();
                 assert_eq!(auth.committee, expected);
             }

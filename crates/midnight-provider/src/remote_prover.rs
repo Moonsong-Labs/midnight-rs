@@ -1,7 +1,7 @@
 //! Remote proof-server client.
 //!
 //! [`RemoteProofServer`] implements the ledger's `ProofProvider` (see
-//! [`crate::ledger_9`]) by delegating ZK proving to an HTTP proof
+//! [`crate::proving`]) by delegating ZK proving to an HTTP proof
 //! server (e.g. midnightntwrk/proof-server) over its `/check`
 //! and `/prove` endpoints. Each request has a deadline, and the client retries
 //! a transient failure with exponential backoff before that deadline.

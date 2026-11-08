@@ -3,19 +3,17 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::{CoinPublicKey, EncryptionPublicKey, TransferResult};
-
-use super::call::{INTENT_SEGMENT, prove_without_fee};
-use super::helpers;
-use super::provider::Builds;
-use super::types::PreparedInput;
-use super::types::convert::{IntoLedger, IntoSdk};
-use helpers::{
+use midnight_helpers::{
     BuildContext, BuildContractAction, BuildInput, BuildOutput, ContractDeploy, DefaultDB,
     FromContext, IntentInfo, OfferInfo, OutputInfo, ShieldedWallet, SplittableRng,
     StandardTransactionInfo, TokenInfo,
 };
+use midnight_provider::Builds;
+use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::convert::{IntoLedger, IntoSdk};
+use midnight_types::{CoinPublicKey, EncryptionPublicKey, PreparedInput, TransferResult};
+
+use super::call::{INTENT_SEGMENT, prove_without_fee};
 
 use crate::ShieldedOffer;
 use crate::change::{change_due, total_by_key};
@@ -39,13 +37,15 @@ pub(crate) async fn deploy_funded(
     }
 
     #[async_trait::async_trait]
-    impl<C: helpers::BuilderContext<DefaultDB>> BuildContractAction<DefaultDB, C> for DeployAction {
+    impl<C: midnight_helpers::BuilderContext<DefaultDB>> BuildContractAction<DefaultDB, C>
+        for DeployAction
+    {
         async fn build(
             &mut self,
-            _rng: &mut helpers::StdRng,
+            _rng: &mut midnight_helpers::StdRng,
             _context: Arc<C>,
-            intent: &helpers::UnprovenIntent<DefaultDB>,
-        ) -> helpers::UnprovenIntent<DefaultDB> {
+            intent: &midnight_helpers::UnprovenIntent<DefaultDB>,
+        ) -> midnight_helpers::UnprovenIntent<DefaultDB> {
             intent.add_deploy(self.deploy.clone())
         }
     }

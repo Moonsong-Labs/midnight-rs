@@ -34,13 +34,13 @@ use std::fmt;
 use std::str::FromStr;
 
 use bip32::{ChildNumber, DerivationPath as Bip32DerivationPath, XPrv};
-use midnight_helpers::ledger_9::{
+use midnight_helpers::{
     DefaultDB, DustWallet, IntoWalletAddress, ShieldedWallet, UnshieldedWallet,
 };
 use rand::RngCore;
 use zeroize::Zeroize;
 
-use crate::ledger_9::convert::{IntoLedger, IntoSdk};
+use crate::convert::{IntoLedger, IntoSdk};
 use crate::{Network, ShieldedRecipient, UnshieldedRecipient};
 
 /// The `role` level of an HD path: the asset family a key belongs to.
@@ -581,14 +581,14 @@ mod tests {
     // wallets derive their keys from those paths.
     #[test]
     fn derive_at_matches_upstream_derivation_paths() {
-        use midnight_helpers::ledger_9::{self, DerivationPath, DeriveSeed, UnshieldedWallet};
+        use midnight_helpers::{DerivationPath, DeriveSeed, UnshieldedWallet};
 
         let upstream_role = |role| match role {
-            Role::UnshieldedExternal => ledger_9::Role::UnshieldedExternal,
-            Role::UnshieldedInternal => ledger_9::Role::UnshieldedInternal,
-            Role::Dust => ledger_9::Role::Dust,
-            Role::Zswap => ledger_9::Role::Zswap,
-            Role::Ecdsa => ledger_9::Role::Ecdsa,
+            Role::UnshieldedExternal => midnight_helpers::Role::UnshieldedExternal,
+            Role::UnshieldedInternal => midnight_helpers::Role::UnshieldedInternal,
+            Role::Dust => midnight_helpers::Role::Dust,
+            Role::Zswap => midnight_helpers::Role::Zswap,
+            Role::Ecdsa => midnight_helpers::Role::Ecdsa,
         };
         let seed = Seed::from_mnemonic(TEST_MNEMONIC).unwrap();
         let path = |p: &str| DerivationPath::new(p.to_string()).unwrap();
@@ -612,7 +612,7 @@ mod tests {
 
         for (account, role, index, upstream_path) in rows {
             let expected = <UnshieldedWallet as DeriveSeed>::derive_seed(
-                crate::ledger_9::convert::IntoLedger::into_ledger(&seed),
+                crate::convert::IntoLedger::into_ledger(&seed),
                 &upstream_path,
             );
             assert_eq!(

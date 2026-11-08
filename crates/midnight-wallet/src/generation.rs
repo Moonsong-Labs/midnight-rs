@@ -3,7 +3,7 @@
 use std::io::Cursor;
 
 use midnight_helpers::midnight_serialize::peek_tag;
-use midnight_helpers::{DefaultDB, Tagged, ledger_8, ledger_9};
+use midnight_helpers::{DefaultDB, Tagged, ledger_8};
 use serde::{Deserialize, Serialize};
 
 use crate::WalletError;
@@ -33,7 +33,7 @@ impl Generation {
         let tag = tag_of(bytes)?;
         if tag == ledger_8::Event::<DefaultDB>::tag() {
             Ok(Self::V8)
-        } else if tag == ledger_9::Event::<DefaultDB>::tag() {
+        } else if tag == midnight_helpers::Event::<DefaultDB>::tag() {
             Ok(Self::V9)
         } else {
             Err(WalletError::UnknownLedger { tag })
@@ -52,7 +52,7 @@ impl Generation {
 /// [`WalletError::UnknownLedger`] that names the tag of the parameters.
 pub(crate) fn require_ledger_9_parameters(bytes: &[u8]) -> Result<(), WalletError> {
     let tag = tag_of(bytes)?;
-    if tag == ledger_9::LedgerParameters::tag() {
+    if tag == midnight_helpers::LedgerParameters::tag() {
         Ok(())
     } else {
         Err(WalletError::UnknownLedger { tag })
@@ -93,7 +93,7 @@ mod tests {
             Generation::V9
         );
 
-        require_ledger_9_parameters(&encoded(&ledger_9::INITIAL_PARAMETERS)).unwrap();
+        require_ledger_9_parameters(&encoded(&midnight_helpers::INITIAL_PARAMETERS)).unwrap();
         let ledger_8_chain =
             require_ledger_9_parameters(b"midnight:ledger-parameters[v5]:").unwrap_err();
         assert!(

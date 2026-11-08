@@ -5,11 +5,9 @@
 
 use std::str::FromStr;
 
-use midnight_helpers::ledger_9::{
-    DefaultDB, DustWallet, ShieldedWallet, UnshieldedWallet, WalletAddress,
-};
+use midnight_helpers::{DefaultDB, DustWallet, ShieldedWallet, UnshieldedWallet, WalletAddress};
 
-use crate::ledger_9::convert::IntoSdk;
+use crate::convert::IntoSdk;
 use crate::{DustPublicKey, Network, ShieldedRecipient, UnshieldedRecipient, WalletError};
 
 /// Payload length of a shielded address: a 32-byte coin public key followed by
@@ -128,11 +126,11 @@ fn check_address_network(addr: &WalletAddress, expected: &Network) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use midnight_helpers::ledger_9::{DefaultDB, DustWallet, ShieldedWallet, UnshieldedWallet};
+    use midnight_helpers::{DefaultDB, DustWallet, ShieldedWallet, UnshieldedWallet};
 
     use crate::Network;
+    use crate::convert::{IntoLedger, IntoSdk as _};
     use crate::hd::Seed;
-    use crate::ledger_9::convert::{IntoLedger, IntoSdk as _};
 
     fn seed() -> Seed {
         Seed::from_bytes(&[7; 32]).unwrap()

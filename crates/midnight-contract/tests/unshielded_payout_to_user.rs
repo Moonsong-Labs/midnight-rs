@@ -80,8 +80,8 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     let recipient_provider = MidnightProvider::new(&node_url);
     let wallet =
         common::synced_wallet(&recipient_provider, &indexer_url, common::RECIPIENT_SEED).await;
-    let recipient = midnight_helpers::ledger_9::UnshieldedWallet::default(
-        midnight_types::ledger_9::convert::IntoLedger::into_ledger(wallet.seed()),
+    let recipient = midnight_helpers::UnshieldedWallet::default(
+        midnight_types::convert::IntoLedger::into_ledger(wallet.seed()),
     )
     .user_address;
     let recipient_provider = recipient_provider.with_wallet(wallet);

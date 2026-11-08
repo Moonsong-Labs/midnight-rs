@@ -5,7 +5,7 @@ mod constructor;
 mod contract;
 pub mod deploy;
 mod error;
-mod ledger_9;
+mod ledger;
 // The Compact IR interpreter now lives in the `compact-interpreter` crate;
 // aliased here so `midnight_contract::interpreter::*` paths keep resolving.
 pub use compact_interpreter as interpreter;

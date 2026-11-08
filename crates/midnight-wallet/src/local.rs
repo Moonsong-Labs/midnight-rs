@@ -1,5 +1,5 @@
 //! [`LocalWallet`]: the [`WalletFacade`] implementation for a [`Wallet`] this
-//! process owns. Its builds are in `ledger_9`.
+//! process owns. Its builds are in `crate::builds`.
 
 use std::sync::Arc;
 use std::time::Duration;

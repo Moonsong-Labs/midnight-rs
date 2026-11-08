@@ -4,27 +4,24 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use super::helpers;
-use super::provider::Builds;
-use super::types::convert::{IntoLedger, IntoSdk};
-use helpers::coin_structure::coin::{
+use midnight_base_crypto::fab::{InvalidBuiltinDecode, ValueSlice};
+use midnight_base_crypto::time::Timestamp;
+use midnight_helpers::coin_structure::coin::{
     Info as ZswapCoinInfo, PublicAddress, PublicKey, QualifiedInfo, ShieldedTokenType, TokenType,
 };
-use helpers::coin_structure::transfer::Recipient;
-use helpers::{
+use midnight_helpers::coin_structure::transfer::Recipient;
+use midnight_helpers::{
     AlignedValue, BuildContext, BuildContractAction, BuildUtxoOutput, BuilderContext,
     ContractAddress, ContractCallPrototype, DefaultDB, EntryPointBuf, FromContext, IntentInfo,
     KeyLocation, OfferInfo, OutputInfo, ProofPreimage, ShieldedWallet, SplittableRng,
     StandardTransactionInfo, TokenInfo, Transcript, UnshieldedOfferInfo, UnshieldedWallet,
     UtxoOutputInfo,
 };
-use midnight_base_crypto::fab::{InvalidBuiltinDecode, ValueSlice};
-use midnight_base_crypto::time::Timestamp;
-use midnight_provider::ProviderError;
+use midnight_provider::{Builds, ProviderError};
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::TransferResult;
+use midnight_types::convert::{IntoLedger, IntoSdk};
+use midnight_types::{PreparedInput, TransferResult};
 
-use super::types::PreparedInput;
 use crate::address::format_contract_address;
 use crate::call::ShieldedInputs;
 use crate::change::{change_due, total_by_key};
@@ -33,8 +30,8 @@ use crate::runtime;
 
 /// The segment of the intent that a call, a deploy or a maintenance update
 /// adds. A call's fallible offers and fallible transients ride in it too.
-pub(crate) const INTENT_SEGMENT: helpers::SegmentId =
-    helpers::Segment::Fallible as helpers::SegmentId;
+pub(crate) const INTENT_SEGMENT: midnight_helpers::SegmentId =
+    midnight_helpers::Segment::Fallible as midnight_helpers::SegmentId;
 
 /// The outputs that pay what a transcript claims to send.
 ///
@@ -72,21 +69,21 @@ fn payouts_of(transcript: Option<&Transcript<DefaultDB>>) -> Vec<UtxoOutputInfo<
 /// read that the ops recorded, so a clock or balance check that reads another
 /// value here fails the build.
 pub(crate) fn partition(
-    state: &helpers::ContractState<DefaultDB>,
+    state: &midnight_helpers::ContractState<DefaultDB>,
     address: ContractAddress,
     block_time: Timestamp,
-    program: Vec<helpers::Op<helpers::ResultModeVerify, DefaultDB>>,
-    parameters: &helpers::LedgerParameters,
-) -> Result<helpers::mn_ledger::construct::TranscriptPair<DefaultDB>, ContractError> {
-    let mut context = helpers::QueryContext::new(state.data.clone(), address);
+    program: Vec<midnight_helpers::Op<midnight_helpers::ResultModeVerify, DefaultDB>>,
+    parameters: &midnight_helpers::LedgerParameters,
+) -> Result<midnight_helpers::mn_ledger::construct::TranscriptPair<DefaultDB>, ContractError> {
+    let mut context = midnight_helpers::QueryContext::new(state.data.clone(), address);
     context.call_context.tblock = block_time;
     context.call_context.balance = state.balance.clone();
-    let pre_transcript = helpers::PreTranscript {
+    let pre_transcript = midnight_helpers::PreTranscript {
         context,
         program,
         comm_comm: None,
     };
-    let partitioned = helpers::partition_transcripts(&[pre_transcript], parameters)
+    let partitioned = midnight_helpers::partition_transcripts(&[pre_transcript], parameters)
         .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
     Ok(partitioned.into_iter().next().unwrap_or((None, None)))
 }
@@ -150,18 +147,19 @@ pub(crate) async fn call_transaction(
     // (node malformed error 186). Coins sent to a user land in
     // `claimed_shielded_spends`, contract-owned coins in
     // `claimed_shielded_receives`; union both.
-    let fallible_commitments: std::collections::HashSet<helpers::coin_structure::coin::Commitment> =
-        fallible
-            .as_ref()
-            .map(|t| {
-                t.effects
-                    .claimed_shielded_spends
-                    .iter()
-                    .chain(t.effects.claimed_shielded_receives.iter())
-                    .map(|c| **c)
-                    .collect()
-            })
-            .unwrap_or_default();
+    let fallible_commitments: std::collections::HashSet<
+        midnight_helpers::coin_structure::coin::Commitment,
+    > = fallible
+        .as_ref()
+        .map(|t| {
+            t.effects
+                .claimed_shielded_spends
+                .iter()
+                .chain(t.effects.claimed_shielded_receives.iter())
+                .map(|c| **c)
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Value this call mints, per (token, segment). The ledger credits a mint
     // against the offer's balance, so a circuit output covered by one draws
@@ -210,7 +208,7 @@ pub(crate) async fn call_transaction(
     struct CallAction {
         address: ContractAddress,
         entry_point: EntryPointBuf,
-        op: helpers::ContractOperation,
+        op: midnight_helpers::ContractOperation,
         input: AlignedValue,
         output: AlignedValue,
         key_location: String,
@@ -223,10 +221,10 @@ pub(crate) async fn call_transaction(
     impl<C: BuilderContext<DefaultDB>> BuildContractAction<DefaultDB, C> for CallAction {
         async fn build(
             &mut self,
-            rng: &mut helpers::StdRng,
+            rng: &mut midnight_helpers::StdRng,
             _context: std::sync::Arc<C>,
-            intent: &helpers::UnprovenIntent<DefaultDB>,
-        ) -> helpers::UnprovenIntent<DefaultDB> {
+            intent: &midnight_helpers::UnprovenIntent<DefaultDB>,
+        ) -> midnight_helpers::UnprovenIntent<DefaultDB> {
             use rand::Rng;
 
             let call = ContractCallPrototype {
@@ -301,8 +299,10 @@ pub(crate) async fn call_transaction(
     // compute its contract-owned commitment to pair it with the matching
     // self-output below into a transient.
     let self_recipient = Recipient::Contract(helper_addr);
-    let mut pending_input_coins: Vec<(helpers::coin_structure::coin::Commitment, ZswapCoinInfo)> =
-        Vec::with_capacity(exec_result.zswap_inputs.len());
+    let mut pending_input_coins: Vec<(
+        midnight_helpers::coin_structure::coin::Commitment,
+        ZswapCoinInfo,
+    )> = Vec::with_capacity(exec_result.zswap_inputs.len());
     for zi in &exec_result.zswap_inputs {
         let coin = decode_shielded_input(zi)?;
         pending_input_coins.push((coin.commitment(&self_recipient), coin));
@@ -349,7 +349,7 @@ pub(crate) async fn call_transaction(
                     segment: if is_fallible {
                         INTENT_SEGMENT
                     } else {
-                        helpers::Segment::Guaranteed.into()
+                        midnight_helpers::Segment::Guaranteed.into()
                     },
                 }));
         } else {
@@ -452,7 +452,10 @@ async fn attach_and_prove(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     circuit_offers: CircuitOffers,
     prepared: Vec<PreparedInput>,
-    (change_cpk, change_epk): (helpers::CoinPublicKey, helpers::EncryptionPublicKey),
+    (change_cpk, change_epk): (
+        midnight_helpers::CoinPublicKey,
+        midnight_helpers::EncryptionPublicKey,
+    ),
     pay_fees: bool,
 ) -> Result<TransferResult, ContractError> {
     let CircuitOffers {
@@ -523,7 +526,7 @@ async fn attach_and_prove(
 pub(super) async fn prove_without_fee(
     tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
 ) -> Result<TransferResult, ContractError> {
-    let prepared = super::types::prepare_no_validate(tx_info)
+    let prepared = midnight_types::prepare_no_validate(tx_info)
         .await
         .map_err(ProviderError::Wallet)?;
     Ok(prepared.prove().await.map_err(ProviderError::Wallet)?)
@@ -648,14 +651,14 @@ enum MintRecipient {
     /// `watchFor`); without it the output still lands on-chain but the recipient
     /// must already know the coin out of band.
     User {
-        cpk: helpers::CoinPublicKey,
-        epk: Option<helpers::EncryptionPublicKey>,
+        cpk: midnight_helpers::CoinPublicKey,
+        epk: Option<midnight_helpers::EncryptionPublicKey>,
     },
     /// Contract recipient (e.g. a mint-to-self branch): a contract-owned output.
     Contract(ContractAddress),
 }
 
-/// A [`helpers::BuildOutput`] that emits the exact coin a circuit
+/// A [`midnight_helpers::BuildOutput`] that emits the exact coin a circuit
 /// created via `createZswapOutput` into a Zswap offer. Unlike the wallet's
 /// `OutputInfo` (which mints a fresh coin), this carries the circuit's exact
 /// `CoinInfo`, so the output's `coin_com` equals the commitment the proof
@@ -665,7 +668,7 @@ struct MintedCoinOutput {
     recipient: MintRecipient,
 }
 
-impl helpers::TokenInfo for MintedCoinOutput {
+impl midnight_helpers::TokenInfo for MintedCoinOutput {
     fn token_type(&self) -> ShieldedTokenType {
         self.coin.type_
     }
@@ -674,25 +677,28 @@ impl helpers::TokenInfo for MintedCoinOutput {
     }
 }
 
-impl helpers::BuildOutput<helpers::DefaultDB, helpers::BuildContext> for MintedCoinOutput {
+impl midnight_helpers::BuildOutput<midnight_helpers::DefaultDB, midnight_helpers::BuildContext>
+    for MintedCoinOutput
+{
     fn build(
         &self,
-        rng: &mut helpers::StdRng,
-        _context: Arc<helpers::BuildContext>,
-    ) -> helpers::Output<helpers::ProofPreimage, helpers::DefaultDB> {
+        rng: &mut midnight_helpers::StdRng,
+        _context: Arc<midnight_helpers::BuildContext>,
+    ) -> midnight_helpers::Output<midnight_helpers::ProofPreimage, midnight_helpers::DefaultDB>
+    {
         match &self.recipient {
-            MintRecipient::User { cpk, epk } => helpers::Output::new(
+            MintRecipient::User { cpk, epk } => midnight_helpers::Output::new(
                 rng,
                 &self.coin,
-                helpers::Segment::Guaranteed.into(),
+                midnight_helpers::Segment::Guaranteed.into(),
                 cpk,
                 *epk,
             )
             .expect("circuit-minted user coin output must be constructible"),
-            MintRecipient::Contract(addr) => helpers::Output::new_contract_owned(
+            MintRecipient::Contract(addr) => midnight_helpers::Output::new_contract_owned(
                 rng,
                 &self.coin,
-                helpers::Segment::Guaranteed.into(),
+                midnight_helpers::Segment::Guaranteed.into(),
                 *addr,
             )
             .expect("circuit-minted contract-owned coin output must be constructible"),
@@ -720,20 +726,27 @@ struct ContractOwnedTransient {
     segment: u16,
 }
 
-impl helpers::BuildTransient<helpers::DefaultDB, helpers::BuildContext> for ContractOwnedTransient {
+impl midnight_helpers::BuildTransient<midnight_helpers::DefaultDB, midnight_helpers::BuildContext>
+    for ContractOwnedTransient
+{
     fn build(
         &self,
-        rng: &mut helpers::StdRng,
-        _context: Arc<helpers::BuildContext>,
-    ) -> helpers::Transient<helpers::ProofPreimage, helpers::DefaultDB> {
+        rng: &mut midnight_helpers::StdRng,
+        _context: Arc<midnight_helpers::BuildContext>,
+    ) -> midnight_helpers::Transient<midnight_helpers::ProofPreimage, midnight_helpers::DefaultDB>
+    {
         // Build the contract-owned output first, then derive the transient from
         // it: `new_from_contract_owned_output` seeds a fresh 1-leaf Merkle tree
         // with this output's commitment and spends it back, so the created coin
         // is consumed within the same tx without ever entering the chain tree.
-        let output =
-            helpers::Output::new_contract_owned(rng, &self.coin, Some(self.segment), self.contract)
-                .expect("contract-owned transient output must be constructible");
-        helpers::Transient::new_from_contract_owned_output(
+        let output = midnight_helpers::Output::new_contract_owned(
+            rng,
+            &self.coin,
+            Some(self.segment),
+            self.contract,
+        )
+        .expect("contract-owned transient output must be constructible");
+        midnight_helpers::Transient::new_from_contract_owned_output(
             rng,
             &self.coin.qualify(0),
             Some(self.segment),
@@ -748,7 +761,10 @@ impl helpers::BuildTransient<helpers::DefaultDB, helpers::BuildContext> for Cont
 /// ledger partitioned the coin's creating op into, and match it against a
 /// `createZswapInput` to form a transient; the output gives the coin and the
 /// contract of that transient when they pair.
-type ShieldedOfferOutput = (helpers::coin_structure::coin::Commitment, MintedCoinOutput);
+type ShieldedOfferOutput = (
+    midnight_helpers::coin_structure::coin::Commitment,
+    MintedCoinOutput,
+);
 
 /// Turn the coins a circuit created via `createZswapOutput` into Zswap offer
 /// outputs, each paired with its coin commitment.
@@ -768,11 +784,14 @@ type ShieldedOfferOutput = (helpers::coin_structure::coin::Commitment, MintedCoi
 fn build_shielded_offer_outputs(
     zswap_outputs: &[runtime::CircuitZswapOutput],
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
-    wallet_keys: (helpers::CoinPublicKey, helpers::EncryptionPublicKey),
+    wallet_keys: (
+        midnight_helpers::CoinPublicKey,
+        midnight_helpers::EncryptionPublicKey,
+    ),
 ) -> Result<Vec<ShieldedOfferOutput>, ContractError> {
     // Index the recipients once so the per-output lookup is O(1); keyed by the
     // coin public key's raw bytes (`HashOutput` inner array).
-    let mut epk_by_cpk: std::collections::HashMap<[u8; 32], helpers::EncryptionPublicKey> =
+    let mut epk_by_cpk: std::collections::HashMap<[u8; 32], midnight_helpers::EncryptionPublicKey> =
         coin_encryption_keys
             .iter()
             .map(|r| (r.coin_public_key.0.0, r.enc_public_key.into_ledger()))
@@ -805,8 +824,8 @@ fn build_shielded_offer_outputs(
 mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
-    use helpers::HashOutput;
-    use helpers::coin_structure::coin::{Nonce, UnshieldedTokenType};
+    use midnight_helpers::HashOutput;
+    use midnight_helpers::coin_structure::coin::{Nonce, UnshieldedTokenType};
 
     /// A transcript claiming one spend of `token` by `recipient`.
     fn transcript_claiming(
@@ -814,7 +833,7 @@ mod tests {
         recipient: PublicAddress,
         value: u128,
     ) -> Transcript<DefaultDB> {
-        use helpers::onchain_runtime::context::{ClaimedUnshieldedSpendsKey, Effects};
+        use midnight_helpers::onchain_runtime::context::{ClaimedUnshieldedSpendsKey, Effects};
         let mut effects = Effects::<DefaultDB>::default();
         effects.claimed_unshielded_spends = effects.claimed_unshielded_spends.insert(
             ClaimedUnshieldedSpendsKey::from_inner(token, recipient),
@@ -828,8 +847,8 @@ mod tests {
         }
     }
 
-    fn a_user() -> helpers::coin_structure::coin::UserAddress {
-        helpers::coin_structure::coin::UserAddress(HashOutput([7; 32]))
+    fn a_user() -> midnight_helpers::coin_structure::coin::UserAddress {
+        midnight_helpers::coin_structure::coin::UserAddress(HashOutput([7; 32]))
     }
 
     fn a_token() -> UnshieldedTokenType {
@@ -923,9 +942,11 @@ mod tests {
         .expect("build must succeed");
         assert_eq!(outputs.len(), 1);
 
-        let expected = coin.commitment(&helpers::coin_structure::transfer::Recipient::User(
-            helpers::coin_structure::coin::PublicKey(HashOutput(cpk)),
-        ));
+        let expected = coin.commitment(
+            &midnight_helpers::coin_structure::transfer::Recipient::User(
+                midnight_helpers::coin_structure::coin::PublicKey(HashOutput(cpk)),
+            ),
+        );
         assert_eq!(outputs[0].0, expected);
     }
 
@@ -961,8 +982,8 @@ mod tests {
         assert_eq!(sealed_to, [Some(wallet.enc_public_key), None]);
     }
 
-    fn a_wallet() -> helpers::ShieldedWallet<DefaultDB> {
-        helpers::ShieldedWallet::default(helpers::WalletSeed::from([1u8; 32]))
+    fn a_wallet() -> midnight_helpers::ShieldedWallet<DefaultDB> {
+        midnight_helpers::ShieldedWallet::default(midnight_helpers::WalletSeed::from([1u8; 32]))
     }
 
     /// A captured `createZswapOutput` of `coin` to the user `cpk`, encoded as

@@ -132,7 +132,7 @@ async fn provider_build_context_succeeds() {
         .build_context()
         .await
         .expect("build_context should succeed");
-    let seed = midnight_types::ledger_9::convert::IntoLedger::into_ledger(&seed);
+    let seed = midnight_types::convert::IntoLedger::into_ledger(&seed);
     assert!(
         context.wallets.lock().unwrap().contains_key(&seed),
         "context should contain our wallet"
@@ -266,14 +266,14 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
 
 /// Sum the signed deltas a proven transaction carries for one shielded token.
 fn shielded_delta(tx_bytes: &[u8], token: midnight_wallet::ShieldedTokenType) -> i128 {
-    use midnight_helpers::ledger_9 as l;
-    let tx: l::FinalizedTransaction<l::DefaultDB> =
-        l::midnight_serialize::tagged_deserialize(&mut &tx_bytes[..])
-            .expect("deserialize proven transaction");
+    use midnight_helpers::midnight_serialize::tagged_deserialize;
+    use midnight_helpers::{DefaultDB, FinalizedTransaction, TokenType};
+    let tx: FinalizedTransaction<DefaultDB> =
+        tagged_deserialize(&mut &tx_bytes[..]).expect("deserialize proven transaction");
     tx.balance(None)
         .expect("token balance")
         .iter()
-        .filter(|((tt, _seg), _)| matches!(tt, l::TokenType::Shielded(s) if s.0 == token.0))
+        .filter(|((tt, _seg), _)| matches!(tt, TokenType::Shielded(s) if s.0 == token.0))
         .map(|(_, v)| *v)
         .sum()
 }

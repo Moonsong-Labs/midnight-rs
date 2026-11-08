@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use midnight_helpers::ledger_9;
+use midnight_helpers::INITIAL_PARAMETERS;
 use midnight_helpers::midnight_serialize::tagged_serialize;
 use midnight_indexer_client::testutil::{
     ServerWs, bind, ledger_event, next_json, read_http_request, send_next, subscriber_handshake,
@@ -159,7 +159,7 @@ async fn handle_http(mut stream: TcpStream, state: &MockState) {
 /// The block, with the parameters of ledger 9.
 fn block_response() -> String {
     let mut params = Vec::new();
-    tagged_serialize(&ledger_9::INITIAL_PARAMETERS, &mut params).unwrap();
+    tagged_serialize(&INITIAL_PARAMETERS, &mut params).unwrap();
     json!({
         "data": {
             "block": {

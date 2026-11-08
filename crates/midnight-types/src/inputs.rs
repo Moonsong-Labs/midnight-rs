@@ -12,8 +12,7 @@
 
 use std::sync::Arc;
 
-use super::helpers;
-use helpers::{
+use midnight_helpers::{
     BuildContext, DefaultDB, Input, Nullifier, ProofPreimage, Segment, ShieldedTokenType, StdRng,
     TokenInfo,
 };
@@ -52,7 +51,7 @@ impl TokenInfo for PreparedInput {
     }
 }
 
-impl helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
+impl midnight_helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
     fn build(
         &mut self,
         _rng: &mut StdRng,
@@ -131,7 +130,7 @@ pub fn prepare_shielded_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use helpers::{HashOutput, SeedableRng};
+    use midnight_helpers::{HashOutput, SeedableRng};
 
     /// A spend leaves the coin spendable in the wallet's state, so a coin
     /// named twice would be spent twice and its value counted twice. The

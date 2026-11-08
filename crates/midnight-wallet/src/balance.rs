@@ -1,14 +1,13 @@
 use std::collections::HashSet;
 
+use midnight_helpers::Timestamp;
+use midnight_types::convert::IntoSdk;
 use midnight_types::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, SpentUtxoKey,
     UnshieldedUtxoInfo, WalletBalance,
 };
 
-use super::helpers;
 use super::state::Wallet;
-use super::types::convert::IntoSdk;
-use helpers::Timestamp;
 
 impl Wallet {
     pub fn balance(&self) -> WalletBalance {
@@ -68,7 +67,7 @@ impl Wallet {
     }
 
     fn shielded_balance(&self) -> ShieldedBalance {
-        let reserved: HashSet<helpers::Nullifier> =
+        let reserved: HashSet<midnight_helpers::Nullifier> =
             self.reserved_shielded_nullifiers().copied().collect();
         let coins: Vec<ShieldedCoinBalance> = self
             .zswap_state()
@@ -89,7 +88,7 @@ impl Wallet {
         // Exclude coins a recent still-pending build already spent, so callers
         // (and the pinned-coin validation in the contract-call builder) don't
         // re-select a coin that is no longer available.
-        let reserved: HashSet<helpers::Nullifier> =
+        let reserved: HashSet<midnight_helpers::Nullifier> =
             self.reserved_shielded_nullifiers().copied().collect();
         self.zswap_state()
             .coins

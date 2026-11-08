@@ -5,16 +5,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use midnight_helpers::midnight_serialize::tagged_deserialize;
+use midnight_helpers::mn_ledger::structure::{ProofPreimageVersioned, ProofVersioned};
+use midnight_helpers::transient_crypto::curve::Fr;
+use midnight_helpers::transient_crypto::proofs::{Proof, ProofPreimage, ProvingProvider};
+use midnight_helpers::{
+    CostModel, DB, ProofProvider, ProofServerProvider, ProvenTransaction, Resolver, ResolverTrait,
+    StdRng, UnprovenTransaction,
+};
 use tracing::info;
 
-use super::helpers::midnight_serialize::tagged_deserialize;
-use super::helpers::mn_ledger::structure::{ProofPreimageVersioned, ProofVersioned};
-use super::helpers::transient_crypto::curve::Fr;
-use super::helpers::transient_crypto::proofs::{Proof, ProofPreimage};
-use super::helpers::{
-    CostModel, DB, ProofProvider, ProofServerProvider, ProvenTransaction, Resolver, StdRng,
-    UnprovenTransaction,
-};
 use crate::remote_prover::{ProofServerError, RemoteProofServer, post};
 
 #[async_trait]
@@ -68,15 +68,15 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
 /// `/prove` HTTP protocol. The ledger's `ProofServerProvider` builds each
 /// request body, and this client sends it.
 #[derive(Clone)]
-pub(super) struct ProofServerClient<'a> {
-    pub(super) server: ProofServerProvider<'a>,
+struct ProofServerClient<'a> {
+    server: ProofServerProvider<'a>,
     http: reqwest::Client,
     timeout: Duration,
 }
 
 impl ProofServerClient<'_> {
     /// `ProvingProvider::check`, over the proof server's `/check`.
-    pub(super) async fn check_preimage(
+    async fn check_preimage(
         &self,
         preimage: &ProofPreimage,
     ) -> Result<Vec<Option<usize>>, anyhow::Error> {
@@ -97,7 +97,7 @@ impl ProofServerClient<'_> {
     }
 
     /// `ProvingProvider::prove`, over the proof server's `/prove`.
-    pub(super) async fn prove_preimage(
+    async fn prove_preimage(
         self,
         preimage: &ProofPreimage,
         overwrite_binding_input: Option<Fr>,
@@ -122,5 +122,27 @@ impl ProofServerClient<'_> {
             ProofVersioned::V2(proof) => Ok(proof),
             other => Err(ProofServerError::UnsupportedProofVersion(format!("{other:?}")).into()),
         }
+    }
+}
+
+impl ProvingProvider for ProofServerClient<'_> {
+    async fn check(&self, preimage: &ProofPreimage) -> Result<Vec<Option<usize>>, anyhow::Error> {
+        self.check_preimage(preimage).await
+    }
+
+    async fn prove(
+        self,
+        preimage: &ProofPreimage,
+        overwrite_binding_input: Option<Fr>,
+    ) -> Result<Proof, anyhow::Error> {
+        self.prove_preimage(preimage, overwrite_binding_input).await
+    }
+
+    fn split(&mut self) -> Self {
+        self.clone()
+    }
+
+    fn resolver(&self) -> &impl ResolverTrait {
+        self.server.resolver
     }
 }

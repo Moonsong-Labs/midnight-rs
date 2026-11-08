@@ -84,7 +84,7 @@ pub(crate) async fn populate_verifier_keys(
     })
     .await?;
     for (circuit, key) in keys {
-        let op = crate::ledger_9::state::operation(&circuit, &key)?;
+        let op = crate::ledger::state::operation(&circuit, &key)?;
         state.operations = state.operations.insert(circuit.as_bytes().into(), op);
     }
     Ok(state)
@@ -215,7 +215,7 @@ mod tests {
     fn v6_key() -> Vec<u8> {
         let mut bytes = Vec::new();
         midnight_serialize::tagged_serialize(
-            &*midnight_helpers::ledger_9::mn_ledger::dust::SPEND_VK,
+            &*midnight_helpers::mn_ledger::dust::SPEND_VK,
             &mut bytes,
         )
         .unwrap();
@@ -270,8 +270,8 @@ mod tests {
     fn a_key_of_either_version_passes_on_an_operation_that_holds_both() {
         let v6 = v6_key();
         let v7 = verifier_key_file("counter", "increment");
-        let mut op = crate::ledger_9::state::operation("increment", &v6).unwrap();
-        op.v3 = crate::ledger_9::state::operation("increment", &v7)
+        let mut op = crate::ledger::state::operation("increment", &v6).unwrap();
+        op.v3 = crate::ledger::state::operation("increment", &v7)
             .unwrap()
             .v3;
         let mut state = ContractState::<InMemoryDB>::default();
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn a_verifier_key_of_an_unknown_tag_is_refused() {
         let key = b"midnight:verifier-key[v5]:\x00\x01";
-        match crate::ledger_9::state::operation("increment", key) {
+        match crate::ledger::state::operation("increment", key) {
             Err(ContractError::Construction(message)) => {
                 assert!(message.contains("verifier-key[v5]"), "{message}");
             }

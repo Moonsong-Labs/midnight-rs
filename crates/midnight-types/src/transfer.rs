@@ -2,7 +2,7 @@
 //! ([`TransferRequest`]), what it spends ([`SpentInputs`]), and its result
 //! ([`TransferResult`]).
 //!
-//! The builds themselves are in [`crate::ledger_9`].
+//! [`crate::TransferBuilder`] makes the builds themselves.
 
 use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 

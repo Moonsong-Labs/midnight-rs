@@ -3,8 +3,6 @@
 use midnight_helpers::ContractVerifyingKeyBytes;
 use midnight_serialize::peek_tag;
 
-use super::helpers;
-
 use crate::error::ContractError;
 
 /// The operation that verifies `circuit`'s proofs against `verifier_key`, the
@@ -12,10 +10,13 @@ use crate::error::ContractError;
 pub(crate) fn operation(
     circuit: &str,
     verifier_key: &[u8],
-) -> Result<helpers::ContractOperation, ContractError> {
+) -> Result<midnight_helpers::ContractOperation, ContractError> {
     accepted_key(circuit, verifier_key)?;
-    helpers::contract_operation_new(Some(ContractVerifyingKeyBytes(verifier_key.to_vec())), None)
-        .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))
+    midnight_helpers::contract_operation_new(
+        Some(ContractVerifyingKeyBytes(verifier_key.to_vec())),
+        None,
+    )
+    .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))
 }
 
 /// Check that `verifier_key` is a `verifier-key[v6]` or a `verifier-key[v7]`,

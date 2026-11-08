@@ -1,15 +1,17 @@
 #![warn(missing_debug_implementations)]
 
+mod builds;
 mod error;
-pub mod ledger_9;
 mod local_prover;
 pub mod node_error;
 mod provider;
+mod proving;
 mod remote_prover;
 mod submit;
 pub mod transfer;
 mod types;
 
+pub use builds::Builds;
 pub use error::ProviderError;
 pub use provider::{HeldInputs, MidnightProvider, NodeHeader};
 pub use remote_prover::RemoteProofServer;
@@ -39,7 +41,7 @@ pub use midnight_types::{
     SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind,
     TransferRequest, TransferResult, WalletBalance, WalletError,
 };
-pub use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
+pub use midnight_wallet_facade::{IntoWalletFacade, ReservedBuild, WalletBuilds, WalletFacade};
 
 // Re-export the private-state types so callers configure
 // `MidnightProvider::with_private_state` without a separate dep.

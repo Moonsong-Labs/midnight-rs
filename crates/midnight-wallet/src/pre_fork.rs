@@ -9,7 +9,7 @@
 use midnight_helpers::fork::old_to_new_ser;
 use midnight_helpers::ledger_8::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_helpers::midnight_serialize::tagged_deserialize;
-use midnight_helpers::{DefaultDB, ledger_8, ledger_9};
+use midnight_helpers::{DefaultDB, ledger_8};
 use midnight_indexer_client::SubscriptionClient;
 use tokio::sync::mpsc;
 
@@ -19,7 +19,7 @@ use crate::{CoinInfo, Seed, SyncProgress, WalletError};
 
 /// The shielded state that the events before the fork leave, in ledger 9.
 pub(crate) struct PreFork {
-    pub(crate) state: ledger_9::WalletState<DefaultDB>,
+    pub(crate) state: midnight_helpers::WalletState<DefaultDB>,
     /// The id of the last event that the reader applied, or 0 when it applied
     /// none.
     pub(crate) last_id: i64,
