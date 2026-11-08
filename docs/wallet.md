@@ -353,7 +353,7 @@ See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation r
 
 ### Registration to another Dust address
 
-A registration can send the Dust to the Dust address of another wallet. For example, a cold wallet that holds the tNIGHT registers it to the Dust address of a hot wallet. The hot wallet then gets the Dust. The cold wallet builds its transactions with `.without_dust()`, and the hot wallet pays their fees with `balance_transaction` ([`examples/combine-and-sponsor`](../examples/combine-and-sponsor) shows that flow). Read the address with `parse_dust_address`, and give the key to `.to()`. `network` is the wallet's network, which `wallet.network()` returns before `with_wallet` takes the wallet:
+A registration can send the Dust to the Dust address of another wallet. For example, a cold wallet that holds the tNIGHT registers it to the Dust address of a hot wallet. The hot wallet then gets the Dust. The cold wallet builds its transactions with `.without_dust()`, and the hot wallet pays their fees with `balance_transaction` ([`examples/combine-and-sponsor`](../examples/combine-and-sponsor) shows that flow). Read the address with `parse_dust_address`, and give the key to `.to()`. `network` is the wallet's network: take it with `wallet.network().clone()` before `with_wallet` takes the wallet:
 
 ```rust
 use midnight_core::wallet::parse_dust_address;
@@ -396,7 +396,7 @@ let pending = provider
     .await?;
 ```
 
-`recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network against `network`, the wallet's network (`wallet.network()`, read before `with_wallet` takes the wallet). A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
+`recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network against `network`, the wallet's network (`wallet.network().clone()`, taken before `with_wallet` takes the wallet). A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
 
 1. Resyncs, then takes a write lock on the wallet and builds the transaction context.
 2. Selects inputs from the wallet's local UTXO set.
