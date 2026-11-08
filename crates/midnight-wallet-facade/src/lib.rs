@@ -5,7 +5,7 @@
 //! implementation is committed to a particular way of sharing its state. This
 //! crate carries the traits alone and speaks in `midnight-types`'s
 //! vocabulary, so it depends on no wallet implementation; `midnight-wallet`
-//! implements them with `LocalWallet`, over a `Wallet` that process owns.
+//! implements them with its `Wallet`.
 //!
 //! The builds, which name the ledger's transaction types, are in
 //! [`WalletBuilds`]. A wallet that a provider builds with implements both
@@ -115,7 +115,7 @@ pub trait WalletFacade: Send + Sync {
     /// registrations, and then replay the shielded event stream from its
     /// first event, so the replay claims them. The replay rebuilds the
     /// shielded state and leaves the Dust state, the unshielded state and
-    /// their cursors alone. See `Wallet::watch_for_coin` on the implementing
+    /// their cursors alone. See `Wallet::watch_for_coins` on the implementing
     /// wallet.
     ///
     /// `chain` answers the queries of a chain pin, as in [`Self::resync`]. An
@@ -130,30 +130,6 @@ pub trait WalletFacade: Send + Sync {
         coins: Vec<CoinInfo>,
         chain: &dyn ChainView,
     ) -> Result<(), WalletError>;
-}
-
-/// A value that `MidnightProvider::with_wallet` attaches as its wallet.
-///
-/// A wallet that implements [`WalletBuilds`] goes in as itself.
-/// `midnight-wallet` also implements it for its synced `Wallet`, which goes
-/// in behind the lock of a `LocalWallet`.
-pub trait IntoWalletFacade {
-    /// The wallet the provider holds.
-    type Facade: WalletBuilds + 'static;
-
-    /// Convert into the wallet the provider holds.
-    fn into_facade(self) -> Self::Facade;
-}
-
-impl<W> IntoWalletFacade for W
-where
-    W: WalletBuilds + 'static,
-{
-    type Facade = W;
-
-    fn into_facade(self) -> W {
-        self
-    }
 }
 
 /// A shared wallet is a wallet: every call forwards to the one inside.

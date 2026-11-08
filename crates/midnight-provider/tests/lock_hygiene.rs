@@ -6,7 +6,7 @@
 //! - `WalletBuilder::sync_with_progress` must not leak the spawned sync task:
 //!   dropping the progress receiver or the `SyncHandle` tears down the
 //!   indexer WebSocket subscriptions promptly.
-//! - `LocalWallet::sync_in_background` keeps the error of a failed pass until
+//! - `Wallet::sync_in_background` keeps the error of a failed pass until
 //!   a pass commits, and reports a task that a panic ended. Dropping its
 //!   handle closes the subscriptions of the pass in flight, and no later pass
 //!   starts.
@@ -32,8 +32,7 @@ use midnight_indexer_client::testutil::{
 };
 use midnight_provider::{BlockHash, MidnightProvider};
 use midnight_wallet::{
-    LocalWallet, Network, SyncHandle, SyncProgress, Wallet, WalletBuilder, WalletError,
-    WalletFacade,
+    Network, Seed, SyncHandle, SyncProgress, Wallet, WalletBuilder, WalletError,
 };
 use serde_json::json;
 use tokio::net::TcpStream;
@@ -182,9 +181,7 @@ const PAUSE: Duration = Duration::from_millis(50);
 
 fn builder() -> WalletBuilder {
     // No sync source here reports a network, so the wallet names one.
-    Wallet::from_seed(&"11".repeat(32))
-        .unwrap()
-        .with_network(Network::Undeployed)
+    Wallet::from_seed(Seed::from_hex(&"11".repeat(32)).unwrap()).with_network(Network::Undeployed)
 }
 
 fn provider() -> MidnightProvider {
@@ -192,11 +189,32 @@ fn provider() -> MidnightProvider {
     MidnightProvider::new("ws://127.0.0.1:1")
 }
 
-/// Fast mode: sync an unpinned wallet in milliseconds.
+/// A node that answers no query. A wallet synced from it holds no chain pin,
+/// so its later syncs send the chain view no query either.
+struct SilentNode;
+
+#[async_trait::async_trait]
+impl midnight_wallet::chain_pin::ChainView for SilentNode {
+    async fn block_hashes_at(&self, _height: u64) -> Option<Vec<BlockHash>> {
+        None
+    }
+
+    async fn finalized_height(&self) -> Option<u64> {
+        None
+    }
+}
+
+#[async_trait::async_trait]
+impl midnight_wallet::chain_pin::SyncSource for SilentNode {
+    async fn network(&self) -> Option<Network> {
+        None
+    }
+}
+
+/// Fast mode: sync a wallet with no chain pin in milliseconds.
 async fn synced_wallet(url: &str) -> Wallet {
     builder()
-        .unpinned()
-        .sync(&provider(), url)
+        .sync(&SilentNode, url)
         .await
         .expect("initial sync against the mock indexer")
 }
@@ -214,8 +232,7 @@ async fn stalled_streamed_sync(
 ) -> (mpsc::Receiver<SyncProgress>, SyncHandle) {
     state.stall.store(true, Ordering::SeqCst);
     let sync = builder()
-        .unpinned()
-        .sync_with_progress(&provider(), url)
+        .sync_with_progress(&SilentNode, url)
         .await
         .expect("streamed sync");
 
@@ -421,20 +438,19 @@ async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
         .sync(&chain, &url)
         .await
         .expect("initial sync against the mock indexer");
-    let wallet = LocalWallet::new(wallet);
 
     state.quiet_unshielded.store(true, Ordering::SeqCst);
 
     // The replace lands after the resync has checked the old pin and while its
     // replay is still running.
-    let (resync, ()) = tokio::join!(wallet.resync(&chain), async {
+    let (resync, ()) = tokio::join!(wallet.sync(&chain), async {
         tokio::time::sleep(Duration::from_secs(2)).await;
         chain.replace();
     });
     resync.expect("the resync itself completes; the swap is not visible to it");
 
     let err = wallet
-        .resync(&chain)
+        .sync(&chain)
         .await
         .expect_err("the next resync must refuse: the pin belongs to a chain that is gone");
     assert!(
@@ -451,7 +467,7 @@ async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
 #[tokio::test]
 async fn dropping_the_background_sync_closes_its_subscriptions() {
     let (url, state) = spawn_mock().await;
-    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+    let wallet = Arc::new(synced_wallet(&url).await);
 
     state.stall.store(true, Ordering::SeqCst);
     let sync = wallet.sync_in_background(Arc::new(provider()), PAUSE);
@@ -492,7 +508,7 @@ async fn dropping_the_background_sync_closes_its_subscriptions() {
 #[tokio::test]
 async fn a_failed_pass_is_recorded_and_the_next_pass_clears_it() {
     let (url, state) = spawn_mock().await;
-    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+    let wallet = Arc::new(synced_wallet(&url).await);
 
     state.fail_block.store(true, Ordering::SeqCst);
     let sync = wallet.sync_in_background(Arc::new(provider()), PAUSE);
@@ -536,7 +552,7 @@ async fn a_panicked_pass_ends_the_sync_and_last_error_names_it() {
         .sync(&SwappableChain::new(), &url)
         .await
         .expect("initial sync against the mock indexer");
-    let wallet = Arc::new(LocalWallet::new(wallet));
+    let wallet = Arc::new(wallet);
 
     let sync = wallet.sync_in_background(Arc::new(PanickingChain), PAUSE);
     // The first pass starts one pause from now, so this wait is in flight
@@ -564,7 +580,7 @@ async fn a_panicked_pass_ends_the_sync_and_last_error_names_it() {
 #[tokio::test]
 async fn a_wait_outlasts_a_failed_pass() {
     let (url, state) = spawn_mock().await;
-    let wallet = Arc::new(LocalWallet::new(synced_wallet(&url).await));
+    let wallet = Arc::new(synced_wallet(&url).await);
 
     state.fail_block.store(true, Ordering::SeqCst);
     let sync = wallet.sync_in_background(Arc::new(provider()), PAUSE);

@@ -35,9 +35,7 @@ use midnight_helpers::{
 use midnight_provider::{
     MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, UnshieldedRecipient,
 };
-use midnight_wallet::{
-    LocalWallet, SpentInputs, TransferKind, TransferRequest, WalletError, WalletFacade,
-};
+use midnight_wallet::{SpentInputs, TransferKind, TransferRequest, Wallet, WalletError};
 use midnight_wallet_facade::WalletBuilds;
 use tokio::sync::Notify;
 
@@ -48,7 +46,7 @@ fn night() -> ShieldedTokenType {
 /// Prepare a tNIGHT self-transfer of 1 STAR that pays its fee in Dust, through
 /// the wallet's own builds, and return what it reserved. Nothing proves it.
 async fn prepare_night_self_transfer(
-    wallet: Arc<LocalWallet>,
+    wallet: Arc<Wallet>,
     recipient: UnshieldedRecipient,
 ) -> Result<SpentInputs, WalletError> {
     let request = TransferRequest::new(TransferKind::Unshielded {
@@ -184,7 +182,7 @@ async fn the_wallet_is_readable_while_a_build_proves() {
 /// either reserves, so both pick the same largest Dust UTXO and the same
 /// tNIGHT UTXO. Nothing local fails: the loser is rejected on chain.
 ///
-/// This drives [`LocalWallet`] directly rather than the provider. Every
+/// This drives the [`Wallet`] directly rather than the provider. Every
 /// provider build path resyncs first, and the wallet's sync mutex serializes
 /// those resyncs. That staggers two builds and hides the race the hold exists
 /// to stop.
@@ -201,11 +199,12 @@ async fn two_preparations_at_once_draw_different_inputs() {
 
     // Each preparation spends one tNIGHT UTXO and draws Dust for its fee, so
     // the wallet needs two of each for the two to be able to differ at all.
-    let spendable_dust = wallet.balance().dust.spendable_utxos;
-    let night = wallet
-        .unshielded_utxos()
+    let balance = wallet.balance().await;
+    let spendable_dust = balance.dust.spendable_utxos;
+    let night = balance
+        .unshielded
         .iter()
-        .filter(|u| u.is_night())
+        .filter(|u| u.token_type == NIGHT)
         .count();
     if spendable_dust < 2 || night < 2 {
         return common::skip(&format!(
@@ -214,7 +213,7 @@ async fn two_preparations_at_once_draw_different_inputs() {
         ));
     }
 
-    let wallet = Arc::new(LocalWallet::new(wallet));
+    let wallet = Arc::new(wallet);
     // Real tasks, not `join!`: two futures polled by one task interleave only
     // at await points the runtime chooses, and would pass here for the wrong
     // reason.
@@ -248,7 +247,7 @@ async fn two_preparations_at_once_draw_different_inputs() {
 /// A reservation takes its Dust UTXOs out of the spendable readings and leaves
 /// the total alone, and a release puts them back.
 ///
-/// This drives [`LocalWallet`] directly rather than the provider. A provider
+/// This drives the [`Wallet`] directly rather than the provider. A provider
 /// build resyncs first, and a resync can move the block time that the balance
 /// reads Dust at, so the readings would differ for a reason other than the
 /// reservation.
@@ -262,7 +261,7 @@ async fn the_spendable_dust_leaves_out_a_reservation() {
     let source = MidnightProvider::new(&node);
     let wallet = common::synced_wallet(&source, &indexer, common::DEV_WALLET_SEED).await;
     let recipient = wallet.unshielded_recipient();
-    let wallet = Arc::new(LocalWallet::new(wallet));
+    let wallet = Arc::new(wallet);
 
     let before = wallet.balance().await.dust;
     let spent = prepare_night_self_transfer(wallet.clone(), recipient)

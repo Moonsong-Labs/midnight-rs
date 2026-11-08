@@ -74,13 +74,13 @@ balance: ... SPECK, spendable UTXOs: ...
 
 ## What it covers
 
-- `Wallet::from_seed(DEV_SEED)?.with_network(&network).sync(&provider, &indexer_url)` + `MidnightProvider::with_wallet`: the first wallet sync against the indexer, then the attach step. The example attaches an `Arc<LocalWallet>`, so it keeps a handle on the wallet.
+- `Wallet::from_seed(Seed::from_hex(DEV_SEED)?).with_network(&network).sync(&provider, &indexer_url)` + `MidnightProvider::with_wallet`: the first wallet sync against the indexer, then the attach step. The example attaches an `Arc<Wallet>`, so it keeps a handle on the wallet.
 - `Wallet::shielded_address`: the synced wallet's own address, which the example prints
 - `Wallet::shielded_recipient`: the synced wallet's own shielded keys, which receive the self-transfer
 - `MidnightProvider::balance`: shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))
 - `MidnightProvider::transfer_shielded(token_type, amount, recipient).send()`: builds a proven zswap transfer and submits it
 - `PendingTx::wait_best` + `wait_finalized`: the submission lifecycle
-- `LocalWallet::sync_in_background`: resync the attached wallet in a background task until the handle drops
+- `Wallet::sync_in_background`: sync the attached wallet in a background task until the handle drops
 - `BackgroundSync::wait_until` with a balance check: wait until the wallet sees the outputs of the transfer
 - `BackgroundSync::last_error`: after a timeout, the error of the last pass, when that pass failed
 

@@ -79,7 +79,7 @@ async fn a_registration_to_another_dust_address_funds_that_wallet() {
 
     let hot = MidnightProvider::new(&node_url);
     let hot_wallet = common::synced_wallet(&hot, &indexer_url, &hot_seed).await;
-    let target = parse_dust_address(&hot_wallet.dust_address(), Network::Undeployed)
+    let target = parse_dust_address(hot_wallet.dust_address(), Network::Undeployed)
         .expect("the hot wallet's Dust address");
     let hot = hot.with_wallet(hot_wallet);
 

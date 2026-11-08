@@ -6,51 +6,50 @@ The SDK's wallet covers Midnight's three asset legs:
 - **Unshielded UTXOs**: public UTXO-model balances (NIGHT lives here)
 - **Dust**: fee-token, generated continuously from NIGHT holdings
 
-`Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` or `Wallet::from_mnemonic` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts. The wallet can also resync itself in a background task (see [Background sync](#background-sync)).
+`Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts. The wallet can also sync itself in a background task (see [Background sync](#background-sync)).
 
-The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and `midnight_wallet_facade::WalletBuilds`. Such an implementation must serialize its own `resync` and `watch_for_coins` against each other, because the provider holds no lock across them. Its `watch_for_coins` takes the chain view, as `resync` does. It registers the coins and then rescans.
+`Wallet` locks its own state. The lock is a private field, so no caller holds a guard, and a `&Wallet` serves every call. `Wallet` is not `Clone`. To share it, put it in an `Arc`. `provider.with_wallet(wallet)` takes the wallet, and to keep a handle on the attached wallet, attach an `Arc<Wallet>`.
+
+The provider holds the wallet as `Arc<dyn WalletFacade>`. Another implementation goes in as itself when it implements `WalletFacade` and `midnight_wallet_facade::WalletBuilds`. Such an implementation must serialize its own `resync` and `watch_for_coins` against each other, because the provider holds no lock across them. Its `watch_for_coins` takes the chain view, as `resync` does. It registers the coins and then rescans.
 
 ```rust
 use std::sync::Arc;
-use midnight_core::WalletFacade;
-use midnight_core::wallet::LocalWallet;
 
-let wallet = Arc::new(LocalWallet::new(wallet));
+let wallet = Arc::new(wallet);
 let provider = provider.with_wallet(Arc::clone(&wallet));
 let balance = wallet.balance().await;
 ```
 
-The wallet serializes its own resyncs and coin watches. So the handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.resync(&provider)`.
+The wallet serializes its own syncs and coin watches. So the handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.sync(&provider)`.
 
 ## Seeds
 
-A wallet starts from its seed. Each constructor below returns a `WalletBuilder`, and the [sync](#sync) of the builder gives the `Wallet`:
+A wallet starts from its `Seed`. `Wallet::from_seed` returns a `WalletBuilder`, and the [sync](#sync) of the builder gives the `Wallet`:
 
 ```rust
-use midnight_core::{Wallet, WalletBuilder};
+use midnight_core::{Seed, Wallet};
 
 // A hex seed of 16, 32 or 64 bytes.
-let builder = Wallet::from_seed("13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f")?;
+let seed = Seed::from_hex("13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f")?;
 
 // A BIP-39 mnemonic of 12, 15, 18, 21 or 24 words, with an empty passphrase.
-let builder = Wallet::from_mnemonic(
+let seed = Seed::from_mnemonic(
     "abandon abandon abandon abandon abandon abandon abandon abandon \
      abandon abandon abandon abandon abandon abandon abandon abandon \
      abandon abandon abandon abandon abandon abandon abandon diesel",
 )?;
 
 // 25th-word passphrase, matching @scure/bip39's mnemonicToSeed(phrase, passphrase).
-let builder = Wallet::from_mnemonic_with_passphrase(phrase, "extra-word")?;
+let seed = Seed::from_mnemonic_with_passphrase(phrase, "extra-word")?;
 
-// A `Seed` that you already hold, by value or by reference.
-let builder = WalletBuilder::new(&seed);
+let builder = Wallet::from_seed(seed);
 ```
 
-The hex form and the mnemonic form give the same on-chain identity. `Wallet::from_mnemonic("abandon … diesel")` and `Wallet::from_seed("a51c86de…")` of the matching bytes produce byte-identical keys. For an input that is not a seed, a constructor returns `SeedError::InvalidHex`, `SeedError::InvalidLength` or `SeedError::InvalidMnemonic`.
+The hex form and the mnemonic form give the same on-chain identity. `Seed::from_mnemonic("abandon … diesel")` and `Seed::from_hex("a51c86de…")` of the matching bytes produce byte-identical keys. For an input that is not a seed, a constructor returns `SeedError::InvalidHex`, `SeedError::InvalidLength` or `SeedError::InvalidMnemonic`.
 
 ### The `Seed` type
 
-`Seed` is the SDK's wallet-seed type. Hold one when you need the seed for more than a sync. It derives addresses before a sync, derives HD keys, and makes a new seed. To keep the `Seed` after the sync, pass `&seed` to `WalletBuilder::new`.
+`Seed` is the SDK's wallet-seed type. Hold one when you need the seed for more than a sync. It derives addresses before a sync, derives HD keys, and makes a new seed. `Wallet::from_seed` takes the `Seed` by value, so to keep the `Seed` after the sync, pass a clone.
 
 ```rust
 use midnight_core::Seed;
@@ -143,10 +142,10 @@ let dust       = wallet.dust_address();
 ## Sync
 
 ```rust
-use midnight_core::{MidnightProvider, Network, Wallet};
+use midnight_core::{MidnightProvider, Network, Seed, Wallet};
 
 let provider = MidnightProvider::new(node_url);
-let wallet = Wallet::from_mnemonic(phrase)?
+let wallet = Wallet::from_seed(Seed::from_mnemonic(phrase)?)
     .with_network(Network::Preprod)   // optional; the node's network without it
     .with_storage(storage_dir)        // optional; in-memory only without it
     .sync(&provider, indexer_url)
@@ -172,20 +171,18 @@ Before the replay, the sync asks the node which network it runs. Without `.with_
 
 `.with_network(..)` names the network, as a `Network`. A node that runs another network then fails the sync with `WalletError::NetworkMismatch`, before the sync reads the indexer. A node that cannot answer, reports no network, or reports an id that the parse refuses does not fail a sync with a named network. Name the network when your program reads it from its configuration, with `.with_network(env::var("MIDNIGHT_NETWORK")?.parse::<Network>()?)`. The sync then refuses a node URL of another network.
 
-The pin is the chain-reset guard, and every sync takes one by default. A snapshot's cursors are counts, so a snapshot from a replaced chain resumes cleanly and reports the dead chain's balance. To catch this, the sync checks a stored snapshot's pin against the chain before it replays. A replaced chain fails the sync with `WalletError::ChainMismatch`. The sync also gives the wallet a fresh pin, which every later resync checks again.
+The pin is the chain-reset guard, and every sync takes one. A snapshot's cursors are counts, so a snapshot from a replaced chain resumes cleanly and reports the dead chain's balance. To catch this, the sync checks a stored snapshot's pin against the chain before it replays. A replaced chain fails the sync with `WalletError::ChainMismatch`. The sync also gives the wallet a fresh pin, which every later resync checks again.
 
 A node that cannot answer for the pin does not fail the sync. The sync continues without a fresh pin, and keeps a stored snapshot's pin. When the node is down, each query waits ten seconds at most.
-
-`.unpinned()` is the opt-out: it skips the network check and the pin. With a named network, the sync then asks the node nothing. With no network named, the sync still asks the node for its network, and nothing else. The sync still keeps a stored snapshot's pin, and every later resync checks that pin.
 
 Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. A non-retryable error fails the sync at once, and a retryable one fails it after the last retry. An indexer that keeps the socket alive but sends no event in time also fails the sync, unless a resync reads the silence as the tip. When the sync gives up on the indexer, it returns `WalletError::Indexer`, whose `retryable` field tells whether a later sync can succeed.
 
 For a long sync with UI updates, end the builder with `.sync_with_progress(&provider, indexer_url)` in place of `.sync(&provider, indexer_url)`:
 
 ```rust
-use midnight_core::SyncProgress;
+use midnight_core::{Seed, SyncProgress};
 
-let (mut rx, handle) = Wallet::from_mnemonic(phrase)?
+let (mut rx, handle) = Wallet::from_seed(Seed::from_mnemonic(phrase)?)
     .with_storage(storage_dir)
     .sync_with_progress(&provider, indexer_url)
     .await?;
@@ -213,14 +210,13 @@ To incrementally refresh an already-synced wallet without replaying from the cur
 
 ### Background sync
 
-`LocalWallet::sync_in_background` resyncs the wallet in a background task until you drop the handle that it returns. Each pass is one resync against the chain view that you give. So the pass resumes the replay from the wallet's cursors. When the wallet holds a chain pin, the pass checks that pin. Give `sync_in_background` the provider that the wallet is attached to:
+`Wallet::sync_in_background` syncs the wallet in a background task until you drop the handle that it returns. Each pass is one `Wallet::sync` against the chain view that you give. So the pass resumes the replay from the wallet's cursors. When the wallet holds a chain pin, the pass checks that pin. Give `sync_in_background` the provider that the wallet is attached to:
 
 ```rust
 use std::sync::Arc;
 use std::time::Duration;
-use midnight_core::wallet::LocalWallet;
 
-let wallet = Arc::new(LocalWallet::new(wallet));
+let wallet = Arc::new(wallet);
 let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));
 let sync = wallet.sync_in_background(provider.clone(), Duration::from_secs(5));
 ```
@@ -404,7 +400,7 @@ let pending = provider
 4. Reserves the selected inputs so the next concurrent build can't re-pick the same coins. Once the transaction is proven, the reservation reaches `pending.json`.
 5. Submits the proven bytes to the node and returns a `PendingTx`.
 
-Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the chain's latest block that the resync read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships), and `Wallet::parameters().global_ttl` gives the value of the connected chain. To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
+Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the chain's latest block that the resync read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships). To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
 
 ```rust
 use std::time::Duration;
@@ -483,7 +479,7 @@ To check the outcome, look for the coin in `provider.spendable_shielded_coins()`
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there. To retry, call `watch_for_coins` again with the same coins: the second registration changes nothing, and the replay runs again.
 
-A handle (`Arc<LocalWallet>`) has the same method: `watch_for_coins(coins, &provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them.
+A handle (`Arc<Wallet>`) has the same method: `wallet.watch_for_coins(coins, &provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them.
 
 ## Pending reservations
 
@@ -510,12 +506,12 @@ A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node c
 ```
 MidnightProvider::new(node_url)
   ↓
-Wallet::from_seed(hex)? | Wallet::from_mnemonic(phrase)? | WalletBuilder::new(seed)
-  [.with_network(network)][.with_storage(dir)][.unpinned()]
+Wallet::from_seed(seed)
+  [.with_network(network)][.with_storage(dir)]
   ↓
 .sync(&provider, indexer_url).await  or  .sync_with_progress(&provider, indexer_url).await → (progress, handle)
   │ take the node's network when no network is named
-  │ check the node's network and the stored pin, and take the pin this sync carries (not when unpinned)
+  │ check the node's network and the stored pin, and take the pin this sync carries
   │ subscribe zswap + unshielded + dust  (parallel)
   │ persist (metadata + binary state + pending)
   ↓
@@ -523,7 +519,7 @@ provider.with_wallet(wallet)
   ↓
   provider.balance()                     read-only
   provider.resync_wallet()               incremental refresh + re-persist
-  wallet.sync_in_background(provider, pause)   resync in a task until the handle drops (an Arc<LocalWallet>)
+  wallet.sync_in_background(provider, pause)   sync in a task until the handle drops (an Arc<Wallet>)
       sync.wait_until(done)              wait until done holds for the balance (at the call and after each pass)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext: register, then replay
   provider.register_dust(None)                      registers one tNIGHT UTXO, self-funded

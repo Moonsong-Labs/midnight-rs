@@ -1,4 +1,4 @@
-//! [`LocalWallet`]'s builds.
+//! [`Wallet`]'s builds.
 
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ use midnight_types::{
 };
 use midnight_wallet_facade::{ReservedBuild, WalletBuilds};
 
-use crate::LocalWallet;
+use crate::Wallet;
 
 /// Reserve what `prepared` spends, and hand it over as reserved.
 fn reserve(wallet: &mut crate::state::Wallet, prepared: PreparedTransfer) -> ReservedBuild {
@@ -40,14 +40,14 @@ fn fund_from(
 }
 
 #[async_trait]
-impl WalletBuilds for LocalWallet {
+impl WalletBuilds for Wallet {
     async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
-        let wallet = self.inner().read().await;
+        let wallet = self.state().read().await;
         wallet.state().execution_context()
     }
 
     async fn add_funding(&self, context: &BuildContext) -> Result<(), WalletError> {
-        let mut wallet = self.inner().write().await;
+        let mut wallet = self.state().write().await;
         wallet.state_mut().add_funding(context)
     }
 
@@ -56,7 +56,7 @@ impl WalletBuilds for LocalWallet {
         request: TransferRequest,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Result<ReservedBuild, WalletError> {
-        let mut guard = self.inner().write().await;
+        let mut guard = self.state().write().await;
         let wallet = guard.state_mut();
         let context = wallet.build_context_inner()?;
         let prepared = TransferBuilder::new(&*wallet, context, proof_provider)
@@ -69,7 +69,7 @@ impl WalletBuilds for LocalWallet {
         &self,
         mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     ) -> Result<ReservedBuild, WalletError> {
-        let mut guard = self.inner().write().await;
+        let mut guard = self.state().write().await;
         let wallet = guard.state_mut();
         fund_from(wallet, &mut tx_info)?;
         let prepared = prepare_no_validate(tx_info).await?;
@@ -86,7 +86,7 @@ impl WalletBuilds for LocalWallet {
         if nullifiers.is_empty() {
             return Ok((Vec::new(), SpentInputs::default()));
         }
-        let mut guard = self.inner().write().await;
+        let mut guard = self.state().write().await;
         let wallet = guard.state_mut();
         let ledger_nullifiers: Vec<_> = nullifiers.iter().map(|n| n.into_ledger()).collect();
         // The funding view in `context` predates this hold, so a coin named
@@ -120,7 +120,7 @@ impl WalletBuilds for LocalWallet {
         mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         external: &FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
-        let mut guard = self.inner().write().await;
+        let mut guard = self.state().write().await;
         let wallet = guard.state_mut();
         fund_from(wallet, &mut tx_info)?;
         let Some(prepared) = balance_external(tx_info, external)? else {

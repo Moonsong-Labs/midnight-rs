@@ -37,8 +37,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use midnight_core::provider::DustlessBuilder;
-use midnight_core::wallet::LocalWallet;
-use midnight_core::{MidnightProvider, Wallet};
+use midnight_core::{MidnightProvider, Seed, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter).
@@ -73,17 +72,17 @@ async fn main() -> anyhow::Result<()> {
 
     println!("0. Syncing both wallets...");
     let provider_a = MidnightProvider::new(&node_url);
-    let wallet = Wallet::from_seed(SEED_A)?
+    let wallet = Wallet::from_seed(Seed::from_hex(SEED_A)?)
         .sync(&provider_a, &indexer_url)
         .await?;
     let recipient_a = wallet.shielded_recipient();
     let provider_a = provider_a.with_wallet(wallet);
     let provider_b = MidnightProvider::new(&node_url);
-    let wallet = Wallet::from_seed(SEED_B)?
+    let wallet = Wallet::from_seed(Seed::from_hex(SEED_B)?)
         .sync(&provider_b, &indexer_url)
         .await?;
     let recipient_b = wallet.shielded_recipient();
-    let wallet_b = Arc::new(LocalWallet::new(wallet));
+    let wallet_b = Arc::new(wallet);
     let provider_b = Arc::new(provider_b.with_wallet(Arc::clone(&wallet_b)));
     println!("   A and B synced.\n");
 

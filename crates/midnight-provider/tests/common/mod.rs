@@ -1,7 +1,7 @@
 //! Devnet setup for the devnet tests of this crate.
 
 use midnight_provider::MidnightProvider;
-use midnight_wallet::{Network, Wallet};
+use midnight_wallet::{Network, Seed, Wallet};
 
 /// The seed of the devnet genesis wallet, which holds tNIGHT, dust and
 /// shielded coins.
@@ -42,8 +42,7 @@ pub(crate) async fn synced_wallet(
     indexer: &str,
     seed: &str,
 ) -> Wallet {
-    Wallet::from_seed(seed)
-        .expect("hex seed")
+    Wallet::from_seed(seed.parse::<Seed>().expect("hex seed"))
         .with_network(Network::Undeployed)
         .sync(provider, indexer)
         .await

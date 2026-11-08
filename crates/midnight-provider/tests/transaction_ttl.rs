@@ -60,13 +60,21 @@ async fn a_transfer_with_a_short_ttl_lands() {
 
     let provider = MidnightProvider::new(&node_url);
     let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
-    let global_ttl = wallet.parameters().global_ttl.as_seconds();
+    let recipient = wallet.unshielded_recipient();
+    let provider = provider.with_wallet(wallet);
+    let global_ttl = provider
+        .builds()
+        .await
+        .expect("the provider builds")
+        .execution_context()
+        .await
+        .expect("the execution context")
+        .with_ledger_state(|ls| ls.parameters.global_ttl)
+        .as_seconds();
     assert!(
         global_ttl > i128::from(TTL.as_secs()),
         "the devnet's global_ttl of {global_ttl}s leaves no room for a shorter TTL"
     );
-    let recipient = wallet.unshielded_recipient();
-    let provider = provider.with_wallet(wallet);
 
     // A transfer that pays its own fee: its intent and its fee intent are one.
     let paid = provider

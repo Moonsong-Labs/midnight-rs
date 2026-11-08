@@ -8,7 +8,7 @@
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
 use midnight_provider::MidnightProvider;
-use midnight_wallet::Wallet;
+use midnight_wallet::{NIGHT, Seed, Wallet};
 
 const DEFAULT_SHIELDED_TOKEN: midnight_wallet::ShieldedTokenType =
     midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0; 32]));
@@ -20,8 +20,7 @@ const DEV_SEED: &str = "00000000000000000000000000000000000000000000000000000000
 const RECIPIENT_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000042";
 
 async fn synced_wallet(provider: &MidnightProvider, indexer: &str, seed: &str) -> Wallet {
-    Wallet::from_seed(seed)
-        .expect("hex seed")
+    Wallet::from_seed(seed.parse::<Seed>().expect("hex seed"))
         .with_network(midnight_wallet::Network::Undeployed)
         .sync(provider, indexer)
         .await
@@ -71,43 +70,33 @@ async fn sync_replays_events() {
 
     let wallet = synced_wallet(&MidnightProvider::new(&node), &indexer, DEV_SEED).await;
 
-    let cursors = wallet.sync_cursors();
-    let utxos = wallet.unshielded_utxos();
+    // The dev wallet holds coins of all three kinds at genesis, so each
+    // stream that the sync replays shows in the balance.
+    let balance = wallet.balance().await;
     eprintln!(
-        "synced: height={}, utxos={}, zswap_event_id={}, dust_event_id={}",
-        cursors.last_block_height,
-        utxos.len(),
-        cursors.zswap_event_id,
-        cursors.dust_event_id,
-    );
-
-    assert!(
-        cursors.last_tx_id.is_some(),
-        "expected last_tx_id to be set after sync"
+        "synced: shielded coins={}, unshielded utxos={}, dust={} speck",
+        balance.shielded.coins.len(),
+        balance.unshielded.len(),
+        balance.dust.balance_speck,
     );
     assert!(
-        cursors.zswap_event_id > 0,
+        !balance.shielded.coins.is_empty(),
         "expected zswap events to have been replayed"
     );
     assert!(
-        cursors.dust_event_id > 0,
+        balance.unshielded.iter().any(|u| u.token_type == NIGHT),
+        "expected unshielded transactions to have been replayed"
+    );
+    assert!(
+        balance.dust.balance_speck > 0,
         "expected dust events to have been replayed"
     );
-
     // A field dropped from the GraphQL selection set reads as `None`, and
-    // `register_dust` then declares a fee allowance the node rejects.
-    let night: Vec<_> = utxos.iter().filter(|u| u.is_night()).collect();
-    assert!(!night.is_empty(), "the dev wallet needs tNIGHT");
-    for utxo in night {
-        assert!(
-            utxo.ctime.is_some(),
-            "the indexer must report a creation time, got {utxo:?}"
-        );
-        assert!(
-            utxo.registered_for_dust_generation.is_some(),
-            "the indexer must report the dust registration status, got {utxo:?}"
-        );
-    }
+    // `register_dust` then builds a second registration that the node rejects.
+    assert!(
+        balance.dust.night_generates_dust,
+        "the indexer must report the dust registration status of the genesis tNIGHT"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +111,6 @@ async fn provider_build_context_succeeds() {
 
     let provider = MidnightProvider::new(&node);
     let wallet = synced_wallet(&provider, &indexer, DEV_SEED).await;
-    let seed = wallet.seed().clone();
     let provider = provider.with_wallet(wallet);
 
     let context = provider
@@ -132,6 +120,7 @@ async fn provider_build_context_succeeds() {
         .build_context()
         .await
         .expect("build_context should succeed");
+    let seed: Seed = DEV_SEED.parse().expect("hex seed");
     let seed = midnight_types::convert::IntoLedger::into_ledger(&seed);
     assert!(
         context.wallets.lock().unwrap().contains_key(&seed),

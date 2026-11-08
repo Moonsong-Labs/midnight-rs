@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
-use midnight_core::wallet::{BackgroundSync, LocalWallet, WalletBalance};
+use midnight_core::wallet::{BackgroundSync, WalletBalance};
 use midnight_core::{MidnightProvider, Seed, Wallet};
 
 fn env_or(name: &str, default: &str) -> String {
@@ -86,18 +86,18 @@ async fn main() -> anyhow::Result<()> {
     let seed_b = Seed::from_hex(SEED_B)?;
 
     let provider_a = MidnightProvider::new(&node_url);
-    let wallet_a = Arc::new(LocalWallet::new(
-        Wallet::from_seed(SEED_A)?
+    let wallet_a = Arc::new(
+        Wallet::from_seed(Seed::from_hex(SEED_A)?)
             .sync(&provider_a, &indexer_url)
             .await?,
-    ));
+    );
     let provider_a = Arc::new(provider_a.with_wallet(Arc::clone(&wallet_a)));
     let provider_b = MidnightProvider::new(&node_url);
-    let wallet_b = Arc::new(LocalWallet::new(
-        Wallet::from_seed(SEED_B)?
+    let wallet_b = Arc::new(
+        Wallet::from_seed(seed_b.clone())
             .sync(&provider_b, &indexer_url)
             .await?,
-    ));
+    );
     let provider_b = Arc::new(provider_b.with_wallet(Arc::clone(&wallet_b)));
 
     // Setup: two tokens to trade. X is A's genesis shielded token; Y is a fresh

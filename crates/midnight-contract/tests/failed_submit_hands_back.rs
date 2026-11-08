@@ -37,7 +37,7 @@ use midnight_provider::{
     EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions, ImportResult,
     MidnightProvider, PrivateStateError, PrivateStateProvider, ProviderError, Snapshot,
 };
-use midnight_wallet::{LocalWallet, WalletFacade};
+use midnight_wallet::Wallet;
 
 /// A node URL whose dial fails: nothing listens on port 1.
 const REFUSING_NODE_URL: &str = "ws://127.0.0.1:1";
@@ -182,9 +182,8 @@ async fn a_deploy_or_a_call_that_the_node_never_gets_hands_its_inputs_back() {
     // build reads no node: its resync finds no answer for the pin, keeps the
     // state, and replays from the indexer. Only the submit needs the node.
     let devnet = MidnightProvider::new(&node_url);
-    let wallet = Arc::new(LocalWallet::new(
-        common::synced_wallet(&devnet, &indexer_url, common::DEV_WALLET_SEED).await,
-    ));
+    let wallet =
+        Arc::new(common::synced_wallet(&devnet, &indexer_url, common::DEV_WALLET_SEED).await);
     let refusing = MidnightProvider::new(REFUSING_NODE_URL).with_wallet(wallet.clone());
 
     let Err(err) = counter::Contract::deploy(&refusing)
@@ -258,7 +257,7 @@ async fn a_deploy_or_a_call_that_the_node_never_gets_hands_its_inputs_back() {
 
 /// Assert that `wallet` holds no reserved Dust. `failure` says which build
 /// kept it.
-async fn assert_no_dust_reserved(wallet: &LocalWallet, failure: &str) {
+async fn assert_no_dust_reserved(wallet: &Wallet, failure: &str) {
     let dust = wallet.balance().await.dust;
     assert_eq!(dust.spendable_speck, dust.balance_speck, "{failure}");
 }
