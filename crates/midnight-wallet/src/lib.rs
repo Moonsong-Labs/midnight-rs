@@ -87,8 +87,8 @@ pub use midnight_types::{
     TransferResult, UnshieldedRecipient, UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
     WalletError, chain_pin,
 };
-// The API this crate implements, so attaching a wallet needs no dependency on
-// midnight-wallet-facade either.
+// The API this crate implements, so a caller can name `dyn WalletFacade` with
+// no dependency on midnight-wallet-facade.
 pub use midnight_wallet_facade::WalletFacade;
 
 pub use background::BackgroundSync;
