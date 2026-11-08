@@ -136,9 +136,8 @@ provider
   .resync_wallet().await                            // incremental refresh
   .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext: register, then rescan
   .builds().await                  → Builds (resyncs first)
-      b.build_context().await      → Arc<BuildContext> (evicts expired pending)
-      b.execution_context().await  → the half a circuit runs against, with no funding view
-      b.add_funding(&ctx) / b.build_funded(tx_info) / b.prepare_shielded_inputs(..)
+      b.execution_context().await  → the wallet's view a build runs against, with no funding view
+      b.build_funded(tx_info) / b.balance_transaction(bytes, cover)
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
   .prepare_reserved(result).await  → PreparedTx that holds the reservation of the build
@@ -168,7 +167,7 @@ Each node read of the provider, its connect included, ends within 10 s (60 s for
 
 `PendingReservations` records the spends of builds that the chain has not yet confirmed. Every build reserves its dust spends, unshielded UTXOs and shielded nullifiers before it proves, under the same hold of the wallet that selected them. Thus a second build in this process cannot pick the same input. A reservation reaches `pending.json` only when its proof succeeds (`WalletFacade::persist_reservation`), so a process that stops during the proof leaves the next process no reservation for those inputs.
 
-A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy with no shielded offer and a maintenance update reserve theirs through `prepare_funded`. A sponsor's build reserves the Dust for the fee it pays through `prepare_fees`. A call, or a deploy with a shielded offer, reserves its pinned coins through `spend_shielded`. It then reserves the Dust for its own fee through `prepare_fees`.
+A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy with no shielded offer and a maintenance update reserve theirs through `prepare_funded`. A sponsor's build reserves the Dust for the fee it pays through `prepare_fees` with `Cover::Fee`. A call, or a deploy with a shielded offer, proves first. It then reserves the coins that cover its shielded deficits and the Dust for its fee through `prepare_fees` with `Cover::Shortfalls`, in one reservation.
 
 Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm. Each reservation expires at the earliest TTL of the intents that its build made, which `.with_ttl(..)` on a transfer builder makes shorter than the chain's `global_ttl`, and the wallet compares it with the time of the chain's latest block.
 
@@ -246,13 +245,13 @@ deploy_funded(state, provider, shielded_offer)
   │   │  proofs (speculative_spend loop), record what it drew
   │   └─ prove the balanced tx once, for real, with the wallet free
   └─ an offer:                                → DeployResult { address, transaction }
-      ├─ builds.add_funding(context), then builds.prepare_shielded_inputs:
-      │  the wallet spends and reserves the offer's coins
-      ├─ refuse a token the coins do not cover (ShieldedOfferShortfall)
-      ├─ guaranteed offer: the coins, the payments, one change output per token
+      ├─ guaranteed offer: the payments
       ├─ prepare_no_validate, then PreparedTransfer::prove: prove with no fee
-      ├─ builds.balance_transaction: the Dust fee in its own intent
-      └─ the result's spent: the fee Dust, merged with the offer's coins
+      ├─ builds.balance_transaction(bytes, Cover::Shortfalls { pins: the offer's coins, .. }):
+      │  one transition spends the coins, selects more for what they leave
+      │  (InsufficientShielded when the wallet holds too little), adds the
+      │  change and the Dust fee in a part of its own, and reserves it
+      └─ the part proves on its own and merges in; the result's spent names its reservation
   ↓
 provider.prepare_reserved(transaction).await  → PreparedTx (holds the reservation, knows the extrinsic hash)
   ↓
@@ -331,20 +330,17 @@ resolver::register(address, circuit, key, zk_config) → the key location   // t
   ↓
 CallAction holding typed transcripts + AlignedValue inputs/outputs
   ↓
-builds.add_funding(&context)                                   // the payer joins here
-  ↓
-builds.prepare_shielded_inputs(..)                             // only if the call pins coins
-  └─ spends them into this context and reserves them, as one transition
-  ↓
   → StandardTransactionInfo → prepare_no_validate              // fee-less, even when the call pays a fee
   → PreparedTransfer::prove
   ↓
-if pay_fees: builds.balance_transaction(bytes)
-  └─ the wallet draws the Dust and reserves it as one transition (prepare_fees),
-     then the fee is proved on its own and merged in at its own intent segment,
-     so the circuit proof is not redone.
+builds.balance_transaction(bytes, Cover::Shortfalls { pins, pay_fees })
+  └─ one transition (prepare_fees): for each negative shielded (token, segment)
+     entry of the call's balance, the wallet spends the pinned coins first, then
+     selects coins, adds the change at that segment, and with pay_fees the Dust
+     fee in an intent of its own, and reserves what it spends. The part is
+     proved on its own and merged in, so the circuit proof is not redone.
   ↓
-TransferResult: the merged bytes, and the pinned coins and the fee Dust in spent
+TransferResult: the merged bytes, and the part's coins and Dust in spent
   ↓
 provider.prepare_reserved(result) → PreparedTx            // the extrinsic hash, before the submit
   ↓

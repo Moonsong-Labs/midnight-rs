@@ -291,7 +291,7 @@ pub enum WalletError {
 ///
 /// [`WalletError::DuplicateInput`] naming the first nullifier that `nullifiers`
 /// repeats.
-pub fn refuse_repeated_nullifiers<N: Eq + Hash + Debug>(
+pub(crate) fn refuse_repeated_nullifiers<N: Eq + Hash + Debug>(
     nullifiers: &[N],
 ) -> Result<(), WalletError> {
     let mut named = HashSet::with_capacity(nullifiers.len());

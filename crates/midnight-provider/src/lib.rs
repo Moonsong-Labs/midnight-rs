@@ -13,7 +13,8 @@ mod types;
 
 pub use builds::Builds;
 pub use error::ProviderError;
-pub use provider::{HeldInputs, MidnightProvider, NodeHeader};
+pub(crate) use provider::HeldInputs;
+pub use provider::{MidnightProvider, NodeHeader};
 pub use remote_prover::RemoteProofServer;
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{

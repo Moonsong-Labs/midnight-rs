@@ -100,35 +100,6 @@ async fn sync_replays_events() {
 }
 
 // ---------------------------------------------------------------------------
-// Build context from indexed state via the provider
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn provider_build_context_succeeds() {
-    let Some((node, indexer)) = devnet_urls() else {
-        return;
-    };
-
-    let provider = MidnightProvider::new(&node);
-    let wallet = synced_wallet(&provider, &indexer, DEV_SEED).await;
-    let provider = provider.with_wallet(wallet);
-
-    let context = provider
-        .builds()
-        .await
-        .expect("the provider should build")
-        .build_context()
-        .await
-        .expect("build_context should succeed");
-    let seed: Seed = DEV_SEED.parse().expect("hex seed");
-    let seed = midnight_types::convert::IntoLedger::into_ledger(&seed);
-    assert!(
-        context.wallets.lock().unwrap().contains_key(&seed),
-        "context should contain our wallet"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Transfer transaction building via the provider's wallet
 // ---------------------------------------------------------------------------
 

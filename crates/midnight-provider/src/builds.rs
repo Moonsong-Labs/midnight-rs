@@ -5,11 +5,9 @@ use std::sync::Arc;
 use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
 use midnight_helpers::{
     BuildContext, DefaultDB, FinalizedTransaction, FromContext, ProofProvider,
-    StandardTransactionInfo, StdRng, TokenType,
+    StandardTransactionInfo,
 };
-use midnight_types::{
-    PreparedInput, SpendableShieldedCoin, SpentInputs, TransferRequest, TransferResult, fee_speck,
-};
+use midnight_types::{Cover, SpentInputs, TransferRequest, TransferResult, fee_speck};
 use midnight_wallet_facade::{ReservedBuild, WalletBuilds};
 
 use crate::{HeldInputs, MidnightProvider, ProviderError};
@@ -56,37 +54,15 @@ impl<'a> Builds<'a> {
         self.prover.clone()
     }
 
-    /// Build a [`BuildContext`] the attached wallet both executes against and
-    /// pays from.
+    /// Build the half of a [`BuildContext`] a transaction executes against,
+    /// from the attached wallet's view: chain parameters, genesis settings,
+    /// the resolver, and the latest block context.
     ///
-    /// [`Self::execution_context`] followed by [`Self::add_funding`], for the
-    /// builds that fund from the wallet that builds them. Use the two
-    /// separately when a circuit has to run before the payer is known.
-    pub async fn build_context(&self) -> Result<Arc<BuildContext>, ProviderError> {
-        let context = self.execution_context().await?;
-        self.add_funding(&context).await?;
-        Ok(context)
-    }
-
-    /// Build the half of a [`BuildContext`] a transaction executes against:
-    /// chain parameters, genesis settings, the resolver, and the latest block
-    /// context.
-    ///
-    /// The result holds no key material and no coin state, so a caller can
-    /// run a circuit against it and only then decide who pays. Add a payer
-    /// with [`Self::add_funding`]; a context that never gets that call funds
-    /// nothing.
+    /// The result holds no key material and no coin state. A build that
+    /// funds itself from the wallet, such as [`Self::build_funded`], adds the
+    /// wallet's funding view to it.
     pub async fn execution_context(&self) -> Result<Arc<BuildContext>, ProviderError> {
         Ok(self.wallet.execution_context().await?)
-    }
-
-    /// Put the attached wallet's spendable view into `context`, so a build can
-    /// fund itself from it.
-    ///
-    /// Mutates the wallet: its `add_funding` evicts TTL-expired pending
-    /// entries against the refreshed `block_context`.
-    pub async fn add_funding(&self, context: &BuildContext) -> Result<(), ProviderError> {
-        Ok(self.wallet.add_funding(context).await?)
     }
 
     /// Fund a transaction the caller assembled, and prove it.
@@ -106,46 +82,24 @@ impl<'a> Builds<'a> {
         self.prove_reserved(reserved).await
     }
 
-    /// Spend the given coins, returning inputs an offer builder can hold.
+    /// Cover what `cover` names in a proven transaction from the attached
+    /// wallet, and prove the result. [`Cover::Fee`] is the sponsor's cover of
+    /// [`MidnightProvider::balance_transaction`].
     ///
-    /// The wallet performs the spends, so what comes back carries no key
-    /// material and the builder never sees a seed. `context` must be the one
-    /// the caller is building against: the spends roll its wallet state
-    /// forward.
-    ///
-    /// Each coin is named by a nullifier the wallet already knows, so this
-    /// selects nothing; the caller decides what to spend.
-    ///
-    /// # Errors
-    ///
-    /// [`ProviderError::Wallet`] with
-    /// [`WalletError::DuplicateInput`](midnight_types::WalletError::DuplicateInput) when
-    /// `coins` names a coin twice. The provider checks this before it asks
-    /// the wallet, so a custom wallet that breaks the
-    /// [`WalletBuilds::spend_shielded`] contract cannot spend a coin twice.
-    /// Any other error comes from the wallet's spend.
-    pub async fn prepare_shielded_inputs(
-        &self,
-        context: &Arc<BuildContext>,
-        coins: &[SpendableShieldedCoin],
-        rng: &mut StdRng,
-    ) -> Result<(Vec<PreparedInput>, HeldInputs), ProviderError> {
-        let nullifiers: Vec<_> = coins.iter().map(|c| c.nullifier).collect();
-        midnight_types::refuse_repeated_nullifiers(&nullifiers)?;
-        let (prepared, spent) = self.wallet.spend_shielded(context, nullifiers, rng).await?;
-        Ok((prepared, HeldInputs::of(spent, self.provider.facade())))
-    }
-
-    /// Pay the fees for an external party's proven, fee-less transaction from
-    /// the attached wallet. See [`MidnightProvider::balance_transaction`].
+    /// The wallet covers it in a part of its own and reserves what the part
+    /// spends, as one transition. Proving the part and merging it run with the
+    /// wallet free, and a failure in either hands the inputs back. The result
+    /// names what the part reserved. A transaction that the cover leaves as it
+    /// is comes back unchanged, with nothing reserved.
     pub async fn balance_transaction(
         &self,
         tx_bytes: &[u8],
+        cover: Cover,
     ) -> Result<TransferResult, ProviderError> {
         let external = deserialize_transaction(tx_bytes)?;
         // Boxed so a caller's future stays small. See the frame-size note on
         // `MidnightProvider::resync_wallet`.
-        Box::pin(self.balance_decoded(tx_bytes, external)).await
+        Box::pin(self.balance_decoded(tx_bytes, external, cover)).await
     }
 
     /// [`Self::balance_transaction`] for `tx_bytes`, which decode to
@@ -154,28 +108,12 @@ impl<'a> Builds<'a> {
         &self,
         tx_bytes: &[u8],
         external: FinalizedTransaction<DefaultDB>,
+        cover: Cover,
     ) -> Result<TransferResult, ProviderError> {
-        // Refuse any non-fee token deficit: this path only adds Dust, so a
-        // shortfall in any other token (an unfunded swap side) would just fail
-        // at submit. Dust itself is what we are here to supply, so skip it.
-        let imbalance = external
-            .balance(None)
-            .map_err(|e| ProviderError::Transaction(format!("compute balance: {e:?}")))?;
-        if imbalance
-            .iter()
-            .any(|((tt, _seg), val)| !matches!(tt, TokenType::Dust) && *val < 0)
-        {
-            return Err(ProviderError::Transaction(
-                "balance_transaction covers fees only; the transaction has a token deficit \
-                 (swap balancing is not supported yet)"
-                    .into(),
-            ));
-        }
-
         let context = self.execution_context().await?;
         let tx_info =
             StandardTransactionInfo::new_from_context(context.clone(), self.prover.clone(), None);
-        let Some(reserved) = self.wallet.prepare_fees(tx_info, &external).await? else {
+        let Some(reserved) = self.wallet.prepare_fees(tx_info, &external, cover).await? else {
             return Ok(TransferResult {
                 tx_bytes: tx_bytes.to_vec(),
                 spent: SpentInputs::default(),
@@ -208,8 +146,8 @@ impl<'a> Builds<'a> {
     /// reaches the prover only through a wallet that says it reserved the
     /// inputs first. A proof that fails hands them back, because the
     /// reservation outlives the decision that made it and would otherwise
-    /// strand them until their TTL elapses. For a sponsored fee, the proof
-    /// includes the merge into the external transaction and its price.
+    /// strand them until their TTL elapses. For a cover, the proof includes
+    /// the merge into the external transaction and its price.
     async fn prove_reserved(
         &self,
         reserved: ReservedBuild,

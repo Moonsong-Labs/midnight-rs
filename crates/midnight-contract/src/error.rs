@@ -28,7 +28,10 @@ pub enum ContractError {
     /// holds, the error is
     /// `ProviderError::Wallet(WalletError::InputsReserved { .. })`. When it
     /// names a shielded coin twice, the error is
-    /// `ProviderError::Wallet(WalletError::DuplicateInput { .. })`. See
+    /// `ProviderError::Wallet(WalletError::DuplicateInput { .. })`. When the
+    /// wallet holds too little of a shielded token that a call receives or
+    /// the offer of a deploy pays, the error is
+    /// `ProviderError::Wallet(WalletError::InsufficientShielded { .. })`. See
     /// [`WalletError`](midnight_types::WalletError) for the other wallet
     /// failures.
     #[error(transparent)]
@@ -48,22 +51,6 @@ pub enum ContractError {
 
     #[error("transaction construction failed: {0}")]
     Construction(String),
-
-    /// A deploy's shielded offer pays more of a token than its coins hold.
-    ///
-    /// The deploy stops before it proves anything, and the wallet gets the
-    /// offer's coins back. Add coins of `token_type` to the offer, or pay
-    /// less of it.
-    #[error("the shielded offer pays {paid} of token {token_type} but its coins hold {held}")]
-    ShieldedOfferShortfall {
-        /// The token that the coins do not cover.
-        token_type: midnight_types::ShieldedTokenType,
-        /// The value of the token that the offer's coins hold, zero when no
-        /// coin holds it.
-        held: u128,
-        /// The value of the token that the offer's outputs pay.
-        paid: u128,
-    },
 
     #[error("serialization failed: {0}")]
     Serialization(String),

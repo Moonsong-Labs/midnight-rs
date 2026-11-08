@@ -4,11 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_helpers::{
-    BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo, StdRng,
+    BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo,
 };
-use midnight_types::{
-    Nullifier, PreparedInput, PreparedTransfer, SpentInputs, TransferRequest, WalletError,
-};
+use midnight_types::{Cover, PreparedTransfer, TransferRequest, WalletError};
 
 use crate::WalletFacade;
 
@@ -45,10 +43,6 @@ pub trait WalletBuilds: WalletFacade {
     /// carries no key material and no coin state.
     async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError>;
 
-    /// Put this wallet's spendable view into `context`, so a build can fund
-    /// itself from it.
-    async fn add_funding(&self, context: &BuildContext) -> Result<(), WalletError>;
-
     /// Select the inputs a request draws on and reserve them, as one
     /// transition.
     ///
@@ -81,45 +75,29 @@ pub trait WalletBuilds: WalletFacade {
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     ) -> Result<ReservedBuild, WalletError>;
 
-    /// Spend coins this wallet owns into `context`, and reserve them, as one
-    /// transition.
+    /// Cover what `cover` names in a transaction someone else finished, and
+    /// reserve what that spends, as one transition.
     ///
-    /// The caller names each coin by a nullifier, so nothing is selected here.
-    /// Checking that a coin is still free, spending it, and reserving it all
-    /// happen under one hold, so two builds cannot pin the same coin.
-    ///
-    /// Call this after the funding view is in `context`. Reserving first would
-    /// hide these very coins from it, because a funding view drops what a
-    /// pending build already spent.
-    ///
-    /// The reservation stands until the caller releases it. A build that never
-    /// reaches the chain must hand the coins back. Once the build is proven,
-    /// the caller calls [`WalletFacade::persist_reservation`] with the coins.
-    ///
-    /// An implementation refuses a nullifier that `nullifiers` names twice
-    /// with [`WalletError::DuplicateInput`], before it spends anything. A
-    /// second spend of one coin succeeds and counts its value twice.
-    async fn spend_shielded(
-        &self,
-        context: &Arc<BuildContext>,
-        nullifiers: Vec<Nullifier>,
-        rng: &mut StdRng,
-    ) -> Result<(Vec<PreparedInput>, SpentInputs), WalletError>;
-
-    /// Pay the fee of a transaction someone else finished, and reserve what
-    /// that draws, as one transition.
-    ///
-    /// The fee rides an intent of its own, merged in after proving, so
+    /// The cover rides a part of its own, merged in after proving, so
     /// `external` and its proofs stay as they are. `tx_info` supplies the
-    /// context the fee is priced against and the prover that proves it; it
+    /// context the part is priced against and the prover that proves it; it
     /// carries no intents of its own.
     ///
-    /// `None` when `external` already balances its Dust, so there is nothing
-    /// to draw and nothing to reserve.
+    /// Checking that a pinned coin is still free, selecting the other coins,
+    /// and reserving them all happen under one hold, so two builds cannot
+    /// spend the same coin. An implementation refuses a pinned coin that
+    /// another build holds with [`WalletError::InputsReserved`], and one that
+    /// `cover` names twice with [`WalletError::DuplicateInput`], before it
+    /// spends anything.
+    ///
+    /// `None` when there is nothing to add, so nothing to reserve: `external`
+    /// has no deficit that `cover` takes, `cover` pins no coin, and no Dust
+    /// is due.
     async fn prepare_fees(
         &self,
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         external: &FinalizedTransaction<DefaultDB>,
+        cover: Cover,
     ) -> Result<Option<ReservedBuild>, WalletError>;
 }
 
@@ -128,10 +106,6 @@ pub trait WalletBuilds: WalletFacade {
 impl<T: WalletBuilds + ?Sized> WalletBuilds for Arc<T> {
     async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
         (**self).execution_context().await
-    }
-
-    async fn add_funding(&self, context: &BuildContext) -> Result<(), WalletError> {
-        (**self).add_funding(context).await
     }
 
     async fn prepare_transfer(
@@ -149,20 +123,12 @@ impl<T: WalletBuilds + ?Sized> WalletBuilds for Arc<T> {
         (**self).prepare_funded(tx_info).await
     }
 
-    async fn spend_shielded(
-        &self,
-        context: &Arc<BuildContext>,
-        nullifiers: Vec<Nullifier>,
-        rng: &mut StdRng,
-    ) -> Result<(Vec<PreparedInput>, SpentInputs), WalletError> {
-        (**self).spend_shielded(context, nullifiers, rng).await
-    }
-
     async fn prepare_fees(
         &self,
         tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         external: &FinalizedTransaction<DefaultDB>,
+        cover: Cover,
     ) -> Result<Option<ReservedBuild>, WalletError> {
-        (**self).prepare_fees(tx_info, external).await
+        (**self).prepare_fees(tx_info, external, cover).await
     }
 }

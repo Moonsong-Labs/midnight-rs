@@ -49,10 +49,9 @@ impl DeployResult {
 ///
 /// # Errors
 ///
-/// Returns [`ContractError::ShieldedOfferShortfall`] when the offer's outputs
-/// pay more of a token than its coins hold, and [`ContractError::Provider`]
-/// when the wallet cannot spend a coin of the offer, the fee balancing fails,
-/// or proving fails.
+/// Returns [`ContractError::Provider`] when the wallet cannot spend a coin of
+/// the offer or holds too little of a token that the offer pays, when the fee
+/// balancing fails, or when proving fails.
 pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     provider: &midnight_provider::MidnightProvider,

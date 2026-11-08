@@ -1401,21 +1401,17 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         #with_witnesses_impl
 
         impl<'a, P, Wp> Circuits<'a, P, Wp> {
-            /// Attach wallet coins to spend as shielded (Zswap) inputs for the
-            /// next circuit call, funding a circuit that receives a shielded
-            /// coin (e.g. `receiveShielded`). Enumerate the wallet's coins with
+            /// Attach wallet coins that the next circuit call spends first, for
+            /// a circuit that receives a shielded coin (e.g. `receiveShielded`).
+            /// Enumerate the wallet's coins with
             /// `MidnightProvider::spendable_shielded_coins`.
             ///
-            /// Each coin is selected exactly by its nullifier and routed to the
-            /// segment of the output it funds. The attached coins must COVER
-            /// the value the circuit receives: Zswap balances per (token,
-            /// segment) delta, not per coin identity, so one coin may fund a
-            /// `receiveShielded` of its own value, or several coins may fund
-            /// one larger receive. Whatever they carry beyond what the
-            /// circuit's outputs draw returns to this wallet as a change
-            /// output. Coins that fall short leave the call unbalanced, which
-            /// the fee-paying step refuses before submitting; a Dustless call
-            /// carries the shortfall to the node instead.
+            /// Without attached coins, the wallet selects coins for each
+            /// shielded deficit of the call. Attach coins to name the ones it
+            /// spends: it spends each one whole, at the segment of a deficit of
+            /// its token, and selects coins of its own only for what they
+            /// leave. Whatever the spent coins carry beyond the deficit returns
+            /// to this wallet as a change output.
             ///
             /// Every coin must be attached in a single call, since this replaces
             /// the set rather than extending it. The attached inputs apply to
