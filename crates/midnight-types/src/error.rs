@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use crate::{LedgerVersion, Network, ShieldedTokenType, UnknownLedger, UnshieldedTokenType};
+use crate::{Network, ShieldedTokenType, UnshieldedTokenType};
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]
@@ -216,41 +216,26 @@ pub enum WalletError {
     #[error("storage: {0}")]
     Storage(String),
 
-    /// The chain's data belongs to no ledger generation this build links.
-    #[error(transparent)]
-    UnknownLedger(#[from] UnknownLedger),
-
-    /// Data of one ledger generation met a wallet, or a value, of another.
-    ///
-    /// A build returns it between a chain's hard fork and the wallet's next
-    /// resync, and a build after that resync succeeds. A shielded rescan
-    /// returns it in the same window: resync, then rescan. A replay that
-    /// meets an earlier generation than the wallet's state returns it too,
-    /// which means the chain was replaced.
-    #[error("expected {expected} data, found {found} data")]
-    LedgerMismatch {
-        /// The generation of the wallet, or of the value the data met.
-        expected: LedgerVersion,
-        /// The generation of the data.
-        found: LedgerVersion,
+    /// The chain sent ledger data with a tag that this build does not read,
+    /// such as the data of a chain that runs ledger 8.
+    #[error("the chain sent `{tag}` data, which this build does not read")]
+    UnknownLedger {
+        /// The tag of the data, for example `ledger-parameters[v5]`.
+        tag: String,
     },
 
-    /// The persisted snapshot holds a later ledger generation than the chain
-    /// runs, so it belongs to a chain the node no longer has.
+    /// The persisted snapshot holds ledger 8 state, which this build does not
+    /// read.
     ///
-    /// The snapshot is left alone. Remove the directory named here and sync
+    /// The snapshot is left alone. Delete the directory named here and sync
     /// again, which replays from genesis.
     #[error(
-        "wallet snapshot holds {snapshot} state, but the chain runs {chain}: \
-         it belongs to another chain. Remove {path} and sync again."
+        "the snapshot in {path} holds ledger 8 state, which this build does not read; \
+         delete the directory and sync again"
     )]
-    LedgerRegression {
-        /// The snapshot directory to remove.
+    Ledger8Snapshot {
+        /// The snapshot directory to delete.
         path: String,
-        /// The generation the snapshot's state is in.
-        snapshot: LedgerVersion,
-        /// The generation the chain runs.
-        chain: LedgerVersion,
     },
 
     /// The recipient address could not be parsed.

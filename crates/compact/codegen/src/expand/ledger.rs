@@ -87,7 +87,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// Create from a hex-encoded contract state string (as the node RPC returns it).
             pub fn from_hex(hex_state: &str) -> Result<Self, StateError> {
                 let bytes = hex::decode(hex_state).map_err(|e| StateError::HexDecode(e.to_string()))?;
-                Ok(Self::new(decode_contract_state(&bytes)?))
+                Ok(Self::new(tagged_deserialize(bytes.as_slice())?))
             }
 
             /// Fetch the contract state at the node's best block from a provider and wrap it.

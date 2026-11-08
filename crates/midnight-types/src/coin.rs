@@ -1,9 +1,7 @@
-//! The coin, key and address values the SDK's API carries, one type for every
-//! ledger generation.
+//! The coin, key and address values the SDK's API carries.
 //!
 //! Each mirrors the coin-structure type of the same name, field for field.
-//! The generation modules convert them (see [`crate::ledger_8::convert`] and
-//! [`crate::ledger_9::convert`]).
+//! [`crate::ledger_9::convert`] converts them.
 
 use std::fmt;
 
@@ -40,8 +38,7 @@ impl fmt::Display for UnshieldedTokenType {
 /// NIGHT, the native unshielded token.
 pub const NIGHT: UnshieldedTokenType = UnshieldedTokenType(HashOutput([0; 32]));
 
-// `1 DUST = 10^15 SPECK` and `1 NIGHT = 10^6 STAR`, the same in every
-// generation.
+// `1 DUST = 10^15 SPECK` and `1 NIGHT = 10^6 STAR`.
 pub use midnight_helpers::ledger_9::{SPECKS_PER_DUST, STARS_PER_NIGHT};
 
 /// The nullifier that marks a shielded coin as spent.
@@ -70,8 +67,7 @@ pub struct CoinPublicKey(pub HashOutput);
 /// The key a shielded output is encrypted to, so that its recipient can
 /// discover the coin.
 ///
-/// A curve point, held in the 32-byte encoding that every ledger generation
-/// shares.
+/// A curve point, held in the ledger's 32-byte encoding.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EncryptionPublicKey(pub(crate) [u8; 32]);
 
@@ -108,8 +104,7 @@ pub struct UnshieldedRecipient(pub(crate) HashOutput);
 
 /// The nullifier of a Dust spend.
 ///
-/// A field element, held in its 32-byte little-endian form, which every
-/// ledger generation shares.
+/// A field element, held in the ledger's 32-byte little-endian form.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DustNullifier(pub(crate) [u8; 32]);
 
@@ -122,9 +117,9 @@ impl fmt::Debug for DustNullifier {
 /// The public key that a Dust address carries. It owns the Dust that the
 /// tNIGHT registered to this address generates.
 ///
-/// A field element, held in its 32-byte little-endian form, which every
-/// ledger generation shares. [`crate::address::parse_dust_address`] reads one
-/// from a `mn_dust_*` address.
+/// A field element, held in the ledger's 32-byte little-endian form.
+/// [`crate::address::parse_dust_address`] reads one from a `mn_dust_*`
+/// address.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DustPublicKey(pub(crate) [u8; 32]);
 
@@ -154,10 +149,9 @@ impl ContractAddress {
 
 #[cfg(test)]
 mod tests {
-    use midnight_helpers::{ledger_8, ledger_9};
+    use midnight_helpers::ledger_9;
 
-    use crate::ledger_8::convert::IntoSdk as _;
-    use crate::ledger_9::convert::IntoLedger as _;
+    use crate::ledger_9::convert::{IntoLedger as _, IntoSdk as _};
 
     /// The `Display` docs promise the form the indexer reports, and
     /// `UnshieldedUtxoInfo::token_type_hex` gives it to callers. The inner
@@ -172,28 +166,11 @@ mod tests {
     /// that went through it would not fit the SDK's 32 bytes, or would come
     /// back as another element.
     #[test]
-    fn a_dust_nullifier_crosses_generations_unchanged() {
-        for value in [ledger_8::Fr::from(7u64), -ledger_8::Fr::from(1u64)] {
-            let nullifier = ledger_8::DustNullifier(value).into_sdk();
-            let crossed: ledger_9::DustNullifier = nullifier.into_ledger();
-            assert_eq!(crossed.0.as_le_bytes(), value.as_le_bytes());
+    fn a_dust_nullifier_round_trips_through_the_sdk() {
+        for value in [ledger_9::Fr::from(7u64), -ledger_9::Fr::from(1u64)] {
+            let nullifier = ledger_9::DustNullifier(value).into_sdk();
+            let back: ledger_9::DustNullifier = nullifier.into_ledger();
+            assert_eq!(back.0, value);
         }
-    }
-
-    /// The SDK derives a contract's token types through ledger 9. A ledger 8
-    /// chain names the same tokens only if both derive them alike.
-    #[test]
-    fn both_generations_derive_the_same_contract_token_types() {
-        let address = super::ContractAddress(super::HashOutput([5; 32]));
-        let domain = super::HashOutput([9; 32]);
-        let address8 = ledger_8::ContractAddress(address.0);
-        assert_eq!(
-            address.custom_shielded_token_type(domain).0,
-            address8.custom_shielded_token_type(domain).0
-        );
-        assert_eq!(
-            address.custom_unshielded_token_type(domain).0,
-            address8.custom_unshielded_token_type(domain).0
-        );
     }
 }

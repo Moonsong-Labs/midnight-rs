@@ -1,12 +1,12 @@
 //! Remote proof-server client.
 //!
-//! [`RemoteProofServer`] implements each ledger generation's `ProofProvider`
-//! (see the generation modules) by delegating ZK proving to an HTTP proof
+//! [`RemoteProofServer`] implements the ledger's `ProofProvider` (see
+//! [`crate::ledger_9`]) by delegating ZK proving to an HTTP proof
 //! server (e.g. midnightntwrk/proof-server) over its `/check`
 //! and `/prove` endpoints. Each request has a deadline, and the client retries
 //! a transient failure with exponential backoff before that deadline.
 //!
-//! Each ledger's `ProofServerProvider` builds the request bodies: the
+//! The ledger's `ProofServerProvider` builds the request bodies: the
 //! tagged-serialized preimage, plus the circuit's IR or keys when the server
 //! has no built-in key for it. This client does not use the `ProvingProvider`
 //! impl of that type. That impl prints with `println!`, opens a new HTTP client

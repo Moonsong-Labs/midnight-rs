@@ -1,11 +1,4 @@
-//! Circuit calls: run the circuit IR, then build the call's transaction on
-//! the chain's ledger generation.
-//!
-//! The interpreter runs against the Compact side's view of the contract state
-//! and produces the same result whatever the chain runs. The transaction is
-//! per generation (see the generation modules' `call`): the interpreter's ops
-//! cross into the generation's own by their encoding, which is the same in
-//! every generation.
+//! Circuit calls: run the circuit IR, then build the call's transaction.
 //!
 //! State reading, address parsing, and the deploy path live in
 //! [`crate::state`], `address`, and [`crate::deploy`] respectively.
@@ -15,7 +8,6 @@ use std::sync::Arc;
 use midnight_base_crypto::time::Timestamp;
 use midnight_onchain_runtime::ops::Op;
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
-use midnight_provider::Builds;
 use midnight_serialize::tagged_serialize;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 use midnight_types::ledger_9::convert::IntoLedger;
@@ -94,15 +86,14 @@ pub(crate) fn run_call(
     )?)
 }
 
-/// Build the funded, proven transaction of a circuit run on the chain's
-/// generation.
+/// Build the funded, proven transaction of a circuit run.
 ///
 /// `exec_result` is the run of `circuit` on `state`. The build resyncs the
 /// wallet and reserves the inputs that the transaction spends, and the result
 /// names them.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the inputs of the generation's own `call_transaction`, before the dispatch"
+    reason = "the inputs of the ledger's own `call_transaction`, one value each"
 )]
 pub(crate) async fn call_transaction(
     circuit: &compact_codegen::ir::Circuit,
@@ -120,48 +111,24 @@ pub(crate) async fn call_transaction(
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
     pay_fees: bool,
 ) -> Result<midnight_types::TransferResult, ContractError> {
-    // Each arm is boxed so this frame holds one generation's future, not
-    // both (see the frame-size note on `MidnightProvider::resync_wallet`).
-    match provider.builds().await? {
-        Builds::Ledger8(builds) => {
-            Box::pin(crate::ledger_8::call::call_transaction(
-                &builds,
-                circuit,
-                args,
-                exec_result,
-                &state.view,
-                &state.bytes,
-                state.time,
-                circuit_name,
-                contract_address,
-                zk_config,
-                verifier_key,
-                coin_encryption_keys,
-                shielded,
-                pay_fees,
-            ))
-            .await
-        }
-        Builds::Ledger9(builds) => {
-            Box::pin(crate::ledger_9::call::call_transaction(
-                &builds,
-                circuit,
-                args,
-                exec_result,
-                &state.view,
-                &state.bytes,
-                state.time,
-                circuit_name,
-                contract_address,
-                zk_config,
-                verifier_key,
-                coin_encryption_keys,
-                shielded,
-                pay_fees,
-            ))
-            .await
-        }
-    }
+    let builds = provider.builds().await?;
+    // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+    Box::pin(crate::ledger_9::call::call_transaction(
+        &builds,
+        circuit,
+        args,
+        exec_result,
+        &state.contract_state,
+        state.time,
+        circuit_name,
+        contract_address,
+        zk_config,
+        verifier_key,
+        coin_encryption_keys,
+        shielded,
+        pay_fees,
+    ))
+    .await
 }
 
 /// The circuit's public state program, as the transcript replays it: the
@@ -199,16 +166,4 @@ where
     tagged_serialize(value, &mut bytes)
         .map_err(|e| ContractError::Serialization(format!("serialize {what}: {e}")))?;
     Ok(bytes)
-}
-
-/// `value` in another type of the same encoding: another storage backend,
-/// or another generation's type that encodes it alike.
-pub(crate) fn reencode<A, B>(value: &A, what: &str) -> Result<B, ContractError>
-where
-    A: midnight_serialize::Serializable + midnight_serialize::Tagged,
-    B: midnight_serialize::Deserializable + midnight_serialize::Tagged,
-{
-    let bytes = tagged_bytes(value, what)?;
-    midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
-        .map_err(|e| ContractError::Serialization(format!("deserialize {what}: {e}")))
 }

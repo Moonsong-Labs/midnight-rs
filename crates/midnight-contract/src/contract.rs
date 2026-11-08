@@ -1018,7 +1018,10 @@ impl<P> ConnectBuilder<P> {
 
     /// Pin queries to the block `hash`. Default is the node's best block.
     /// Both circuit calls and lazy ledger queries honour the pin through the
-    /// node RPC, and a circuit call runs at the time of that block.
+    /// node RPC, and a circuit call runs at the time of that block. A circuit
+    /// call or a full state read pinned to a block before the chain's hard
+    /// fork to ledger 9 fails with [`ContractError::StateFetch`], which names
+    /// the ledger 8 tag `contract-state[v6]`.
     pub fn at_block(mut self, hash: BlockHash) -> Self {
         self.at_block = Some(hash);
         self
@@ -1277,7 +1280,7 @@ impl<P> Contract<P> {
         let run = crate::call::run_call(
             circuit,
             program,
-            &state.view,
+            &state.contract_state,
             state.time,
             Some(address),
             args,
@@ -1472,7 +1475,7 @@ impl<P> Contract<P> {
         })
         .await
         .map_err(|e| ContractError::Construction(format!("verifier key {circuit_name}: {e}")))?;
-        crate::state::check_verifier_key(&state.view, circuit_name, &verifier_key)?;
+        crate::state::check_verifier_key(&state.contract_state, circuit_name, &verifier_key)?;
         let (baseline, depends_on) = self.witness_baseline(store).await?;
         let coin_public_key = provider.shielded_recipient().await?.coin_public_key;
 
@@ -1480,7 +1483,7 @@ impl<P> Contract<P> {
         let exec_result = crate::call::run_call(
             circuit,
             program,
-            &state.view,
+            &state.contract_state,
             state.time,
             Some(address),
             args,

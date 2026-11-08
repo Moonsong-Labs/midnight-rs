@@ -89,7 +89,7 @@ impl<'a> EmitCtxt<'a> {
                 ListAccessor, MapAccessor, MerkleTree, MerkleTreeAccessor, SetAccessor,
                 StateError, StateValue, StorageArray, StorageHashMap, TransientFr, Uint,
                 ValueSlice, Vector,
-                cell_as, decode_contract_state, get_field_path, hex, lazy, serde, serde_json,
+                cell_as, get_field_path, hex, lazy, serde, serde_json, tagged_deserialize,
             };
         };
 

@@ -1,4 +1,4 @@
-//! [`RemoteProofServer`] as this generation's `ProofProvider`, and the proof
+//! [`RemoteProofServer`] as the ledger's `ProofProvider`, and the proof
 //! server client it proves through.
 
 use std::sync::Arc;

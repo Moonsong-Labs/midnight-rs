@@ -128,61 +128,46 @@ fn check_address_network(addr: &WalletAddress, expected: &Network) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use midnight_helpers::ledger_8;
-    use midnight_helpers::ledger_9::{DefaultDB, ShieldedWallet};
+    use midnight_helpers::ledger_9::{DefaultDB, DustWallet, ShieldedWallet, UnshieldedWallet};
 
+    use crate::Network;
     use crate::hd::Seed;
-    use crate::ledger_8::convert::{IntoLedger, IntoSdk as _};
+    use crate::ledger_9::convert::{IntoLedger, IntoSdk as _};
 
     fn seed() -> Seed {
         Seed::from_bytes(&[7; 32]).unwrap()
     }
 
-    /// The encryption key crosses generations as bytes. A wrong encoding
-    /// would hand a circuit call a key that encrypts to nobody.
+    /// The SDK holds the encryption key as bytes. A wrong encoding would hand
+    /// a circuit call a key that encrypts to nobody.
     #[test]
-    fn an_encryption_key_crosses_generations_unchanged() {
-        use crate::ledger_9::convert::IntoLedger as IntoLedger9;
+    fn an_encryption_key_round_trips_through_the_sdk() {
+        let key = ShieldedWallet::<DefaultDB>::default(seed().into_ledger()).enc_public_key;
 
-        let seed8 = IntoLedger::into_ledger(&seed());
-        let key8 = ledger_8::ShieldedWallet::<ledger_8::DefaultDB>::default(seed8).enc_public_key;
-        let seed9 = IntoLedger9::into_ledger(&seed());
-        let key9 = ShieldedWallet::<DefaultDB>::default(seed9).enc_public_key;
-
-        assert_eq!(IntoLedger9::into_ledger(key8.into_sdk()), key9);
+        assert_eq!(key.into_sdk().into_ledger(), key);
     }
 
-    /// A registration puts the parsed key into the chain's generation. A key
-    /// that changes on the way names a Dust address nobody holds, and the
-    /// chain sends the Dust there without an error.
+    /// A registration puts the parsed key into the ledger's type. A key that
+    /// changes on the way names a Dust address nobody holds, and the chain
+    /// sends the Dust there without an error.
     #[test]
-    fn a_parsed_dust_address_names_the_key_its_wallet_tracks_on_each_generation() {
-        use crate::Network;
-        use crate::ledger_9::convert::IntoLedger as IntoLedger9;
-
+    fn a_parsed_dust_address_names_the_key_its_wallet_tracks() {
         let address = seed().dust_address(Network::Undeployed);
         let key = super::parse_dust_address(&address, Network::Undeployed).unwrap();
 
-        let seed8 = IntoLedger::into_ledger(&seed());
-        let wallet8 = ledger_8::DustWallet::<ledger_8::DefaultDB>::default(seed8, None);
-        assert_eq!(IntoLedger::into_ledger(key), wallet8.public_key);
-        let seed9 = IntoLedger9::into_ledger(&seed());
-        let wallet9 = midnight_helpers::ledger_9::DustWallet::<DefaultDB>::default(seed9, None);
-        assert_eq!(IntoLedger9::into_ledger(key), wallet9.public_key);
+        let wallet = DustWallet::<DefaultDB>::default(seed().into_ledger(), None);
+        assert_eq!(key.into_ledger(), wallet.public_key);
     }
 
     /// A transfer pays the owner that the recipient converts to. A recipient
     /// of other bytes names a user address nobody holds, and the chain pays it
     /// without an error.
     #[test]
-    fn a_parsed_unshielded_address_names_the_owner_its_wallet_tracks_on_each_generation() {
-        use crate::Network;
-
+    fn a_parsed_unshielded_address_names_the_owner_its_wallet_tracks() {
         let address = seed().unshielded_address(Network::Undeployed);
         let recipient = super::parse_unshielded_recipient(&address, Network::Undeployed).unwrap();
         assert_eq!(recipient, seed().unshielded_recipient());
-        let seed8 = IntoLedger::into_ledger(&seed());
-        let wallet8 = ledger_8::UnshieldedWallet::default(seed8);
-        assert_eq!(IntoLedger::into_ledger(recipient), wallet8.user_address);
+        let wallet = UnshieldedWallet::default(seed().into_ledger());
+        assert_eq!(recipient.into_ledger(), wallet.user_address);
     }
 }

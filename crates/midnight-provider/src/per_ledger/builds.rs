@@ -1,5 +1,4 @@
-//! The attached wallet's builds on this generation, with this generation's
-//! prover.
+//! The attached wallet's builds, with the provider's prover.
 
 use std::sync::Arc;
 
@@ -14,17 +13,13 @@ use super::helpers::{
 use super::types::{PreparedInput, fee_speck};
 use crate::{HeldInputs, MidnightProvider, ProviderError};
 
-/// The attached wallet's builds on this generation.
+/// The attached wallet's builds.
 ///
-/// [`MidnightProvider::builds`] hands one out after a resync, for the
-/// generation the wallet's state is in. Each method that uses the wallet
-/// reads its state when the method runs. A background sync of the wallet can
-/// commit while a `Builds` is in use, so two calls can read different states.
-/// A commit that crosses a hard fork makes each of those methods fail with
-/// [`WalletError::LedgerMismatch`](midnight_types::WalletError::LedgerMismatch)
-/// in [`ProviderError::Wallet`]. [`MidnightProvider::builds`] resyncs first
-/// and picks the wallet's generation. So take a fresh one for a build that
-/// starts later.
+/// [`MidnightProvider::builds`] hands one out after a resync. Each method
+/// that uses the wallet reads its state when the method runs. A background
+/// sync of the wallet can commit while a `Builds` is in use, so two calls can
+/// read different states. [`MidnightProvider::builds`] resyncs first, so take
+/// a fresh one for a build that starts later.
 pub struct Builds<'a> {
     provider: &'a MidnightProvider,
     wallet: Arc<dyn WalletBuilds>,
@@ -33,9 +28,7 @@ pub struct Builds<'a> {
 
 impl std::fmt::Debug for Builds<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Builds")
-            .field("ledger", &super::LEDGER)
-            .finish_non_exhaustive()
+        f.debug_struct("Builds").finish_non_exhaustive()
     }
 }
 
@@ -148,17 +141,19 @@ impl<'a> Builds<'a> {
         &self,
         tx_bytes: &[u8],
     ) -> Result<TransferResult, ProviderError> {
+        let external = deserialize_transaction(tx_bytes)?;
         // Boxed so a caller's future stays small. See the frame-size note on
         // `MidnightProvider::resync_wallet`.
-        Box::pin(self.balance_transaction_inner(tx_bytes)).await
+        Box::pin(self.balance_decoded(tx_bytes, external)).await
     }
 
-    async fn balance_transaction_inner(
+    /// [`Self::balance_transaction`] for `tx_bytes`, which decode to
+    /// `external`.
+    pub(crate) async fn balance_decoded(
         &self,
         tx_bytes: &[u8],
+        external: FinalizedTransaction<DefaultDB>,
     ) -> Result<TransferResult, ProviderError> {
-        let external = deserialize_transaction(tx_bytes)?;
-
         // Refuse any non-fee token deficit: this path only adds Dust, so a
         // shortfall in any other token (an unfunded swap side) would just fail
         // at submit. Dust itself is what we are here to supply, so skip it.
@@ -182,7 +177,6 @@ impl<'a> Builds<'a> {
         let Some(reserved) = self.wallet.prepare_fees(tx_info, &external).await? else {
             return Ok(TransferResult {
                 tx_bytes: tx_bytes.to_vec(),
-                ledger_version: super::LEDGER,
                 spent: SpentInputs::default(),
                 fee_speck: fee_speck(&context, &external)?,
             });
@@ -225,7 +219,7 @@ impl<'a> Builds<'a> {
     }
 }
 
-/// Merge proven transactions of this generation into one. See
+/// Merge proven transactions into one. See
 /// [`MidnightProvider::merge_transactions`].
 pub fn merge_transactions(txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
     let mut iter = txs.iter();
@@ -246,7 +240,9 @@ pub fn merge_transactions(txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
     Ok(out)
 }
 
-fn deserialize_transaction(bytes: &[u8]) -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
+pub(crate) fn deserialize_transaction(
+    bytes: &[u8],
+) -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
     tagged_deserialize(&mut &bytes[..])
         .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))
 }

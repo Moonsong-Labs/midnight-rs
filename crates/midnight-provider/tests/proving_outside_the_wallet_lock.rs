@@ -28,12 +28,16 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
+use midnight_helpers::ledger_9::{
+    CostModel, LocalProofServer, ProofProvider, ProvenTransaction, Resolver, UnprovenTransaction,
+};
 use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{
-    LedgerVersion, MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, SpentInputs,
-    TransferKind, TransferRequest, UnshieldedRecipient, WalletError, WalletFacade,
+    MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, SpentInputs, TransferKind,
+    TransferRequest, UnshieldedRecipient, WalletError, WalletFacade,
 };
 use midnight_wallet::LocalWallet;
+use midnight_wallet_facade::ledger_9::WalletBuilds;
 use tokio::sync::Notify;
 
 fn night() -> ShieldedTokenType {
@@ -52,21 +56,11 @@ async fn prepare_night_self_transfer(
         recipient,
         pay_fees: true,
     });
-    macro_rules! prepare {
-        ($ledger:ident) => {{
-            use midnight_wallet_facade::$ledger::WalletBuilds;
-            let prover: Arc<dyn midnight_helpers::$ledger::ProofProvider<DefaultDB>> =
-                Arc::new(midnight_helpers::$ledger::LocalProofServer::default());
-            wallet
-                .prepare_transfer(request, prover)
-                .await
-                .map(|build| build.into_prepared().spent_inputs())
-        }};
-    }
-    match wallet.ledger_version().await {
-        LedgerVersion::V8 => prepare!(ledger_8),
-        LedgerVersion::V9 => prepare!(ledger_9),
-    }
+    let prover: Arc<dyn ProofProvider<DefaultDB>> = Arc::new(LocalProofServer::default());
+    wallet
+        .prepare_transfer(request, prover)
+        .await
+        .map(|build| build.into_prepared().spent_inputs())
 }
 
 /// The readings of a [`DustBalance`](midnight_wallet::DustBalance), to compare
@@ -99,47 +93,38 @@ struct BrokenProver;
 /// the window the wallet must be free in.
 #[derive(Default)]
 struct ParkedProver {
-    ledger_8: midnight_helpers::ledger_8::LocalProofServer,
-    ledger_9: midnight_helpers::ledger_9::LocalProofServer,
+    prover: LocalProofServer,
     started: Notify,
     release: Notify,
 }
 
-/// Each prover for one generation; the bodies are the same on each.
-macro_rules! test_provers {
-    ($ledger:ident) => {
-        #[async_trait::async_trait]
-        impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for BrokenProver {
-            async fn prove(
-                &self,
-                _tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
-                _rng: StdRng,
-                _resolver: &'static midnight_helpers::$ledger::Resolver,
-                _cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
-                panic!("prover is down");
-            }
-        }
-
-        #[async_trait::async_trait]
-        impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ParkedProver {
-            async fn prove(
-                &self,
-                tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
-                rng: StdRng,
-                resolver: &'static midnight_helpers::$ledger::Resolver,
-                cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
-                self.started.notify_one();
-                self.release.notified().await;
-                self.$ledger.prove(tx, rng, resolver, cost_model).await
-            }
-        }
-    };
+#[async_trait::async_trait]
+impl ProofProvider<DefaultDB> for BrokenProver {
+    async fn prove(
+        &self,
+        _tx: UnprovenTransaction<DefaultDB>,
+        _rng: StdRng,
+        _resolver: &'static Resolver,
+        _cost_model: CostModel,
+    ) -> ProvenTransaction<DefaultDB> {
+        panic!("prover is down");
+    }
 }
 
-test_provers!(ledger_8);
-test_provers!(ledger_9);
+#[async_trait::async_trait]
+impl ProofProvider<DefaultDB> for ParkedProver {
+    async fn prove(
+        &self,
+        tx: UnprovenTransaction<DefaultDB>,
+        rng: StdRng,
+        resolver: &'static Resolver,
+        cost_model: CostModel,
+    ) -> ProvenTransaction<DefaultDB> {
+        self.started.notify_one();
+        self.release.notified().await;
+        self.prover.prove(tx, rng, resolver, cost_model).await
+    }
+}
 
 /// The guarantee this split exists for: while a build is proving, the wallet is
 /// readable. Before the split this read queued behind the whole proof.

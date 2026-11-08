@@ -36,9 +36,9 @@ use midnight_types::HashOutput;
 
 use super::helpers;
 use helpers::{DustNullifier, Nullifier, Timestamp};
-use tracing::warn;
 
 use super::types::DustSpendBatch;
+use crate::generation::Generation;
 use crate::storage::{
     StoredPending, StoredPendingDustBatch, StoredPendingShielded, StoredPendingUnshielded,
     tagged_from_hex, tagged_to_hex,
@@ -340,7 +340,7 @@ impl PendingReservations {
         }
 
         Ok(StoredPending {
-            ledger_version: super::LEDGER,
+            ledger_version: Generation::V9,
             dust,
             unshielded,
             shielded,
@@ -368,20 +368,11 @@ impl PendingReservations {
             .transpose()
     }
 
-    /// Decode what a `pending.json` holds. Reservations another generation
-    /// made are dropped: a transaction built for it cannot land on a chain
-    /// that runs this one.
+    /// Decode what a `pending.json` holds.
     ///
     /// Every entry loads as proven, because [`Self::to_stored`] writes only
     /// proven entries.
     pub(crate) fn from_stored(stored: StoredPending) -> Result<Self, WalletError> {
-        if stored.ledger_version != super::LEDGER {
-            warn!(
-                found = %stored.ledger_version,
-                "dropping pending reservations of another ledger generation"
-            );
-            return Ok(Self::default());
-        }
         let mut dust = Vec::with_capacity(stored.dust.len());
         for s in stored.dust {
             dust.push(PendingDustBatch {
@@ -486,37 +477,6 @@ mod tests {
     use super::*;
     use crate::Seed;
     use helpers::{DustLocalState, INITIAL_PARAMETERS, Sp};
-
-    /// A transaction built for one generation cannot land on a chain that
-    /// runs another, so its reservations are dead. Loading them would hide
-    /// their inputs until their TTL, and would decode another generation's
-    /// Dust spends with this one's types.
-    #[test]
-    fn reservations_of_another_generation_are_dropped_at_load() {
-        let mut p = PendingReservations::default();
-        p.reserve(
-            Vec::new(),
-            vec![ukey(0xab, 0)],
-            Vec::new(),
-            Timestamp::from_secs(100),
-            Timestamp::MAX,
-        );
-        prove_all(&mut p);
-        for version in [
-            midnight_types::LedgerVersion::V8,
-            midnight_types::LedgerVersion::V9,
-        ] {
-            let mut stored = p.to_stored().unwrap();
-            stored.ledger_version = version;
-            let loaded = PendingReservations::from_stored(stored).unwrap();
-            assert_eq!(
-                loaded.unshielded_spends().count() == 1,
-                version == super::super::LEDGER,
-                "{version} reservations loaded into a {} wallet",
-                super::super::LEDGER
-            );
-        }
-    }
 
     #[test]
     fn evict_expired_drops_entries_past_ttl() {

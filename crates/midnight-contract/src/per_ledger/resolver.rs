@@ -1,12 +1,12 @@
-//! The resolver this generation's contract calls prove with.
+//! The resolver that contract calls prove with.
 
 use std::sync::LazyLock;
 
 use super::helpers;
 
-/// The resolver every contract call on this generation proves with: the
-/// builtin Zswap and Dust keys, then whatever
-/// [`register`](crate::resolver::register) made resolvable.
+/// The resolver every contract call proves with: the builtin Zswap and Dust
+/// keys, then whatever [`register`](crate::resolver::register) made
+/// resolvable.
 pub(crate) fn shared() -> &'static helpers::Resolver {
     static RESOLVER: LazyLock<helpers::Resolver> = LazyLock::new(|| {
         use helpers::{

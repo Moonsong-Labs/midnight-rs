@@ -1,6 +1,5 @@
-//! A circuit call's transaction on this generation: the interpreter's result
-//! partitioned into this generation's transcripts, its coins in Zswap offers,
-//! proven, and funded.
+//! A circuit call's transaction: the interpreter's result partitioned into
+//! transcripts, its coins in Zswap offers, proven, and funded.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -92,22 +91,20 @@ pub(crate) fn partition(
     Ok(partitioned.into_iter().next().unwrap_or((None, None)))
 }
 
-/// Build this generation's transaction for a circuit call the interpreter
-/// already ran against `state`, and prove it. When `pay_fees` is false the
-/// transaction is left fee-less, for another wallet to sponsor, and the result
-/// prices the fee-less transaction.
+/// Build the transaction for a circuit call the interpreter already ran
+/// against `state`, and prove it. When `pay_fees` is false the transaction is
+/// left fee-less, for another wallet to sponsor, and the result prices the
+/// fee-less transaction.
 ///
 /// The result names the inputs that the build reserved: the pinned coins of
 /// `shielded`, and the Dust of the fee.
 ///
-/// `state` is the contract's state as the Compact side reads it, and
-/// `state_bytes` the encoding the chain served it in. `block_time` is the
-/// time the interpreter ran the circuit at. `verifier_key` is the circuit's
-/// verifier key as `zk_config` serves it, which the caller checked against
-/// `state`.
+/// `block_time` is the time the interpreter ran the circuit at.
+/// `verifier_key` is the circuit's verifier key as `zk_config` serves it,
+/// which the caller checked against `state`.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the neutral call path hands over what the interpreter ran with, one value each"
+    reason = "the call path hands over what the interpreter ran with, one value each"
 )]
 pub(crate) async fn call_transaction(
     builds: &Builds<'_>,
@@ -115,7 +112,6 @@ pub(crate) async fn call_transaction(
     args: &[(&str, runtime::Value)],
     exec_result: &runtime::ExecutionResult,
     state: &ContractState<InMemoryDB>,
-    state_bytes: &[u8],
     block_time: Timestamp,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
@@ -126,7 +122,6 @@ pub(crate) async fn call_transaction(
     pay_fees: bool,
 ) -> Result<TransferResult, ContractError> {
     let helper_addr: ContractAddress = contract_address.into_ledger();
-    let state_db = super::state::native_state(state, state_bytes)?;
 
     // 1. The build context, from the provider's synced wallet. Nothing here
     //    needs the seed: the wallet performs the spends, and addressing a coin
@@ -141,18 +136,10 @@ pub(crate) async fn call_transaction(
     // 2. Build transcripts by partitioning the circuit's state ops, budgeted
     //    with the chain's own parameters: the node checks the gas each
     //    transcript declares against its current cost model.
-    let program = crate::call::verify_ops(exec_result)
-        .iter()
-        .map(|op| crate::call::reencode(op, "circuit op"))
-        .collect::<Result<Vec<helpers::Op<helpers::ResultModeVerify, DefaultDB>>, _>>()?;
+    let program = crate::call::verify_ops(exec_result);
     let chain_parameters = BuilderContext::ledger_parameters(&*context).await;
-    let (guaranteed, fallible) = partition(
-        &state_db,
-        helper_addr,
-        block_time,
-        program,
-        &chain_parameters,
-    )?;
+    let (guaranteed, fallible) =
+        partition(state, helper_addr, block_time, program, &chain_parameters)?;
 
     // Commitments the ledger partitioned into the fallible section. A
     // circuit-created coin's Zswap output must ride in the same segment as the
@@ -205,7 +192,7 @@ pub(crate) async fn call_transaction(
     context.update_resolver(super::resolver::shared()).await;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
-    let op = state_db
+    let op = state
         .operations
         .get(&entry_point)
         .map(|op| (*op).clone())

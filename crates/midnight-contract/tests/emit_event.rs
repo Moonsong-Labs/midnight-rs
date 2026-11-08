@@ -8,8 +8,7 @@
 //! the call returns is the one that the chain logs.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
-//! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL or a
-//! missing `MIDNIGHT_LEDGER` panics.
+//! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
 
 mod common;
 
@@ -30,12 +29,6 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
     let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
-    let ledger = std::env::var("MIDNIGHT_LEDGER").unwrap_or_else(|_| {
-        if std::env::var_os("MIDNIGHT_E2E").is_some() {
-            panic!("MIDNIGHT_LEDGER is missing under make test-e2e");
-        }
-        "unset".into()
-    });
     assert!(
         std::path::Path::new(events::ZK_CONFIG_DIR)
             .join("keys")
@@ -56,14 +49,14 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
         .expect("submit deploy")
         .into_contract()
         .await
-        .unwrap_or_else(|e| panic!("the deploy must apply on ledger {ledger}: {e:?}"));
+        .unwrap_or_else(|e| panic!("the deploy must apply: {e:?}"));
 
     let simulated = contract
         .circuits()
         .record(Bytes(NAME))
         .simulate()
         .await
-        .unwrap_or_else(|e| panic!("the simulation must run on ledger {ledger}: {e:?}"));
+        .unwrap_or_else(|e| panic!("the simulation must run: {e:?}"));
     let [event] = simulated.logs.as_slice() else {
         panic!("record emits one event, got {:?}", simulated.logs);
     };
@@ -88,7 +81,7 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
         .expect("submit record")
         .wait_finalized()
         .await
-        .unwrap_or_else(|e| panic!("the emitting call must apply on ledger {ledger}: {e:?}"));
+        .unwrap_or_else(|e| panic!("the emitting call must apply: {e:?}"));
     assert_eq!(
         outcome.logs, simulated.logs,
         "the call must return the event that its run emitted"

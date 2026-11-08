@@ -14,38 +14,32 @@ mod common;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use midnight_helpers::ledger_9::{
+    CostModel, LocalProofServer, ProofProvider, ProvenTransaction, Resolver, UnprovenTransaction,
+};
 use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::MidnightProvider;
 
-/// Wraps each generation's real prover and records whether one ran.
+/// Wraps the real prover and records whether it ran.
 #[derive(Default)]
 struct ProofRecorder {
-    ledger_8: midnight_helpers::ledger_8::LocalProofServer,
-    ledger_9: midnight_helpers::ledger_9::LocalProofServer,
+    prover: LocalProofServer,
     proved: AtomicBool,
 }
 
-/// The recorder for each generation; the body is the same on each.
-macro_rules! proof_recorder {
-    ($ledger:ident) => {
-        #[async_trait::async_trait]
-        impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ProofRecorder {
-            async fn prove(
-                &self,
-                tx: midnight_helpers::$ledger::UnprovenTransaction<DefaultDB>,
-                rng: StdRng,
-                resolver: &'static midnight_helpers::$ledger::Resolver,
-                cost_model: midnight_helpers::$ledger::CostModel,
-            ) -> midnight_helpers::$ledger::ProvenTransaction<DefaultDB> {
-                self.proved.store(true, Ordering::SeqCst);
-                self.$ledger.prove(tx, rng, resolver, cost_model).await
-            }
-        }
-    };
+#[async_trait::async_trait]
+impl ProofProvider<DefaultDB> for ProofRecorder {
+    async fn prove(
+        &self,
+        tx: UnprovenTransaction<DefaultDB>,
+        rng: StdRng,
+        resolver: &'static Resolver,
+        cost_model: CostModel,
+    ) -> ProvenTransaction<DefaultDB> {
+        self.proved.store(true, Ordering::SeqCst);
+        self.prover.prove(tx, rng, resolver, cost_model).await
+    }
 }
-
-proof_recorder!(ledger_8);
-proof_recorder!(ledger_9);
 
 /// Counts the wallet's tNIGHT UTXOs, and how many of them still await a
 /// registration.

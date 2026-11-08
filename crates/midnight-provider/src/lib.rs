@@ -1,15 +1,9 @@
 #![warn(missing_debug_implementations)]
 
 mod error;
-pub mod ledger_8;
-#[expect(
-    clippy::duplicate_mod,
-    reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
-)]
 pub mod ledger_9;
 mod local_prover;
 pub mod node_error;
-mod proof_providers;
 mod provider;
 mod remote_prover;
 mod submit;
@@ -17,8 +11,7 @@ pub mod transfer;
 mod types;
 
 pub use error::ProviderError;
-pub use proof_providers::ProofProviders;
-pub use provider::{Builds, HeldInputs, MidnightProvider, NodeHeader};
+pub use provider::{HeldInputs, MidnightProvider, NodeHeader};
 pub use remote_prover::RemoteProofServer;
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{
@@ -33,9 +26,9 @@ pub use types::{Health, TransactionHash};
 // crate never names them.
 pub use midnight_types::{
     BlockHash, ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
-    DustParameters, DustPublicKey, EncryptionPublicKey, ExtrinsicHash, HashOutput, LedgerVersion,
-    NIGHT, Nonce, Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient,
-    ShieldedTokenType, UnshieldedRecipient, UnshieldedTokenType,
+    DustParameters, DustPublicKey, EncryptionPublicKey, ExtrinsicHash, HashOutput, NIGHT, Nonce,
+    Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType,
+    UnshieldedRecipient, UnshieldedTokenType,
 };
 
 // The wallet's API, so a caller attaching one (or implementing one) needs no

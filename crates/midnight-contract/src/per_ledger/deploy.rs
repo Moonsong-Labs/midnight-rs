@@ -1,4 +1,4 @@
-//! A contract deploy on this generation.
+//! A contract deploy.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -27,13 +27,11 @@ use crate::offer::refuse_shortfall;
 /// wallet. See [`crate::deploy::deploy_funded`].
 pub(crate) async fn deploy_funded(
     builds: &Builds<'_>,
-    initial_state: &ContractState<InMemoryDB>,
+    initial_state: ContractState<InMemoryDB>,
     shielded_offer: Option<&ShieldedOffer>,
 ) -> Result<DeployResult, ContractError> {
     let context = builds.execution_context().await?;
-    let state = super::state::from_view(initial_state)?;
-
-    let deploy = ContractDeploy::new(&mut rand::thread_rng(), state);
+    let deploy = ContractDeploy::new(&mut rand::thread_rng(), initial_state);
     let address = deploy.address().into_sdk();
 
     struct DeployAction {

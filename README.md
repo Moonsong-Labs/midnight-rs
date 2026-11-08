@@ -10,7 +10,7 @@
 - **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token). A wallet can register its NIGHT to generate Dust for another wallet's Dust address.
 - **Swaps and sponsored fees**: two-party shielded swaps, and one party paying the Dust fees of another party's transactions.
 - **Node and indexer clients**: node RPC over subxt for contract state and submission, and a GraphQL client for the indexer that the wallet sync reads.
-- **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
+- **Ledger 9**: the SDK runs on chains that run ledger 9. On a chain that forked from ledger 8 to ledger 9, a sync from genesis also finds the shielded coins that the wallet received before the fork.
 - **Deploy and call Compact smart contracts**: typed Rust bindings generated from the compiled contract. A circuit call takes typed arguments, and returns a typed value and the events that the circuit emits.
 - **Per-contract private state**: a pluggable `PrivateStateProvider` store with password-encrypted export and import. Witnesses read and update the state during circuit calls (see [`docs/private-state.md`](docs/private-state.md)).
 - **Contract maintenance**: deploy with a k-of-n maintenance committee, then rotate verifier keys or replace the authority with signed updates (see [`docs/contract-maintenance-governance.md`](docs/contract-maintenance-governance.md)).
@@ -28,7 +28,7 @@ anyhow = "1"
 
 ## Quick start
 
-The Quick start runs against a local devnet (node, indexer and proof server) in Docker. The Quick start proves in its own process. Its first proofs download the public parameters into a local cache (see [proof backends](docs/ledger-generations.md#proof-backends)). Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
+The Quick start runs against a local devnet (node, indexer and proof server) in Docker. The Quick start proves in its own process. Its first proofs download the public parameters into a local cache (see [Proof backends](#proof-backends)). Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
 
 ```rust
 use midnight_core::provider::{NIGHT, STARS_PER_NIGHT};
@@ -80,7 +80,22 @@ async fn main() -> anyhow::Result<()> {
 
 The crates in [`examples/`](examples) run against the same devnet. Run one from the root of the clone with `make run-<name>`, for example `make run-shielded-transfer`.
 
-Preprod, the public test network, needs no Docker. [`examples/wallet-sync`](examples/wallet-sync) gives its URLs and faucet, and registers Dust for the fees. The faucet funds only unshielded addresses.
+To sync a wallet against another network that runs ledger 9, give [`examples/wallet-sync`](examples/wallet-sync) the URLs of its node and indexer. Its README lists the environment variables.
+
+## Proof backends
+
+A `ProofProvider` proves the transactions that the provider builds: transfers, Dust registrations, deploys, contract calls and maintenance updates. By default, the provider proves in its own process. To prove on a proof server, give a `RemoteProofServer` to `with_proof_provider`:
+
+```rust,ignore
+use std::sync::Arc;
+use midnight_core::provider::RemoteProofServer;
+
+let provider = provider.with_proof_provider(Arc::new(RemoteProofServer::new(proof_url)));
+```
+
+`with_proof_provider` takes any `Arc<dyn ProofProvider<DefaultDB>>`, where `ProofProvider` and `DefaultDB` come from `midnight_helpers::ledger_9`. `MidnightProvider::proof_provider` returns the prover that the provider uses. The proof server must prove ledger 9 transactions, as the `proof-server` image of the devnet does.
+
+The local prover downloads the public parameters for the first proof of each circuit size, when the cache does not hold them. It downloads a built-in Zswap or Dust key for the first proof that uses that key, in the same way. The source is `MIDNIGHT_PARAM_SOURCE` (default `https://srs.midnight.network/`). The cache is the directory that upstream `MidnightDataProvider` picks, `MIDNIGHT_PP` first. For offline or container use, fill that cache once with network access. Then point `MIDNIGHT_PP` at it. A `RemoteProofServer` proves on the server and downloads none of these files.
 
 ## Swaps and sponsored fees
 
@@ -178,6 +193,40 @@ let contract = owned_counter::Contract::deploy(&provider)
 ```
 
 The deploy records the private state that the constructor leaves as the first snapshot of the new contract (see [`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy)). An `into_contract` with no wait before it leaves that snapshot `Pending`. To confirm it, call `PendingDeploy::wait_finalized` before `into_contract`. A constructor that mints, claims, or spends or creates a coin fails the deploy with `ContractError::Construction` before any proof. A constructor that reads `kernel.self()` fails the deploy with `ContractError::Interpreter`, because the contract gets its address from the deploy.
+
+## Deploy with a shielded offer
+
+A deploy can carry a shielded offer. A `ShieldedOffer` holds coins from `spendable_shielded_coins` and the `ShieldedPayment`s to make from them:
+
+```rust,ignore
+use midnight_core::Contract;
+use midnight_core::contract::{ShieldedOffer, ShieldedPayment, parse_shielded_recipient};
+
+let coin = provider
+    .spendable_shielded_coins()
+    .await?
+    .into_iter()
+    .find(|coin| coin.token_type == token_type && coin.value >= 10)
+    .ok_or_else(|| std::io::Error::other("no coin of the token holds 10"))?;
+let offer = ShieldedOffer {
+    coins: vec![coin],
+    outputs: vec![ShieldedPayment {
+        recipient: parse_shielded_recipient(address, provider.network().await?)?,
+        token_type,
+        value: 10,
+    }],
+};
+let contract = Contract::deploy(&provider)
+    .with_initial_state(state)
+    .with_zk_config("compiled")
+    .with_shielded_offer(offer)
+    .send()
+    .await?
+    .into_contract()
+    .await?;
+```
+
+`DeployBuilder::with_shielded_offer` says how the deploy spends the coins, returns the change and pays the fee. The deploy builder of a `contract!` binding has the same method.
 
 ## Connecting to an existing contract
 

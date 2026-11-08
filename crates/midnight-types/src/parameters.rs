@@ -1,12 +1,11 @@
-//! The chain parameters a wallet reads, in the shape every ledger generation
-//! shares.
+//! The chain parameters a wallet reads, in the SDK's own types.
 
 use midnight_helpers::Duration;
 
 /// The chain's ledger parameters that a wallet and its callers read.
 ///
-/// A generation's full `LedgerParameters` hold more (the cost model, limits,
-/// fee prices), which the builds read from their own generation's context.
+/// The ledger's full `LedgerParameters` hold more (the cost model, limits,
+/// fee prices), which the builds read from their ledger context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChainParameters {
     /// How Dust generates and decays.

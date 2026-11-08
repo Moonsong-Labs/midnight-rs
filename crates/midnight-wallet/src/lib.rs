@@ -2,9 +2,9 @@
 //!
 //! [`Wallet`] owns the seed, the secret keys, the synced ledger state
 //! (shielded coins, dust UTXOs, unshielded UTXOs), the ledger parameters,
-//! and the latest block context, in the ledger generation the chain runs. It
-//! exposes accessors for balances, addresses and cursors. Its resyncs and
-//! rescans run through [`LocalWallet`].
+//! and the latest block context. It exposes accessors for balances,
+//! addresses and cursors. Its resyncs and rescans run through
+//! [`LocalWallet`].
 //!
 //! The API a consumer programs against is the `WalletFacade` trait in
 //! `midnight-wallet-facade`, which this crate depends on and implements:
@@ -67,13 +67,10 @@
 //! ```
 
 mod background;
-mod ledger_8;
-#[expect(
-    clippy::duplicate_mod,
-    reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
-)]
+mod generation;
 mod ledger_9;
 mod local;
+mod pre_fork;
 mod replay;
 mod storage;
 mod sync;
@@ -86,8 +83,8 @@ pub use midnight_types::address::{
 };
 pub use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustParameters,
-    DustPublicKey, EncryptionPublicKey, HashOutput, InvalidNetworkName, LedgerVersion, NIGHT,
-    Network, NetworkName, Nonce, Nullifier, ReservedInput, ShieldedBalance, ShieldedCoinBalance,
+    DustPublicKey, EncryptionPublicKey, HashOutput, InvalidNetworkName, NIGHT, Network,
+    NetworkName, Nonce, Nullifier, ReservedInput, ShieldedBalance, ShieldedCoinBalance,
     ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SpentUtxoKey,
     SyncCursors, TrackedUtxo, TransferKind, TransferRequest, TransferResult, UnshieldedRecipient,
     UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance, WalletError, chain_pin,

@@ -1,6 +1,5 @@
 //! [`LocalWallet`]: the [`WalletFacade`] implementation for a [`Wallet`] this
-//! process owns. Its builds for each ledger generation are in the generation
-//! modules.
+//! process owns. Its builds are in `ledger_9`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,8 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use midnight_types::chain_pin::{ChainView, current_pin};
 use midnight_types::{
-    ChainParameters, CoinInfo, LedgerVersion, Network, ShieldedRecipient, SpendableShieldedCoin,
-    SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
+    ChainParameters, CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, SpentInputs,
+    SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
 use tokio::sync::{Mutex, RwLock};
@@ -169,18 +168,6 @@ impl LocalWallet {
             require_same_chain(chain, pin, snapshot.as_deref()).await?;
         }
 
-        match self.rescan_once().await {
-            // A fork the state has not crossed. `resync` would wait for the
-            // `self.sync` that the caller holds, so cross with `resync_held`.
-            Err(WalletError::LedgerMismatch { expected, found }) if found > expected => {
-                self.resync_held(chain).await?;
-                self.rescan_once().await
-            }
-            result => result,
-        }
-    }
-
-    async fn rescan_once(&self) -> Result<(), WalletError> {
         let plan = self.inner.read().await.shielded_rescan_plan();
         let commit = plan.run().await?;
         self.inner.write().await.commit_shielded_rescan(commit)
@@ -206,10 +193,6 @@ impl IntoWalletFacade for Wallet {
 impl WalletFacade for LocalWallet {
     async fn network(&self) -> Network {
         self.inner.read().await.network().clone()
-    }
-
-    async fn ledger_version(&self) -> LedgerVersion {
-        self.inner.read().await.ledger_version()
     }
 
     async fn shielded_recipient(&self) -> ShieldedRecipient {

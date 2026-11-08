@@ -6,7 +6,7 @@ Self-transfer of 1 unit of a shielded token, end to end: sync wallet â†’ build â
 
 ## Setup
 
-Start the local devnet (`devnet/docker-compose.ledger-9.yml`):
+Start the local devnet (`devnet/docker-compose.yml`):
 
 ```bash
 make dev-up   # from the repo root

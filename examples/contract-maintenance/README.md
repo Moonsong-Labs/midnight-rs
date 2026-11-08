@@ -21,7 +21,7 @@ so the deployed contract has the `increment` / `increment_by` circuits to rotate
 
 ## Run
 
-Start the local devnet (`devnet/docker-compose.ledger-9.yml`):
+Start the local devnet (`devnet/docker-compose.yml`):
 
 ```bash
 make dev-up   # from the repo root

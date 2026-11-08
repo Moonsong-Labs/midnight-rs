@@ -127,9 +127,6 @@ pub enum SeedError {
 /// The bytes can be 16, 32, or 64 wide. `as_bytes` exposes them regardless
 /// of width. BIP-32 reads the slice, so the width changes nothing downstream.
 ///
-/// Every ledger generation derives the same keys and addresses from a seed,
-/// so the address methods derive through ledger 9.
-///
 /// `Drop` zeroizes the seed bytes. `Debug` and `Display` redact them.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Seed(pub(crate) SeedBytes);
@@ -625,32 +622,6 @@ mod tests {
                 upstream_path.path
             );
         }
-    }
-
-    /// The address methods derive through ledger 9 alone. If ledger 8 derived
-    /// other keys from the same seed, a wallet on a ledger 8 chain would
-    /// receive at addresses its owner never sees.
-    #[test]
-    fn both_generations_derive_the_same_addresses_and_keys() {
-        use crate::ledger_8::convert::IntoSdk as _;
-        use midnight_helpers::ledger_8;
-        use midnight_helpers::ledger_8::IntoWalletAddress as _;
-
-        let seed = seed();
-        let seed8 = crate::ledger_8::convert::IntoLedger::into_ledger(&seed);
-        let unshielded8 = ledger_8::UnshieldedWallet::default(seed8.clone())
-            .address(Network::Undeployed.as_str())
-            .to_bech32();
-        let shielded8 = ledger_8::ShieldedWallet::<ledger_8::DefaultDB>::default(seed8);
-        let address8 = shielded8.address(Network::Undeployed.as_str()).to_bech32();
-
-        assert_eq!(seed.unshielded_address(Network::Undeployed), unshielded8);
-        assert_eq!(seed.shielded_address(Network::Undeployed), address8);
-        let recipient8 = ShieldedRecipient {
-            coin_public_key: shielded8.coin_public_key.into_sdk(),
-            enc_public_key: shielded8.enc_public_key.into_sdk(),
-        };
-        assert_eq!(seed.shielded_recipient(), recipient8);
     }
 
     #[test]

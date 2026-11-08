@@ -5,7 +5,7 @@
 //! submits and waits for the verdict. That is the only way the size and
 //! dismissal-cost rule shows up: a registration spending two unshielded
 //! inputs builds cleanly and is refused with
-//! `FeeCalculation(OutsideTimeToDismiss)`, custom error 168.
+//! `FeeCalculation(OutsideTimeToDismiss)`, custom error 231.
 //!
 //! Needs a devnet, and a genesis wallet with tNIGHT and dust to fund the
 //! fresh address this drives.

@@ -1,5 +1,4 @@
-//! A wallet's state files in this generation's encoding, under the snapshot
-//! layout of [`crate::storage`].
+//! A wallet's state files, under the snapshot layout of [`crate::storage`].
 
 use std::path::Path;
 
@@ -8,6 +7,7 @@ use tracing::info;
 use super::helpers::{DefaultDB, DustWallet, WalletState as ZswapLocalState};
 use crate::WalletError;
 use crate::chain_pin::ChainPin;
+use crate::generation::Generation;
 use crate::storage::{
     StoredMetadata, StoredUtxo, dust_wallet_file, read_metadata, snapshot_path, tagged_from_file,
     tagged_to_file, zswap_file,
@@ -36,7 +36,6 @@ pub(crate) fn load(
     let Some(metadata) = read_metadata(&dir)? else {
         return Ok(None);
     };
-    super::state::expect_ledger(metadata.ledger_version)?;
 
     let zswap_state = tagged_from_file(&dir, &zswap_file(metadata.generation))?;
     let dust_wallet = tagged_from_file(&dir, &dust_wallet_file(metadata.generation))?;
@@ -100,7 +99,7 @@ pub(crate) fn save(
     } = snapshot;
     let metadata = StoredMetadata {
         generation: 0,
-        ledger_version: super::LEDGER,
+        ledger_version: Generation::V9,
         zswap_event_id,
         dust_event_id,
         last_block_height,

@@ -1,8 +1,4 @@
-//! Conversions between the SDK's own values and this generation's.
-//!
-//! Two traits, not `From` impls, let each generation module own its
-//! conversions. A later generation that shares this one's companion crates
-//! then gets its own traits, not a second impl of the same `From`.
+//! Conversions between the SDK's own values and the ledger's.
 
 use super::helpers;
 use helpers::{Deserializable, Serializable};
@@ -14,16 +10,16 @@ use crate::{
     UnshieldedTokenType,
 };
 
-/// An SDK value that has a counterpart in this generation.
+/// An SDK value that has a counterpart in the ledger.
 pub trait IntoLedger {
-    /// This generation's counterpart.
+    /// The ledger's counterpart.
     type Ledger;
 
-    /// This value as this generation's counterpart.
+    /// This value as the ledger's counterpart.
     fn into_ledger(self) -> Self::Ledger;
 }
 
-/// A value of this generation that has a counterpart among the SDK's own.
+/// A ledger value that has a counterpart among the SDK's own.
 pub trait IntoSdk {
     /// The SDK's counterpart.
     type Sdk;
@@ -87,7 +83,7 @@ impl IntoLedger for EncryptionPublicKey {
     type Ledger = helpers::EncryptionPublicKey;
     fn into_ledger(self) -> Self::Ledger {
         helpers::EncryptionPublicKey::deserialize(&mut self.0.as_slice(), 0)
-            .expect("every generation decodes the encryption key encoding it shares")
+            .expect("the SDK holds only encryption keys that the ledger encoded")
     }
 }
 
@@ -103,7 +99,7 @@ impl IntoLedger for DustNullifier {
     fn into_ledger(self) -> Self::Ledger {
         helpers::DustNullifier(
             helpers::Fr::from_le_bytes(&self.0)
-                .expect("every generation takes the field elements the SDK's nullifier holds"),
+                .expect("the SDK holds only Dust nullifiers that the ledger encoded"),
         )
     }
 }
@@ -125,7 +121,7 @@ impl IntoLedger for DustPublicKey {
     fn into_ledger(self) -> Self::Ledger {
         helpers::DustPublicKey(
             helpers::Fr::from_le_bytes(&self.0)
-                .expect("every generation takes the field elements the SDK's key holds"),
+                .expect("the SDK holds only Dust public keys that the ledger encoded"),
         )
     }
 }
