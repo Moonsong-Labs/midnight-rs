@@ -11,7 +11,7 @@ midnight-core                    meta-crate; re-exports the public API
   ├── midnight-contract          contract lifecycle (deploy / call / prove / submit)
   │     ├── contract.rs          Contract<P>, DeployBuilder, ConnectBuilder, PendingDeploy
   │     ├── constructor.rs       Constructor: the constructor run of a deploy
-  │     ├── call.rs              circuit-call tx builder, shielded inputs, caller change
+  │     ├── call.rs              circuit-call tx builder, the coins a call pins
   │     ├── deploy.rs            deploy tx builder
   │     ├── maintenance.rs       verifier-key rotation, authority replacement
   │     ├── state.rs             state fetch (node RPC) + deserialization
@@ -19,7 +19,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── offer.rs             ShieldedOffer: coins and payments a deploy carries
   │     ├── ledger/              (private) the ledger 9 build of a call, deploy and
   │     │     │                  maintenance update
-  │     │     ├── call.rs        a circuit call's transaction: transcripts, offers, proof, funding
+  │     │     ├── call.rs        a circuit call's transaction: transcripts, offers, proof, the wallet's cover
   │     │     ├── deploy.rs      a deploy's transaction
   │     │     ├── maintenance.rs a maintenance update's transaction
   │     │     ├── resolver.rs    the resolver that contract calls prove with
