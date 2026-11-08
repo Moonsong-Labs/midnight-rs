@@ -89,7 +89,8 @@ pub(crate) fn partition(
 /// Build the transaction for a circuit call the interpreter already ran
 /// against `state`, and prove it.
 ///
-/// The call proves with no fee. The wallet then covers each shielded deficit of the call in a part of its own:
+/// The call proves with no fee, against a context from node queries. The
+/// wallet then covers each shielded deficit of the call in a part of its own:
 /// the coins of `shielded` first, then coins that it selects, and the change.
 /// When `pay_fees` is true, the part also pays the Dust fee. Otherwise the
 /// transaction is left fee-less, for another wallet to sponsor, and the
@@ -120,15 +121,14 @@ pub(crate) async fn call_transaction(
 ) -> Result<TransferResult, ContractError> {
     let helper_addr: ContractAddress = contract_address.into_ledger();
 
-    // 1. The execution context, from the provider's synced wallet. The
-    //    wallet's keys seal the coins that the circuit sends to
-    //    `ownPublicKey()`.
+    // 1. The execution context, from node queries. The wallet's keys seal
+    //    the coins that the circuit sends to `ownPublicKey()`.
     let midnight_types::ShieldedRecipient {
         coin_public_key: wallet_cpk,
         enc_public_key: wallet_epk,
     } = builds.provider().shielded_recipient().await?;
     let wallet_keys = (wallet_cpk.into_ledger(), wallet_epk.into_ledger());
-    let context = builds.execution_context().await?;
+    let context = builds.chain_context().await?;
 
     // 2. Build transcripts by partitioning the circuit's state ops, budgeted
     //    with the chain's own parameters: the node checks the gas each

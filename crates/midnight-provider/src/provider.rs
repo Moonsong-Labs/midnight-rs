@@ -16,7 +16,8 @@ use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, Unshield
 use crate::{
     Builds, Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit,
 };
-use midnight_helpers::{DefaultDB, ProofProvider};
+use midnight_helpers::midnight_serialize::tagged_deserialize;
+use midnight_helpers::{DefaultDB, LedgerParameters, ProofProvider};
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
     BlockHash, CoinInfo, Cover, Network, ShieldedRecipient, ShieldedTokenType,
@@ -1048,6 +1049,18 @@ impl MidnightProvider {
         let id = self.call_runtime_api::<String>("get_network_id").await?;
         id.parse()
             .map_err(|e| ProviderError::Rpc(format!("get_network_id: {e}")))
+    }
+
+    /// The ledger parameters that the node's runtime holds at the current
+    /// finalized block, from its `MidnightRuntimeApi::get_ledger_parameters`
+    /// runtime API.
+    pub(crate) async fn ledger_parameters(&self) -> Result<LedgerParameters, ProviderError> {
+        let encoded = self
+            .call_runtime_api::<Result<Vec<u8>, subxt::dynamic::Value>>("get_ledger_parameters")
+            .await?
+            .map_err(|e| ProviderError::Rpc(format!("get_ledger_parameters: {e}")))?;
+        tagged_deserialize(&mut &encoded[..])
+            .map_err(|e| ProviderError::Rpc(format!("decoding get_ledger_parameters: {e}")))
     }
 
     /// Best-effort health status of the node.

@@ -13,11 +13,12 @@ use midnight_helpers::{
     BlockContext, BuildContext, BuildUtxoOutput, BuildUtxoSpend, BuilderContext,
     CoinSelectionStrategy, DefaultDB, DustActions, DustLocalState, DustRegistration,
     DustRegistrationBuilder, DustSpend, DustWallet, FromContext, HashMapStorage, InputInfo, Intent,
-    IntentInfo, LedgerParameters, NIGHT, Nullifier, Offer, OfferInfo, OutputInfo, ProofPreimage,
-    ProofPreimageMarker, ProofProvider, Segment, ShieldedCoinSelectionError, ShieldedTokenType,
-    ShieldedWallet, Signature, Sp, SplittableRng, StandardTransactionInfo, StdRng, Timestamp,
-    TokenType, Transaction, TransactionSigningKey, UnshieldedOffer, UnshieldedOfferInfo,
-    UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo,
+    IntentInfo, LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, NIGHT, Nullifier, Offer,
+    OfferInfo, OutputInfo, ProofPreimage, ProofPreimageMarker, ProofProvider, Segment,
+    ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng,
+    StandardTransactionInfo, StdRng, Timestamp, TokenType, Transaction, TransactionSigningKey,
+    UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo,
+    UtxoSelectionError, UtxoSpendInfo,
 };
 
 use super::convert::{IntoLedger, IntoSdk, sdk_seed};
@@ -910,6 +911,28 @@ fn intent_ttl(
 pub fn longest_ttl(context: &BuildContext) -> Timestamp {
     chain_time(&context.latest_block_context())
         + context.with_ledger_state(|ls| ls.parameters.global_ttl)
+}
+
+/// The context a build executes against: a ledger of `network` with
+/// `parameters`, the default proving resolver, and `block_context`. It holds
+/// no wallet, so a build funds nothing from it until a wallet adds its view.
+///
+/// # Errors
+///
+/// [`WalletError::Transfer`] when the ledger refuses the genesis settings.
+pub fn execution_context(
+    network: &str,
+    parameters: LedgerParameters,
+    block_context: Option<BlockContext>,
+) -> Result<Arc<BuildContext>, WalletError> {
+    // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
+    let ledger_state = LedgerState::with_genesis_settings(network, parameters, 0, MAX_SUPPLY, 0)
+        .map_err(transfer_err("construct ledger state"))?;
+    Ok(Arc::new(LedgerContext {
+        ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
+        latest_block_context: std::sync::Mutex::new(block_context),
+        ..LedgerContext::new(network)
+    }))
 }
 
 /// `ttl` after `chain_time`, or `global_ttl` after it for `None`. See

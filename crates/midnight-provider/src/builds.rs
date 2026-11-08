@@ -5,7 +5,7 @@ use std::sync::Arc;
 use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
 use midnight_helpers::{
     BuildContext, DefaultDB, FinalizedTransaction, FromContext, ProofProvider,
-    StandardTransactionInfo,
+    StandardTransactionInfo, Timestamp, make_block_context,
 };
 use midnight_types::{Cover, SpentInputs, TransferRequest, TransferResult, fee_speck};
 use midnight_wallet_facade::{ReservedBuild, WalletBuilds};
@@ -63,6 +63,31 @@ impl<'a> Builds<'a> {
     /// wallet's funding view to it.
     pub async fn execution_context(&self) -> Result<Arc<BuildContext>, ProviderError> {
         Ok(self.wallet.execution_context().await?)
+    }
+
+    /// Build the half of a [`BuildContext`] a transaction executes against,
+    /// from node queries: the node's network and ledger parameters, the
+    /// resolver, and the time of the node's best block.
+    ///
+    /// A transaction built on it counts its TTL from that time. The result
+    /// holds no wallet, so it funds nothing.
+    pub async fn chain_context(&self) -> Result<Arc<BuildContext>, ProviderError> {
+        let node = self.provider;
+        let best_block_time = async {
+            node.get_block_timestamp(node.best_block_hash().await?)
+                .await
+        };
+        let (network, parameters, time) = tokio::try_join!(
+            node.ledger_network_id(),
+            node.ledger_parameters(),
+            best_block_time
+        )?;
+        let time = Timestamp::from_secs(time.as_secs());
+        Ok(midnight_types::execution_context(
+            network.as_str(),
+            parameters,
+            Some(make_block_context(time, Default::default(), time)),
+        )?)
     }
 
     /// Fund a transaction the caller assembled, and prove it.

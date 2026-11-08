@@ -137,6 +137,7 @@ provider
   .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext: register, then rescan
   .builds().await                  → Builds (resyncs first)
       b.execution_context().await  → the wallet's view a build runs against, with no funding view
+      b.chain_context().await      → the node's view a circuit call runs against
       b.build_funded(tx_info) / b.balance_transaction(bytes, cover)
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
@@ -319,7 +320,8 @@ build verify-ops:
   ↓
 provider.builds() → the Builds of the wallet (resyncs first)
   ↓
-builds.execution_context()
+builds.chain_context()                        // node queries: the network, get_ledger_parameters,
+                                              // and the best block's time, which the TTL counts from
   ↓
 partition_transcripts([PreTranscript { context, program: verify_ops, comm_comm: None }],
                       the chain's ledger parameters from the context)

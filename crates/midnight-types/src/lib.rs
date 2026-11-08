@@ -36,7 +36,7 @@ pub use balance::{
 };
 pub use builder::{
     BuildInputs, Cover, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external,
-    chain_time, fee_speck, longest_ttl, prepare_no_validate,
+    chain_time, execution_context, fee_speck, longest_ttl, prepare_no_validate,
 };
 pub use coin::{
     CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustPublicKey, EncryptionPublicKey,
