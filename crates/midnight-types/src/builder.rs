@@ -25,7 +25,7 @@ use super::convert::{IntoLedger, IntoSdk, sdk_seed};
 use crate::error::refuse_repeated_nullifiers;
 use crate::hd::Seed;
 use crate::inputs::prepare_shielded_inputs;
-use crate::request::{RequestKind, TransactionRequest};
+use crate::request::{CoinSelection, RequestKind, TransactionRequest};
 use crate::sync::TrackedUtxo;
 use crate::transfer::panic_message;
 use crate::transfer::{ReservedInput, SpentInputs, SpentUtxoKey};
@@ -206,6 +206,14 @@ fn transfer_err<E: std::fmt::Debug>(ctx: &str) -> impl FnOnce(E) -> WalletError 
     move |e| WalletError::Transfer(format!("{ctx}: {e:?}"))
 }
 
+/// The helpers' counterpart of `selection`.
+fn strategy(selection: CoinSelection) -> CoinSelectionStrategy {
+    match selection {
+        CoinSelection::LargestFirst => CoinSelectionStrategy::LargestFirst,
+        CoinSelection::SmallestFirst => CoinSelectionStrategy::SmallestFirst,
+    }
+}
+
 /// Type a shielded coin selection that fell short, with what the seed holds of
 /// the token in the funding view the selection read.
 fn shielded_selection_error(context: &BuildContext, e: ShieldedCoinSelectionError) -> WalletError {
@@ -303,7 +311,7 @@ pub struct TransferBuilder<'a> {
     state: &'a dyn BuildInputs,
     context: Arc<BuildContext>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    coin_selection: CoinSelectionStrategy,
+    coin_selection: CoinSelection,
     ttl: Option<std::time::Duration>,
 }
 
@@ -317,32 +325,14 @@ impl<'a> TransferBuilder<'a> {
             state,
             context,
             proof_provider,
-            coin_selection: CoinSelectionStrategy::default(),
+            coin_selection: CoinSelection::default(),
             ttl: None,
         }
     }
 
-    /// Order the coins and UTXOs this build draws on.
-    ///
-    /// [`CoinSelectionStrategy::LargestFirst`], the default, spends the fewest
-    /// inputs, which matters because every shielded input carries its own proof
-    /// and is charged for separately. [`CoinSelectionStrategy::SmallestFirst`]
-    /// spends the most, absorbing small coins that the default would leave
-    /// untouched indefinitely, at the cost of a larger and more expensive
-    /// transaction. Nothing caps how many inputs the latter draws, so prefer it
-    /// for a deliberate cleanup rather than for ordinary payments.
-    ///
-    /// Neither ordering is a good default, since one never absorbs small coins
-    /// and the other is unbounded. TODO: replace both with best-fit selection,
-    /// <https://github.com/Moonsong-Labs/midnight-rs/issues/145>
-    pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
-        self.coin_selection = strategy;
-        self
-    }
-
-    /// Prepare the transfer that `request` names, with the TTL and the fee
-    /// that it asks for. Dispatches to the matching `prepare_*` method below,
-    /// each of which documents what it builds.
+    /// Prepare the transfer that `request` names, with the coin order, the
+    /// TTL and the fee that it asks for. Dispatches to the matching
+    /// `prepare_*` method below, each of which documents what it builds.
     ///
     /// # Errors
     ///
@@ -356,8 +346,13 @@ impl<'a> TransferBuilder<'a> {
             kind,
             pays_fee,
             ttl,
+            coin_selection,
         } = request;
-        let builder = Self { ttl, ..self };
+        let builder = Self {
+            coin_selection,
+            ttl,
+            ..self
+        };
         match kind {
             RequestKind::Shielded {
                 token_type,
@@ -500,7 +495,7 @@ impl<'a> TransferBuilder<'a> {
             from_seed.clone(),
             spend_amount,
             spend_token,
-            self.coin_selection,
+            strategy(self.coin_selection),
         )
         .map_err(|e| shielded_selection_error(&self.context, e))?;
 
@@ -585,7 +580,7 @@ impl<'a> TransferBuilder<'a> {
             from_seed.clone(),
             amount,
             token_type,
-            self.coin_selection,
+            strategy(self.coin_selection),
         )
         .await;
         let (spend_infos, change) = match selected {
@@ -1303,7 +1298,7 @@ struct CoverPlan {
 /// of its token that is left, or at the guaranteed segment when none is left.
 /// Then each deficit that the pins leave takes coins of its token, largest
 /// first. A call or a deploy names no coin order, so the cover takes the
-/// default of [`TransferBuilder::with_coin_selection`]. The ledger balances
+/// default of [`TransactionRequest::with_coin_selection`]. The ledger balances
 /// each token at each segment, so what the coins at a token and segment hold
 /// beyond its deficit comes back as change at that segment.
 ///

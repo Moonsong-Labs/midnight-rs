@@ -19,6 +19,21 @@ pub struct TransactionRequest {
     pub(crate) kind: RequestKind,
     pub(crate) pays_fee: bool,
     pub(crate) ttl: Option<Duration>,
+    pub(crate) coin_selection: CoinSelection,
+}
+
+/// The order in which a wallet draws the coins and UTXOs of a transfer.
+///
+/// [`TransactionRequest::with_coin_selection`] sets it for one request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+// TODO: replace both orders with best-fit selection,
+// <https://github.com/Moonsong-Labs/midnight-rs/issues/145>
+pub enum CoinSelection {
+    /// The largest coins first. It spends the fewest inputs. The default.
+    #[default]
+    LargestFirst,
+    /// The smallest coins first. It consolidates small coins.
+    SmallestFirst,
 }
 
 /// The transaction that a [`TransactionRequest`] names.
@@ -63,16 +78,18 @@ impl TransactionRequest {
             kind,
             pays_fee: true,
             ttl: None,
+            coin_selection: CoinSelection::default(),
         }
     }
 
     /// Send `amount` of `token` to `to`. Change returns to this wallet.
     ///
     /// `amount` may span several coins. The wallet selects the coins up
-    /// front, largest first, and the remainder returns to it as a change
-    /// output. So a payment is bounded by the wallet's total balance in
-    /// `token`, not by its largest coin. A transfer of the whole balance to
-    /// this wallet's own address joins it into one coin.
+    /// front, in the order of [`Self::with_coin_selection`], and the remainder
+    /// returns to it as a change output. So a payment is bounded by the
+    /// wallet's total balance in `token`, not by its largest coin. A transfer
+    /// of the whole balance to this wallet's own address joins it into one
+    /// coin.
     ///
     /// Read `to` from a shielded address with
     /// [`parse_shielded_recipient`](crate::address::parse_shielded_recipient),
@@ -128,6 +145,7 @@ impl TransactionRequest {
             },
             pays_fee: false,
             ttl: None,
+            coin_selection: CoinSelection::default(),
         }
     }
 
@@ -222,6 +240,23 @@ impl TransactionRequest {
     /// [`WalletError::Transfer`](crate::WalletError::Transfer).
     pub fn with_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = Some(ttl);
+        self
+    }
+
+    /// Draw the coins and UTXOs of the transfer in the order of `selection`.
+    ///
+    /// [`CoinSelection::LargestFirst`], the default, spends the fewest inputs.
+    /// Each shielded input adds a proof and a fee.
+    /// [`CoinSelection::SmallestFirst`] spends the small coins that the
+    /// default never spends. Nothing caps how many inputs it draws, so use it
+    /// for a deliberate consolidation, not for an ordinary payment.
+    ///
+    /// The order applies to the coins of a shielded transfer and of a swap
+    /// half, and to the UTXOs of an unshielded transfer. Two draws do not read
+    /// it: a Dust registration picks its tNIGHT UTXO by the Dust that the UTXO
+    /// can generate, and the fee draws on the wallet's Dust.
+    pub fn with_coin_selection(mut self, selection: CoinSelection) -> Self {
+        self.coin_selection = selection;
         self
     }
 }

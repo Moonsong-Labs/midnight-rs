@@ -43,13 +43,13 @@ pub use coin::{
 };
 pub use error::WalletError;
 pub use hash::{BlockHash, ExtrinsicHash};
-pub use midnight_helpers::{CoinSelectionStrategy, HashOutput};
+pub use midnight_helpers::HashOutput;
 pub use network::{InvalidNetworkName, Network, NetworkName};
 /// The chain's 32-byte hash, under the names [`BlockHash`] and [`ExtrinsicHash`].
 ///
 /// `Display` abbreviates it to `0x1234…cdef`. Format it with `{:x}`, or with
 /// `{:#x}` for a `0x` prefix, to get the whole digest.
 pub use primitive_types::H256;
-pub use request::TransactionRequest;
+pub use request::{CoinSelection, TransactionRequest};
 pub use stage::{FilledTx, FundedTx, ProvenTx, TxEnvelope};
 pub use wallet::MidnightWallet;
