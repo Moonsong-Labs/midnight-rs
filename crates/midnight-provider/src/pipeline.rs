@@ -12,6 +12,7 @@ use midnight_helpers::{
 use midnight_types::build;
 use midnight_types::{FilledTx, MidnightWallet, TransactionRequest, TxEnvelope};
 
+use crate::provider::fee_less_refusal;
 use crate::{MidnightProvider, PendingTx, ProviderError};
 
 impl<W> MidnightProvider<W> {
@@ -82,13 +83,16 @@ impl<W: MidnightWallet> MidnightProvider<W> {
     ///
     /// # Errors
     ///
-    /// The errors of [`Self::fill`] and of [`Self::send_tx_envelope`]. A
-    /// request that pays no fee fills, and its send then fails with
-    /// [`ProviderError::Transaction`].
+    /// [`ProviderError::Transaction`] for a request that pays no fee, before
+    /// the fill. The errors of [`Self::fill`] and of
+    /// [`Self::send_tx_envelope`].
     pub async fn send_transaction(
         &self,
         request: TransactionRequest,
     ) -> Result<PendingTx, ProviderError> {
+        if !build::pays_fee(&request) {
+            return Err(fee_less_refusal());
+        }
         // Boxed; see the frame-size note on `Self::fund_prove_sign`.
         Box::pin(async move {
             let tx = self.fill_inner(request).await?;

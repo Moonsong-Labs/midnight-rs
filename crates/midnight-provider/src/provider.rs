@@ -264,13 +264,7 @@ impl<W> MidnightProvider<W> {
     /// [`SubmitError::NotSubmitted`](crate::SubmitError::NotSubmitted) when
     /// the client cannot make the extrinsic.
     pub async fn prepare(&self, tx: TxEnvelope) -> Result<submit::PreparedTx, ProviderError> {
-        let (bytes, reservation) = build::into_parts(tx).map_err(|_fee_less| {
-            ProviderError::Transaction(
-                "the transaction pays no fee, so the node refuses it; hand its bytes \
-                 (`TxEnvelope::into_bytes`) to the party that pays its fee"
-                    .into(),
-            )
-        })?;
+        let (bytes, reservation) = build::into_parts(tx).map_err(|_fee_less| fee_less_refusal())?;
         self.prepare_parts(bytes, reservation).await
     }
 
@@ -407,6 +401,14 @@ impl<W: Send + Sync> Provider for MidnightProvider<W> {
     ) -> Result<Option<String>, ProviderError> {
         self.get_state_from_node(address, at).await
     }
+}
+
+pub(crate) fn fee_less_refusal() -> ProviderError {
+    ProviderError::Transaction(
+        "the transaction pays no fee, so the node refuses it; hand the bytes of its fill \
+         (`TxEnvelope::into_bytes`) to the party that pays its fee"
+            .into(),
+    )
 }
 
 /// The JSON-RPC error code of every `midnight_contractState` refusal (the

@@ -16,7 +16,7 @@ use midnight_helpers::{
 };
 use midnight_provider::{
     HashOutput, MidnightProvider, MidnightWallet, Nullifier, ProviderError, ShieldedRecipient,
-    TxEnvelope, WalletError,
+    ShieldedTokenType, TransactionRequest, TxEnvelope, WalletError,
 };
 use midnight_types::build::{self, Funded, Reservation, ReservedInput, SpentInputs};
 use midnight_types::chain_pin::ChainView;
@@ -114,4 +114,22 @@ async fn a_send_refuses_a_fee_less_transaction_and_hands_its_inputs_back() {
 
     assert!(matches!(err, ProviderError::Transaction(_)), "{err:?}");
     assert_eq!(*released.lock().unwrap(), vec![nullifier]);
+}
+
+/// A send of a request that pays no fee fails before its fill, so it makes no
+/// proof. A send that filled first would query the node for the fill and fail
+/// with `ProviderError::Rpc`.
+#[tokio::test]
+async fn a_send_refuses_a_fee_less_request_before_its_fill() {
+    let provider = MidnightProvider::new("not a node url").with_wallet(StubWallet);
+    let token = ShieldedTokenType(HashOutput([0; 32]));
+
+    let Err(err) = provider
+        .send_transaction(TransactionRequest::shielded_swap(token, 1, token, 1))
+        .await
+    else {
+        panic!("a send of a fee-less request must fail");
+    };
+
+    assert!(matches!(err, ProviderError::Transaction(_)), "{err:?}");
 }

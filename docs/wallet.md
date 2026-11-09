@@ -434,7 +434,7 @@ let pending = provider.send_tx_envelope(envelope).await?;
 
 `fill` reserves the spent inputs just like `send_transaction`. `send_tx_envelope` hands them back when the node never gets the transaction or rejects it, and a drop of the envelope hands them back at once. `TxEnvelope::into_bytes` gives the bytes for another party and keeps the inputs reserved until a sync sees the chain spend them or their TTL ends (see [Pending reservations](#pending-reservations)).
 
-A request made `without_fee`, and a swap half, give a transaction that pays no fee. `send_tx_envelope` and `prepare` refuse it with `ProviderError::Transaction`, because the node refuses it. Hand its bytes to the party that pays its fee with `TransactionRequest::sponsor`.
+A request made `without_fee`, and a swap half, give a transaction that pays no fee. `send_tx_envelope` and `prepare` refuse it with `ProviderError::Transaction`, because the node refuses it. `send_transaction` refuses such a request with the same error before its fill, so it reserves no input and makes no proof. Hand its bytes to the party that pays its fee with `TransactionRequest::sponsor`.
 
 ## Submission and waiting
 
