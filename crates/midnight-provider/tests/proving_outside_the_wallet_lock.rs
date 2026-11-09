@@ -1,5 +1,5 @@
-//! A transfer build selects and reserves under the wallet, then proves without
-//! it.
+//! A wallet funds a transfer, selecting and reserving under its lock, and the
+//! provider then proves without it.
 //!
 //! The properties below follow, and each has a test here.
 //!
@@ -12,7 +12,8 @@
 //!
 //! A reservation outlives the decision that made it, so a build whose proof
 //! fails has to hand its inputs back. Otherwise they stay unusable until their
-//! TTL elapses and the wallet looks poorer than it is.
+//! TTL elapses and the wallet looks poorer than it is. The same holds for a
+//! funded transaction that its caller drops.
 //!
 //! The spendable Dust readings leave out reserved Dust, and the total counts
 //! it. A new build cannot draw on reserved Dust, so a spendable reading that
@@ -35,20 +36,22 @@ use midnight_helpers::{
 use midnight_provider::{
     MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, UnshieldedRecipient,
 };
-use midnight_wallet::{SpentInputs, TransferKind, TransferRequest, Wallet, WalletError};
-use midnight_wallet_facade::WalletBuilds;
+use midnight_types::build::{self, Fill, TransferKind, TransferRequest};
+use midnight_wallet::{FundedTx, MidnightWallet, Wallet, WalletError};
 use tokio::sync::Notify;
 
 fn night() -> ShieldedTokenType {
     ShieldedTokenType(midnight_provider::HashOutput([0u8; 32]))
 }
 
-/// Prepare a tNIGHT self-transfer of 1 STAR that pays its fee in Dust, through
-/// the wallet's own builds, and return what it reserved. Nothing proves it.
-async fn prepare_night_self_transfer(
+/// Fund a tNIGHT self-transfer of 1 STAR that pays its fee in Dust, through
+/// the wallet alone, on a fill from `source`. Nothing proves it, and a drop of
+/// the result hands what it reserved back.
+async fn fund_night_self_transfer(
     wallet: Arc<Wallet>,
+    source: Arc<MidnightProvider>,
     recipient: UnshieldedRecipient,
-) -> Result<SpentInputs, WalletError> {
+) -> Result<FundedTx, WalletError> {
     let request = TransferRequest::new(TransferKind::Unshielded {
         token_type: NIGHT,
         amount: 1,
@@ -56,31 +59,22 @@ async fn prepare_night_self_transfer(
         pay_fees: true,
     });
     let prover: Arc<dyn ProofProvider<DefaultDB>> = Arc::new(LocalProofServer::default());
-    wallet
-        .prepare_transfer(request, prover)
-        .await
-        .map(|build| build.into_prepared().spent_inputs())
+    let context = source.chain_context().await.expect("the chain context");
+    let fill = Fill::Transfer {
+        request,
+        context,
+        prover,
+    };
+    wallet.fund_transaction(&*source, build::filled(fill)).await
 }
 
-/// The readings of a [`DustBalance`](midnight_wallet::DustBalance), to compare
-/// two of them.
-fn dust_readings(dust: &midnight_wallet::DustBalance) -> (usize, u128, u128, bool, usize) {
-    // No `..`: a new field must cause a compile error here, so the comparison
-    // cannot miss it.
-    let midnight_wallet::DustBalance {
-        spendable_utxos,
-        balance_speck,
-        spendable_speck,
-        night_generates_dust,
-        unregistered_night_utxos,
-    } = dust;
-    (
-        *spendable_utxos,
-        *balance_speck,
-        *spendable_speck,
-        *night_generates_dust,
-        *unregistered_night_utxos,
-    )
+/// The number of the wallet's tNIGHT UTXOs that a reservation holds.
+fn reserved_night(balance: &midnight_wallet::WalletBalance) -> usize {
+    balance
+        .unshielded
+        .iter()
+        .filter(|u| u.token_type == NIGHT && !u.spendable)
+        .count()
 }
 
 /// A prover that always fails. `ProofProvider::prove` returns a bare
@@ -152,53 +146,45 @@ async fn the_wallet_is_readable_while_a_build_proves() {
     // holding the wallet.
     prover.started.notified().await;
 
-    let balance = tokio::time::timeout(Duration::from_secs(10), provider.balance())
+    let balance = tokio::time::timeout(Duration::from_secs(10), provider.wallet().balance())
         .await
-        .expect("reading the wallet must not wait for a build that is only proving")
-        .expect("wallet attached");
+        .expect("reading the wallet must not wait for a build that is only proving");
     eprintln!(
         "read the wallet mid-proof: {} spendable dust UTXO(s)",
         balance.dust.spendable_utxos
     );
 
     prover.release.notify_one();
-    let result = building
+    // The build still had to reserve before it proved. The drop of its
+    // envelope hands back what it took.
+    building
         .await
         .expect("build task")
         .expect("the build must finish once the prover is released");
-
-    // The build still had to reserve before it proved, so release what it took.
-    provider
-        .release(&result.spent)
-        .await
-        .expect("release the reservation");
 }
 
-/// The property the single hold exists for: two preparations running at once
+/// The property the single hold exists for: two fundings running at once
 /// never draw the same input.
 ///
 /// Selection reads the reserved set and the reservation writes it. Split them
-/// across two acquisitions of the wallet and both preparations select before
+/// across two acquisitions of the wallet and both fundings select before
 /// either reserves, so both pick the same largest Dust UTXO and the same
 /// tNIGHT UTXO. Nothing local fails: the loser is rejected on chain.
 ///
-/// This drives the [`Wallet`] directly rather than the provider. Every
-/// provider build path resyncs first, and the wallet's sync mutex serializes
-/// those resyncs. That staggers two builds and hides the race the hold exists
-/// to stop.
-///
-/// Neither preparation proves or submits. Both release what they reserved.
+/// Each funding takes one tNIGHT UTXO, so the two hold two tNIGHT UTXOs only
+/// when they differ. Neither funding proves or submits. A drop of each hands
+/// back what it reserved.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_preparations_at_once_draw_different_inputs() {
+async fn two_fundings_at_once_draw_different_inputs() {
     let Some((node, indexer)) = common::devnet_urls() else {
         return;
     };
-    let source = MidnightProvider::new(&node);
+    let source = Arc::new(MidnightProvider::new(&node));
     let wallet = common::synced_wallet(&source, &indexer, common::DEV_WALLET_SEED).await;
     let recipient = wallet.unshielded_recipient();
 
-    // Each preparation spends one tNIGHT UTXO and draws Dust for its fee, so
-    // the wallet needs two of each for the two to be able to differ at all.
+    // Each funding spends one tNIGHT UTXO and draws Dust for its fee, so the
+    // wallet needs two of each for the two to be able to differ at all.
     let balance = wallet.balance().await;
     let spendable_dust = balance.dust.spendable_utxos;
     let night = balance
@@ -217,40 +203,43 @@ async fn two_preparations_at_once_draw_different_inputs() {
     // Real tasks, not `join!`: two futures polled by one task interleave only
     // at await points the runtime chooses, and would pass here for the wrong
     // reason.
-    let first = tokio::spawn(prepare_night_self_transfer(wallet.clone(), recipient));
-    let second = tokio::spawn(prepare_night_self_transfer(wallet.clone(), recipient));
-    let first = first.await.expect("first task").expect("first preparation");
-    let second = second
-        .await
-        .expect("second task")
-        .expect("second preparation");
+    let first = tokio::spawn(fund_night_self_transfer(
+        wallet.clone(),
+        source.clone(),
+        recipient,
+    ));
+    let second = tokio::spawn(fund_night_self_transfer(
+        wallet.clone(),
+        source.clone(),
+        recipient,
+    ));
+    let first = first.await.expect("first task").expect("first funding");
+    let second = second.await.expect("second task").expect("second funding");
 
-    let (first_dust, second_dust) = (&first.dust, &second.dust);
-    assert!(
-        !first_dust.iter().any(|n| second_dust.contains(n)),
-        "both preparations drew the same Dust: {first_dust:?} and {second_dust:?}"
+    let held = wallet.balance().await;
+    drop((first, second));
+    let released = wallet.balance().await;
+
+    assert_eq!(
+        reserved_night(&held),
+        2,
+        "both fundings spent the same tNIGHT UTXO"
     );
     assert!(
-        !first
-            .unshielded
-            .iter()
-            .any(|k| second.unshielded.contains(k)),
-        "both preparations spent the same tNIGHT UTXO: {:?} and {:?}",
-        first.unshielded,
-        second.unshielded
+        released.dust.spendable_utxos >= held.dust.spendable_utxos + 2,
+        "both fundings drew the same Dust: {} spendable Dust UTXOs held, {} released",
+        held.dust.spendable_utxos,
+        released.dust.spendable_utxos
     );
-
-    wallet.release(&first).await;
-    wallet.release(&second).await;
 }
 
 /// A reservation takes its Dust UTXOs out of the spendable readings and leaves
-/// the total alone, and a release puts them back.
+/// the total alone, and the drop of the funded transaction puts them back.
 ///
-/// This drives the [`Wallet`] directly rather than the provider. A provider
-/// build resyncs first, and a resync can move the block time that the balance
-/// reads Dust at, so the readings would differ for a reason other than the
-/// reservation.
+/// The readings compare the funded state with the released one. A funding
+/// syncs first, and a sync can move the block time that the balance reads
+/// Dust at, so a reading from before the funding could differ for a reason
+/// other than the reservation.
 ///
 /// Nothing proves or submits.
 #[tokio::test]
@@ -258,38 +247,35 @@ async fn the_spendable_dust_leaves_out_a_reservation() {
     let Some((node, indexer)) = common::devnet_urls() else {
         return;
     };
-    let source = MidnightProvider::new(&node);
+    let source = Arc::new(MidnightProvider::new(&node));
     let wallet = common::synced_wallet(&source, &indexer, common::DEV_WALLET_SEED).await;
     let recipient = wallet.unshielded_recipient();
     let wallet = Arc::new(wallet);
 
-    let before = wallet.balance().await.dust;
-    let spent = prepare_night_self_transfer(wallet.clone(), recipient)
+    let funded = fund_night_self_transfer(wallet.clone(), source, recipient)
         .await
         .expect("the dev seed pays a tNIGHT self-transfer's fee in Dust");
     let reserved = wallet.balance().await.dust;
-    wallet.release(&spent).await;
+    drop(funded);
     let released = wallet.balance().await.dust;
 
-    assert_eq!(
-        reserved.spendable_utxos + spent.dust.len(),
-        before.spendable_utxos,
-        "each Dust UTXO the build reserved must leave the spendable count"
+    assert!(
+        reserved.spendable_utxos < released.spendable_utxos,
+        "each Dust UTXO the funding reserved must leave the spendable count"
     );
     assert!(
-        reserved.spendable_speck < before.spendable_speck,
-        "the Dust the build reserved must leave the spendable SPECK: {} before, {} reserved",
-        before.spendable_speck,
-        reserved.spendable_speck
+        reserved.spendable_speck < released.spendable_speck,
+        "the Dust the funding reserved must leave the spendable SPECK: {} reserved, {} released",
+        reserved.spendable_speck,
+        released.spendable_speck
     );
     assert_eq!(
-        reserved.balance_speck, before.balance_speck,
+        reserved.balance_speck, released.balance_speck,
         "the total must count reserved Dust"
     );
     assert_eq!(
-        dust_readings(&released),
-        dust_readings(&before),
-        "a release must hand the reserved Dust back"
+        released.spendable_speck, released.balance_speck,
+        "the drop must hand every reserved Dust UTXO back"
     );
 }
 
@@ -305,11 +291,7 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
     let recipient = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
 
-    let spendable_before = provider
-        .spendable_shielded_coins()
-        .await
-        .expect("wallet attached")
-        .len();
+    let spendable_before = provider.wallet().spendable_shielded_coins().await.len();
     if spendable_before == 0 {
         return common::skip("a spendable shielded coin");
     }
@@ -337,11 +319,7 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
 
     // `spendable_shielded_coins` filters out coins a pending build reserved, so
     // a leaked reservation shows up here as a coin that has gone missing.
-    let spendable_after = broken
-        .spendable_shielded_coins()
-        .await
-        .expect("wallet attached")
-        .len();
+    let spendable_after = broken.wallet().spendable_shielded_coins().await.len();
 
     assert_eq!(
         spendable_after, spendable_before,

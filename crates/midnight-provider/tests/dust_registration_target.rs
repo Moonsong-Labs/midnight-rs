@@ -12,7 +12,7 @@ mod common;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use midnight_provider::{DustlessBuilder, MidnightProvider, ProviderError};
-use midnight_wallet::{DustBalance, NIGHT, Network, Seed, WalletError, parse_dust_address};
+use midnight_wallet::{DustBalance, NIGHT, Network, Seed, Wallet, WalletError, parse_dust_address};
 
 /// Enough tNIGHT that the coin carries real generationless dust.
 const SEND: u128 = 5_000_000_000_000;
@@ -31,14 +31,14 @@ fn unused_seeds() -> (String, String) {
 /// balance. Finalized on chain is not yet visible through the indexer, which
 /// the wallets sync from.
 async fn wait_for_dust(
-    provider: &MidnightProvider,
+    provider: &MidnightProvider<Wallet>,
     what: &str,
     done: impl Fn(&DustBalance) -> bool,
 ) -> DustBalance {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        provider.resync_wallet().await.expect("resync");
-        let dust = provider.balance().await.expect("balance").dust;
+        provider.wallet().sync(provider).await.expect("resync");
+        let dust = provider.wallet().balance().await.dust;
         if done(&dust) {
             return dust;
         }

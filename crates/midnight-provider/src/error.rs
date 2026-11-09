@@ -6,18 +6,8 @@ pub enum ProviderError {
     #[error("RPC error: {0}")]
     Rpc(String),
 
-    /// An operation requiring a synced wallet was invoked on a provider
-    /// without one. Sync a wallet
-    /// (`Wallet::from_seed(seed).sync(&provider, indexer_url)` in
-    /// `midnight-wallet`) and attach it with
-    /// `MidnightProvider::with_wallet`.
-    #[error(
-        "provider has no wallet; sync one (`Wallet::from_seed(seed).sync(&provider, indexer_url)`) \
-         and attach it with .with_wallet(wallet)"
-    )]
-    NoWallet,
-
-    /// An error surfaced from the wallet (sync/resync/transaction building).
+    /// An error surfaced from the wallet (its sync, its funding or its
+    /// signing) or from the proof.
     /// Match the inner [`WalletError`], whose `Display` and `source()` this
     /// variant forwards.
     #[error(transparent)]

@@ -9,10 +9,13 @@
 //! The futures here are built and dropped, never polled, so this needs no
 //! devnet.
 
+mod common;
+
 mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
+use common::UnreachedWallet;
 use midnight_contract::interpreter::Program;
 use midnight_contract::runtime::NoWitnesses;
 use midnight_contract::{Contract, ShieldedInputs};
@@ -27,8 +30,10 @@ const MAX_FUTURE_BYTES: usize = 4096;
 
 const ADDR: &str = "0200aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
 
-fn provider() -> &'static MidnightProvider {
-    Box::leak(Box::new(MidnightProvider::new("ws://test")))
+fn provider() -> &'static MidnightProvider<UnreachedWallet> {
+    Box::leak(Box::new(
+        MidnightProvider::new("ws://test").with_wallet(UnreachedWallet),
+    ))
 }
 
 #[track_caller]
@@ -93,7 +98,7 @@ fn contract_entry_points_return_small_futures() {
 #[test]
 fn the_base_contract_call_methods_return_small_futures() {
     let p = provider();
-    let contract: Contract<&MidnightProvider> =
+    let contract: Contract<&MidnightProvider<UnreachedWallet>> =
         Contract::at(p, ADDR).with_zk_config("compiled").build();
 
     let helpers = counter::Ledger::__helpers();
@@ -158,7 +163,6 @@ fn provider_entry_points_return_small_futures() {
     let p = provider();
     let recipient = Seed::from_bytes(&[1; 32]).unwrap();
 
-    assert_small("MidnightProvider::resync_wallet", p.resync_wallet());
     assert_small(
         "MidnightProvider::balance_transaction",
         p.balance_transaction(&[]),

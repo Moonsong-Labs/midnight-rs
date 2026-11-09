@@ -1,0 +1,280 @@
+//! The ledger-typed toolkit that the SDK crates share: transaction assembly,
+//! input selection, the fee loop, the reservation of a funded transaction,
+//! and the conversions between the stages of a transaction.
+//!
+//! These items name the ledger's own types. They are outside the semver
+//! promise of this crate.
+
+use std::sync::Arc;
+
+use midnight_helpers::midnight_serialize::tagged_serialize;
+use midnight_helpers::{BuildContext, DefaultDB, ProofProvider, StandardTransactionInfo};
+
+pub use crate::builder::{
+    BuildInputs, Cover, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external,
+    chain_time, execution_context, prepare_no_validate,
+};
+use crate::stage::FinalizedTx;
+pub use crate::sync::TrackedUtxo;
+pub use crate::transfer::{
+    ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
+};
+use crate::{CoinPublicKey, FilledTx, FundedTx, MidnightWallet, ProvenTx, TxEnvelope, WalletError};
+
+/// What a fill asks the wallet to fund.
+pub enum Fill {
+    /// A transfer, which the wallet selects and assembles on `context` and
+    /// proves with `prover`.
+    Transfer {
+        request: TransferRequest,
+        context: Arc<BuildContext>,
+        prover: Arc<dyn ProofProvider<DefaultDB>>,
+    },
+    /// A transaction that the filler assembled, which the wallet funds in its
+    /// own intents. It asks for mock fee proofs.
+    Assembled(Box<StandardTransactionInfo<DefaultDB, BuildContext>>),
+    /// A proven transaction, which the wallet covers in a part of its own as
+    /// [`balance_external`] does. `tx_info` prices and proves the part, and
+    /// carries no intents.
+    Sealed {
+        tx_info: Box<StandardTransactionInfo<DefaultDB, BuildContext>>,
+        external: Box<FinalizedTx>,
+        cover: Cover,
+    },
+}
+
+/// What a wallet funded.
+pub enum Funded {
+    /// An unproven transaction, or the unproven part that covers a sealed
+    /// transaction.
+    Prepared(Box<PreparedTransfer>),
+    /// A sealed transaction that the wallet had nothing to add to.
+    Unchanged(Box<FinalizedTx>),
+}
+
+/// Wrap `fill` as the stage that a wallet funds.
+pub fn filled(fill: Fill) -> FilledTx {
+    FilledTx(fill)
+}
+
+/// What `tx` asks the wallet to fund.
+pub fn fill_of(tx: FilledTx) -> Fill {
+    tx.0
+}
+
+/// Wrap what a wallet funded, with the reservation of what it spends.
+pub fn funded(funded: Funded, reservation: Reservation) -> FundedTx {
+    FundedTx {
+        funded,
+        reservation,
+    }
+}
+
+/// Prove `tx` with the prover that its fill chose, and seal it.
+///
+/// A proof that fails drops the reservation of `tx`, which hands its inputs
+/// back to the wallet.
+///
+/// # Errors
+///
+/// [`WalletError::Proving`] when the prover fails, and
+/// [`WalletError::Transfer`] when the proven part does not merge into the
+/// transaction that it covers.
+pub async fn prove(tx: FundedTx) -> Result<ProvenTx, WalletError> {
+    let FundedTx {
+        funded,
+        reservation,
+    } = tx;
+    let tx = match funded {
+        Funded::Prepared(prepared) => prepared.prove().await?,
+        Funded::Unchanged(tx) => *tx,
+    };
+    Ok(ProvenTx { tx, reservation })
+}
+
+/// What the wallet that funded `tx` reserved for it.
+pub fn spent_by(tx: &ProvenTx) -> &SpentInputs {
+    tx.reservation.spent()
+}
+
+/// Serialize `tx` for the node. Its reservation moves to the envelope.
+///
+/// # Errors
+///
+/// [`WalletError::Transfer`] when `tx` does not serialize. The reservation
+/// then drops, which hands the inputs back.
+pub fn envelope(tx: ProvenTx) -> Result<TxEnvelope, WalletError> {
+    let ProvenTx { tx, reservation } = tx;
+    let mut bytes = Vec::new();
+    tagged_serialize(&tx, &mut bytes)
+        .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
+    Ok(TxEnvelope { bytes, reservation })
+}
+
+/// The tagged bytes of `tx`, and its reservation.
+pub fn into_parts(tx: TxEnvelope) -> (Vec<u8>, Reservation) {
+    (tx.bytes, tx.reservation)
+}
+
+/// Hands the inputs of a reservation back to its wallet.
+type Release = Box<dyn FnOnce(&SpentInputs) + Send + Sync>;
+
+/// What a wallet reserved for one transaction, and how to hand it back.
+///
+/// The wallet makes it when it funds a transaction, and the stages of the
+/// transaction carry it. A drop hands the inputs back, so an unsent
+/// transaction cannot strand them. Once the node can hold the transaction,
+/// [`Self::keep_on_drop`] stops that, and only [`Self::release`] hands them
+/// back.
+pub struct Reservation {
+    spent: SpentInputs,
+    release: Option<Release>,
+    release_on_drop: bool,
+}
+
+impl Reservation {
+    /// A reservation of `spent`, which `release` hands back.
+    pub fn new(
+        spent: SpentInputs,
+        release: impl FnOnce(&SpentInputs) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            spent,
+            release: Some(Box::new(release)),
+            release_on_drop: true,
+        }
+    }
+
+    /// What this reservation holds.
+    pub fn spent(&self) -> &SpentInputs {
+        &self.spent
+    }
+
+    /// Keep the inputs reserved when this drops. [`Self::release`] still
+    /// hands them back.
+    pub fn keep_on_drop(mut self) -> Self {
+        self.release_on_drop = false;
+        self
+    }
+
+    /// Hand the inputs back now, because the transaction can no longer land.
+    pub fn release(mut self) {
+        self.hand_back();
+    }
+
+    fn hand_back(&mut self) {
+        if let Some(release) = self.release.take()
+            && !self.spent.is_empty()
+        {
+            release(&self.spent);
+        }
+    }
+}
+
+/// Nothing reserved, for a transaction that no wallet of this process funded.
+impl Default for Reservation {
+    fn default() -> Self {
+        Self {
+            spent: SpentInputs::default(),
+            release: None,
+            release_on_drop: true,
+        }
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if self.release_on_drop {
+            self.hand_back();
+        }
+    }
+}
+
+impl std::fmt::Debug for Reservation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reservation")
+            .field("spent", &self.spent)
+            .field("release_on_drop", &self.release_on_drop)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The wallet slot of a provider: `()` when it holds no wallet, or a
+/// [`MidnightWallet`].
+///
+/// The local run of a circuit reads the wallet's key only when the circuit
+/// calls `ownPublicKey()`, so it also runs on a provider with no wallet.
+// Defined beside `MidnightWallet`: in a crate where that trait is foreign,
+// rustc refuses the impl for `()` next to the blanket impl (E0119).
+pub trait MaybeWallet: Send + Sync {
+    /// The coin public key that `ownPublicKey()` returns, or `None` when there
+    /// is no wallet.
+    fn coin_public_key(&self) -> Option<CoinPublicKey>;
+}
+
+impl MaybeWallet for () {
+    fn coin_public_key(&self) -> Option<CoinPublicKey> {
+        None
+    }
+}
+
+impl<W: MidnightWallet> MaybeWallet for W {
+    fn coin_public_key(&self) -> Option<CoinPublicKey> {
+        Some(self.shielded_recipient().coin_public_key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::{HashOutput, Nullifier};
+
+    fn spending(byte: u8) -> SpentInputs {
+        SpentInputs {
+            shielded: vec![ReservedInput {
+                input: Nullifier(HashOutput([byte; 32])),
+                reserved_at: midnight_helpers::Timestamp::from_secs(1),
+            }],
+            ..SpentInputs::default()
+        }
+    }
+
+    /// A reservation of `spent` that records what it hands back.
+    fn recorded(spent: SpentInputs) -> (Reservation, Arc<Mutex<Vec<Nullifier>>>) {
+        let released = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&released);
+        let reservation = Reservation::new(spent, move |spent| {
+            record
+                .lock()
+                .unwrap()
+                .extend(spent.shielded.iter().map(|reserved| reserved.input));
+        });
+        (reservation, released)
+    }
+
+    /// An unsent stage hands its inputs back only through the drop of the
+    /// reservation it carries. A reservation that dropped silently would
+    /// strand the inputs of every abandoned transaction until their TTL.
+    #[test]
+    fn a_dropped_reservation_hands_its_inputs_back() {
+        let (reservation, released) = recorded(spending(7));
+        drop(reservation);
+        assert_eq!(*released.lock().unwrap(), [Nullifier(HashOutput([7; 32]))]);
+    }
+
+    /// A sent transaction can still land, so its handle keeps the inputs on a
+    /// drop and hands them back only on a definitive rejection. A release on
+    /// that drop would let a later transaction spend the same inputs.
+    #[test]
+    fn a_reservation_kept_on_drop_hands_back_only_on_release() {
+        let (reservation, released) = recorded(spending(7));
+        drop(reservation.keep_on_drop());
+        assert!(released.lock().unwrap().is_empty());
+
+        let (reservation, released) = recorded(spending(8));
+        reservation.keep_on_drop().release();
+        assert_eq!(*released.lock().unwrap(), [Nullifier(HashOutput([8; 32]))]);
+    }
+}

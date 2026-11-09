@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
         .sync(&provider, &indexer_url)
         .await?;
     let network = wallet.network().clone();
-    let provider = provider.with_wallet(wallet);
+    let provider = provider.with_wallet(&wallet);
     println!("   synced.\n");
 
     // 1. The recipient's coin public key (coin ownership) and encryption public
@@ -137,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
     {
         waited?;
     }
-    let balance = recipient_provider.balance().await?;
+    let balance = wallet.balance().await;
 
     let minted = balance.shielded.coins.iter().find(|c| is_minted(c));
     match minted {

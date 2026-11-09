@@ -102,9 +102,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Setup: two tokens to trade. X is A's genesis shielded token; Y is a fresh
     // token A mints to B (see `mint`). Not part of the swap.
-    let token_x = provider_a
+    let token_x = wallet_a
         .balance()
-        .await?
+        .await
         .shielded
         .coins
         .first()
@@ -119,8 +119,8 @@ async fn main() -> anyhow::Result<()> {
     println!("Setup: A holds token X, B holds token Y (minted).\n");
 
     // Snapshot both wallets so the final check proves both tokens actually moved.
-    let a_before = provider_a.balance().await?;
-    let b_before = provider_b.balance().await?;
+    let a_before = wallet_a.balance().await;
+    let b_before = wallet_b.balance().await;
     let (a_x0, a_y0) = (
         a_before.shielded_value(token_x),
         a_before.shielded_value(token_y),
@@ -162,8 +162,8 @@ async fn main() -> anyhow::Result<()> {
         b.shielded_value(token_x) != b_x0
     })
     .await?;
-    let a_after = provider_a.balance().await?;
-    let b_after = provider_b.balance().await?;
+    let a_after = wallet_a.balance().await;
+    let b_after = wallet_b.balance().await;
     let (a_x1, a_y1) = (
         a_after.shielded_value(token_x),
         a_after.shielded_value(token_y),

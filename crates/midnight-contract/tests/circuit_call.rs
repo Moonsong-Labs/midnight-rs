@@ -256,7 +256,7 @@ fn witness_context_threads_private_state() {
 /// A build-only call of a contract with witnesses needs a private-state store,
 /// as a submitted call does, and it checks for one before it queries the node.
 /// The provider's node URL is a closed port, so a check after the state read
-/// fails with a node error instead.
+/// fails with a node error instead. The wallet is never reached.
 #[tokio::test]
 async fn a_build_only_call_with_witnesses_needs_a_store_before_any_node_query() {
     use midnight_base_crypto::hash::HashOutput;
@@ -264,7 +264,7 @@ async fn a_build_only_call_with_witnesses_needs_a_store_before_any_node_query() 
     use midnight_contract::{Contract, ContractError, ShieldedInputs};
     use midnight_provider::MidnightProvider;
 
-    let provider = MidnightProvider::new("ws://127.0.0.1:1");
+    let provider = MidnightProvider::new("ws://127.0.0.1:1").with_wallet(common::UnreachedWallet);
     let contract = Contract::at(
         &provider,
         midnight_contract::ContractAddress(HashOutput([7; 32])),

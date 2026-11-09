@@ -16,7 +16,8 @@ use crate::WalletError;
 use crate::chain_pin::ChainPin;
 use crate::generation::Generation;
 use hex::FromHex;
-use midnight_types::{HashOutput, TrackedUtxo, UnshieldedTokenType};
+use midnight_types::build::TrackedUtxo;
+use midnight_types::{HashOutput, UnshieldedTokenType};
 
 const METADATA_FILE: &str = "metadata.json";
 const PENDING_FILE: &str = "pending.json";

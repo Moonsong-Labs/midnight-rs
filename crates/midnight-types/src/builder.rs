@@ -1,7 +1,7 @@
 //! A transfer build: select the inputs, balance the Dust fee, and prove.
 //!
 //! A wallet implementation selects inputs and assembles a [`PreparedTransfer`]
-//! with a [`TransferBuilder`]; proving it ([`PreparedTransfer::prove`]) needs
+//! with a [`TransferBuilder`]. Proving it ([`PreparedTransfer::prove`]) needs
 //! the build context alone.
 
 use std::cmp::Reverse;
@@ -27,10 +27,8 @@ use crate::hd::Seed;
 use crate::inputs::prepare_shielded_inputs;
 use crate::sync::TrackedUtxo;
 use crate::transfer::panic_message;
-use crate::{
-    DustPublicKey, Network, ReservedInput, ShieldedRecipient, SpentInputs, SpentUtxoKey,
-    TransferKind, TransferRequest, TransferResult, UnshieldedRecipient, WalletError,
-};
+use crate::transfer::{ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest};
+use crate::{DustPublicKey, Network, ShieldedRecipient, UnshieldedRecipient, WalletError};
 
 type UnprovenTx = midnight_helpers::UnprovenTransaction<DefaultDB>;
 type FinalizedTx = midnight_helpers::FinalizedTransaction<DefaultDB>;
@@ -163,62 +161,27 @@ impl PreparedTransfer {
             .collect()
     }
 
-    /// Prove the transaction and serialize it. The slowest step in a build,
-    /// and it touches no wallet.
+    /// Prove the transaction and seal it. The slowest step in a build, and it
+    /// touches no wallet.
     ///
     /// A build from [`balance_external`] proves its part and merges it into
-    /// the transaction that the part covers. The result then holds the merged
-    /// transaction and its fee, and its `spent` names only the inputs of this
-    /// build.
-    pub async fn prove(self) -> Result<TransferResult, WalletError> {
-        let spent = self.spent_inputs();
+    /// the transaction that the part covers, and returns the merged
+    /// transaction.
+    pub async fn prove(self) -> Result<FinalizedTx, WalletError> {
         let PreparedTransfer {
             mut tx_info,
             tx,
             external,
             ..
         } = self;
-
-        // Keep a handle to the ledger context so we can read `parameters`
-        // after proving to compute the fee. `Arc::clone` is cheap and the lock
-        // inside `with_ledger_state` is held only for the closure.
-        let context = tx_info.context.clone();
         let proven = prove_tx_no_validate(&mut tx_info, tx).await?;
-        let finalized = match external {
+        match external {
             Some(external) => external
                 .merge(&proven)
-                .map_err(transfer_err("merge the part"))?,
-            None => proven,
-        };
-
-        let mut bytes = Vec::new();
-        midnight_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
-            .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
-        let fee_speck = fee_speck(&context, &finalized)?;
-
-        Ok(TransferResult {
-            tx_bytes: bytes,
-            spent,
-            fee_speck,
-        })
+                .map_err(transfer_err("merge the part")),
+            None => Ok(proven),
+        }
     }
-}
-
-/// The Dust fee, in SPECK, that the chain charges for `tx`, against the
-/// ledger parameters in `context`. See [`TransferResult::fee_speck`].
-///
-/// # Errors
-///
-/// [`WalletError::Transfer`] when the ledger cannot price `tx`.
-pub fn fee_speck(context: &BuildContext, tx: &FinalizedTx) -> Result<u128, WalletError> {
-    // Mirrors the node's own estimation RPC: `enforce_time_to_dismiss =
-    // false`, i.e. report the deterministic SPECK cost without the
-    // chain-side mempool-eviction check. The chain charges the same number
-    // at inclusion; if the tx exceeds the eviction-time bound, that
-    // surfaces at submit, not here.
-    context
-        .with_ledger_state(|s| tx.fees(&s.parameters, false))
-        .map_err(transfer_err("fees"))
 }
 
 /// The nullifier of every Dust spend in `batches`, which is how a release
@@ -319,10 +282,10 @@ async fn prove_tx_no_validate(
 
 /// What a transfer build reads from the wallet that funds it.
 ///
-/// A build signs with the seed. A dust registration also reads the ledger
-/// parameters and the tNIGHT UTXOs to choose one from. Everything else a
-/// build needs is in its [`BuildContext`]. These readings are the whole of
-/// the wallet that a build depends on.
+/// A build signs with the seed. A dust registration also reads the tNIGHT
+/// UTXOs to choose one from. Everything else a build needs is in its
+/// [`BuildContext`], the ledger parameters included. These readings are the
+/// whole of the wallet that a build depends on.
 ///
 /// A dust registration names the Dust public key of the seed's default Dust
 /// path (`m/44'/2400'/0'/2/0`). A wallet that tracks its Dust under another
@@ -330,10 +293,6 @@ async fn prove_tx_no_validate(
 pub trait BuildInputs: Send + Sync {
     /// The seed the build signs and derives with.
     fn seed(&self) -> &Seed;
-
-    /// The ledger parameters a dust registration computes its fee allowance
-    /// from.
-    fn parameters(&self) -> &LedgerParameters;
 
     /// The unshielded UTXOs a dust registration picks its tNIGHT from.
     fn unshielded_utxos(&self) -> &[TrackedUtxo];
@@ -733,7 +692,7 @@ impl<'a> TransferBuilder<'a> {
             ));
         }
 
-        let dust_params = &self.state.parameters().dust;
+        let dust_params = self.context.with_ledger_state(|ls| ls.parameters.dust);
         let now = self.context.latest_block_context().tblock;
         let fallback_ctime = match utxo_ctime {
             Some(t) => Timestamp::from_secs(t),
@@ -910,7 +869,7 @@ fn intent_ttl(
 /// The longest TTL that the chain accepts for an intent built on `context`:
 /// the chain's `global_ttl` after the chain time of `context` (see
 /// [`chain_time`]).
-pub fn longest_ttl(context: &BuildContext) -> Timestamp {
+fn longest_ttl(context: &BuildContext) -> Timestamp {
     chain_time(&context.latest_block_context())
         + context.with_ledger_state(|ls| ls.parameters.global_ttl)
 }
@@ -1149,9 +1108,10 @@ pub enum Cover {
 /// The shielded inputs come from the funding view of `seed` in the context of
 /// `tx_info`. The reservation of the part, and its fee intent, take the
 /// earliest TTL of the intents of `external`, kept between the chain time of
-/// the build (see [`chain_time`]) and [`longest_ttl`]. So what the part
-/// reserves expires when the merged transaction can no longer land. When
-/// `external` has no intent, they get [`longest_ttl`].
+/// the build (see [`chain_time`]) and the chain's `global_ttl` after it. So
+/// what the part reserves expires when the merged transaction can no longer
+/// land. When `external` has no intent, they get `global_ttl` after the chain
+/// time.
 ///
 /// `None` when the part has nothing to add: no shielded deficit to cover, no
 /// pin, and no Dust to draw. An intent with no spends is one the ledger

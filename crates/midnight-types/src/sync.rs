@@ -2,7 +2,8 @@
 
 use midnight_helpers::HashOutput;
 
-use crate::{NIGHT, SpentUtxoKey, UnshieldedTokenType};
+use crate::transfer::SpentUtxoKey;
+use crate::{NIGHT, UnshieldedTokenType};
 
 /// A tracked unshielded UTXO from the indexer.
 #[derive(Debug, Clone)]

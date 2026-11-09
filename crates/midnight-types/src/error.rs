@@ -101,8 +101,9 @@ pub enum WalletError {
 
     /// The wallets that fund the fee hold too little spendable Dust.
     ///
-    /// A build through `MidnightProvider` resyncs the wallet first, so a later
-    /// build reads the Dust that the wallet has gained since. The wallet's
+    /// [`MidnightWallet::fund_transaction`](crate::MidnightWallet::fund_transaction)
+    /// resyncs the wallet first, so a later build reads the Dust that the
+    /// wallet has gained since. The wallet's
     /// [`DustBalance`](crate::DustBalance) tells which next step applies: see
     /// [Dust shortfalls] in `docs/dust-and-fees.md`.
     ///
@@ -133,10 +134,10 @@ pub enum WalletError {
     /// transaction to finalize, then build again. Otherwise the wallet must
     /// receive more of the token.
     ///
-    /// A [`Cover`](crate::Cover) spends each coin at one segment, and it gives
-    /// the coins to the segments in turn. When a transaction lacks the token
-    /// at more than one segment, the cover can fail with `available` at or
-    /// above `required`.
+    /// A wallet that covers the shortfalls of a proven transaction spends each
+    /// coin at one segment, and it gives the coins to the segments in turn.
+    /// When a transaction lacks the token at more than one segment, the cover
+    /// can fail with `available` at or above `required`.
     #[error("insufficient shielded token {token_type}: need {required}, {available} spendable")]
     InsufficientShielded {
         /// The token the transfer spends.

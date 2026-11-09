@@ -9,7 +9,6 @@ rust-version.workspace = true
 async-trait = { workspace = true }
 midnight-indexer-client = { workspace = true }
 midnight-types = { workspace = true }
-midnight-wallet-facade = { workspace = true }
 midnight-helpers = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }

@@ -7,15 +7,12 @@
 //!   dust so concurrent in-process builds don't double-select), submits the
 //!   proven transaction bytes to the node, and returns a [`PendingTx`] so the
 //!   caller chooses how to wait (`wait_best` / `wait_finalized`).
-//! - `.build().await?`: the escape hatch. Returns the [`TransferResult`]
-//!   without submitting. Useful when the caller wants to inspect `tx_bytes`,
-//!   or read [`TransferResult::fee_speck`] to show the user the
-//!   deterministic Dust fee before they confirm. The inputs stay reserved.
-//!   Submit the result with
+//! - `.build().await?`: the escape hatch. Returns the signed [`TxEnvelope`]
+//!   without submitting. The inputs stay reserved. Submit the envelope with
 //!   [`MidnightProvider::submit_reserved`], which hands them back when the
-//!   node never gets the transaction or rejects it. Bytes that never reach
-//!   the chain keep them until [`MidnightProvider::release`] gets
-//!   `result.spent`, or until their TTL passes.
+//!   node never gets the transaction or rejects it. A drop of the envelope
+//!   hands them back too. Its bytes ([`TxEnvelope::into_bytes`]) keep them
+//!   until a sync sees the chain spend them, or until their TTL passes.
 //!
 //! Constructors are sync methods on [`MidnightProvider`]: `transfer_unshielded`,
 //! `transfer_shielded`, `register_dust`. They borrow the provider and capture
@@ -27,7 +24,7 @@
 //! #     MidnightProvider, NIGHT, ShieldedRecipient, ShieldedTokenType, UnshieldedRecipient,
 //! # };
 //! # async fn f(
-//! #     provider: MidnightProvider,
+//! #     provider: MidnightProvider<midnight_wallet::Wallet>,
 //! #     unshielded: UnshieldedRecipient,
 //! #     shielded: ShieldedRecipient,
 //! #     token: ShieldedTokenType,
@@ -40,10 +37,9 @@
 //!     .await?;
 //! pending.wait_finalized().await?;
 //!
-//! // Build only: read the fee, then submit with the reservation.
-//! let result = provider.transfer_shielded(token, 1, shielded).build().await?;
-//! println!("fee: {} SPECK", result.fee_speck);
-//! provider.submit_reserved(result).await?.wait_finalized().await?;
+//! // Build only, then submit with the reservation.
+//! let envelope = provider.transfer_shielded(token, 1, shielded).build().await?;
+//! provider.submit_reserved(envelope).await?.wait_finalized().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -51,9 +47,10 @@
 use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
+use midnight_types::build::{TransferKind, TransferRequest};
 use midnight_types::{
-    DustPublicKey, ShieldedRecipient, ShieldedTokenType, TransferKind, TransferRequest,
-    TransferResult, UnshieldedRecipient, UnshieldedTokenType,
+    DustPublicKey, MidnightWallet, ShieldedRecipient, ShieldedTokenType, TxEnvelope,
+    UnshieldedRecipient, UnshieldedTokenType,
 };
 
 use crate::{MidnightProvider, PendingTx, ProviderError};
@@ -62,17 +59,17 @@ use crate::{MidnightProvider, PendingTx, ProviderError};
 /// for the `.send()` vs `.build()` distinction.
 #[derive(Debug)]
 #[must_use = "does nothing until sent or built"]
-pub struct UnshieldedTransfer<'a> {
-    provider: &'a MidnightProvider,
+pub struct UnshieldedTransfer<'a, W> {
+    provider: &'a MidnightProvider<W>,
     token_type: UnshieldedTokenType,
     amount: u128,
     recipient: UnshieldedRecipient,
     ttl: Option<std::time::Duration>,
 }
 
-impl<'a> UnshieldedTransfer<'a> {
+impl<'a, W: MidnightWallet> UnshieldedTransfer<'a, W> {
     pub(crate) fn new(
-        provider: &'a MidnightProvider,
+        provider: &'a MidnightProvider<W>,
         token_type: UnshieldedTokenType,
         amount: u128,
         recipient: UnshieldedRecipient,
@@ -86,9 +83,11 @@ impl<'a> UnshieldedTransfer<'a> {
         }
     }
 
-    /// Make the transaction expire `ttl` after the chain time of the build.
-    /// See [`TransferRequest::ttl`](midnight_types::TransferRequest::ttl).
-    /// Defaults to the chain's `global_ttl`, the longest TTL the chain accepts.
+    /// Make the transaction expire `ttl` after the time of the node's best
+    /// block at the build. Defaults to the chain's `global_ttl`, the longest
+    /// TTL the chain accepts. The build fails with
+    /// [`WalletError::TtlOutOfRange`](midnight_types::WalletError::TtlOutOfRange)
+    /// when `ttl` is under one second or longer than `global_ttl`.
     ///
     /// Once the TTL passes, the transaction can no longer land, and the next
     /// build frees the inputs it reserved. So after a submit whose fate is
@@ -105,16 +104,16 @@ impl<'a> UnshieldedTransfer<'a> {
     /// wait on.
     pub async fn send(self) -> Result<PendingTx, ProviderError> {
         let provider = self.provider;
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(build_and_submit(provider, self.into_request(true))).await
     }
 
     /// Build the transaction without submitting it. Reserves pending UTXOs /
     /// dust in the wallet so concurrent in-process builds don't double-select
     /// the same inputs.
-    pub async fn build(self) -> Result<TransferResult, ProviderError> {
+    pub async fn build(self) -> Result<TxEnvelope, ProviderError> {
         let provider = self.provider;
-        provider.build_then_prove(self.into_request(true)).await
+        provider.build_transfer(self.into_request(true)).await
     }
 
     fn into_request(self, pay_fees: bool) -> TransferRequest {
@@ -133,17 +132,17 @@ impl<'a> UnshieldedTransfer<'a> {
 /// the `.send()` vs `.build()` distinction.
 #[derive(Debug)]
 #[must_use = "does nothing until sent or built"]
-pub struct ShieldedTransfer<'a> {
-    provider: &'a MidnightProvider,
+pub struct ShieldedTransfer<'a, W> {
+    provider: &'a MidnightProvider<W>,
     token_type: ShieldedTokenType,
     amount: u128,
     recipient: ShieldedRecipient,
     ttl: Option<std::time::Duration>,
 }
 
-impl<'a> ShieldedTransfer<'a> {
+impl<'a, W: MidnightWallet> ShieldedTransfer<'a, W> {
     pub(crate) fn new(
-        provider: &'a MidnightProvider,
+        provider: &'a MidnightProvider<W>,
         token_type: ShieldedTokenType,
         amount: u128,
         recipient: ShieldedRecipient,
@@ -174,15 +173,15 @@ impl<'a> ShieldedTransfer<'a> {
     /// wait on.
     pub async fn send(self) -> Result<PendingTx, ProviderError> {
         let provider = self.provider;
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(build_and_submit(provider, self.into_request(true))).await
     }
 
     /// Build the transaction without submitting it. Reserves pending dust in
     /// the wallet so concurrent in-process builds don't double-select.
-    pub async fn build(self) -> Result<TransferResult, ProviderError> {
+    pub async fn build(self) -> Result<TxEnvelope, ProviderError> {
         let provider = self.provider;
-        provider.build_then_prove(self.into_request(true)).await
+        provider.build_transfer(self.into_request(true)).await
     }
 
     fn into_request(self, pay_fees: bool) -> TransferRequest {
@@ -204,17 +203,17 @@ impl<'a> ShieldedTransfer<'a> {
 /// [`MidnightProvider::shielded_swap`] for the full two-party flow.
 #[derive(Debug)]
 #[must_use = "does nothing until awaited or built"]
-pub struct ShieldedSwap<'a> {
-    provider: &'a MidnightProvider,
+pub struct ShieldedSwap<'a, W> {
+    provider: &'a MidnightProvider<W>,
     give_token: ShieldedTokenType,
     give_amount: u128,
     receive_token: ShieldedTokenType,
     receive_amount: u128,
 }
 
-impl<'a> ShieldedSwap<'a> {
+impl<'a, W: MidnightWallet> ShieldedSwap<'a, W> {
     pub(crate) fn new(
-        provider: &'a MidnightProvider,
+        provider: &'a MidnightProvider<W>,
         give_token: ShieldedTokenType,
         give_amount: u128,
         receive_token: ShieldedTokenType,
@@ -229,32 +228,32 @@ impl<'a> ShieldedSwap<'a> {
         }
     }
 
-    /// Build the swap half without wrapping it, returning the raw
-    /// [`TransferResult`]. Reserves the spent give-side coins so concurrent
-    /// in-process builds don't re-select them. Most callers want the
-    /// [`DustlessTransaction`] from `.await`; use this only to inspect the raw
-    /// `tx_bytes`. Note [`TransferResult::fee_speck`] here prices this half in
-    /// isolation and is not the fee the merged swap pays; the sponsor learns
-    /// that when [`MidnightProvider::balance_transaction`] funds the merge.
-    pub async fn build(self) -> Result<TransferResult, ProviderError> {
+    /// Build the swap half without wrapping it, returning the signed
+    /// [`TxEnvelope`]. Reserves the spent give-side coins so concurrent
+    /// in-process builds don't re-select them, and a drop of the envelope
+    /// hands them back. Most callers want the [`DustlessTransaction`] from
+    /// `.await`.
+    pub async fn build(self) -> Result<TxEnvelope, ProviderError> {
         let request = TransferRequest::new(TransferKind::ShieldedSwap {
             give_token: self.give_token,
             give_amount: self.give_amount,
             receive_token: self.receive_token,
             receive_amount: self.receive_amount,
         });
-        self.provider.build_then_prove(request).await
+        self.provider.build_transfer(request).await
     }
 }
 
-impl<'a> IntoFuture for ShieldedSwap<'a> {
+impl<'a, W: MidnightWallet> IntoFuture for ShieldedSwap<'a, W> {
     type Output = Result<DustlessTransaction, ProviderError>;
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let result = self.build().await?;
-            Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
+            let envelope = self.build().await?;
+            Ok(DustlessTransaction::from_proven_bytes(
+                envelope.into_bytes(),
+            ))
         })
     }
 }
@@ -279,21 +278,25 @@ pub trait DustlessBuilder: Sized {
     fn without_dust(self) -> impl Future<Output = Result<DustlessTransaction, Self::Error>> + Send;
 }
 
-impl<'a> DustlessBuilder for ShieldedTransfer<'a> {
+impl<'a, W: MidnightWallet> DustlessBuilder for ShieldedTransfer<'a, W> {
     type Error = ProviderError;
     async fn without_dust(self) -> Result<DustlessTransaction, ProviderError> {
         let provider = self.provider;
-        let result = provider.build_then_prove(self.into_request(false)).await?;
-        Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
+        let envelope = provider.build_transfer(self.into_request(false)).await?;
+        Ok(DustlessTransaction::from_proven_bytes(
+            envelope.into_bytes(),
+        ))
     }
 }
 
-impl<'a> DustlessBuilder for UnshieldedTransfer<'a> {
+impl<'a, W: MidnightWallet> DustlessBuilder for UnshieldedTransfer<'a, W> {
     type Error = ProviderError;
     async fn without_dust(self) -> Result<DustlessTransaction, ProviderError> {
         let provider = self.provider;
-        let result = provider.build_then_prove(self.into_request(false)).await?;
-        Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
+        let envelope = provider.build_transfer(self.into_request(false)).await?;
+        Ok(DustlessTransaction::from_proven_bytes(
+            envelope.into_bytes(),
+        ))
     }
 }
 
@@ -341,15 +344,15 @@ impl DustlessTransaction {
 /// distinction.
 #[derive(Debug)]
 #[must_use = "does nothing until sent or built"]
-pub struct DustRegistration<'a> {
-    provider: &'a MidnightProvider,
+pub struct DustRegistration<'a, W> {
+    provider: &'a MidnightProvider<W>,
     utxo_ctime: Option<u64>,
     target: Option<DustPublicKey>,
     ttl: Option<std::time::Duration>,
 }
 
-impl<'a> DustRegistration<'a> {
-    pub(crate) fn new(provider: &'a MidnightProvider, utxo_ctime: Option<u64>) -> Self {
+impl<'a, W: MidnightWallet> DustRegistration<'a, W> {
+    pub(crate) fn new(provider: &'a MidnightProvider<W>, utxo_ctime: Option<u64>) -> Self {
         Self {
             provider,
             utxo_ctime,
@@ -387,15 +390,15 @@ impl<'a> DustRegistration<'a> {
     /// wait on.
     pub async fn send(self) -> Result<PendingTx, ProviderError> {
         let provider = self.provider;
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(build_and_submit(provider, self.into_request())).await
     }
 
     /// Build the registration transaction without submitting. Spends and
     /// re-creates one of the wallet's tNIGHT UTXOs as part of the build.
-    pub async fn build(self) -> Result<TransferResult, ProviderError> {
+    pub async fn build(self) -> Result<TxEnvelope, ProviderError> {
         let provider = self.provider;
-        provider.build_then_prove(self.into_request()).await
+        provider.build_transfer(self.into_request()).await
     }
 
     fn into_request(self) -> TransferRequest {
@@ -408,10 +411,10 @@ impl<'a> DustRegistration<'a> {
     }
 }
 
-async fn build_and_submit(
-    provider: &MidnightProvider,
+async fn build_and_submit<W: MidnightWallet>(
+    provider: &MidnightProvider<W>,
     request: TransferRequest,
 ) -> Result<PendingTx, ProviderError> {
-    let result = provider.build_then_prove(request).await?;
-    provider.submit_reserved(result).await
+    let envelope = provider.build_transfer(request).await?;
+    provider.submit_reserved(envelope).await
 }

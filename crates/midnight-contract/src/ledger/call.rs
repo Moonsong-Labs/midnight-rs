@@ -16,10 +16,11 @@ use midnight_helpers::{
     KeyLocation, OfferInfo, ProofPreimage, StandardTransactionInfo, Transcript,
     UnshieldedOfferInfo, UnshieldedWallet, UtxoOutputInfo,
 };
-use midnight_provider::{Builds, ProviderError};
+use midnight_provider::{MidnightProvider, ProviderError};
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::build::{self, Cover, Fill};
 use midnight_types::convert::IntoLedger;
-use midnight_types::{Cover, TransferResult};
+use midnight_types::{MidnightWallet, TxEnvelope};
 
 use crate::address::format_contract_address;
 use crate::call::ShieldedInputs;
@@ -93,9 +94,9 @@ pub(crate) fn partition(
 /// wallet then covers each shielded deficit of the call in a part of its own:
 /// the coins of `shielded` first, then coins that it selects, and the change.
 /// When `pay_fees` is true, the part also pays the Dust fee. Otherwise the
-/// transaction is left fee-less, for another wallet to sponsor, and the
-/// result prices the fee-less transaction. The result names what the part
-/// reserved.
+/// transaction is left fee-less, for another wallet to sponsor. The provider
+/// proves the part and merges it, and the wallet signs. The result carries the
+/// reservation of what the part spends.
 ///
 /// `block_time` is the time the interpreter ran the circuit at.
 /// `verifier_key` is the circuit's verifier key as `zk_config` serves it,
@@ -104,8 +105,8 @@ pub(crate) fn partition(
     clippy::too_many_arguments,
     reason = "the call path hands over what the interpreter ran with, one value each"
 )]
-pub(crate) async fn call_transaction(
-    builds: &Builds<'_>,
+pub(crate) async fn call_transaction<W: MidnightWallet>(
+    provider: &MidnightProvider<W>,
     circuit: &compact_codegen::ir::Circuit,
     args: &[(&str, runtime::Value)],
     exec_result: &runtime::ExecutionResult,
@@ -118,7 +119,7 @@ pub(crate) async fn call_transaction(
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     pay_fees: bool,
-) -> Result<TransferResult, ContractError> {
+) -> Result<TxEnvelope, ContractError> {
     let helper_addr: ContractAddress = contract_address.into_ledger();
 
     // 1. The execution context, from node queries. The wallet's keys seal
@@ -126,9 +127,9 @@ pub(crate) async fn call_transaction(
     let midnight_types::ShieldedRecipient {
         coin_public_key: wallet_cpk,
         enc_public_key: wallet_epk,
-    } = builds.provider().shielded_recipient().await?;
+    } = provider.wallet().shielded_recipient();
     let wallet_keys = (wallet_cpk.into_ledger(), wallet_epk.into_ledger());
-    let context = builds.chain_context().await?;
+    let context = provider.chain_context().await?;
 
     // 2. Build transcripts by partitioning the circuit's state ops, budgeted
     //    with the chain's own parameters: the node checks the gas each
@@ -259,9 +260,10 @@ pub(crate) async fn call_transaction(
         actions: vec![Box::new(call_action)],
     };
 
-    // 6. Prove the call with no fee, then let the wallet cover it.
+    // 6. Prove the call with no fee, then let the wallet cover it. The cover
+    //    prices and proves its part on the same context, after the call.
     let mut tx_info =
-        StandardTransactionInfo::new_from_context(context, builds.proof_provider(), None);
+        StandardTransactionInfo::new_from_context(context.clone(), provider.proof_provider(), None);
     tx_info.add_intent(INTENT_SEGMENT, Box::new(intent_info));
     // Attach a Zswap output for every coin the circuit created via
     // `createZswapOutput` (shielded mints/sends). Each carries the circuit's
@@ -350,12 +352,20 @@ pub(crate) async fn call_transaction(
     // circuit again on every round. The wallet's part rides beside the call,
     // which leaves the circuit proof as it is. A transaction with no user
     // circuit can take `super::deploy::build_with_mock_fee_proofs` instead.
-    let unpaid = prove_without_fee(tx_info).await?;
+    let external = prove_without_fee(tx_info).await?;
     let cover = Cover::Shortfalls {
         pins: shielded.coins.iter().map(|coin| coin.nullifier).collect(),
         pay_fees,
     };
-    Ok(builds.balance_transaction(&unpaid.tx_bytes, cover).await?)
+    let tx_info =
+        StandardTransactionInfo::new_from_context(context, provider.proof_provider(), None);
+    Ok(provider
+        .fund_prove_sign(build::filled(Fill::Sealed {
+            tx_info: Box::new(tx_info),
+            external: Box::new(external),
+            cover,
+        }))
+        .await?)
 }
 
 /// A call's two Zswap offers: the guaranteed one, and the fallible one at
@@ -387,15 +397,14 @@ impl SegmentOffers {
     }
 }
 
-/// Build and prove `tx_info` with no fee, and serialize and price the result.
+/// Build and prove `tx_info` with no fee.
 ///
 /// `tx_info` must carry no funding seed. The build then draws no Dust, so it
-/// leaves nothing to reserve, and the result names no input.
-/// `Builds::balance_transaction` reserves what the wallet's cover spends.
+/// leaves nothing to reserve. The wallet reserves what its cover spends.
 pub(super) async fn prove_without_fee(
     tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-) -> Result<TransferResult, ContractError> {
-    let prepared = midnight_types::prepare_no_validate(tx_info)
+) -> Result<midnight_helpers::FinalizedTransaction<DefaultDB>, ContractError> {
+    let prepared = build::prepare_no_validate(tx_info)
         .await
         .map_err(ProviderError::Wallet)?;
     Ok(prepared.prove().await.map_err(ProviderError::Wallet)?)

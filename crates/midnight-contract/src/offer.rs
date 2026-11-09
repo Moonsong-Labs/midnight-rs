@@ -16,14 +16,14 @@ use midnight_types::{ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin
 /// use midnight_contract::parse_shielded_recipient;
 ///
 /// # async fn offer(
-/// #     provider: &midnight_provider::MidnightProvider,
+/// #     wallet: &midnight_wallet::Wallet,
 /// #     token_type: ShieldedTokenType,
 /// #     address: &str,
 /// #     network: &midnight_types::Network,
 /// # ) -> Result<ShieldedOffer, Box<dyn std::error::Error>> {
-/// let coin = provider
+/// let coin = wallet
 ///     .spendable_shielded_coins()
-///     .await?
+///     .await
 ///     .into_iter()
 ///     .find(|coin| coin.token_type == token_type && coin.value >= 10)
 ///     .ok_or_else(|| std::io::Error::other("no coin of the token holds 10"))?;
@@ -41,7 +41,7 @@ use midnight_types::{ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin
 #[derive(Debug, Clone)]
 pub struct ShieldedOffer {
     /// The attached wallet's coins to spend, from
-    /// [`MidnightProvider::spendable_shielded_coins`](midnight_provider::MidnightProvider::spendable_shielded_coins).
+    /// `Wallet::spendable_shielded_coins` in `midnight-wallet`.
     ///
     /// The deploy spends each coin whole. When the coins of a token hold less
     /// than [`Self::outputs`] pay of it, the wallet selects more of its coins

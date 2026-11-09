@@ -27,7 +27,7 @@ async fn synced_wallet(provider: &MidnightProvider, indexer: &str, seed: &str) -
         .expect("indexer sync should succeed")
 }
 
-async fn synced_provider(node: &str, indexer: &str, seed: &str) -> MidnightProvider {
+async fn synced_provider(node: &str, indexer: &str, seed: &str) -> MidnightProvider<Wallet> {
     let provider = MidnightProvider::new(node);
     let wallet = synced_wallet(&provider, indexer, seed).await;
     provider.with_wallet(wallet)
@@ -130,7 +130,7 @@ async fn build_shielded_transfer_arbitrary_token_id() {
     let recipient = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
 
-    let balance = provider.balance().await.expect("wallet attached");
+    let balance = provider.wallet().balance().await;
     let Some(coin) = balance
         .shielded
         .coins
@@ -146,17 +146,15 @@ async fn build_shielded_transfer_arbitrary_token_id() {
         coin.value
     );
 
-    let tx_result = provider
+    let tx_bytes = provider
         .transfer_shielded(coin.token_type, 1, recipient)
         .build()
         .await
-        .expect("shielded transfer of arbitrary token id should build (proofs + serialize)");
-    eprintln!(
-        "shielded transfer built, tx_bytes={}",
-        tx_result.tx_bytes.len()
-    );
+        .expect("shielded transfer of arbitrary token id should build (proofs + serialize)")
+        .into_bytes();
+    eprintln!("shielded transfer built, tx_bytes={}", tx_bytes.len());
     assert_eq!(
-        shielded_delta(&tx_result.tx_bytes, coin.token_type),
+        shielded_delta(&tx_bytes, coin.token_type),
         0,
         "a self-funded transfer of a non-zero token id must return its change \
          in that token"
@@ -185,9 +183,9 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
     let recipient = wallet.shielded_recipient();
     let payee = payee.with_wallet(wallet);
     let before: std::collections::HashSet<_> = payee
+        .wallet()
         .spendable_shielded_coins()
         .await
-        .expect("payee coins")
         .into_iter()
         .map(|c| c.nullifier)
         .collect();
@@ -204,11 +202,11 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
     // for the indexer to replay the transaction rather than assuming.
     let mut received = None;
     for _ in 0..20 {
-        payee.resync_wallet().await.expect("payee resync");
+        payee.wallet().sync(&payee).await.expect("payee resync");
         received = payee
+            .wallet()
             .spendable_shielded_coins()
             .await
-            .expect("payee coins")
             .into_iter()
             .find(|c| c.token_type == DEFAULT_SHIELDED_TOKEN && !before.contains(&c.nullifier));
         if received.is_some() {
@@ -222,6 +220,21 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
         received.value, AMOUNT,
         "the recipient must receive the requested amount, not the sender's change"
     );
+}
+
+/// The nullifiers of the shielded inputs of a proven transaction.
+fn spent_nullifiers(tx_bytes: &[u8]) -> Vec<midnight_wallet::Nullifier> {
+    use midnight_helpers::midnight_serialize::tagged_deserialize;
+    use midnight_helpers::{DefaultDB, FinalizedTransaction, Transaction};
+    use midnight_types::convert::IntoSdk;
+    let tx: FinalizedTransaction<DefaultDB> =
+        tagged_deserialize(&mut &tx_bytes[..]).expect("deserialize proven transaction");
+    let Transaction::Standard(tx) = tx else {
+        panic!("a transfer is a standard transaction");
+    };
+    tx.inputs()
+        .map(|input| input.nullifier.into_sdk())
+        .collect()
 }
 
 /// Sum the signed deltas a proven transaction carries for one shielded token.
@@ -259,22 +272,28 @@ async fn shielded_transfer_conserves_value() {
 
     // 1 is deliberately far below any coin the dev preset mints, so the
     // remainder is large and an abandoned one would be unmissable.
-    let result = provider
+    let tx_bytes = provider
         .transfer_shielded(DEFAULT_SHIELDED_TOKEN, 1, recipient)
         .build()
         .await
-        .expect("shielded transfer should build");
+        .expect("shielded transfer should build")
+        .into_bytes();
 
     assert_eq!(
-        shielded_delta(&result.tx_bytes, DEFAULT_SHIELDED_TOKEN),
+        shielded_delta(&tx_bytes, DEFAULT_SHIELDED_TOKEN),
         0,
         "a self-funded transfer must leave no surplus; the remainder of the \
          selected coins has to return as change"
     );
+    // The bytes keep the reservation, and a read of the wallet does not sync.
+    let spent = spent_nullifiers(&tx_bytes);
+    let spendable = provider.wallet().spendable_shielded_coins().await;
     assert!(
-        !result.spent.shielded.is_empty(),
-        "the build selects coins up front, so it must surface their nullifiers \
-         for reservation"
+        !spent.is_empty()
+            && spendable
+                .iter()
+                .all(|coin| !spent.contains(&coin.nullifier)),
+        "the build must reserve the coins it spends"
     );
 }
 
@@ -293,7 +312,7 @@ async fn shielded_transfer_spans_multiple_coins() {
     let recipient = wallet.shielded_recipient();
     let provider = provider.with_wallet(wallet);
 
-    let balance = provider.balance().await.expect("wallet attached");
+    let balance = provider.wallet().balance().await;
     let values: Vec<u128> = balance
         .shielded
         .coins
@@ -314,7 +333,7 @@ async fn shielded_transfer_spans_multiple_coins() {
 
     // One more than the biggest coin: satisfiable only by combining coins.
     let amount = largest + 1;
-    let result = provider
+    let tx_bytes = provider
         .transfer_shielded(DEFAULT_SHIELDED_TOKEN, amount, recipient)
         .build()
         .await
@@ -323,16 +342,17 @@ async fn shielded_transfer_spans_multiple_coins() {
                 "transfer of {amount} across {} coins should build: {e}",
                 values.len()
             )
-        });
+        })
+        .into_bytes();
 
+    let inputs = spent_nullifiers(&tx_bytes).len();
     assert!(
-        result.spent.shielded.len() >= 2,
+        inputs >= 2,
         "covering {amount} needs more than the largest coin ({largest}), so at \
-         least two inputs; got {}",
-        result.spent.shielded.len()
+         least two inputs; got {inputs}"
     );
     assert_eq!(
-        shielded_delta(&result.tx_bytes, DEFAULT_SHIELDED_TOKEN),
+        shielded_delta(&tx_bytes, DEFAULT_SHIELDED_TOKEN),
         0,
         "a multi-coin transfer must return its change too"
     );
@@ -365,25 +385,25 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
     const GIVE: u128 = 1;
     const RECEIVE: u128 = 3;
 
-    let result = provider
+    let tx_bytes = provider
         .shielded_swap(give_token, GIVE, receive_token, RECEIVE)
         .build()
         .await
-        .expect("swap half should build (coin selection + proofs + serialize)");
+        .expect("swap half should build (coin selection + proofs + serialize)")
+        .into_bytes();
 
-    // The build selects concrete give-side coins up front and surfaces their
-    // nullifiers so the caller can reserve them.
+    // The build selects concrete give-side coins up front.
     assert!(
-        !result.spent.shielded.is_empty(),
-        "swap half should surface the spent give-side coin nullifiers"
+        !spent_nullifiers(&tx_bytes).is_empty(),
+        "swap half should spend give-side coins"
     );
     assert!(
-        result.tx_bytes.len() > 1000,
+        tx_bytes.len() > 1000,
         "tx bytes too small to be a real proven offer ({})",
-        result.tx_bytes.len()
+        tx_bytes.len()
     );
 
-    let delta = |token: midnight_wallet::ShieldedTokenType| shielded_delta(&result.tx_bytes, token);
+    let delta = |token: midnight_wallet::ShieldedTokenType| shielded_delta(&tx_bytes, token);
 
     assert_eq!(
         delta(give_token),

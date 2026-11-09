@@ -5,7 +5,7 @@
 //! discovery ciphertext. The recipient's sync cannot see them: it owns them,
 //! but the only thing on chain that names each one is its commitment.
 //! Rebuilding a coin from what the caller knows (nonce, token type, value)
-//! and registering it with `watch_for_coin` recovers it.
+//! and registering it with `watch_for_coins` recovers it.
 //!
 //! The second coin is what proves recovery composes: registering it replays
 //! the stream again, and the first coin has to survive that replay even
@@ -100,10 +100,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
             .collect::<Vec<_>>()
     };
 
-    let before = recip_provider
-        .spendable_shielded_coins()
-        .await
-        .expect("recipient coins");
+    let before = recip_provider.wallet().spendable_shielded_coins().await;
     for (nonce, value) in mints {
         assert!(
             !holds(&before, nonce, value),
@@ -115,19 +112,18 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     //     chain's own output, decrypting nothing. Registering the second must
     //     not cost us the first ---
     for (index, (nonce, value)) in mints.iter().copied().enumerate() {
+        let coin = midnight_provider::CoinInfo {
+            nonce: midnight_provider::Nonce(midnight_base_crypto::hash::HashOutput(nonce)),
+            type_: token_type,
+            value: u128::from(value),
+        };
         recip_provider
-            .watch_for_coin(midnight_provider::CoinInfo {
-                nonce: midnight_provider::Nonce(midnight_base_crypto::hash::HashOutput(nonce)),
-                type_: token_type,
-                value: u128::from(value),
-            })
+            .wallet()
+            .watch_for_coins(vec![coin], &recip_provider)
             .await
-            .expect("watch_for_coin");
+            .expect("watch_for_coins");
 
-        let after = recip_provider
-            .spendable_shielded_coins()
-            .await
-            .expect("recipient coins");
+        let after = recip_provider.wallet().spendable_shielded_coins().await;
         for (recovered_nonce, recovered_value) in mints.iter().copied().take(index + 1) {
             assert!(
                 holds(&after, recovered_nonce, recovered_value),
@@ -137,5 +133,5 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
             );
         }
     }
-    eprintln!("recipient recovered both coins through watch_for_coin ✓");
+    eprintln!("recipient recovered both coins through watch_for_coins ✓");
 }

@@ -1,8 +1,7 @@
 //! The vocabulary of a transfer build: the request that names one
-//! ([`TransferRequest`]), what it spends ([`SpentInputs`]), and its result
-//! ([`TransferResult`]).
+//! ([`TransferRequest`]) and what it spends ([`SpentInputs`]).
 //!
-//! [`crate::TransferBuilder`] makes the builds themselves.
+//! [`crate::build::TransferBuilder`] makes the builds themselves.
 
 use midnight_helpers::{HashOutput, Timestamp};
 
@@ -10,44 +9,6 @@ use crate::coin::{
     DustNullifier, DustPublicKey, Nullifier, ShieldedRecipient, ShieldedTokenType,
     UnshieldedRecipient, UnshieldedTokenType,
 };
-
-/// A proven transaction a build made, and the inputs the build reserved for
-/// it.
-pub struct TransferResult {
-    /// The proven transaction, in its tagged encoding.
-    pub tx_bytes: Vec<u8>,
-    /// The inputs of this transaction that the builds of this wallet
-    /// reserved. `WalletFacade::release` takes them back if the transaction
-    /// never reaches the chain. A transaction that pays the fee of another
-    /// party's transaction also spends that party's inputs, and this names
-    /// only the Dust of the fee.
-    pub spent: SpentInputs,
-    /// Deterministic Dust fee the chain will charge for this transaction, in
-    /// SPECK (`1 DUST = 10^15 SPECK`). Computed via
-    /// `Transaction::fees(&ledger.parameters, false)` against the parameters
-    /// the build pipeline saw — matches what the node's own estimation RPC
-    /// returns and what the indexer later reports as `paidFees` for an
-    /// accepted, included transaction.
-    ///
-    /// The `false` skips the time-to-dismiss check, and the node applies that
-    /// check at submit. It rejects a transaction, as
-    /// `FeeCalculation(OutsideTimeToDismiss)`, when validating the whole
-    /// transaction and applying its guaranteed part take more time than its
-    /// size allows. The allowance is `time_to_dismiss_per_byte` per byte, and
-    /// never less than `min_time_to_dismiss`. The check never changes the
-    /// fee, but a quote does not mean that the node accepts the transaction.
-    pub fee_speck: u128,
-}
-
-impl std::fmt::Debug for TransferResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TransferResult")
-            .field("tx_bytes", &format_args!("{} bytes", self.tx_bytes.len()))
-            .field("spent", &self.spent)
-            .field("fee_speck", &self.fee_speck)
-            .finish()
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpentUtxoKey {

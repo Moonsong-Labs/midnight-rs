@@ -1,9 +1,9 @@
 #![warn(missing_debug_implementations)]
 
-mod builds;
 mod error;
 mod local_prover;
 pub mod node_error;
+mod pipeline;
 mod provider;
 mod proving;
 mod remote_prover;
@@ -11,9 +11,7 @@ mod submit;
 mod transfer;
 mod types;
 
-pub use builds::Builds;
 pub use error::ProviderError;
-pub(crate) use provider::HeldInputs;
 pub use provider::{MidnightProvider, NodeHeader};
 pub use remote_prover::RemoteProofServer;
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
@@ -23,15 +21,16 @@ pub use transfer::{
 };
 pub use types::{Health, TransactionHash};
 
-// Re-export the types that `MidnightProvider`'s own signatures name, and the
-// NIGHT and DUST units, so a caller of the provider needs no separate dep for
-// them. The implementation types (`Wallet`, `WalletBuilder`) live in
-// midnight-wallet; this crate never names them.
+// Re-export the coin, token, key and hash vocabulary, the types that
+// `MidnightProvider`'s own signatures name, and the NIGHT and DUST units, so a
+// caller of the provider needs no separate dep for them. The implementation
+// types (`Wallet`, `WalletBuilder`) live in midnight-wallet; this crate never
+// names them.
 pub use midnight_types::{
     BlockHash, CoinInfo, CoinPublicKey, ContractAddress, DustPublicKey, EncryptionPublicKey,
-    ExtrinsicHash, HashOutput, NIGHT, Network, Nonce, Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT,
-    ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, TransferResult,
-    UnshieldedRecipient, UnshieldedTokenType, WalletBalance, WalletError,
+    ExtrinsicHash, HashOutput, MidnightWallet, NIGHT, Network, Nonce, Nullifier, SPECKS_PER_DUST,
+    STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, TxEnvelope, UnshieldedRecipient,
+    UnshieldedTokenType, WalletError,
 };
 
 // Re-export the private-state types so callers configure
@@ -81,7 +80,7 @@ pub trait Provider: Send + Sync {
 // Bridge: MidnightProvider → StateQueryProvider (from compact-bindgen)
 // ---------------------------------------------------------------------------
 
-impl StateQueryProvider for MidnightProvider {
+impl<W: Send + Sync> StateQueryProvider for MidnightProvider<W> {
     type Error = ProviderError;
 
     async fn query_contract_state(

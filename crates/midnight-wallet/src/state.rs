@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_helpers::mn_ledger::events::EventDetails;
@@ -11,12 +11,12 @@ use midnight_helpers::{
     WalletState as ZswapLocalState,
 };
 use midnight_indexer_client::SubscriptionClient;
+use midnight_types::build::{DustSpendBatch, SpentUtxoKey, TrackedUtxo, chain_time};
 use midnight_types::convert::{IntoLedger, IntoSdk};
-use midnight_types::{TrackedUtxo, chain_time};
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
-use super::pending::{PendingReservations, within_ttl};
+use super::pending::{PendingBook, PendingFile, PendingReservations, lock, within_ttl};
 use crate::chain_pin::ChainPin;
 use crate::generation::Generation;
 use crate::replay::{
@@ -24,7 +24,7 @@ use crate::replay::{
 };
 use crate::storage::wallet_storage_id;
 use crate::wallet::ChainSync;
-use crate::{Network, ReservedInput, Seed, SpentUtxoKey, SyncProgress, WalletError};
+use crate::{Network, Seed, SyncProgress, WalletError};
 
 /// A Midnight wallet: identity (seed, addresses) and synced ledger state.
 ///
@@ -68,21 +68,16 @@ pub struct Wallet {
     block_context: Option<BlockContext>,
 
     /// In-flight reservations: spends built locally but not yet observed
-    /// as confirmed on-chain. Applied at [`Wallet::build_context_inner`]
-    /// time to prevent local double-builds, cleared when corresponding
-    /// events arrive or when the TTL window elapses. Never written to the
-    /// confirmed-state files; persisted separately via `pending.json`.
-    pending: PendingReservations,
+    /// as confirmed on-chain. Applied at [`Wallet::add_funding`] time to
+    /// prevent local double-builds, cleared when corresponding events arrive
+    /// or when the TTL window elapses. Never written to the confirmed-state
+    /// files; persisted separately via `pending.json`.
+    pending: Arc<Mutex<PendingBook>>,
 
     /// Where this wallet persists its state, when [`Wallet::sync_inner`] was
     /// given a storage directory. Retained so [`Wallet::commit_resync`] can
-    /// re-save the moved cursors and [`Wallet::persist_reservation`] can
-    /// persist `pending.json` without the caller re-supplying the path.
+    /// re-save the moved cursors without the caller re-supplying the path.
     storage_dir: Option<PathBuf>,
-
-    /// Whether the last save to `storage_dir` failed, so the disk is behind
-    /// the memory.
-    save_failed: bool,
 
     /// The indexer this wallet synced against.
     ///
@@ -591,14 +586,19 @@ impl Wallet {
         // Load any pre-existing pending reservations from disk so they
         // survive process restarts. Confirmed-state files never carry
         // pending entries; this is a separate file.
-        let pending = match storage_dir {
+        let reservations = match storage_dir {
             Some(dir) => {
                 PendingReservations::load(dir, network.as_str(), &wallet_id)?.unwrap_or_default()
             }
             None => PendingReservations::default(),
         };
+        let file = storage_dir.map(|dir| PendingFile {
+            dir: dir.to_path_buf(),
+            network: network.as_str().to_owned(),
+            wallet_id: wallet_id.clone(),
+        });
 
-        let mut state = Self {
+        let state = Self {
             seed: seed.clone(),
             secret_keys,
             network: network.clone(),
@@ -613,24 +613,25 @@ impl Wallet {
             chain_pin,
             parameters,
             block_context,
-            pending,
+            pending: Arc::new(Mutex::new(PendingBook::new(reservations, file))),
             storage_dir: storage_dir.map(Path::to_path_buf),
-            save_failed: false,
             indexer_url: indexer_url.to_string(),
         };
 
-        // Reservations made before a restart whose spends this replay just
-        // observed confirmed are no longer in flight; drop them so the
-        // underlying UTXOs become spendable again immediately.
-        state
-            .pending
-            .clear_confirmed(&spent_unshielded, &dust_nullifiers);
+        {
+            let mut book = lock(&state.pending);
+            // Reservations made before a restart whose spends this replay just
+            // observed confirmed are no longer in flight; drop them so the
+            // underlying UTXOs become spendable again immediately.
+            book.reservations_mut()
+                .clear_confirmed(&spent_unshielded, &dust_nullifiers);
 
-        // Any pending entry whose TTL has passed against the chain's current
-        // view can no longer produce a valid transaction; drop them so they
-        // don't pollute subsequent build contexts.
-        if let Some(ref bc) = state.block_context {
-            state.pending.evict_expired(chain_time(bc));
+            // Any pending entry whose TTL has passed against the chain's
+            // current view can no longer produce a valid transaction; drop
+            // them so they don't pollute subsequent build contexts.
+            if let Some(ref bc) = state.block_context {
+                book.reservations_mut().evict_expired(chain_time(bc));
+            }
         }
 
         if let Some(dir) = storage_dir {
@@ -644,36 +645,36 @@ impl Wallet {
     /// about-to-be-submitted) transaction so subsequent in-process builds
     /// don't re-select the same inputs.
     ///
-    /// Dust and unshielded reservations live in `Wallet::pending` until either:
+    /// Dust and unshielded reservations live in the pending book until either:
     /// - event replay (a sync or a resync) observes the corresponding
     ///   confirmed spends and clears them,
     /// - or the chain time passes `expires_at` (evicted at
-    ///   [`Wallet::build_context_inner`] time).
+    ///   [`Wallet::add_funding`] time).
     ///
     /// `shielded_spends` (Zswap coin nullifiers pinned by a contract call) are
     /// cleared by TTL only: once the spend confirms, resync drops the coin from
     /// `zswap_state`, so filtering it out becomes a no-op regardless.
     ///
     /// `reserved_at` should be the [`chain_time`] of the build context
-    /// (typically [`PreparedTransfer::reserved_at`](midnight_types::PreparedTransfer::reserved_at)),
+    /// (typically [`PreparedTransfer::reserved_at`](midnight_types::build::PreparedTransfer::reserved_at)),
     /// which a release names. `expires_at` should be the TTL of the
-    /// transaction ([`PreparedTransfer::expires_at`](midnight_types::PreparedTransfer::expires_at)):
+    /// transaction ([`PreparedTransfer::expires_at`](midnight_types::build::PreparedTransfer::expires_at)):
     /// TTL eviction compares it against the chain time of `block_context`.
     /// Confirmed-state files never persist these reservations.
     ///
-    /// The reservation stays in memory until [`Self::persist_reservation`]
+    /// The reservation stays in memory until [`PendingBook::mark_proven`]
     /// names its build as proven, and only then reaches `pending.json`. A
     /// process that stops during the proof leaves no reservation on disk, so
     /// the next process can select these inputs again.
     pub fn reserve_pending(
         &mut self,
-        dust_batches: Vec<midnight_types::DustSpendBatch>,
+        dust_batches: Vec<DustSpendBatch>,
         unshielded_spends: Vec<SpentUtxoKey>,
         shielded_spends: Vec<midnight_helpers::Nullifier>,
         reserved_at: Timestamp,
         expires_at: Timestamp,
     ) {
-        self.pending.reserve(
+        lock(&self.pending).reservations_mut().reserve(
             dust_batches,
             unshielded_spends,
             shielded_spends,
@@ -682,59 +683,14 @@ impl Wallet {
         );
     }
 
-    /// Hand back the inputs a build reserved. See [`crate::Wallet::release`].
-    ///
-    /// It then writes `pending.json` as [`Self::persist_reservation`] does.
-    pub fn release(&mut self, spent: &crate::SpentInputs) {
-        let dust: Vec<ReservedInput<DustNullifier>> =
-            spent.dust.iter().map(into_ledger_entry).collect();
-        let shielded: Vec<ReservedInput<midnight_helpers::Nullifier>> =
-            spent.shielded.iter().map(into_ledger_entry).collect();
-        self.pending.release(&dust, &spent.unshielded, &shielded);
-        self.persist_pending();
-    }
-
-    /// Keep the reservation of a proven build across a restart. See
-    /// [`WalletFacade::persist_reservation`](midnight_wallet_facade::WalletFacade::persist_reservation).
-    ///
-    /// It marks the entries that `spent` names as proven, and then writes the
-    /// pending set to `pending.json` when the wallet has a storage directory.
-    /// The write is best-effort. The mark stands when the write fails, so the
-    /// next commit writes the reservation.
-    pub fn persist_reservation(&mut self, spent: &crate::SpentInputs) {
-        let dust: Vec<ReservedInput<DustNullifier>> =
-            spent.dust.iter().map(into_ledger_entry).collect();
-        let shielded: Vec<ReservedInput<midnight_helpers::Nullifier>> =
-            spent.shielded.iter().map(into_ledger_entry).collect();
-        self.pending
-            .mark_proven(&dust, &spent.unshielded, &shielded);
-        self.persist_pending();
+    /// The book that holds this wallet's reservations.
+    pub(crate) fn pending_book(&self) -> &Arc<Mutex<PendingBook>> {
+        &self.pending
     }
 
     /// This wallet's on-disk identity; see [`wallet_storage_id`].
     fn storage_id(&self) -> String {
         wallet_storage_id(&self.unshielded_address)
-    }
-
-    /// Write the pending set to `pending.json`, when the wallet has a storage
-    /// directory.
-    ///
-    /// It writes only the pending file, because a full `save` rewrites the
-    /// multi-MB confirmed-state files. The write is best-effort, because the
-    /// caller changes the in-memory set for a build that already exists, and
-    /// an error cannot undo that build. The in-memory set still protects the
-    /// running process. A failure marks the save as failed, so the next
-    /// commit saves the whole state and reports the same disk fault.
-    /// Crash-safety is degraded until then, hence the error-level log.
-    fn persist_pending(&mut self) {
-        if let Some(dir) = self.storage_dir.as_deref()
-            && let Err(err) = self
-                .pending
-                .save(dir, self.network.as_str(), &self.storage_id())
-        {
-            error!(error = %err, "failed to persist pending reservations; in-memory set is ahead of pending.json");
-            self.save_failed = true;
-        }
     }
 
     /// Whether a reservation that expires at `expires_at` still holds its
@@ -752,31 +708,35 @@ impl Wallet {
 
     /// Nullifiers of the shielded coins that a reservation holds; see
     /// [`Self::reservation_holds`].
-    pub(crate) fn reserved_shielded_nullifiers(
-        &self,
-    ) -> impl Iterator<Item = &midnight_helpers::Nullifier> {
-        self.pending
+    pub(crate) fn reserved_shielded_nullifiers(&self) -> Vec<midnight_helpers::Nullifier> {
+        lock(&self.pending)
+            .reservations()
             .shielded_spends()
             .filter(|spend| self.reservation_holds(spend.expires_at))
-            .map(|spend| &spend.nullifier)
+            .map(|spend| spend.nullifier)
+            .collect()
     }
 
     /// Keys of the unshielded UTXOs that a reservation holds; see
     /// [`Self::reservation_holds`].
-    pub(crate) fn reserved_unshielded_keys(&self) -> impl Iterator<Item = &SpentUtxoKey> {
-        self.pending
+    pub(crate) fn reserved_unshielded_keys(&self) -> Vec<SpentUtxoKey> {
+        lock(&self.pending)
+            .reservations()
             .unshielded_spends()
             .filter(|spend| self.reservation_holds(spend.expires_at))
-            .map(|spend| &spend.key)
+            .map(|spend| spend.key.clone())
+            .collect()
     }
 
     /// Nullifiers of the Dust UTXOs that a reservation holds; see
     /// [`Self::reservation_holds`].
-    fn reserved_dust_nullifiers(&self) -> impl Iterator<Item = &DustNullifier> {
-        self.pending
+    fn reserved_dust_nullifiers(&self) -> Vec<DustNullifier> {
+        lock(&self.pending)
+            .reservations()
             .dust_batches()
             .filter(|batch| self.reservation_holds(batch.expires_at))
-            .flat_map(|batch| &batch.nullifiers)
+            .flat_map(|batch| batch.nullifiers.iter().copied())
+            .collect()
     }
 
     /// The confirmed Dust state less the UTXOs that a reservation holds; see
@@ -790,6 +750,7 @@ impl Wallet {
         let confirmed = self.dust_wallet.dust_local_state.as_deref()?;
         Some(
             self.reserved_dust_nullifiers()
+                .iter()
                 .fold(confirmed.clone(), |state, nullifier| {
                     state
                         .remove_utxo(nullifier)
@@ -823,7 +784,9 @@ impl Wallet {
                 unshielded_utxos: &self.unshielded_utxos,
             },
         )?;
-        self.pending.save(base, self.network.as_str(), &wallet_id)
+        lock(&self.pending)
+            .reservations()
+            .save(base, self.network.as_str(), &wallet_id)
     }
 
     /// Save to the storage directory when `changed` is true or the last save
@@ -832,33 +795,15 @@ impl Wallet {
     /// A failed save leaves the memory ahead of the disk, so the next call
     /// retries it even when nothing changed.
     fn persist(&mut self, changed: bool) -> Result<(), WalletError> {
-        if !(changed || self.save_failed) {
+        if !(changed || lock(&self.pending).save_failed()) {
             return Ok(());
         }
         let Some(dir) = self.storage_dir() else {
             return Ok(());
         };
         let saved = self.save(dir);
-        self.save_failed = saved.is_err();
+        lock(&self.pending).set_save_failed(saved.is_err());
         saved
-    }
-
-    /// The ledger state a build executes against: the chain's parameters and
-    /// genesis settings, the proving resolver, and the latest block context.
-    ///
-    /// Holds no key material and no coin state, so nothing here depends on
-    /// which wallet pays. Add a funding view with [`Self::add_funding`].
-    ///
-    /// Performs no I/O. The caller keeps the wallet synced (typically via
-    /// `MidnightProvider::resync_wallet`) and refreshes [`Self::block_context`]
-    /// first, since the embedded block context drives proof root lookup and
-    /// transaction TTL.
-    pub fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
-        midnight_types::execution_context(
-            &self.network,
-            self.parameters.clone(),
-            self.block_context.clone(),
-        )
     }
 
     /// Put this wallet's spendable view into `ctx`: its unshielded UTXOs, its
@@ -870,9 +815,12 @@ impl Wallet {
     /// gets this call funds nothing.
     ///
     /// Call this once per context, and errors on a second call for the same
-    /// wallet. It also re-anchors `ctx`'s block context on the chain view the
-    /// funding snapshot came from, so a resync between the two halves cannot
-    /// leave the dust state newer than the `ctime` a build reads.
+    /// wallet. It also moves the block time of `ctx`'s block context to this
+    /// wallet's Dust anchor, which a build reads as the Dust `ctime`, so the
+    /// Dust spends witness a root that the chain holds at that time. The time
+    /// of the last block stays as `ctx` has it, so a build still counts its
+    /// TTL from the chain time of `ctx`. A `ctx` with no block context takes
+    /// this wallet's whole.
     ///
     /// The only mutation is TTL eviction of expired `pending` entries against
     /// the chain time of `block_context`: entries whose `expires_at` has
@@ -900,19 +848,28 @@ impl Wallet {
         // only place that doesn't require the caller to restart the process
         // to free up UTXOs reserved by transactions that never confirmed.
         if let Some(bc) = self.block_context.as_ref() {
-            self.pending.evict_expired(chain_time(bc));
+            lock(&self.pending)
+                .reservations_mut()
+                .evict_expired(chain_time(bc));
         }
 
-        // Re-anchor the context on the chain view this funding snapshot came
-        // from. The execution half captured `block_context` when it was built,
-        // and a resync since then leaves the dust state below newer than that
-        // anchor. A build reads `ctime` from the anchor and witnesses against
-        // the newer Dust root, which the chain rejects because it looks the
-        // root up as `root_history.get(ctime)`.
-        *ctx.latest_block_context
-            .lock()
-            .map_err(|_| WalletError::Sync("block context lock poisoned".into()))? =
-            self.block_context.clone();
+        // A build reads `ctime` from the block time and witnesses against the
+        // Dust root of this wallet's state, and the chain looks that root up
+        // as `root_history.get(ctime)`.
+        {
+            let mut latest = ctx
+                .latest_block_context
+                .lock()
+                .map_err(|_| WalletError::Sync("block context lock poisoned".into()))?;
+            *latest = match (latest.take(), self.block_context.as_ref()) {
+                (Some(chain), Some(own)) => Some(BlockContext {
+                    tblock: own.tblock,
+                    ..chain
+                }),
+                (chain, None) => chain,
+                (None, own) => own.cloned(),
+            };
+        }
 
         // Populate UTXO state so the transaction builder can find our UTXOs.
         let unshielded = UnshieldedWallet::default(seed.clone());
@@ -926,7 +883,7 @@ impl Wallet {
         // Filter out UTXOs reserved by recent (still-pending) builds so the
         // selector doesn't re-pick them before the indexer confirms the
         // spend.
-        let pending_unshielded: Vec<&SpentUtxoKey> = self.reserved_unshielded_keys().collect();
+        let pending_unshielded = self.reserved_unshielded_keys();
 
         {
             let mut guard = ctx
@@ -937,7 +894,7 @@ impl Wallet {
 
             let mut utxo_state = (*ledger_state.utxo).clone();
             for tracked in &self.unshielded_utxos {
-                if pending_unshielded.contains(&&tracked.spent_key()) {
+                if pending_unshielded.contains(&tracked.spent_key()) {
                     continue;
                 }
                 let utxo = tracked_to_ledger_utxo(tracked, owner);
@@ -959,7 +916,7 @@ impl Wallet {
             // nullifier (the spend confirmed and resync dropped the coin) is a
             // harmless no-op.
             for nullifier in self.reserved_shielded_nullifiers() {
-                shielded.state.coins = shielded.state.coins.remove(nullifier);
+                shielded.state.coins = shielded.state.coins.remove(&nullifier);
             }
 
             let mut dust = self.dust_wallet.clone();
@@ -979,14 +936,6 @@ impl Wallet {
         }
 
         Ok(())
-    }
-
-    /// [`Self::execution_context`] carrying this wallet's own funding view,
-    /// for the builds that fund from the wallet that builds them.
-    pub fn build_context_inner(&mut self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
-        let ctx = self.execution_context()?;
-        self.add_funding(&ctx)?;
-        Ok(ctx)
     }
 
     // -------------------------------------------------------------------------
@@ -1017,10 +966,6 @@ impl Wallet {
 
     pub fn unshielded_utxos(&self) -> &[TrackedUtxo] {
         &self.unshielded_utxos
-    }
-
-    pub fn parameters(&self) -> &LedgerParameters {
-        &self.parameters
     }
 
     pub fn zswap_state(&self) -> &ZswapLocalState<DefaultDB> {
@@ -1069,8 +1014,8 @@ impl Wallet {
         } = commit;
 
         // Dirty-check inputs, captured before the assignments below
-        // overwrite them. Resync runs before every transfer/contract build
-        // (`MidnightProvider::resync_wallet`) and on user polling, so the
+        // overwrite them. Resync runs before every funding
+        // (`MidnightWallet::fund_transaction`) and on user polling, so the
         // `save` at the end must be skipped when nothing durable moved;
         // otherwise every no-op resync rewrites the multi-MB
         // `zswap-N.bin`/`dust_wallet-N.bin` generation files. Dirty means:
@@ -1112,8 +1057,8 @@ impl Wallet {
         // Reservations whose spends this replay just observed confirmed are
         // no longer in flight; drop them so the underlying UTXOs become
         // spendable again immediately instead of waiting for TTL eviction.
-        let pending_changed = self
-            .pending
+        let pending_changed = lock(&self.pending)
+            .reservations_mut()
             .clear_confirmed(&spent_unshielded, &dust_nullifiers);
 
         // Re-persist the committed state (moved cursors, refreshed
@@ -1453,14 +1398,6 @@ pub(crate) mod test_support {
     }
 }
 
-/// `entry`, with its input in the ledger's type.
-fn into_ledger_entry<T: IntoLedger + Copy>(entry: &ReservedInput<T>) -> ReservedInput<T::Ledger> {
-    ReservedInput {
-        input: entry.input.into_ledger(),
-        reserved_at: entry.reserved_at,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use midnight_helpers::coin_structure::coin::Commitment;
@@ -1470,6 +1407,8 @@ mod tests {
         DustNullifier, Fr, HashOutput, INITIAL_PARAMETERS, Nonce, Nullifier, QualifiedInfo,
         Recipient, ShieldedTokenType,
     };
+
+    use midnight_types::build::{ReservedInput, SpentInputs};
 
     use super::super::pending::test_support::{dust_batch, ukey};
     use super::test_support::{ciphertextless_output, zero_source_event};
@@ -1548,11 +1487,23 @@ mod tests {
             chain_pin: None,
             parameters: INITIAL_PARAMETERS,
             block_context: None,
-            pending: PendingReservations::default(),
+            pending: Arc::new(Mutex::new(PendingBook::new(
+                PendingReservations::default(),
+                storage_dir.clone().map(|dir| PendingFile {
+                    dir,
+                    network: Network::Undeployed.as_str().to_owned(),
+                    wallet_id: wallet_storage_id("mn_addr_undeployed1test"),
+                }),
+            ))),
             storage_dir,
-            save_failed: false,
             indexer_url: "http://indexer.invalid".into(),
         }
+    }
+
+    /// A context from a node, as a provider fills one, with no block context.
+    fn chain_context() -> Arc<LedgerContext<DefaultDB>> {
+        midnight_types::build::execution_context(Network::Undeployed, INITIAL_PARAMETERS, None)
+            .expect("execution context")
     }
 
     fn block_with_params(ledger_parameters: Option<String>) -> midnight_indexer_client::Block {
@@ -1622,8 +1573,10 @@ mod tests {
             chain_now,
         );
 
-        let reserved: Vec<DustNullifier> = wallet.reserved_dust_nullifiers().copied().collect();
-        assert_eq!(reserved, vec![DustNullifier(Fr::from(2u64))]);
+        assert_eq!(
+            wallet.reserved_dust_nullifiers(),
+            vec![DustNullifier(Fr::from(2u64))]
+        );
     }
 
     /// The shielded and unshielded readings hold the inputs of a live
@@ -1716,9 +1669,10 @@ mod tests {
         );
         assert!(wallet.spendable_shielded_coins().is_empty());
 
-        // And it is gone from the coin set the build context exposes (this is
-        // the `coins.remove(nullifier)` path in build_context_inner).
-        let ctx = wallet.build_context_inner().expect("build context");
+        // And it is gone from the coin set the funding view exposes (this is
+        // the `coins.remove(nullifier)` path in add_funding).
+        let ctx = chain_context();
+        wallet.add_funding(&ctx).expect("add funding");
         let wallets = ctx.wallets.lock().expect("wallets lock");
         let ctx_wallet = wallets
             .get(&wallet.seed().into_ledger())
@@ -1744,29 +1698,11 @@ mod tests {
     }
 
     #[test]
-    fn execution_context_holds_no_wallet_and_no_utxos() {
-        let mut wallet = test_wallet(None);
-        wallet.unshielded_utxos = vec![tracked_night_utxo()];
-
-        let ctx = wallet.execution_context().expect("execution context");
-
-        assert!(
-            ctx.wallets.lock().expect("wallets lock").is_empty(),
-            "the execution half must carry no wallet, so it holds no seed or secret keys"
-        );
-        assert_eq!(
-            ctx.with_ledger_state(|s| s.utxo.utxos.iter().count()),
-            0,
-            "the execution half must carry none of the wallet's UTXOs"
-        );
-    }
-
-    #[test]
     fn add_funding_puts_the_wallet_and_its_utxos_in() {
         let mut wallet = test_wallet(None);
         wallet.unshielded_utxos = vec![tracked_night_utxo()];
 
-        let ctx = wallet.execution_context().expect("execution context");
+        let ctx = chain_context();
         wallet.add_funding(&ctx).expect("add funding");
 
         assert!(
@@ -1795,7 +1731,7 @@ mod tests {
             Timestamp::MAX,
         );
 
-        let ctx = wallet.execution_context().expect("execution context");
+        let ctx = chain_context();
         wallet.add_funding(&ctx).expect("add funding");
 
         assert_eq!(
@@ -1808,7 +1744,7 @@ mod tests {
     #[test]
     fn add_funding_refuses_a_context_it_already_funds() {
         let mut wallet = test_wallet(None);
-        let ctx = wallet.execution_context().expect("execution context");
+        let ctx = chain_context();
         wallet.add_funding(&ctx).expect("first funding");
 
         // A second pass would merge into the first one's UTXO set, leaving an
@@ -1819,36 +1755,44 @@ mod tests {
         );
     }
 
+    /// The Dust spends witness a root that the chain looks up at the block
+    /// time of the context, and the TTL counts from its chain time. A funding
+    /// view that kept the fill's block time fails at the chain, and one that
+    /// took the wallet's whole block context counts the TTL from the wallet's
+    /// older view.
     #[test]
-    fn add_funding_reanchors_the_block_context() {
+    fn add_funding_takes_the_dust_anchor_and_keeps_the_chain_time() {
         let mut wallet = test_wallet(None);
-        let ctx = wallet.execution_context().expect("execution context");
-        assert!(ctx.latest_block_context.lock().unwrap().is_none());
-
-        // A resync between the two halves moves the wallet's chain view. The
-        // funding pass must carry it over, or the build witnesses a Dust root
-        // the context's `ctime` does not resolve to.
-        let tblock = Timestamp::from_secs(1_234);
+        let anchor = Timestamp::from_secs(1_000);
         wallet.block_context = Some(midnight_helpers::make_block_context(
-            tblock,
+            anchor,
             Default::default(),
-            tblock,
+            Timestamp::from_secs(1_100),
         ));
+        let node_time = Timestamp::from_secs(1_200);
+        let ctx = midnight_types::build::execution_context(
+            Network::Undeployed,
+            INITIAL_PARAMETERS,
+            Some(midnight_helpers::make_block_context(
+                node_time,
+                Default::default(),
+                node_time,
+            )),
+        )
+        .expect("execution context");
+
         wallet.add_funding(&ctx).expect("add funding");
 
-        assert_eq!(
-            ctx.latest_block_context
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|bc| bc.tblock),
-            Some(Timestamp::from_secs(1_234)),
-            "funding must re-anchor the context on its own chain view"
-        );
+        let funded = ctx.latest_block_context();
+        assert_eq!(funded.tblock, anchor);
+        assert_eq!(chain_time(&funded), node_time);
     }
 
+    /// `sign_transaction` marks a reservation proven, and only a proven one
+    /// reaches `pending.json`. A mark that stayed in memory would lose the
+    /// reservation of a proven transaction at a restart.
     #[test]
-    fn persist_reservation_writes_pending_file_when_storage_dir_set() {
+    fn a_reservation_marked_proven_reaches_pending_json() {
         let dir = tempfile::TempDir::new().unwrap();
         let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
         wallet.reserve_pending(
@@ -1859,18 +1803,18 @@ mod tests {
             Timestamp::MAX,
         );
 
-        wallet.persist_reservation(&spent_utxo(ukey(0xab, 0), 100));
+        lock(&wallet.pending).mark_proven(&spent_utxo(ukey(0xab, 0), 100));
 
         let loaded = PendingReservations::load(dir.path(), "undeployed", &wallet.storage_id())
             .unwrap()
-            .expect("pending.json should exist after persist_reservation");
+            .expect("pending.json should exist after mark_proven");
         assert_eq!(loaded.unshielded_spends().count(), 1);
     }
 
     /// What a build that reserved only the UTXO `key` at `reserved_at_secs`
     /// reports spending.
-    fn spent_utxo(key: SpentUtxoKey, reserved_at_secs: u64) -> crate::SpentInputs {
-        crate::SpentInputs {
+    fn spent_utxo(key: SpentUtxoKey, reserved_at_secs: u64) -> SpentInputs {
+        SpentInputs {
             unshielded: vec![ReservedInput {
                 input: key,
                 reserved_at: Timestamp::from_secs(reserved_at_secs),
@@ -2066,14 +2010,10 @@ mod tests {
         commit.chain_tblock = anchor + midnight_helpers::Duration::from_secs(600);
         wallet.commit_resync(commit).unwrap();
 
-        let context = wallet.execution_context().unwrap();
+        let context = wallet.block_context().expect("a block context");
+        assert_eq!(context.tblock, anchor, "no Dust event moved the anchor");
         assert_eq!(
-            context.latest_block_context().tblock,
-            anchor,
-            "no Dust event moved the anchor"
-        );
-        assert_eq!(
-            chain_time(&context.latest_block_context()),
+            chain_time(context),
             anchor + midnight_helpers::Duration::from_secs(600)
         );
     }
@@ -2130,13 +2070,13 @@ mod tests {
             Timestamp::from_secs(100),
             Timestamp::MAX,
         );
-        wallet.persist_reservation(&spent_utxo(key.clone(), 100));
+        lock(&wallet.pending).mark_proven(&spent_utxo(key.clone(), 100));
 
         let mut commit = noop_commit(&wallet);
         commit.spent_unshielded = vec![key];
         wallet.commit_resync(commit).unwrap();
 
-        assert!(wallet.pending.is_empty());
+        assert!(lock(&wallet.pending).reservations().is_empty());
         assert_eq!(stored_generations(dir.path()), vec![2]);
         assert!(
             PendingReservations::load(dir.path(), "undeployed", &wallet.storage_id())
@@ -2215,8 +2155,8 @@ mod tests {
         commit.spent_unshielded = vec![confirmed];
         wallet.commit_resync(commit).unwrap();
 
-        let remaining: Vec<_> = wallet
-            .pending
+        let remaining: Vec<_> = lock(&wallet.pending)
+            .reservations()
             .unshielded_spends()
             .map(|spend| spend.key.clone())
             .collect();
@@ -2224,7 +2164,7 @@ mod tests {
     }
 
     #[test]
-    fn persist_reservation_keeps_reservation_when_persistence_fails() {
+    fn a_proven_mark_keeps_the_reservation_when_persistence_fails() {
         // `storage_dir` points at a regular file, so `save_pending` cannot
         // create the wallet directory and the disk write fails. The write
         // is best-effort: no panic, and the in-memory reservation stands.
@@ -2241,9 +2181,15 @@ mod tests {
             Timestamp::from_secs(100),
             Timestamp::MAX,
         );
-        wallet.persist_reservation(&spent_utxo(ukey(0xab, 0), 100));
+        lock(&wallet.pending).mark_proven(&spent_utxo(ukey(0xab, 0), 100));
 
-        assert_eq!(wallet.pending.unshielded_spends().count(), 1);
+        assert_eq!(
+            lock(&wallet.pending)
+                .reservations()
+                .unshielded_spends()
+                .count(),
+            1
+        );
 
         // Once the disk works again, a commit that moves nothing must
         // still write the reservation.
@@ -2513,7 +2459,7 @@ mod tests {
         /// Asking for the next event instead leaves the indexer with nothing
         /// to send, and the replay can only read that silence by waiting out
         /// its 10s timeout. Every build pays that, because
-        /// `MidnightProvider::execution_context` resyncs first.
+        /// `fund_transaction` resyncs first.
         #[tokio::test]
         async fn zswap_resume_at_the_tip_returns_without_waiting() {
             let (listener, url) = bind().await;

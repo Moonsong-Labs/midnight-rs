@@ -81,23 +81,23 @@ pub(crate) fn run_call(
     )?)
 }
 
-/// Build the funded, proven transaction of a circuit run.
+/// Build the funded, proven and signed transaction of a circuit run.
 ///
-/// `exec_result` is the run of `circuit` on `state`. The build resyncs the
-/// wallet, which covers the call and reserves the inputs that it spends, and
-/// the result names them.
+/// `exec_result` is the run of `circuit` on `state`. The wallet resyncs, then
+/// covers the call and reserves the inputs that it spends, and the result
+/// carries that reservation.
 #[expect(
     clippy::too_many_arguments,
     reason = "the inputs of the ledger's own `call_transaction`, one value each"
 )]
-pub(crate) async fn call_transaction(
+pub(crate) async fn call_transaction<W: midnight_types::MidnightWallet>(
     circuit: &compact_codegen::ir::Circuit,
     args: &[(&str, runtime::Value)],
     exec_result: &runtime::ExecutionResult,
     state: &StateAtBlock,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
-    provider: &midnight_provider::MidnightProvider,
+    provider: &midnight_provider::MidnightProvider<W>,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
     verifier_key: &[u8],
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
@@ -105,11 +105,10 @@ pub(crate) async fn call_transaction(
     // When false, skip Dust funding: the call is built proven but fee-less, for
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
     pay_fees: bool,
-) -> Result<midnight_types::TransferResult, ContractError> {
-    let builds = provider.builds().await?;
-    // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+) -> Result<midnight_types::TxEnvelope, ContractError> {
+    // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
     Box::pin(crate::ledger::call::call_transaction(
-        &builds,
+        provider,
         circuit,
         args,
         exec_result,

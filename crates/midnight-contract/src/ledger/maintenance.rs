@@ -8,10 +8,10 @@ use midnight_helpers::{
     BuildContext, ContractOperationVersion, ContractOperationVersionedVerifierKey, DefaultDB,
     EntryPointBuf, MaintenanceUpdate, SingleUpdate,
 };
-use midnight_provider::Builds;
+use midnight_provider::MidnightProvider;
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::TransferResult;
 use midnight_types::convert::IntoLedger;
+use midnight_types::{MidnightWallet, TxEnvelope};
 
 use super::deploy::{build_with_mock_fee_proofs, single_action_tx_info};
 
@@ -122,15 +122,15 @@ impl midnight_helpers::BuildContractAction<DefaultDB, BuildContext> for AttachMa
     }
 }
 
-/// Sign `update` with `signatures`, then balance, prove, and serialize the
+/// Sign `update` with `signatures`, then balance, prove, and sign the
 /// maintenance transaction. A maintenance update is just another intent
 /// action with no ZK proof of its own, so it rides the same dust-balancing
 /// pipeline as a deploy.
-pub(crate) async fn maintenance_funded(
-    builds: &Builds<'_>,
+pub(crate) async fn maintenance_funded<W: MidnightWallet>(
+    provider: &MidnightProvider<W>,
     update: MaintenanceUpdate<DefaultDB>,
     signatures: &[(u32, Signature)],
-) -> Result<TransferResult, ContractError> {
+) -> Result<TxEnvelope, ContractError> {
     let update = signatures
         .iter()
         .fold(update, |update, (index, signature)| {
@@ -140,10 +140,10 @@ pub(crate) async fn maintenance_funded(
             )
         });
 
-    let context = builds.execution_context().await?;
+    let context = provider.chain_context().await?;
     build_with_mock_fee_proofs(
-        builds,
-        single_action_tx_info(builds, context, AttachMaintenance { update }),
+        provider,
+        single_action_tx_info(provider, context, AttachMaintenance { update }),
     )
     .await
 }
