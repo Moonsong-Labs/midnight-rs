@@ -425,6 +425,15 @@ let pending = provider.send_transaction(request).await?;
 
 The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the fill with `WalletError::TtlOutOfRange`, before it spends or proves anything. A fee-less shielded transfer (`without_fee`) and a shielded swap half are Zswap offers with no intent, so they cannot carry a TTL, and their fill fails with `WalletError::TtlWithoutIntent`. A sponsor keeps the TTL of the transaction that it pays for, so its fill refuses a TTL with `WalletError::Transfer`.
 
+The wallet draws the coins and UTXOs of a transfer largest first, which spends the fewest inputs. To spend small coins first, for example to consolidate them, call `.with_coin_selection(CoinSelection::SmallestFirst)` on the request. Its rustdoc gives the cost of that order and the requests that read it:
+
+```rust
+use midnight_core::provider::CoinSelection;
+
+let request = TransactionRequest::shielded(token_type, amount, recipient)
+    .with_coin_selection(CoinSelection::SmallestFirst);
+```
+
 To fill the transaction without a send, call `fill` in place of `send_transaction`. It returns the signed `TxEnvelope`, which carries the reservation of its inputs:
 
 ```rust

@@ -23,7 +23,7 @@ use midnight_helpers::{
 use super::convert::{IntoLedger, IntoSdk};
 use crate::error::refuse_repeated_nullifiers;
 use crate::inputs::prepare_shielded_inputs;
-use crate::request::{RequestKind, TransactionRequest};
+use crate::request::{CoinSelection, RequestKind, TransactionRequest};
 use crate::sync::TrackedUtxo;
 use crate::transfer::panic_message;
 use crate::transfer::{ReservedInput, SpentInputs, SpentUtxoKey};
@@ -268,19 +268,18 @@ fn transfer_err<E: std::fmt::Debug>(ctx: &str) -> impl FnOnce(E) -> WalletError 
     move |e| WalletError::Transfer(format!("{ctx}: {e:?}"))
 }
 
-/// Take `candidates` of `(input, value)` largest first until their values
-/// cover `required`. Returns the inputs and the change, or `None` when all of
-/// them fall short.
-///
-/// Largest first spends the fewest inputs, and each shielded input carries its
-/// own proof and adds to the fee. It never absorbs small coins. TODO: replace
-/// it with best-fit selection,
-/// <https://github.com/Moonsong-Labs/midnight-rs/issues/145>
-fn select_largest_first<T>(
+/// Take `candidates` of `(input, value)` in the order of `selection` until
+/// their values cover `required`. Returns the inputs and the change, or `None`
+/// when all of them fall short.
+fn select_inputs<T>(
     mut candidates: Vec<(T, u128)>,
     required: u128,
+    selection: CoinSelection,
 ) -> Option<(Vec<T>, u128)> {
-    candidates.sort_by_key(|(_, value)| Reverse(*value));
+    match selection {
+        CoinSelection::LargestFirst => candidates.sort_by_key(|(_, value)| Reverse(*value)),
+        CoinSelection::SmallestFirst => candidates.sort_by_key(|(_, value)| *value),
+    }
     let mut total = 0u128;
     let mut selected = Vec::new();
     for (input, value) in candidates {
@@ -327,6 +326,7 @@ pub struct TransferBuilder {
     funding: Funding,
     context: Arc<BuildContext>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
+    coin_selection: CoinSelection,
     ttl: Option<std::time::Duration>,
 }
 
@@ -340,13 +340,14 @@ impl TransferBuilder {
             funding,
             context,
             proof_provider,
+            coin_selection: CoinSelection::default(),
             ttl: None,
         }
     }
 
-    /// Prepare the transfer that `request` names, with the TTL and the fee
-    /// that it asks for. Dispatches to the matching `prepare_*` method below,
-    /// each of which documents what it builds.
+    /// Prepare the transfer that `request` names, with the coin order, the
+    /// TTL and the fee that it asks for. Dispatches to the matching
+    /// `prepare_*` method below, each of which documents what it builds.
     ///
     /// # Errors
     ///
@@ -360,8 +361,13 @@ impl TransferBuilder {
             kind,
             pays_fee,
             ttl,
+            coin_selection,
         } = request;
-        let builder = Self { ttl, ..self };
+        let builder = Self {
+            coin_selection,
+            ttl,
+            ..self
+        };
         match kind {
             RequestKind::Shielded {
                 token_type,
@@ -415,12 +421,13 @@ impl TransferBuilder {
     /// submittable on its own; hand it to the fee payer, who completes it with
     /// `TransactionRequest::sponsor` and sends it.
     ///
-    /// `amount` may span several coins: inputs are selected up front, largest
-    /// first, and the remainder returns to this wallet as a change output, so
-    /// a payment is bounded by the wallet's total balance in `token_type`
-    /// rather than by its largest single coin. Sending the full balance to
-    /// this wallet's own address therefore consolidates it into one coin, and
-    /// sending part of a coin splits it. The spent coins' nullifiers are in
+    /// `amount` may span several coins: inputs are selected up front, in the
+    /// order of `TransactionRequest::with_coin_selection`, and the remainder
+    /// returns to this wallet as a change output, so a payment is bounded by
+    /// the wallet's total balance in `token_type` rather than by its largest
+    /// single coin. Sending the full balance to this wallet's own address
+    /// therefore consolidates it into one coin, and sending part of a coin
+    /// splits it. The spent coins' nullifiers are in
     /// [`PreparedTransfer::spent_shielded_inputs`].
     pub async fn prepare_shielded(
         self,
@@ -456,10 +463,10 @@ impl TransferBuilder {
     ///
     /// Because the half is unbalanced it can't self-fund its Dust, so it is
     /// always fee-less: the build draws no Dust. Give-side coins are selected
-    /// up front, largest first; the resulting change (if any) goes back to
-    /// this wallet, mirroring [`Self::prepare_unshielded`]'s change handling in
-    /// the shielded domain. The spent coins' nullifiers are in
-    /// [`PreparedTransfer::spent_shielded_inputs`].
+    /// up front, in the order of the request; the resulting change (if any)
+    /// goes back to this wallet, mirroring [`Self::prepare_unshielded`]'s
+    /// change handling in the shielded domain. The spent coins' nullifiers are
+    /// in [`PreparedTransfer::spent_shielded_inputs`].
     pub async fn prepare_shielded_swap(
         self,
         give_token: ShieldedTokenType,
@@ -491,6 +498,7 @@ impl TransferBuilder {
             mut funding,
             context,
             proof_provider,
+            coin_selection,
             ttl,
         } = self;
 
@@ -502,7 +510,7 @@ impl TransferBuilder {
             .map(|(nullifier, coin)| (nullifier, coin.value))
             .collect();
         let available = held(coins.iter().map(|(_, value)| *value));
-        let (spent_shielded_inputs, change) = select_largest_first(coins, spend_amount)
+        let (spent_shielded_inputs, change) = select_inputs(coins, spend_amount, coin_selection)
             .ok_or_else(|| WalletError::InsufficientShielded {
                 token_type: spend_token.into_sdk(),
                 required: spend_amount,
@@ -578,13 +586,14 @@ impl TransferBuilder {
             .map(|utxo| (utxo, utxo.value))
             .collect();
         let available = held(utxos.iter().map(|(_, value)| *value));
-        let (selected, change) = select_largest_first(utxos, amount).ok_or_else(|| {
-            WalletError::InsufficientUnshielded {
-                token_type: token_type.into_sdk(),
-                required: amount,
-                available,
-            }
-        })?;
+        let (selected, change) =
+            select_inputs(utxos, amount, self.coin_selection).ok_or_else(|| {
+                WalletError::InsufficientUnshielded {
+                    token_type: token_type.into_sdk(),
+                    required: amount,
+                    available,
+                }
+            })?;
 
         let mut outputs = vec![UtxoOutput {
             value: amount,
@@ -1275,7 +1284,8 @@ struct CoverPlan {
 /// Each coin of `pins` is spent whole, at the segment of the largest deficit
 /// of its token that is left, or at the guaranteed segment when none is left.
 /// Then each deficit that the pins leave takes coins of its token, largest
-/// first, for the reason that [`select_largest_first`] gives. The ledger balances
+/// first. A call or a deploy names no coin order, so the cover takes the
+/// default of [`TransactionRequest::with_coin_selection`]. The ledger balances
 /// each token at each segment, so what the coins at a token and segment hold
 /// beyond its deficit comes back as change at that segment.
 ///
@@ -2154,10 +2164,13 @@ mod tests {
     fn the_selection_takes_the_largest_inputs_until_they_cover_the_need() {
         let candidates = vec![('a', 3), ('b', 10), ('c', 5)];
         assert_eq!(
-            select_largest_first(candidates.clone(), 12),
+            select_inputs(candidates.clone(), 12, CoinSelection::LargestFirst),
             Some((vec!['b', 'c'], 3))
         );
-        assert_eq!(select_largest_first(candidates, 19), None);
+        assert_eq!(
+            select_inputs(candidates, 19, CoinSelection::LargestFirst),
+            None
+        );
     }
 
     /// The fee of a funding counts a placeholder in each signature slot. A

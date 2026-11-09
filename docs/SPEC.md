@@ -108,7 +108,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `WalletBuilder` | wallet | The builder that `Wallet::from_seed(seed)` starts and that syncs a `Wallet` from an indexer. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder::send` submits the deploy and returns a `PendingDeploy`. |
-| `TransactionRequest` | types | What to build: `shielded`, `unshielded`, `shielded_swap`, `register_dust`, `register_dust_to` or `sponsor`, adjusted with `without_fee` and `with_ttl`. `send_transaction` and `fill` take it. Not `Clone`. |
+| `TransactionRequest` | types | What to build: `shielded`, `unshielded`, `shielded_swap`, `register_dust`, `register_dust_to` or `sponsor`, adjusted with `without_fee`, `with_ttl` and `with_coin_selection`. `send_transaction` and `fill` take it. Not `Clone`. |
 | `PendingTx` / `TransactionReceipt` | provider | Watch handle over `submit_and_watch`; `get_receipt` waits for finality. It returns the `TransactionReceipt` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
 | `PendingCall<T>` | contract | A submitted circuit call and its decoded result. `get_receipt()` waits with no SDK deadline and settles the private-state snapshot by the verdict. A drop leaves the snapshot `Pending`. |
 | `Constructor` | contract | A contract's constructor as an `ir::Circuit`, the declarations it calls and the state it starts from. The generated `Contract::deploy` sets it, and the deploy runs it before any proof. |
@@ -371,7 +371,7 @@ CallOutcome<T> → caller
 
 ### Transfer (shielded / unshielded / swap / register dust / sponsor)
 
-A `TransactionRequest` names the transaction as data: a constructor, then the modifiers `without_fee` and `with_ttl`. The provider needs a wallet (`W: MidnightWallet`) to fill it. `send_transaction` fills and sends; `fill` stops at the signed `TxEnvelope`:
+A `TransactionRequest` names the transaction as data: a constructor, then the modifiers `without_fee`, `with_ttl` and `with_coin_selection`. The provider needs a wallet (`W: MidnightWallet`) to fill it. `send_transaction` fills and sends; `fill` stops at the signed `TxEnvelope`:
 
 ```
 TransactionRequest::shielded(token_type, amount, recipient)      // a typed recipient; no work yet
@@ -379,7 +379,7 @@ TransactionRequest::shielded(token_type, amount, recipient)      // a typed reci
                     shielded_swap(give_token, give_amount, receive_token, receive_amount)   // fee-less
                     register_dust() / register_dust_to(dust_key)
                     sponsor(tx_bytes)                            // pay the fee of another party's tx
-  [.without_fee()] [.with_ttl(ttl)]
+  [.without_fee()] [.with_ttl(ttl)] [.with_coin_selection(CoinSelection)]
 
   ↓ provider.send_transaction(request).await? (or provider.fill(request).await? to stop before the send)
 
