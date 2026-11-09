@@ -13,13 +13,11 @@
 use std::sync::Arc;
 
 use midnight_helpers::{
-    BuildContext, DefaultDB, Input, Nullifier, ProofPreimage, Segment, ShieldedTokenType, StdRng,
-    TokenInfo,
+    BuildContext, DefaultDB, Input, Nullifier, ProofPreimage, SecretKeys, Segment,
+    ShieldedTokenType, StdRng, TokenInfo, WalletState,
 };
 
-use super::convert::IntoLedger;
 use crate::WalletError;
-use crate::hd::Seed;
 
 /// A shielded input the wallet already produced.
 ///
@@ -63,14 +61,14 @@ impl midnight_helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
     }
 }
 
-/// Spend the named coins from `seed`'s wallet, returning inputs the offer
+/// Spend the named coins of `state` with `keys`, returning inputs the offer
 /// builder can hold without a secret.
 ///
-/// A coin is named only by its nullifier. Its token and value come from the
-/// wallet, never from the caller, so the figure the offer sums is the one the
-/// spend proof commits to and the two cannot drift apart. The wallet's Zswap
-/// state is rolled forward as it goes, the same bookkeeping the helpers' input
-/// does inside `build`.
+/// A coin is named only by its nullifier. Its token and value come from
+/// `state`, never from the caller, so the figure the offer sums is the one the
+/// spend proof commits to and the two cannot drift apart. `state` is rolled
+/// forward as it goes, the same bookkeeping the helpers' input does inside
+/// `build`.
 ///
 /// A spend leaves the coin in the wallet's Zswap state, so a second spend of
 /// it succeeds. The function refuses a coin that `nullifiers` names twice,
@@ -79,57 +77,46 @@ impl midnight_helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
 /// # Errors
 ///
 /// [`WalletError::DuplicateInput`] when `nullifiers` names a coin twice, and
-/// [`WalletError::Transfer`] when the wallet cannot spend a coin.
-///
-/// # Panics
-///
-/// Panics when `context` holds no wallet for `seed`.
+/// [`WalletError::Transfer`] when `state` cannot spend a coin.
 pub(crate) fn prepare_shielded_inputs(
-    context: &Arc<BuildContext>,
-    seed: &Seed,
+    state: &mut WalletState<DefaultDB>,
+    keys: &SecretKeys,
     nullifiers: &[Nullifier],
     rng: &mut StdRng,
 ) -> Result<Vec<PreparedInput>, WalletError> {
     crate::error::refuse_repeated_nullifiers(nullifiers)?;
-    context.with_wallet_from_seed(seed.into_ledger(), |wallet| {
-        let mut prepared = Vec::with_capacity(nullifiers.len());
-        for nullifier in nullifiers {
-            let coin = wallet.shielded.state.coins.get(nullifier).ok_or_else(|| {
-                // Deliberately not naming the wallet: the upstream selector
-                // panics here with the whole state in the message.
-                WalletError::Transfer(format!(
-                    "shielded coin {nullifier:?} is not spendable by this wallet \
-                         (already spent, not yet synced, or not owned by it)"
-                ))
-            })?;
-            // Read before the spend, which replaces the state this borrows.
-            let (token_type, value) = (coin.type_, coin.value);
+    let mut prepared = Vec::with_capacity(nullifiers.len());
+    for nullifier in nullifiers {
+        let coin = state.coins.get(nullifier).ok_or_else(|| {
+            // Deliberately not naming the wallet: the upstream selector
+            // panics here with the whole state in the message.
+            WalletError::Transfer(format!(
+                "shielded coin {nullifier:?} is not spendable by this wallet \
+                     (already spent, not yet synced, or not owned by it)"
+            ))
+        })?;
+        // Read before the spend, which replaces the state this borrows.
+        let (token_type, value) = (coin.type_, coin.value);
 
-            let (updated, input) = wallet
-                .shielded
-                .state
-                .spend(
-                    rng,
-                    wallet.shielded.secret_keys(),
-                    coin,
-                    Segment::Guaranteed.into(),
-                )
-                .map_err(|e| WalletError::Transfer(format!("spend shielded coin: {e:?}")))?;
-            wallet.shielded.state = updated;
+        let (updated, input) = state
+            .spend(rng, keys, coin, Segment::Guaranteed.into())
+            .map_err(|e| WalletError::Transfer(format!("spend shielded coin: {e:?}")))?;
+        *state = updated;
 
-            prepared.push(PreparedInput {
-                input: Some(input),
-                token_type,
-                value,
-            });
-        }
-        Ok(prepared)
-    })
+        prepared.push(PreparedInput {
+            input: Some(input),
+            token_type,
+            value,
+        });
+    }
+    Ok(prepared)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::convert::IntoLedger;
+    use crate::hd::Seed;
     use midnight_helpers::{HashOutput, SeedableRng};
 
     /// A spend leaves the coin spendable in the wallet's state, so a coin
@@ -139,16 +126,15 @@ mod tests {
     #[test]
     fn a_coin_named_twice_is_refused_before_any_spend() {
         let seed = Seed::from_bytes(&[1; 32]).unwrap();
-        let context = Arc::new(BuildContext::new_from_wallet_seeds(
-            "undeployed",
-            &[seed.into_ledger()],
-        ));
+        let keys = midnight_helpers::ShieldedWallet::<DefaultDB>::default(seed.into_ledger())
+            .secret_keys()
+            .clone();
         let coin = Nullifier(HashOutput([7; 32]));
         let other = Nullifier(HashOutput([8; 32]));
 
         let err = prepare_shielded_inputs(
-            &context,
-            &seed,
+            &mut WalletState::new(),
+            &keys,
             &[coin, other, coin],
             &mut StdRng::seed_from_u64(0),
         )

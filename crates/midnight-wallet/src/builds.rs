@@ -1,15 +1,16 @@
 //! [`Wallet`]'s funding and signing, as a [`MidnightWallet`].
 
 use async_trait::async_trait;
-use midnight_helpers::{BuildContext, DefaultDB, StandardTransactionInfo};
+use midnight_helpers::{OsRng, Serializable, Signature};
 use midnight_types::build::{
-    self, Cover, Fill, Funded, PreparedTransfer, SpentInputs, TransferBuilder, balance_external,
-    prepare_no_validate,
+    self, Cover, Fill, Funded, PreparedTransfer, ReservedInput, SpentInputs, SpentUtxoKey,
+    TransferBuilder, balance_external, prepare_no_validate,
 };
 use midnight_types::chain_pin::ChainView;
 use midnight_types::convert::IntoLedger;
 use midnight_types::{
-    FilledTx, FundedTx, MidnightWallet, ProvenTx, ShieldedRecipient, TxEnvelope, WalletError,
+    FilledTx, FundedTx, MidnightWallet, ProvenTx, ShieldedRecipient, SignatureRequest, TxEnvelope,
+    WalletError,
 };
 
 use crate::Wallet;
@@ -18,7 +19,11 @@ use crate::pending;
 /// Reserve what `prepared` spends in `wallet`'s book.
 fn reserve(wallet: &mut crate::state::Wallet, prepared: &PreparedTransfer) -> SpentInputs {
     wallet.reserve_pending(
-        prepared.dust_batches().to_vec(),
+        prepared
+            .dust_spends()
+            .iter()
+            .map(|spend| spend.old_nullifier)
+            .collect(),
         prepared.spent_unshielded_inputs().to_vec(),
         prepared.spent_shielded_inputs().to_vec(),
         prepared.reserved_at(),
@@ -27,21 +32,10 @@ fn reserve(wallet: &mut crate::state::Wallet, prepared: &PreparedTransfer) -> Sp
     prepared.spent_inputs()
 }
 
-/// Fund `tx_info` from `wallet`, and name `wallet`'s seed as the one the
-/// build draws on, as [`crate::state::Wallet::add_funding`] requires.
-fn fund_from(
-    wallet: &mut crate::state::Wallet,
-    tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
-) -> Result<(), WalletError> {
-    wallet.add_funding(&tx_info.context)?;
-    tx_info.set_funding_seeds(vec![wallet.seed().into_ledger()]);
-    Ok(())
-}
-
 /// Refuse a pinned coin that a pending build of `wallet` holds.
 ///
-/// The funding view leaves such a coin out, so a check after
-/// [`fund_from`] could not tell it from a coin that the wallet does not own.
+/// The funding view leaves such a coin out, so a check against that view
+/// could not tell it from a coin that the wallet does not own.
 fn refuse_reserved(
     wallet: &crate::state::Wallet,
     pins: &[midnight_types::Nullifier],
@@ -72,25 +66,25 @@ async fn fund(
             context,
             prover,
         } => {
-            wallet.add_funding(&context)?;
-            TransferBuilder::new(&*wallet, context, prover)
+            let funding = wallet.funding(&context)?;
+            TransferBuilder::new(funding, context, prover)
                 .prepare(request)
                 .await?
         }
-        Fill::Assembled(mut tx_info) => {
-            fund_from(wallet, &mut tx_info)?;
-            prepare_no_validate(*tx_info).await?
+        Fill::Assembled(tx_info) => {
+            let funding = wallet.funding(&tx_info.context)?;
+            prepare_no_validate(*tx_info, Some(&funding.dust)).await?
         }
         Fill::Sealed {
-            mut tx_info,
+            tx_info,
             external,
             cover,
         } => {
             if let Cover::Shortfalls { pins, .. } = &cover {
                 refuse_reserved(wallet, pins)?;
             }
-            fund_from(wallet, &mut tx_info)?;
-            match balance_external(*tx_info, wallet.seed(), &external, &cover)? {
+            let funding = wallet.funding(&tx_info.context)?;
+            match balance_external(*tx_info, funding, &external, &cover)? {
                 Some(prepared) => prepared,
                 None => return Ok((Funded::Unchanged(external), SpentInputs::default())),
             }
@@ -122,16 +116,111 @@ impl MidnightWallet for Wallet {
         Ok(build::funded(funded, reservation))
     }
 
-    /// Serialize `tx`, then keep its reservation across a restart.
+    /// Sign each placeholder of this wallet's unshielded key in `tx`,
+    /// serialize `tx`, then keep its reservation across a restart.
     ///
-    /// The fund step signed `tx` already, and the proof leaves those
-    /// signatures valid, so this adds none.
-    async fn sign_transaction(&self, tx: ProvenTx) -> Result<TxEnvelope, WalletError> {
+    /// The wallet signs only the inputs that `tx` reserved, so a sponsored
+    /// transaction cannot make it sign a spend or a Dust registration that it
+    /// did not fund.
+    async fn sign_transaction(&self, mut tx: ProvenTx) -> Result<TxEnvelope, WalletError> {
+        let requests: Vec<SignatureRequest> = tx
+            .signature_requests()
+            .into_iter()
+            .filter(|request| request.signer == self.unshielded_recipient())
+            .collect();
+        for request in &requests {
+            refuse_unreserved(
+                &build::inputs_to_sign(&tx, request),
+                &build::spent_by(&tx).unshielded,
+                request.segment,
+            )?;
+            let signature = self.signer().sign(&mut OsRng, &request.data);
+            tx.add_signature(request, signature_bytes(&signature))?;
+        }
+        if let Some(left) = tx.signature_requests().first() {
+            return Err(WalletError::Transfer(format!(
+                "the transaction still needs a signature of {:?} at segment {}, \
+                 which this wallet does not hold",
+                left.signer, left.segment
+            )));
+        }
         let spent = build::spent_by(&tx).clone();
         let envelope = build::envelope(tx)?;
         if !spent.is_empty() {
             pending::lock(self.pending()).mark_proven(&spent);
         }
         Ok(envelope)
+    }
+}
+
+/// Refuse to sign at `segment` unless `inputs`, the inputs that the
+/// signature covers there, hold at least one input and each is in `reserved`.
+///
+/// An intent that spends an input of the reservation is one that this wallet
+/// funded, so it carries no slot of this wallet's key that another party put
+/// there.
+fn refuse_unreserved(
+    inputs: &[SpentUtxoKey],
+    reserved: &[ReservedInput<SpentUtxoKey>],
+    segment: u16,
+) -> Result<(), WalletError> {
+    let held = |input: &SpentUtxoKey| reserved.iter().any(|r| r.input == *input);
+    if inputs.is_empty() || !inputs.iter().all(held) {
+        return Err(WalletError::Transfer(format!(
+            "the intent at segment {segment} needs a signature of this wallet for a spend or \
+             a Dust registration that this wallet did not fund"
+        )));
+    }
+    Ok(())
+}
+
+/// The 64-byte encoding of `signature`, which [`ProvenTx::add_signature`]
+/// takes.
+fn signature_bytes(signature: &Signature) -> [u8; 64] {
+    let mut bytes = Vec::with_capacity(64);
+    match signature {
+        Signature::Schnorr(signature) => signature.serialize(&mut bytes),
+        Signature::ECDSA(signature) => signature.serialize(&mut bytes),
+    }
+    .expect("serializing into a Vec cannot fail");
+    bytes.try_into().expect("a signature encodes to 64 bytes")
+}
+
+#[cfg(test)]
+mod tests {
+    use midnight_helpers::Timestamp;
+    use midnight_types::HashOutput;
+
+    use super::*;
+
+    fn utxo(byte: u8) -> SpentUtxoKey {
+        SpentUtxoKey {
+            intent_hash: HashOutput([byte; 32]),
+            output_index: 0,
+        }
+    }
+
+    /// A sponsored transaction can carry a placeholder of this wallet's key
+    /// in an intent of another party: a spend of one of its UTXOs, or a
+    /// registration of its NIGHT address to another Dust key. A wallet that
+    /// signed every request of its key would sign them, and lose the UTXO or
+    /// the Dust it generates.
+    #[test]
+    fn the_wallet_signs_only_for_inputs_that_it_reserved() {
+        let reserved = [ReservedInput {
+            input: utxo(1),
+            reserved_at: Timestamp::from_secs(100),
+        }];
+
+        assert!(refuse_unreserved(&[utxo(1)], &reserved, 1).is_ok());
+        for foreign in [&[utxo(1), utxo(2)][..], &[]] {
+            assert!(
+                matches!(
+                    refuse_unreserved(foreign, &reserved, 1),
+                    Err(WalletError::Transfer(_))
+                ),
+                "{foreign:?}"
+            );
+        }
     }
 }

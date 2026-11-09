@@ -14,8 +14,8 @@ use midnight_helpers::{
 };
 
 pub use crate::builder::{
-    BuildInputs, Cover, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external,
-    chain_time, execution_context, prepare_no_validate,
+    Cover, Funding, PreparedTransfer, TransferBuilder, balance_external, chain_time,
+    execution_context, prepare_no_validate,
 };
 use crate::request::{RequestKind, TransactionRequest};
 use crate::stage::FinalizedTx;
@@ -123,7 +123,7 @@ pub async fn fill<E: From<WalletError>>(
             // The fee of a user circuit is priced after its proof:
             // `mock_prove` refuses a user circuit, and a real proof on each
             // round of the fee loop would prove the circuit again.
-            let external = prepare_no_validate(*tx_info).await?.prove().await?;
+            let external = prepare_no_validate(*tx_info, None).await?.prove().await?;
             Fill::Sealed {
                 tx_info: Box::new(StandardTransactionInfo::new_from_context(
                     context, prover, None,

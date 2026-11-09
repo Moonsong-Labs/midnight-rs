@@ -36,8 +36,11 @@ pub trait MidnightWallet: std::fmt::Debug + Send + Sync {
     /// Resync against `chain`. Then add this wallet's inputs, change and Dust
     /// fee to `tx`, and reserve what they spend.
     ///
-    /// The selection and the reservation are one step, so two calls cannot
-    /// spend the same input. On an error, the wallet reserves nothing.
+    /// Each signature slot of an unshielded input or a Dust registration that
+    /// the funding adds holds a placeholder, which
+    /// [`Self::sign_transaction`] replaces after the proof. The selection and
+    /// the reservation are one step, so two calls cannot spend the same input.
+    /// On an error, the wallet reserves nothing.
     ///
     /// # Errors
     ///
@@ -59,13 +62,17 @@ pub trait MidnightWallet: std::fmt::Debug + Send + Sync {
     /// Add the signatures of this wallet that `tx` still needs. Then keep the
     /// reservation that `tx` carries across a restart.
     ///
-    /// The provider calls it after the proof, so a process that stops during
-    /// the proof leaves no reservation on disk.
+    /// The wallet signs each [`SignatureRequest`](crate::SignatureRequest)
+    /// of its key, with [`ProvenTx::add_signature`]. The provider calls it
+    /// after the proof, so a process that stops during the proof leaves no
+    /// reservation on disk.
     ///
     /// # Errors
     ///
-    /// [`WalletError::Transfer`] when the signed transaction does not
-    /// serialize.
+    /// [`WalletError::Transfer`] when `tx` asks this wallet to sign for an
+    /// unshielded input that `tx` did not reserve, when `tx` still needs a
+    /// signature that this wallet cannot make, and when the signed
+    /// transaction does not serialize.
     async fn sign_transaction(&self, tx: ProvenTx) -> Result<TxEnvelope, WalletError>;
 }
 

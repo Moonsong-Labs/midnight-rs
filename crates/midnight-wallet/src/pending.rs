@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hex::FromHex;
 use midnight_helpers::{DustNullifier, Nullifier, Timestamp};
 use midnight_types::HashOutput;
-use midnight_types::build::{DustSpendBatch, Reservation, SpentInputs};
+use midnight_types::build::{Reservation, SpentInputs};
 use midnight_types::convert::IntoLedger;
 use tracing::error;
 
@@ -48,8 +48,7 @@ use crate::storage::{
 };
 use midnight_types::build::{ReservedInput, SpentUtxoKey};
 
-/// The Dust UTXOs that one `speculative_spend` call spent, named by their
-/// nullifiers.
+/// The Dust UTXOs that one build spent, named by their nullifiers.
 ///
 /// A later build selects from a Dust state that leaves these UTXOs out, so it
 /// cannot spend them again.
@@ -137,24 +136,26 @@ pub(crate) struct PendingReservations {
 impl PendingReservations {
     /// Append new reservations from a freshly-built transaction, stamped
     /// `reserved_at` and held until the chain time passes `expires_at`.
+    /// `dust` names the Dust spends of the build, which form one batch.
     ///
     /// The build is not proven yet, so `pending.json` leaves the new entries
     /// out until [`Self::mark_proven`] names them.
     pub(crate) fn reserve(
         &mut self,
-        dust_batches: Vec<DustSpendBatch>,
+        dust: Vec<DustNullifier>,
         unshielded: Vec<SpentUtxoKey>,
         shielded: Vec<Nullifier>,
         reserved_at: Timestamp,
         expires_at: Timestamp,
     ) {
-        self.dust
-            .extend(dust_batches.into_iter().map(|b| PendingDustBatch {
-                nullifiers: b.spends.iter().map(|s| s.old_nullifier).collect(),
+        if !dust.is_empty() {
+            self.dust.push(PendingDustBatch {
+                nullifiers: dust,
                 reserved_at,
                 expires_at,
                 proven: false,
-            }));
+            });
+        }
         self.unshielded
             .extend(unshielded.into_iter().map(|key| PendingUnshieldedSpend {
                 key,
@@ -242,7 +243,7 @@ impl PendingReservations {
     /// the chain time passes the TTL of the reservation. A TTL is never before
     /// the chain time of its build. So after that TTL, a later build carries a
     /// later stamp when its context is as new as the wallet's chain view.
-    /// [`crate::state::Wallet::add_funding`] re-anchors the context of a funded build
+    /// [`crate::state::Wallet::funding`] re-anchors the context of a funded build
     /// on that view.
     ///
     /// Release each reservation once. Two builds at one chain time share a
@@ -551,12 +552,7 @@ impl PendingReservations {
 #[cfg(test)]
 pub(super) mod test_support {
     use super::*;
-    use crate::Seed;
-    use midnight_helpers::mn_ledger::dust::DustCommitment;
-    use midnight_helpers::{
-        DefaultDB, DustLocalState, DustSpend, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage,
-        ProofPreimageMarker, Sp,
-    };
+    use midnight_helpers::Fr;
 
     /// The key of output `output_index` of the transaction whose intent
     /// hash repeats the byte `intent_hash`.
@@ -571,50 +567,23 @@ pub(super) mod test_support {
         DustNullifier(Fr::from(n))
     }
 
-    /// A structurally valid `DustSpend` whose identity is `nullifier(n)`.
-    /// The proof is a placeholder preimage, because a reservation keeps only
-    /// `old_nullifier`.
-    pub(crate) fn dust_spend(n: u64) -> DustSpend<ProofPreimageMarker, DefaultDB> {
-        DustSpend {
-            v_fee: 1,
-            old_nullifier: nullifier(n),
-            new_commitment: DustCommitment(Fr::from(n + 1)),
-            proof: ProofPreimage {
-                inputs: Vec::new(),
-                private_transcript: Vec::new(),
-                public_transcript_inputs: Vec::new(),
-                public_transcript_outputs: Vec::new(),
-                binding_input: Fr::from(0u64),
-                communications_commitment: None,
-                key_location: KeyLocation(std::borrow::Cow::Borrowed("test")),
-            },
-        }
-    }
-
-    /// A batch of [`dust_spend`]s. Its seed is a fixed placeholder, because a
-    /// reservation drops the seed.
-    pub(crate) fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
-        DustSpendBatch {
-            seed: Seed::from_bytes(&[0x00; 32]).unwrap(),
-            spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
-            updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
-        }
+    /// The nullifiers of the Dust spends of one build.
+    pub(crate) fn dust(nullifiers: &[u64]) -> Vec<DustNullifier> {
+        nullifiers.iter().map(|&n| nullifier(n)).collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{dust_batch, dust_spend, nullifier, ukey};
+    use super::test_support::{dust, nullifier, ukey};
     use super::*;
-    use crate::Seed;
-    use midnight_helpers::{DustLocalState, INITIAL_PARAMETERS, Sp};
 
     #[test]
     fn evict_expired_drops_entries_past_ttl() {
         let mut p = PendingReservations::default();
         // Reserved at t=100 for a transaction whose TTL is t=130.
         p.reserve(
-            vec![dust_batch(&[7])],
+            dust(&[7]),
             vec![ukey(0xab, 0)],
             vec![shielded_nf(1)],
             Timestamp::from_secs(100),
@@ -648,7 +617,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let mut p = PendingReservations::default();
         p.reserve(
-            vec![dust_batch(&[7])],
+            dust(&[7]),
             vec![ukey(0xab, 0)],
             vec![shielded_nf(1)],
             Timestamp::from_secs(100),
@@ -674,7 +643,7 @@ mod tests {
     fn clear_confirmed_removes_matching_reservations_before_ttl() {
         let mut p = PendingReservations::default();
         p.reserve(
-            vec![dust_batch(&[7])],
+            dust(&[7]),
             vec![ukey(0xab, 0), ukey(0xab, 1)],
             Vec::new(),
             Timestamp::from_secs(100),
@@ -697,7 +666,7 @@ mod tests {
     fn clear_confirmed_ignores_unrelated_events() {
         let mut p = PendingReservations::default();
         p.reserve(
-            vec![dust_batch(&[7])],
+            dust(&[7]),
             vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
@@ -714,13 +683,15 @@ mod tests {
     #[test]
     fn clear_confirmed_drops_dust_batch_on_any_observed_nullifier() {
         let mut p = PendingReservations::default();
-        p.reserve(
-            vec![dust_batch(&[7, 8]), dust_batch(&[9])],
-            Vec::new(),
-            Vec::new(),
-            Timestamp::from_secs(100),
-            Timestamp::MAX,
-        );
+        for nullifiers in [&[7, 8][..], &[9]] {
+            p.reserve(
+                dust(nullifiers),
+                Vec::new(),
+                Vec::new(),
+                Timestamp::from_secs(100),
+                Timestamp::MAX,
+            );
+        }
 
         // One observed nullifier from the first batch drops the whole batch
         // (transactions apply atomically); the second batch is untouched.
@@ -728,56 +699,6 @@ mod tests {
         let batches: Vec<_> = p.dust_batches().collect();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].nullifiers, vec![nullifier(9)]);
-    }
-
-    /// The snapshot directory is named by public address, so no file in it
-    /// needs the seed, and `pending.json` is a file in it. A seed written there
-    /// would sit in the clear beside the other state files.
-    #[test]
-    fn pending_json_contains_no_seed_material() {
-        let dir = tempfile::TempDir::new().unwrap();
-
-        // A seed whose hex is distinctive enough to find in the raw file.
-        let seed = Seed::from_bytes(&[0xab; 32]).unwrap();
-        let mut p = PendingReservations::default();
-        p.reserve(
-            vec![DustSpendBatch {
-                seed: seed.clone(),
-                spends: vec![dust_spend(1)],
-                updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
-            }],
-            vec![ukey(0xcd, 0)],
-            vec![shielded_nf(1)],
-            Timestamp::from_secs(100),
-            Timestamp::MAX,
-        );
-        prove_all(&mut p);
-        p.save(dir.path(), "undeployed", "testwallet").unwrap();
-
-        let raw = std::fs::read_to_string(
-            dir.path()
-                .join("undeployed")
-                .join("testwallet")
-                .join("pending.json"),
-        )
-        .expect("pending.json should exist after save");
-
-        assert!(
-            !raw.contains(&"ab".repeat(32)),
-            "pending.json must not contain the wallet seed: {raw}"
-        );
-        assert!(
-            !raw.to_lowercase().contains("seed"),
-            "pending.json must carry no seed field at all: {raw}"
-        );
-
-        // The batch still round-trips; the seed comes from the owning wallet.
-        let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
-            .unwrap()
-            .expect("pending.json should load");
-        let batches: Vec<_> = loaded.dust_batches().collect();
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].nullifiers, vec![nullifier(1)]);
     }
 
     #[test]
@@ -788,7 +709,7 @@ mod tests {
 
         let mut p = PendingReservations::default();
         p.reserve(
-            vec![dust_batch(&[7])],
+            dust(&[7]),
             vec![ukey(0xab, 0)],
             Vec::new(),
             Timestamp::from_secs(100),
@@ -818,14 +739,14 @@ mod tests {
         let mut p = PendingReservations::default();
         // Build A, then build B in the same block. Only A finishes its proof.
         p.reserve(
-            vec![dust_batch(&[1])],
+            dust(&[1]),
             vec![ukey(0xaa, 0)],
             vec![shielded_nf(1)],
             Timestamp::from_secs(100),
             Timestamp::MAX,
         );
         p.reserve(
-            vec![dust_batch(&[2])],
+            dust(&[2]),
             vec![ukey(0xbb, 0)],
             vec![shielded_nf(2)],
             Timestamp::from_secs(100),
@@ -906,9 +827,16 @@ mod tests {
     fn release_returns_only_the_named_reservations() {
         let mut p = PendingReservations::default();
         p.reserve(
-            vec![dust_batch(&[1, 2]), dust_batch(&[3])],
+            dust(&[1, 2]),
             vec![ukey(0xaa, 0), ukey(0xbb, 1)],
             vec![shielded_nf(1), shielded_nf(2)],
+            Timestamp::from_secs(100),
+            Timestamp::MAX,
+        );
+        p.reserve(
+            dust(&[3]),
+            Vec::new(),
+            Vec::new(),
             Timestamp::from_secs(100),
             Timestamp::MAX,
         );
@@ -952,7 +880,7 @@ mod tests {
         let mut p = PendingReservations::default();
         // B's reservation, made after A's entry left the set.
         p.reserve(
-            vec![dust_batch(&[1])],
+            dust(&[1]),
             vec![ukey(0xaa, 0)],
             vec![shielded_nf(1)],
             Timestamp::from_secs(200),
@@ -997,7 +925,7 @@ mod tests {
         );
         // Build B, the fee Dust.
         p.reserve(
-            vec![dust_batch(&[1])],
+            dust(&[1]),
             Vec::new(),
             Vec::new(),
             Timestamp::from_secs(200),

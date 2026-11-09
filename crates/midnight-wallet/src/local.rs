@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use midnight_helpers::UnshieldedWallet;
 use midnight_types::chain_pin::{ChainView, current_pin};
+use midnight_types::convert::IntoLedger;
 use midnight_types::{
     CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, UnshieldedRecipient,
     WalletBalance, WalletError,
@@ -50,6 +52,8 @@ pub struct Wallet {
     dust_address: String,
     shielded_recipient: ShieldedRecipient,
     unshielded_recipient: UnshieldedRecipient,
+    /// The key of the unshielded UTXOs, which signs after the proof.
+    signer: UnshieldedWallet,
 }
 
 impl Wallet {
@@ -68,6 +72,7 @@ impl Wallet {
             dust_address: seed.dust_address(state.network()),
             shielded_recipient: state.shielded_recipient(),
             unshielded_recipient: seed.unshielded_recipient(),
+            signer: UnshieldedWallet::default(seed.into_ledger()),
             state: RwLock::new(state),
             sync: Mutex::new(()),
         })
@@ -79,6 +84,10 @@ impl Wallet {
 
     pub(crate) fn pending(&self) -> &Arc<std::sync::Mutex<PendingBook>> {
         &self.pending
+    }
+
+    pub(crate) fn signer(&self) -> &UnshieldedWallet {
+        &self.signer
     }
 
     /// The default storage directory: `~/.midnight/wallets/`. Pass it to

@@ -16,7 +16,8 @@ pub struct FilledTx(pub(crate) Fill);
 /// A transaction that a wallet funded, not yet proven.
 ///
 /// It holds the wallet's inputs, change and Dust fee, and the reservation of
-/// what they spend. A drop hands those inputs back to the wallet.
+/// what they spend. Each signature slot that the funding added holds a
+/// placeholder. A drop hands those inputs back to the wallet.
 pub struct FundedTx {
     pub(crate) funded: Funded,
     pub(crate) reservation: Reservation,
@@ -24,7 +25,9 @@ pub struct FundedTx {
 
 /// A proven and sealed transaction, which the wallet signs next.
 ///
-/// A drop hands the inputs that its wallet reserved back to the wallet.
+/// Its placeholders wait for signatures: see [`Self::signature_requests`] and
+/// [`Self::add_signature`]. A drop hands the inputs that its wallet reserved
+/// back to the wallet.
 pub struct ProvenTx {
     pub(crate) tx: FinalizedTx,
     pub(crate) reservation: Reservation,

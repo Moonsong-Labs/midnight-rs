@@ -72,7 +72,6 @@ mod snapshot;
 mod state;
 mod storage;
 mod sync;
-mod transfer;
 mod wallet;
 
 // The vocabulary this crate's own signatures name, so a consumer of the
