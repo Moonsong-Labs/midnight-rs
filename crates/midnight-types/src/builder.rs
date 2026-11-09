@@ -1299,11 +1299,11 @@ struct CoverPlan {
 ///
 /// Each coin of `pins` is spent whole, at the segment of the largest deficit
 /// of its token that is left, or at the guaranteed segment when none is left.
-/// Then each deficit that the pins leave takes coins of its token, largest
-/// first. A call or a deploy names no coin order, so the cover takes the
-/// default of [`TransferBuilder::with_coin_selection`]. The ledger balances
-/// each token at each segment, so what the coins at a token and segment hold
-/// beyond its deficit comes back as change at that segment.
+/// Then each deficit that the pins leave takes coins of its token in the order
+/// of [`CoinSelectionStrategy::LargestFirst`]. A call or a deploy names no coin
+/// order. The ledger balances each token at each segment, so what the coins at
+/// a token and segment hold beyond its deficit comes back as change at that
+/// segment.
 ///
 /// # Errors
 ///
