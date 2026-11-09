@@ -7,7 +7,8 @@ pub enum ProviderError {
     Rpc(String),
 
     /// An error surfaced from the wallet (its sync, its funding or its
-    /// signing) or from the proof.
+    /// signing), from the proof, or from a fill that refuses its request,
+    /// such as a sponsor of bytes that do not decode.
     /// Match the inner [`WalletError`], whose `Display` and `source()` this
     /// variant forwards.
     #[error(transparent)]

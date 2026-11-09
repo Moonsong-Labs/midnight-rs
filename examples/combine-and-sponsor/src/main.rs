@@ -15,7 +15,7 @@
 //! - A fee-less contract call (`.without_fee()` on the call builder) and a
 //!   fee-less transfer (`TransactionRequest::without_fee`). Each gives a
 //!   `TxEnvelope` whose bytes (`into_bytes`) go to the payer.
-//! - `merge_transactions(&[..])` (↔ midnight-js `Transaction.merge`) —
+//! - `merge_transactions(&[..])` (↔ midnight-js `Transaction.merge`):
 //!   combine proven transactions into one that lands atomically.
 //! - `TransactionRequest::sponsor(bytes)` (↔ midnight-js
 //!   `walletProvider.balanceTx`): pay another party's Dust fees.
@@ -50,7 +50,7 @@ fn env_or(name: &str, default: &str) -> String {
 
 /// Genesis-funded dev wallet (NIGHT + Dust + shielded test tokens).
 const SEED_A: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-/// Second wallet, holds no Dust — it only ever fills fee-less transactions.
+/// Second wallet. It holds no Dust, so it fills only fee-less transactions.
 const SEED_B: &str = "0000000000000000000000000000000000000000000000000000000000000002";
 
 /// Shielded units A seeds B with, so B has a coin to transfer.

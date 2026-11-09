@@ -102,9 +102,8 @@ pub enum SubmitError {
 
     /// The watch subscription failed or ended before the transaction
     /// reached the awaited status (a transport/stream issue). Says nothing
-    /// about the
-    /// transaction itself: it stays in the node's pool and may still land.
-    /// Re-query the chain instead of resubmitting.
+    /// about the transaction itself: it stays in the node's pool and may still
+    /// land. Re-query the chain instead of resubmitting.
     #[error("watch stream: {message}")]
     WatchStream { message: String },
 
@@ -361,8 +360,7 @@ impl PendingTx {
     /// and return its receipt when the chain applied it there.
     ///
     /// The verdict is provisional: a reorg can drop the block, and the
-    /// transaction can land again with another verdict. midnight-contract
-    /// reads a new contract at this block.
+    /// transaction can land again with another verdict.
     #[doc(hidden)]
     pub async fn best_block_receipt(self) -> Result<TransactionReceipt, ProviderError> {
         self.wait_for(TransactionStatus::as_in_block, "reaching best block")
