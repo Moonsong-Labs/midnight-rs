@@ -5,8 +5,9 @@ use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_helpers::mn_ledger::events::EventDetails;
 use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_helpers::{
-    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, LedgerContext, LedgerParameters,
-    SecretKeys, ShieldedWallet, Sp, Timestamp, UnshieldedWallet, WalletState as ZswapLocalState,
+    BlockContext, DefaultDB, DustLocalState, DustNullifier, DustWallet, Event, LedgerContext,
+    LedgerParameters, SecretKeys, SignatureVerifyingKey, Sp, Timestamp,
+    WalletState as ZswapLocalState, ledger_8,
 };
 use midnight_indexer_client::SubscriptionClient;
 use midnight_types::build::{Funding, SpentUtxoKey, TrackedUtxo, chain_time};
@@ -22,9 +23,9 @@ use crate::replay::{
 };
 use crate::storage::wallet_storage_id;
 use crate::wallet::ChainSync;
-use crate::{Network, Seed, SyncProgress, WalletError};
+use crate::{Network, SyncProgress, WalletError};
 
-/// A Midnight wallet: identity (seed, addresses) and synced ledger state.
+/// A Midnight wallet: identity (keys, addresses) and synced ledger state.
 ///
 /// Maintains three streams of state from the indexer:
 /// - `zswapLedgerEvents` → shielded coin tracking + Merkle tree
@@ -34,8 +35,12 @@ use crate::{Network, Seed, SyncProgress, WalletError};
 /// The state of the SDK's `Wallet`. Transaction building uses it directly (no
 /// full-chain replay).
 pub struct Wallet {
-    seed: Seed,
     secret_keys: SecretKeys,
+    /// The ledger 8 Zswap keys, which a rescan from the first event reads the
+    /// events before the hard fork with.
+    pre_fork_keys: ledger_8::SecretKeys,
+    /// The key that owns the unshielded UTXOs.
+    night_key: SignatureVerifyingKey,
     network: Network,
     unshielded_address: String,
 
@@ -408,7 +413,8 @@ pub struct ResyncCommit {
 /// The wallet's half of [`crate::wallet::ShieldedRescanPlan`]: who the
 /// rescan is for, and the coins it claims on the way.
 pub struct ShieldedRescanPlan {
-    seed: Seed,
+    secret_keys: SecretKeys,
+    pre_fork_keys: ledger_8::SecretKeys,
     coins: Vec<crate::CoinInfo>,
 }
 
@@ -417,7 +423,14 @@ impl ShieldedRescanPlan {
     /// first event of the stream.
     pub async fn run(self, indexer_url: &str) -> Result<ShieldedRescanCommit, WalletError> {
         let sub_client = SubscriptionClient::new(indexer_url);
-        let replay = replay_zswap_from_genesis(&sub_client, &self.seed, &self.coins, None).await?;
+        let replay = replay_zswap_from_genesis(
+            &sub_client,
+            &self.secret_keys,
+            &self.pre_fork_keys,
+            &self.coins,
+            None,
+        )
+        .await?;
         Ok(ShieldedRescanCommit {
             zswap_state: replay.state,
             zswap_event_id: replay.last_id,
@@ -457,13 +470,6 @@ pub(crate) enum DustStart {
     },
     /// From an empty Dust state, at the first event: a sync with no snapshot.
     Fresh,
-}
-
-/// The shielded keys `seed` derives.
-pub(crate) fn zswap_keys(seed: &Seed) -> SecretKeys {
-    ShieldedWallet::<DefaultDB>::default(seed.into_ledger())
-        .secret_keys()
-        .clone()
 }
 
 impl Wallet {
@@ -506,7 +512,7 @@ impl Wallet {
     ) -> Result<Self, WalletError> {
         let ChainSync {
             indexer_url,
-            seed,
+            keys,
             address,
             network,
             storage_dir,
@@ -522,17 +528,17 @@ impl Wallet {
             dust,
         } = start;
         let wallet_id = wallet_storage_id(address);
-        let secret_keys = zswap_keys(seed);
 
         let parameters = decode_ledger_parameters(block)?;
         let block_timestamp = block_time(block)?;
 
         let (dust_wallet, start_dust_id) = match dust {
             DustStart::Resume { wallet, next_id } => (*wallet, next_id),
-            DustStart::Fresh => (
-                DustWallet::default(seed.into_ledger(), Some(&parameters)),
-                0,
-            ),
+            DustStart::Fresh => {
+                let mut wallet = keys.dust.clone();
+                wallet.dust_local_state = Some(Sp::new(DustLocalState::new(parameters.dust)));
+                (wallet, 0)
+            }
         };
 
         let sub_client = SubscriptionClient::new(indexer_url);
@@ -597,8 +603,9 @@ impl Wallet {
         });
 
         let state = Self {
-            seed: seed.clone(),
-            secret_keys,
+            secret_keys: keys.zswap.clone(),
+            pre_fork_keys: keys.zswap_pre_fork.clone(),
+            night_key: keys.unshielded.verifying_key(),
             network: network.clone(),
             unshielded_address: address.to_string(),
             zswap_state,
@@ -871,7 +878,7 @@ impl Wallet {
         Ok(Funding {
             shielded_keys: self.secret_keys.clone(),
             shielded,
-            night_key: UnshieldedWallet::default((&self.seed).into_ledger()).verifying_key(),
+            night_key: self.night_key.clone(),
             utxos,
             dust,
         })
@@ -880,10 +887,6 @@ impl Wallet {
     // -------------------------------------------------------------------------
     // Accessors
     // -------------------------------------------------------------------------
-
-    pub fn seed(&self) -> &Seed {
-        &self.seed
-    }
 
     /// See [`crate::Wallet::shielded_recipient`].
     pub fn shielded_recipient(&self) -> crate::ShieldedRecipient {
@@ -1080,7 +1083,8 @@ impl Wallet {
     /// [`ShieldedRescanPlan`] for the intended plan → run → commit flow.
     pub fn shielded_rescan_plan(&self) -> ShieldedRescanPlan {
         ShieldedRescanPlan {
-            seed: self.seed.clone(),
+            secret_keys: self.secret_keys.clone(),
+            pre_fork_keys: self.pre_fork_keys.clone(),
             coins: self
                 .coins_to_register()
                 .into_iter()
@@ -1123,11 +1127,13 @@ pub(crate) struct ZswapReplay {
 /// goes on from the first ledger 9 event.
 pub(crate) async fn replay_zswap_from_genesis(
     sub_client: &SubscriptionClient,
-    seed: &Seed,
+    secret_keys: &SecretKeys,
+    pre_fork_keys: &ledger_8::SecretKeys,
     coins: &[crate::CoinInfo],
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<ZswapReplay, WalletError> {
-    let pre_fork = crate::pre_fork::replay(sub_client, seed, coins, progress.clone()).await?;
+    let pre_fork =
+        crate::pre_fork::replay(sub_client, pre_fork_keys, coins, progress.clone()).await?;
     let Some(fork_id) = pre_fork.fork_id else {
         return Ok(ZswapReplay {
             state: pre_fork.state,
@@ -1137,7 +1143,7 @@ pub(crate) async fn replay_zswap_from_genesis(
     info!(fork_id, "the shielded stream continues in ledger 9");
     replay_zswap_events(
         sub_client,
-        &zswap_keys(seed),
+        secret_keys,
         pre_fork.state,
         fork_id,
         false,
@@ -1287,6 +1293,7 @@ pub(crate) mod test_support {
     use midnight_helpers::{HashOutput, Recipient, TransactionHash};
 
     use super::*;
+    use crate::Seed;
 
     /// An event with an all-zero source, for tests that read only its content.
     pub(super) fn zero_source_event(content: EventDetails<DefaultDB>) -> Event<DefaultDB> {
@@ -1309,9 +1316,9 @@ pub(crate) mod test_support {
         coin: &crate::CoinInfo,
         mt_index: u64,
     ) -> String {
-        let commitment = coin
-            .into_ledger()
-            .commitment(&Recipient::User(zswap_keys(seed).coin_public_key()));
+        let commitment = coin.into_ledger().commitment(&Recipient::User(
+            crate::keys::RoleKeys::derive(seed).zswap.coin_public_key(),
+        ));
         let event = zero_source_event(EventDetails::ZswapOutput {
             commitment,
             preimage_evidence: ZswapPreimageEvidence::None,
@@ -1395,17 +1402,18 @@ mod tests {
 
     /// Minimal offline wallet for unit tests: fresh state, no sync.
     fn test_wallet(storage_dir: Option<PathBuf>) -> Wallet {
-        let seed = test_seed();
-        let shielded = ShieldedWallet::<DefaultDB>::default((&seed).into_ledger());
-        let secret_keys = shielded.secret_keys().clone();
+        let keys = crate::keys::RoleKeys::derive(&test_seed());
+        let mut dust_wallet = keys.dust.clone();
+        dust_wallet.dust_local_state = Some(Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)));
         Wallet {
-            seed: seed.clone(),
-            secret_keys,
+            secret_keys: keys.zswap.clone(),
+            pre_fork_keys: keys.zswap_pre_fork.clone(),
+            night_key: keys.unshielded.verifying_key(),
             network: Network::Undeployed,
             unshielded_address: "mn_addr_undeployed1test".into(),
-            zswap_state: shielded.state.clone(),
+            zswap_state: ZswapLocalState::new(),
             zswap_event_id: 0,
-            dust_wallet: DustWallet::default((&seed).into_ledger(), Some(&INITIAL_PARAMETERS)),
+            dust_wallet,
             dust_event_id: 0,
             unshielded_utxos: Vec::new(),
             last_block_height: 0,
@@ -2169,7 +2177,7 @@ mod tests {
             let (listener, url) = bind().await;
             let mut wallet = test_wallet(None);
             let coin = unreachable_coin(9, 42);
-            let raw = ciphertextless_output(&wallet.seed, &coin, 0);
+            let raw = ciphertextless_output(&test_seed(), &coin, 0);
 
             let server = tokio::spawn(async move {
                 // The same one-event stream for each of the two rescans. A
@@ -2241,8 +2249,8 @@ mod tests {
             let first = unreachable_coin(9, 42);
             let second = unreachable_coin(8, 77);
             let stream = [
-                ciphertextless_output(&wallet.seed, &first, 0),
-                ciphertextless_output(&wallet.seed, &second, 1),
+                ciphertextless_output(&test_seed(), &first, 0),
+                ciphertextless_output(&test_seed(), &second, 1),
             ];
 
             let server = tokio::spawn(async move {
@@ -2292,7 +2300,7 @@ mod tests {
             let (listener, url) = bind().await;
             let mut wallet = test_wallet(None);
             let coin = unreachable_coin(9, 42);
-            let raw = crate::pre_fork::test_support::ciphertextless_output(&wallet.seed, &coin, 0);
+            let raw = crate::pre_fork::test_support::ciphertextless_output(&test_seed(), &coin, 0);
             let server = tokio::spawn(async move {
                 let (mut ws, sub) = accept_subscriber(&listener).await;
                 assert_eq!(subscription_variable(&sub, "id"), 0);
@@ -2353,12 +2361,12 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let shielded = ShieldedWallet::<DefaultDB>::default((&test_seed()).into_ledger());
+            let keys = crate::keys::RoleKeys::derive(&test_seed());
             let started = std::time::Instant::now();
             let replay = replay_zswap_events(
                 &sub_client,
-                shielded.secret_keys(),
-                shielded.state.clone(),
+                &keys.zswap,
+                ZswapLocalState::new(),
                 8,
                 true,
                 None,

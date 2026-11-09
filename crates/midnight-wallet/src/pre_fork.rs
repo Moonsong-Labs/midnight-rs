@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::generation::Generation;
 use crate::replay::{LedgerStream, replay_ledger_events};
-use crate::{CoinInfo, Seed, SyncProgress, WalletError};
+use crate::{CoinInfo, SyncProgress, WalletError};
 
 /// The shielded state that the events before the fork leave, in ledger 9.
 pub(crate) struct PreFork {
@@ -28,8 +28,9 @@ pub(crate) struct PreFork {
     pub(crate) fork_id: Option<i64>,
 }
 
-/// Replay the zswap stream of `seed`'s wallet from its first event up to the
-/// first ledger 9 event, and claim `coins` on the way.
+/// Replay the zswap stream of the wallet whose ledger 8 keys are
+/// `secret_keys` from its first event up to the first ledger 9 event, and
+/// claim `coins` on the way.
 ///
 /// The replay hands back the state in ledger 9 also when the stream ends
 /// before a ledger 9 event: the chain runs ledger 9, so the replay goes on
@@ -37,11 +38,10 @@ pub(crate) struct PreFork {
 /// events it reads, and writes nothing to disk.
 pub(crate) async fn replay(
     sub_client: &SubscriptionClient,
-    seed: &Seed,
+    secret_keys: &ledger_8::SecretKeys,
     coins: &[CoinInfo],
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<PreFork, WalletError> {
-    let secret_keys = zswap_keys(seed);
     let coin_public_key = secret_keys.coin_public_key();
     let mut state = coins
         .iter()
@@ -59,7 +59,7 @@ pub(crate) async fn replay(
             let event: ledger_8::Event<DefaultDB> = tagged_deserialize(raw).map_err(|e| {
                 WalletError::Sync(format!("deserialize ledger 8 zswap event id={id}: {e}"))
             })?;
-            state = state.replay_events(&secret_keys, [&event]).map_err(|e| {
+            state = state.replay_events(secret_keys, [&event]).map_err(|e| {
                 WalletError::Sync(format!("replay ledger 8 zswap event id={id}: {e}"))
             })?;
             Ok(())
@@ -74,15 +74,6 @@ pub(crate) async fn replay(
         last_id: replay.last_id,
         fork_id: replay.later_ledger.map(|(id, _)| id),
     })
-}
-
-/// The ledger 8 shielded keys that `seed` derives.
-fn zswap_keys(seed: &Seed) -> ledger_8::SecretKeys {
-    let seed = ledger_8::WalletSeed::try_from(seed.as_bytes())
-        .expect("a seed holds 16, 32 or 64 bytes, which ledger 8 takes");
-    ledger_8::ShieldedWallet::<DefaultDB>::default(seed)
-        .secret_keys()
-        .clone()
 }
 
 fn coin_info(coin: &CoinInfo) -> ledger_8::CoinInfo {
@@ -102,12 +93,15 @@ pub(crate) mod test_support {
     use midnight_helpers::midnight_serialize::tagged_serialize;
 
     use super::*;
+    use crate::Seed;
+    use crate::keys::RoleKeys;
 
     /// The hex of a ledger 8 event for an output of `coin` to `seed`'s wallet
     /// that carries no discovery ciphertext. Only a registration claims it.
     pub(crate) fn ciphertextless_output(seed: &Seed, coin: &CoinInfo, mt_index: u64) -> String {
-        let commitment =
-            coin_info(coin).commitment(&Recipient::User(zswap_keys(seed).coin_public_key()));
+        let commitment = coin_info(coin).commitment(&Recipient::User(
+            RoleKeys::derive(seed).zswap_pre_fork.coin_public_key(),
+        ));
         let event: Event<DefaultDB> = Event {
             source: EventSource {
                 transaction_hash: TransactionHash(HashOutput([0u8; 32])),
@@ -152,9 +146,15 @@ mod tests {
             while next_json(&mut ws).await.is_some() {}
         });
 
-        let pre_fork = replay(&SubscriptionClient::new(&url), &test_seed(), &[coin], None)
-            .await
-            .expect("the reader replays the ledger 8 events");
+        let keys = crate::keys::RoleKeys::derive(&test_seed());
+        let pre_fork = replay(
+            &SubscriptionClient::new(&url),
+            &keys.zswap_pre_fork,
+            &[coin],
+            None,
+        )
+        .await
+        .expect("the reader replays the ledger 8 events");
         server.await.unwrap();
 
         assert_eq!(pre_fork.last_id, 1);

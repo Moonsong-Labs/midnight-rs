@@ -1,8 +1,9 @@
 //! Wallet state and address derivation for the Midnight SDK.
 //!
-//! [`Wallet`] holds the seed, the secret keys, the synced ledger state
-//! (shielded coins, dust UTXOs, unshielded UTXOs), the ledger parameters,
-//! and the latest block context. It reads its balance and addresses, and it
+//! [`Wallet`] holds the keys of each role, the synced ledger state (shielded
+//! coins, dust UTXOs, unshielded UTXOs), the ledger parameters, and the latest
+//! block context. It holds no seed: its sync derives the keys and drops the
+//! seed. It reads its balance and addresses, and it
 //! syncs itself. It locks its own state, so a `&Wallet` serves every call and
 //! a caller never holds a lock.
 //!
@@ -64,6 +65,7 @@ mod background;
 mod balance;
 mod builds;
 mod generation;
+mod keys;
 mod local;
 mod pending;
 mod pre_fork;
@@ -83,7 +85,7 @@ pub use midnight_types::{
     CoinInfo, CoinPublicKey, DustBalance, DustPublicKey, EncryptionPublicKey, FilledTx, FundedTx,
     HashOutput, InvalidNetworkName, MidnightWallet, NIGHT, Network, NetworkName, Nonce, Nullifier,
     ProvenTx, ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
-    SpendableShieldedCoin, TxEnvelope, UnshieldedRecipient, UnshieldedTokenType,
+    SignatureRequest, SpendableShieldedCoin, TxEnvelope, UnshieldedRecipient, UnshieldedTokenType,
     UnshieldedUtxoInfo, WalletBalance, WalletError, chain_pin,
 };
 

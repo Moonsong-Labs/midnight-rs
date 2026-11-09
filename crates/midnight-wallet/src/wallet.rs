@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 
 use midnight_indexer_client::SubscriptionClient;
 use midnight_types::chain_pin::ChainPin;
-use midnight_types::hd::Seed;
 use midnight_types::{
     CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, WalletBalance, WalletError,
 };
 use tokio::sync::mpsc;
 use tracing::info;
 
+use crate::keys::RoleKeys;
 use crate::replay::{
     UnshieldedReplay, latest_block, progress_cancelled, replay_unshielded_events, require_ledger_9,
     send_progress,
@@ -20,7 +20,7 @@ use crate::storage::wallet_storage_id;
 use crate::sync::SyncPlan;
 use crate::{SyncProgress, state};
 
-/// The synced ledger state of one seed, which a [`Wallet`](crate::Wallet)
+/// The synced ledger state of one wallet, which a [`Wallet`](crate::Wallet)
 /// holds behind its lock.
 ///
 /// Maintains three streams of state from the indexer:
@@ -90,7 +90,7 @@ impl WalletState {
     ) -> Result<Self, WalletError> {
         let sync = ChainSync {
             indexer_url: &plan.indexer_url,
-            seed: &plan.seed,
+            keys: &plan.keys,
             address: &plan.address,
             network: &plan.network,
             storage_dir: plan.storage_dir.as_deref(),
@@ -156,11 +156,6 @@ impl WalletState {
     /// archive's retention window rather than ageing out of it.
     pub(crate) fn set_chain_pin(&mut self, pin: ChainPin) {
         self.state.set_chain_pin(pin)
-    }
-
-    /// The seed this wallet signs and derives with.
-    pub(crate) fn seed(&self) -> &Seed {
-        self.state.seed()
     }
 
     /// The wallet's shielded public keys. See
@@ -356,7 +351,7 @@ impl ShieldedRescanPlan {
 /// Who a sync is for, and where it keeps what it learns.
 pub(crate) struct ChainSync<'a> {
     pub(crate) indexer_url: &'a str,
-    pub(crate) seed: &'a Seed,
+    pub(crate) keys: &'a RoleKeys,
     pub(crate) address: &'a str,
     pub(crate) network: &'a Network,
     /// Where the sync writes its state as it goes: Dust checkpoints, the
@@ -404,7 +399,7 @@ async fn sync_on_chain(
             Some((state, next_id)) => {
                 crate::state::replay_zswap_events(
                     &sub_client,
-                    &crate::state::zswap_keys(sync.seed),
+                    &sync.keys.zswap,
                     state,
                     next_id,
                     true,
@@ -413,8 +408,14 @@ async fn sync_on_chain(
                 .await
             }
             None => {
-                state::replay_zswap_from_genesis(&sub_client, sync.seed, &[], progress.clone())
-                    .await
+                state::replay_zswap_from_genesis(
+                    &sub_client,
+                    &sync.keys.zswap,
+                    &sync.keys.zswap_pre_fork,
+                    &[],
+                    progress.clone(),
+                )
+                .await
             }
         }
     };
@@ -525,9 +526,11 @@ mod tests {
             }
         });
 
+        let keys = RoleKeys::derive(&test_seed());
         let replayed = crate::state::replay_zswap_from_genesis(
             &SubscriptionClient::new(&url),
-            &test_seed(),
+            &keys.zswap,
+            &keys.zswap_pre_fork,
             &[unreachable_coin(1, 42), unreachable_coin(2, 42)],
             None,
         )

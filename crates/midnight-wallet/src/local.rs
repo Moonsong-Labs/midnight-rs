@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use midnight_helpers::UnshieldedWallet;
 use midnight_types::chain_pin::{ChainView, current_pin};
-use midnight_types::convert::IntoLedger;
+use midnight_types::convert::IntoSdk;
 use midnight_types::{
     CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, UnshieldedRecipient,
     WalletBalance, WalletError,
@@ -28,8 +28,9 @@ use crate::wallet::WalletState;
 /// locks its own state, so a `&Wallet` serves every call, and an
 /// `Arc<Wallet>` shares it with a background sync and a provider.
 ///
-/// The network, the addresses and the recipients are fixed when the sync
-/// makes the wallet, so their readers take no lock. The synced state sits
+/// The wallet holds the keys of each role, not the seed. The network, the
+/// addresses, the recipients and the keys are fixed when the sync makes the
+/// wallet, so their readers take no lock. The synced state sits
 /// behind a lock that no method hands out, so a caller cannot block a sync by
 /// keeping a guard alive. Reads and builds take that lock alone.
 ///
@@ -57,22 +58,24 @@ pub struct Wallet {
 }
 
 impl Wallet {
-    /// Run the sync of `plan`, and make the wallet of its seed.
+    /// Run the sync of `plan`, and make the wallet of its keys.
     pub(crate) async fn synced(
         plan: SyncPlan,
         progress: Option<mpsc::Sender<SyncProgress>>,
     ) -> Result<Self, WalletError> {
+        let shielded_address = plan.keys.shielded_address(&plan.network);
+        let dust_address = plan.keys.dust_address(&plan.network);
+        let signer = plan.keys.unshielded.clone();
         let state = WalletState::sync_inner(plan, progress).await?;
-        let seed = state.seed();
         Ok(Self {
             pending: Arc::clone(state.state().pending_book()),
             network: state.network().clone(),
             unshielded_address: state.unshielded_address(),
-            shielded_address: seed.shielded_address(state.network()),
-            dust_address: seed.dust_address(state.network()),
+            shielded_address,
+            dust_address,
             shielded_recipient: state.shielded_recipient(),
-            unshielded_recipient: seed.unshielded_recipient(),
-            signer: UnshieldedWallet::default(seed.into_ledger()),
+            unshielded_recipient: signer.user_address.into_sdk(),
+            signer,
             state: RwLock::new(state),
             sync: Mutex::new(()),
         })
