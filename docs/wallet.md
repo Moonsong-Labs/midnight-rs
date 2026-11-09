@@ -500,7 +500,7 @@ The reservation travels with the transaction, from the `FundedTx` to the `Proven
 - `MidnightProvider::submit_reserved` and `prepare_reserved`, when the prepare fails (the connect included).
 - The `PendingTx`, when a wait reads `Invalid`. A submit moves the reservation to the `PendingTx` before the call starts.
 
-A release changes the wallet's memory at once. `pending.json` follows at the next write of the wallet, so until then it keeps a proven entry that a release dropped, and a restart before that write holds the entry until a sync sees the chain spend its inputs or its TTL ends.
+A release changes the wallet's memory at once. `pending.json` follows at the next write of the wallet: the next `sign_transaction`, or a sync whose commit moves a cursor or the ledger parameters, clears a confirmed reservation, or follows a failed save. Until then the file keeps a proven entry that a release dropped, and a restart before that write holds the entry until a sync sees the chain spend its inputs or its TTL ends.
 
 A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node can still hold the transaction, and so does a dropped `PendingTx`. The bytes of `TxEnvelope::into_bytes`, and of a contract call's `.build()` or `.without_dust()`, keep their inputs reserved too, so their reservation ends only when a sync sees the chain spend them, or when their TTL ends. Other than that, you don't normally interact with this directly: the funding reserves, and the sync loop clears.
 

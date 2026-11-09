@@ -357,9 +357,10 @@ impl PendingBook {
     /// the chain. See [`PendingReservations::release`].
     ///
     /// It changes the memory alone. `pending.json` follows at the next write
-    /// of the wallet, and until then it keeps a proven entry that this
-    /// releases. A restart then holds that entry until a sync sees the chain
-    /// spend its inputs or its TTL passes.
+    /// of the wallet: the next [`Self::mark_proven`], or a commit that saves.
+    /// Until then the file keeps a proven entry that this releases, and a
+    /// restart holds that entry until a sync sees the chain spend its inputs
+    /// or its TTL passes.
     pub(crate) fn release(&mut self, spent: &SpentInputs) {
         let (dust, shielded) = ledger_entries(spent);
         self.reservations

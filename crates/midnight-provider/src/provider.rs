@@ -182,8 +182,9 @@ impl MidnightProvider {
 }
 
 impl<W> MidnightProvider<W> {
-    /// Override the proof backend used by [`Self::transfer_shielded`],
-    /// [`Self::transfer_unshielded`], and [`Self::register_dust`].
+    /// Override the proof backend that proves every transaction of this
+    /// provider: the transfers, the Dust registrations, and the deploys,
+    /// calls and maintenance updates of a `Contract` on it.
     ///
     /// Without this call, the provider proves locally, in this process. The
     /// local prover proves circuits compiled for ZKIR v2 and for ZKIR v3.
