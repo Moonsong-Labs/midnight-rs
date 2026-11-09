@@ -394,6 +394,37 @@ mod tests {
         );
     }
 
+    /// The wallet checks the inputs that a request covers against its
+    /// reservation before it signs. A cover that ignored the segment would
+    /// show the inputs of the wallet's own intent for a request at an intent
+    /// of another party. The check would pass, and the wallet would sign a
+    /// spend that it did not fund.
+    #[test]
+    fn a_request_covers_the_placeholder_inputs_of_its_signer_at_its_segment() {
+        let (alice, bob) = (signer(1), signer(2));
+        let tx = awaiting(&alice, &bob);
+        let request = |wallet: &UnshieldedWallet| {
+            tx.signature_requests()
+                .into_iter()
+                .find(|r| r.signer == address(wallet))
+                .unwrap()
+        };
+        let key = |byte: u8| SpentUtxoKey {
+            intent_hash: midnight_helpers::HashOutput([byte; 32]),
+            output_index: 0,
+        };
+
+        let mut by_alice = tx.inputs_to_sign(&request(&alice));
+        by_alice.sort_by_key(|input| input.intent_hash.0);
+        assert_eq!(by_alice, [key(1), key(2)]);
+        assert_eq!(tx.inputs_to_sign(&request(&bob)), [key(3)]);
+        let elsewhere = SignatureRequest {
+            segment: 2,
+            ..request(&alice)
+        };
+        assert!(tx.inputs_to_sign(&elsewhere).is_empty());
+    }
+
     /// A signature that an HSM made over other data, or with another key,
     /// must stop at the SDK. Put in, it reaches the node, which refuses the
     /// whole transaction with no word on the cause.
