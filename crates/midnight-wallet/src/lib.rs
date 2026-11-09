@@ -80,12 +80,12 @@ pub use midnight_types::address::{
     parse_dust_address, parse_shielded_recipient, parse_unshielded_recipient,
 };
 pub use midnight_types::{
-    CoinInfo, CoinPublicKey, DustBalance, DustPublicKey, EncryptionPublicKey, HashOutput,
-    InvalidNetworkName, NIGHT, Network, NetworkName, Nonce, Nullifier, ReservedInput,
-    ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
-    SpendableShieldedCoin, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
-    TransferResult, UnshieldedRecipient, UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
-    WalletError, chain_pin,
+    CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustPublicKey,
+    EncryptionPublicKey, HashOutput, InvalidNetworkName, NIGHT, Network, NetworkName, Nonce,
+    Nullifier, ReservedInput, ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient,
+    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SpentUtxoKey, TransferKind,
+    TransferRequest, TransferResult, UnshieldedRecipient, UnshieldedTokenType, UnshieldedUtxoInfo,
+    WalletBalance, WalletError, chain_pin,
 };
 // The API this crate implements, so a caller can name `dyn WalletFacade` with
 // no dependency on midnight-wallet-facade.

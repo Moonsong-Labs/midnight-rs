@@ -46,7 +46,7 @@ pub use coin::{
 pub use error::{WalletError, refuse_repeated_nullifiers};
 pub use hash::{BlockHash, ExtrinsicHash};
 pub use inputs::{PreparedInput, prepare_shielded_inputs};
-pub use midnight_helpers::{HashOutput, Timestamp};
+pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::{InvalidNetworkName, Network, NetworkName};
 /// The chain's 32-byte hash, under the names [`BlockHash`] and [`ExtrinsicHash`].
 ///
