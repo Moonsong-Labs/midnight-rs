@@ -1,6 +1,6 @@
 # Wallet Sync Example
 
-The example syncs a wallet against the local devnet, or another network that runs ledger 9. It syncs the wallet's three legs (zswap shielded coins, unshielded UTXOs, Dust) with progress reporting. It prints the addresses, the balances and the Dust parameters. As an option, it registers Dust or submits an unshielded self-transfer.
+The example syncs a wallet against the local devnet, or another network that runs ledger 9. It syncs the wallet's three legs (zswap shielded coins, unshielded UTXOs, Dust) with progress reporting. It prints the addresses and the balances. As an option, it registers Dust or submits an unshielded self-transfer.
 
 By default, the example uses the dev seed (`0000…0001`), which the local devnet funds at genesis. Do **not** use it on a public network.
 
@@ -42,8 +42,6 @@ TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 
 - `WalletBuilder::new(&seed).with_network(&network).sync_with_progress(&provider, &indexer_url)`: streamed `SyncProgress` events, then `with_wallet` to attach. The sync checks a persisted snapshot's chain pin by default.
 - `provider.balance()`: the three asset legs (shielded coins, unshielded UTXOs, Dust)
-- `balance.unshielded_value(NIGHT)`: the NIGHT held, in STAR
-- `provider.parameters()` / `provider.sync_cursors()`: the ledger parameters and the sync counters
 - `provider.register_dust(None).send()`: registers one tNIGHT UTXO for Dust generation
 - `provider.transfer_unshielded(NIGHT, amount, seed.unshielded_recipient()).send()`: an unshielded self-transfer
 - `PendingTx::extrinsic_hash_hex` and `PendingTx::wait_best`: the submission lifecycle

@@ -4,7 +4,7 @@
 
 use std::env;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use midnight_core::provider::SPECKS_PER_DUST;
 use midnight_core::wallet::NIGHT;
 use midnight_core::{MidnightProvider, Network, Seed, SyncProgress, Wallet, WalletBuilder};
@@ -107,51 +107,13 @@ async fn main() -> anyhow::Result<()> {
         println!("  {utxo}");
     }
 
-    {
-        let parameters = provider.parameters().await?;
-        println!("\n--- Dust ---");
-        let dust_params = &parameters.dust;
-        println!(
-            "Dust ratio:      {} SPECK/STAR",
-            dust_params.night_dust_ratio
-        );
-        println!(
-            "Decay rate:      {} SPECK/STAR/sec",
-            dust_params.generation_decay_rate
-        );
-        let night_value = balance.unshielded_value(NIGHT);
-        let max_dust = night_value.saturating_mul(dust_params.night_dust_ratio as u128);
-        let rate = night_value.saturating_mul(dust_params.generation_decay_rate as u128);
-        let time_to_cap = max_dust.checked_div(rate).unwrap_or(0);
-        println!(
-            "Max capacity:    {} SPECK ({:.6} DUST)",
-            max_dust,
-            max_dust as f64 / SPECKS_PER_DUST as f64
-        );
-        println!(
-            "Generation rate: {} SPECK/sec ({:.6} DUST/sec)",
-            rate,
-            rate as f64 / SPECKS_PER_DUST as f64
-        );
-        println!(
-            "Time to cap:     {} seconds ({:.1} days)",
-            time_to_cap,
-            time_to_cap as f64 / 86400.0
-        );
-        println!("Spendable UTXOs: {}", balance.dust.spendable_utxos);
-        println!(
-            "Dust balance:    {} SPECK ({:.6} DUST)",
-            balance.dust.balance_speck,
-            balance.dust.balance_speck as f64 / SPECKS_PER_DUST as f64
-        );
-
-        let cursors = provider.sync_cursors().await?;
-        println!("\n--- Sync state ---");
-        println!("Zswap event ID:  {}", cursors.zswap_event_id);
-        println!("Dust event ID:   {}", cursors.dust_event_id);
-        println!("Last block:      {}", cursors.last_block_height);
-        println!("Last tx ID:      {:?}", cursors.last_tx_id);
-    }
+    println!("\n--- Dust ---");
+    println!("Spendable UTXOs: {}", balance.dust.spendable_utxos);
+    println!(
+        "Dust balance:    {} SPECK ({:.6} DUST)",
+        balance.dust.balance_speck,
+        balance.dust.balance_speck as f64 / SPECKS_PER_DUST as f64
+    );
 
     if env::var("REGISTER_DUST").is_ok() {
         println!("\n--- Dust Registration ---");
@@ -168,10 +130,6 @@ async fn main() -> anyhow::Result<()> {
                 "TRANSFER_AMOUNT must be a valid integer (atomic units / STAR), got {amount_str:?}"
             )
         })?;
-
-        if !provider.dust_synced().await? {
-            bail!("Dust sync required for transfers. Run a full sync first.");
-        }
 
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");

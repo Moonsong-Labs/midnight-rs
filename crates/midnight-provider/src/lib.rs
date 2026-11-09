@@ -8,7 +8,7 @@ mod provider;
 mod proving;
 mod remote_prover;
 mod submit;
-pub mod transfer;
+mod transfer;
 mod types;
 
 pub use builds::Builds;
@@ -22,26 +22,17 @@ pub use transfer::{
 };
 pub use types::{Health, TransactionHash};
 
-// Re-export the vocabulary that appears in MidnightProvider's public surface
-// so callers don't need separate deps for it. The implementation types
-// (`Wallet`, `LocalWallet`, `WalletBuilder`) live in midnight-wallet; this
-// crate never names them.
+// Re-export the types that `MidnightProvider`'s own signatures name, and the
+// NIGHT and DUST units, so a caller of the provider needs no separate dep for
+// them. The implementation types (`Wallet`, `LocalWallet`, `WalletBuilder`)
+// live in midnight-wallet; this crate never names them.
 pub use midnight_types::{
-    BlockHash, ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
-    DustParameters, DustPublicKey, EncryptionPublicKey, ExtrinsicHash, HashOutput, NIGHT, Nonce,
-    Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType,
-    UnshieldedRecipient, UnshieldedTokenType,
+    BlockHash, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress, DustPublicKey,
+    EncryptionPublicKey, ExtrinsicHash, HashOutput, NIGHT, Network, Nonce, Nullifier,
+    SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin,
+    SpentInputs, TransferResult, UnshieldedRecipient, UnshieldedTokenType, WalletBalance,
+    WalletError,
 };
-
-// The wallet's API, so a caller attaching one (or implementing one) needs no
-// separate dep on midnight-wallet-facade.
-pub use midnight_types::hd::{Seed, SeedError};
-pub use midnight_types::{
-    InvalidNetworkName, Network, NetworkName, ReservedInput, ShieldedCoinBalance,
-    SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind,
-    TransferRequest, TransferResult, WalletBalance, WalletError,
-};
-pub use midnight_wallet_facade::{IntoWalletFacade, ReservedBuild, WalletBuilds, WalletFacade};
 
 // Re-export the private-state types so callers configure
 // `MidnightProvider::with_private_state` without a separate dep.

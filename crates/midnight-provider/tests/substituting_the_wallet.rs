@@ -1,6 +1,6 @@
 //! The provider serves a wallet it did not write.
 //!
-//! It holds `Arc<dyn WalletFacade>`, so a reading it answers comes from
+//! It holds `Arc<dyn WalletFacade>`, so what it asks of the wallet goes to
 //! whatever implements that trait. This file implements one that is not a
 //! `Wallet` and attaches it.
 //!
@@ -17,17 +17,19 @@ use midnight_helpers::{
     BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo, StdRng,
 };
 use midnight_provider::{
-    ChainParameters, CoinInfo, HashOutput, MidnightProvider, Network, Nullifier, ProviderError,
-    ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors,
-    TrackedUtxo, TransferRequest, TransferResult, WalletBalance, WalletError, WalletFacade,
+    CoinInfo, HashOutput, MidnightProvider, Nullifier, ProviderError, ShieldedRecipient,
+    ShieldedTokenType,
 };
-use midnight_types::{PreparedInput, Timestamp};
+use midnight_types::{
+    PreparedInput, SpendableShieldedCoin, SpentInputs, Timestamp, TransferRequest, TransferResult,
+    WalletBalance, WalletError,
+};
 use midnight_wallet::chain_pin::ChainView;
-use midnight_wallet_facade::{ReservedBuild, WalletBuilds};
+use midnight_wallet_facade::{ReservedBuild, WalletBuilds, WalletFacade};
 
-/// A wallet that answers the three readings this test makes and refuses the
-/// rest. Everything it refuses would need chain state to answer honestly. It
-/// records the shielded inputs that the provider hands back.
+/// A wallet whose resync, coin watch and reservation persist do nothing, and
+/// that refuses everything that would need chain state to answer honestly.
+/// It records the shielded inputs that the provider hands back.
 #[derive(Default)]
 struct StubWallet {
     released: std::sync::Mutex<Vec<Nullifier>>,
@@ -35,23 +37,6 @@ struct StubWallet {
 
 #[async_trait::async_trait]
 impl WalletFacade for StubWallet {
-    async fn network(&self) -> Network {
-        Network::Preprod
-    }
-
-    async fn sync_cursors(&self) -> SyncCursors {
-        SyncCursors {
-            last_block_height: 12,
-            last_tx_id: Some(34),
-            zswap_event_id: 56,
-            dust_event_id: 78,
-        }
-    }
-
-    async fn dust_synced(&self) -> bool {
-        true
-    }
-
     async fn shielded_recipient(&self) -> ShieldedRecipient {
         unimplemented!("this wallet holds no keys")
     }
@@ -62,14 +47,6 @@ impl WalletFacade for StubWallet {
 
     async fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
         unimplemented!("this wallet holds no coins")
-    }
-
-    async fn unshielded_utxos(&self) -> Vec<TrackedUtxo> {
-        Vec::new()
-    }
-
-    async fn parameters(&self) -> ChainParameters {
-        unimplemented!("this wallet has synced no parameters")
     }
 
     async fn release(&self, spent: &SpentInputs) {
@@ -83,19 +60,11 @@ impl WalletFacade for StubWallet {
         Ok(())
     }
 
-    async fn rescan_shielded(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
-        Ok(())
-    }
-
     async fn watch_for_coins(
         &self,
         _coins: Vec<CoinInfo>,
         _chain: &dyn ChainView,
     ) -> Result<(), WalletError> {
-        Ok(())
-    }
-
-    async fn forget_coins(&self, _coins: Vec<CoinInfo>) -> Result<(), WalletError> {
         Ok(())
     }
 }
@@ -142,25 +111,6 @@ impl WalletBuilds for StubWallet {
     ) -> Result<Option<ReservedBuild>, WalletError> {
         Err(WalletError::Transfer("stub wallet funds nothing".into()))
     }
-}
-
-#[tokio::test]
-async fn the_provider_reads_whatever_wallet_it_was_given() {
-    let provider = MidnightProvider::new("ws://test").with_wallet(StubWallet::default());
-
-    assert_eq!(
-        provider.network().await.expect("attached"),
-        Network::Preprod
-    );
-    assert!(provider.dust_synced().await.expect("attached"));
-    assert_eq!(
-        provider
-            .sync_cursors()
-            .await
-            .expect("attached")
-            .zswap_event_id,
-        56
-    );
 }
 
 /// A wallet the SDK did not write may skip the duplicate check that

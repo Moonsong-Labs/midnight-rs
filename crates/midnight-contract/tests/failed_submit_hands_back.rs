@@ -36,9 +36,8 @@ use midnight_contract::ContractError;
 use midnight_provider::{
     EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions, ImportResult,
     MidnightProvider, PrivateStateError, PrivateStateProvider, ProviderError, Snapshot,
-    WalletFacade,
 };
-use midnight_wallet::LocalWallet;
+use midnight_wallet::{LocalWallet, WalletFacade};
 
 /// A node URL whose dial fails: nothing listens on port 1.
 const REFUSING_NODE_URL: &str = "ws://127.0.0.1:1";

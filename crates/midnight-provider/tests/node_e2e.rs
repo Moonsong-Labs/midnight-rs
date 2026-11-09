@@ -6,7 +6,8 @@
 #[expect(dead_code, reason = "this test needs only the skip")]
 mod common;
 
-use midnight_provider::{MidnightProvider, Network};
+use midnight_provider::MidnightProvider;
+use midnight_wallet::Network;
 
 fn node_only_provider() -> Option<MidnightProvider> {
     let Ok(node_url) = std::env::var("MIDNIGHT_NODE_URL") else {

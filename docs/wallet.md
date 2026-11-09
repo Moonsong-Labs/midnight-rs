@@ -8,7 +8,7 @@ The SDK's wallet covers Midnight's three asset legs:
 
 `Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` or `Wallet::from_mnemonic` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts. The wallet can also resync itself in a background task (see [Background sync](#background-sync)).
 
-The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and `midnight_core::provider::WalletBuilds`. Such an implementation must serialize its own `resync`, `rescan_shielded`, `watch_for_coins` and `forget_coins` against each other, because the provider holds no lock across them. Its `rescan_shielded` and `watch_for_coins` take the chain view, as `resync` does. `watch_for_coins` registers the coins and then rescans.
+The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, pass it as it is: `provider.with_wallet(wallet)` puts it behind a `LocalWallet`. To keep a handle on the attached wallet, attach an `Arc<LocalWallet>`. Another implementation goes in as itself when it implements `WalletFacade` and `midnight_wallet_facade::WalletBuilds`. Such an implementation must serialize its own `resync` and `watch_for_coins` against each other, because the provider holds no lock across them. Its `watch_for_coins` takes the chain view, as `resync` does. It registers the coins and then rescans.
 
 ```rust
 use std::sync::Arc;
@@ -20,7 +20,7 @@ let provider = provider.with_wallet(Arc::clone(&wallet));
 let balance = wallet.balance().await;
 ```
 
-The wallet serializes its own resyncs, rescans, coin watches and forgets. So the handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.rescan_shielded(&provider)`.
+The wallet serializes its own resyncs and coin watches. So the handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.resync(&provider)`.
 
 ## Seeds
 
@@ -311,18 +311,7 @@ A reserved coin or UTXO reads `spendable: false`. `spendable_shielded_value` and
 
 `token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_core::wallet::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT. See [`tokens.md`](tokens.md) for the two-ledger model.
 
-For the rest of what the wallet holds:
-
-```rust
-provider.parameters().await?.dust.night_dust_ratio;
-provider.unshielded_utxos().await?;
-
-let cursors = provider.sync_cursors().await?;
-cursors.zswap_event_id;
-cursors.last_block_height;
-```
-
-Every reading returns an owned value taken under a short read lock, so nothing a caller holds can block a resync running in another task. `sync_cursors()` returns the four counters together because they advance together: reading them one at a time can report a mixture of two syncs.
+Every reading returns an owned value taken under a short read lock, so nothing a caller holds can block a resync running in another task.
 
 ## Dust registration
 
@@ -364,13 +353,13 @@ See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation r
 
 ### Registration to another Dust address
 
-A registration can send the Dust to the Dust address of another wallet. For example, a cold wallet that holds the tNIGHT registers it to the Dust address of a hot wallet. The hot wallet then gets the Dust. The cold wallet builds its transactions with `.without_dust()`, and the hot wallet pays their fees with `balance_transaction` ([`examples/combine-and-sponsor`](../examples/combine-and-sponsor) shows that flow). Read the address with `parse_dust_address`, and give the key to `.to()`:
+A registration can send the Dust to the Dust address of another wallet. For example, a cold wallet that holds the tNIGHT registers it to the Dust address of a hot wallet. The hot wallet then gets the Dust. The cold wallet builds its transactions with `.without_dust()`, and the hot wallet pays their fees with `balance_transaction` ([`examples/combine-and-sponsor`](../examples/combine-and-sponsor) shows that flow). Read the address with `parse_dust_address`, and give the key to `.to()`. `network` is the wallet's network: take it with `wallet.network().clone()` before `with_wallet` takes the wallet:
 
 ```rust
 use midnight_core::wallet::parse_dust_address;
 
 let hot_address = hot_wallet.dust_address(); // mn_dust_undeployed1...
-let target = parse_dust_address(&hot_address, provider.network().await?)?;
+let target = parse_dust_address(&hot_address, &network)?;
 provider.register_dust(None).to(target).send().await?.wait_finalized().await?;
 ```
 
@@ -389,7 +378,7 @@ Two flavors, same shape. Each method returns a builder, and `.send().await?` bui
 ```rust
 use midnight_core::wallet::{NIGHT, parse_unshielded_recipient};
 
-let recipient = parse_unshielded_recipient(&recipient_address, provider.network().await?)?;
+let recipient = parse_unshielded_recipient(&recipient_address, &network)?;
 let pending = provider
     .transfer_unshielded(NIGHT, amount_in_star, recipient)
     .send()
@@ -400,14 +389,14 @@ pending.wait_best().await?;
 ```rust
 use midnight_core::wallet::parse_shielded_recipient;
 
-let recipient = parse_shielded_recipient(&recipient_shielded_address, provider.network().await?)?;
+let recipient = parse_shielded_recipient(&recipient_shielded_address, &network)?;
 let pending = provider
     .transfer_shielded(token_type, amount, recipient)
     .send()
     .await?;
 ```
 
-`recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network. A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
+`recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network against `network`, the wallet's network (`wallet.network().clone()`, taken before `with_wallet` takes the wallet). A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
 
 1. Resyncs, then takes a write lock on the wallet and builds the transaction context.
 2. Selects inputs from the wallet's local UTXO set.
@@ -490,11 +479,11 @@ Every coin the wallet already holds is re-registered before that replay, so a re
 
 That full replay costs more than a resync, so register every coin you know about in one `watch_for_coins([...])` call, and treat this as a recovery step rather than a routine one. Registrations are persisted with the rest of the wallet state, so one made for a coin that has not landed yet survives a restart, and every later resync carries it rather than dropping it.
 
-To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. If the coin does not appear there, it is not on chain yet, or its rebuilt `CoinInfo` is wrong. A wrong registration never matches an output, and every later replay carries it. Drop it with `provider.forget_coin(coin)`. Forgetting drops the registration only, and a coin that the wallet already claimed stays spendable.
+To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. If the coin does not appear there, it is not on chain yet, or its rebuilt `CoinInfo` is wrong. A wrong registration never matches an output, and every later replay carries it.
 
-The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
+The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there. To retry, call `watch_for_coins` again with the same coins: the second registration changes nothing, and the replay runs again.
 
-`provider.rescan_shielded()` runs the replay alone. A handle (`Arc<LocalWallet>`) has the same two methods: `watch_for_coins(coins, &provider)` and `rescan_shielded(&provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them.
+A handle (`Arc<LocalWallet>`) has the same method: `watch_for_coins(coins, &provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them.
 
 ## Pending reservations
 
@@ -533,13 +522,10 @@ Wallet::from_seed(hex)? | Wallet::from_mnemonic(phrase)? | WalletBuilder::new(se
 provider.with_wallet(wallet)
   ↓
   provider.balance()                     read-only
-  provider.parameters() / .sync_cursors() / .unshielded_utxos()
   provider.resync_wallet()               incremental refresh + re-persist
   wallet.sync_in_background(provider, pause)   resync in a task until the handle drops (an Arc<LocalWallet>)
       sync.wait_until(done)              wait until done holds for the balance (at the call and after each pass)
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext: register, then replay
-  provider.rescan_shielded()             replay the shielded stream from event zero
-  provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None)                      registers one tNIGHT UTXO, self-funded
       .to(dust_key)                                 the Dust goes to another wallet's Dust address
       .send().await                                 builds + submits → PendingTx

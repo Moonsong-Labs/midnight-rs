@@ -33,7 +33,8 @@ use midnight_helpers::{
     CostModel, DefaultDB, ProofProvider, ProvenTransaction, Resolver, StdRng, Transaction,
     UnprovenTransaction,
 };
-use midnight_provider::{MidnightProvider, ProviderError, WalletError};
+use midnight_provider::{MidnightProvider, ProviderError};
+use midnight_types::WalletError;
 
 /// The message of every proof that [`ProofCounter`] fails.
 const MARKER: &str = "the test prover fails on purpose";

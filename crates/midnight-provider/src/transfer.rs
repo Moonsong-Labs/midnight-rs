@@ -58,8 +58,8 @@ use midnight_types::{
 
 use crate::{MidnightProvider, PendingTx, ProviderError};
 
-/// Pending unshielded transfer. See [module docs](crate::transfer) for the
-/// `.send()` vs `.build()` distinction.
+/// Pending unshielded transfer. See [`MidnightProvider::transfer_shielded`]
+/// for the `.send()` vs `.build()` distinction.
 #[derive(Debug)]
 #[must_use = "does nothing until sent or built"]
 pub struct UnshieldedTransfer<'a> {
@@ -98,7 +98,7 @@ impl<'a> UnshieldedTransfer<'a> {
     }
 
     /// Make the transaction expire `ttl` after the chain time of the build.
-    /// See [`TransferRequest::ttl`](crate::TransferRequest::ttl).
+    /// See [`TransferRequest::ttl`](midnight_types::TransferRequest::ttl).
     /// Defaults to the chain's `global_ttl`, the longest TTL the chain accepts.
     ///
     /// Once the TTL passes, the transaction can no longer land, and the next
@@ -141,8 +141,8 @@ impl<'a> UnshieldedTransfer<'a> {
     }
 }
 
-/// Pending shielded transfer. See [module docs](crate::transfer) for the
-/// `.send()` vs `.build()` distinction.
+/// Pending shielded transfer. See [`MidnightProvider::transfer_shielded`] for
+/// the `.send()` vs `.build()` distinction.
 #[derive(Debug)]
 #[must_use = "does nothing until sent or built"]
 pub struct ShieldedTransfer<'a> {
@@ -372,8 +372,9 @@ impl DustlessTransaction {
     }
 }
 
-/// Pending dust-address registration. See [module docs](crate::transfer) for
-/// the `.send()` vs `.build()` distinction.
+/// Pending dust-address registration. See
+/// [`MidnightProvider::transfer_shielded`] for the `.send()` vs `.build()`
+/// distinction.
 #[derive(Debug)]
 #[must_use = "does nothing until sent or built"]
 pub struct DustRegistration<'a> {

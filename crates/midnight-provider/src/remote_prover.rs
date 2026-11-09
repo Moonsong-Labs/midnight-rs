@@ -145,8 +145,8 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 ///
 /// A failed proof unwinds `prove` with a `String` message. A build through
 /// `with_proof_provider` returns that message as
-/// [`WalletError::Proving`](crate::WalletError::Proving). A caller of `prove`
-/// outside a build must catch the unwind (for example with
+/// [`WalletError::Proving`](midnight_types::WalletError::Proving). A caller
+/// of `prove` outside a build must catch the unwind (for example with
 /// `FutureExt::catch_unwind`) to get the message.
 #[derive(Debug)]
 pub struct RemoteProofServer {

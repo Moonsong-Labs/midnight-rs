@@ -18,7 +18,7 @@ use midnight_helpers::{
     CostModel, DefaultDB, LocalProofServer, ProofProvider, ProvenTransaction, Resolver, StdRng,
     UnprovenTransaction,
 };
-use midnight_provider::MidnightProvider;
+use midnight_provider::{MidnightProvider, NIGHT};
 
 /// Wraps the real prover and records whether it ran.
 #[derive(Default)]
@@ -44,13 +44,13 @@ impl ProofProvider<DefaultDB> for ProofRecorder {
 /// Counts the wallet's tNIGHT UTXOs, and how many of them still await a
 /// registration.
 async fn night_counts(provider: &MidnightProvider) -> (usize, usize) {
-    let utxos = provider.unshielded_utxos().await.expect("wallet");
-    let night = utxos.iter().filter(|u| u.is_night());
-    let total = night.clone().count();
-    let unregistered = night
-        .filter(|u| u.registered_for_dust_generation != Some(true))
+    let balance = provider.balance().await.expect("wallet");
+    let total = balance
+        .unshielded
+        .iter()
+        .filter(|u| u.token_type == NIGHT)
         .count();
-    (total, unregistered)
+    (total, balance.dust.unregistered_night_utxos)
 }
 
 /// A wallet whose tNIGHT already generates dust must not build a second

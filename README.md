@@ -196,7 +196,7 @@ The deploy records the private state that the constructor leaves as the first sn
 
 ## Deploy with a shielded offer
 
-A deploy can carry a shielded offer. A `ShieldedOffer` holds coins from `spendable_shielded_coins` and the `ShieldedPayment`s to make from them:
+A deploy can carry a shielded offer. A `ShieldedOffer` holds coins from `spendable_shielded_coins` and the `ShieldedPayment`s to make from them. Take `network` with `wallet.network().clone()` before `with_wallet` takes the wallet:
 
 ```rust,ignore
 use midnight_core::Contract;
@@ -211,7 +211,7 @@ let coin = provider
 let offer = ShieldedOffer {
     coins: vec![coin],
     outputs: vec![ShieldedPayment {
-        recipient: parse_shielded_recipient(address, provider.network().await?)?,
+        recipient: parse_shielded_recipient(address, &network)?,
         token_type,
         value: 10,
     }],
