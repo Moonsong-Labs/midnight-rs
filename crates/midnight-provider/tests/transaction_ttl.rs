@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_helpers::{DefaultDB, FinalizedTransaction};
-use midnight_provider::{MidnightProvider, NIGHT};
+use midnight_provider::{MidnightProvider, NIGHT, TransactionRequest};
 
 /// Long enough for a build, its proof and its inclusion, and well short of
 /// the devnet's `global_ttl`.
@@ -63,9 +63,10 @@ async fn a_transfer_with_a_short_ttl_lands() {
     let recipient = wallet.unshielded_recipient();
     let provider = provider.with_wallet(wallet);
     let global_ttl = provider
-        .chain_context()
+        .transaction_info()
         .await
         .expect("the chain context")
+        .context
         .with_ledger_state(|ls| ls.parameters.global_ttl)
         .as_seconds();
     assert!(
@@ -75,9 +76,7 @@ async fn a_transfer_with_a_short_ttl_lands() {
 
     // A transfer that pays its own fee: its intent and its fee intent are one.
     let paid = provider
-        .transfer_unshielded(NIGHT, 1, recipient)
-        .with_ttl(TTL)
-        .build()
+        .fill(TransactionRequest::unshielded(NIGHT, 1, recipient).with_ttl(TTL))
         .await
         .expect("build a transfer with a short TTL")
         .into_bytes();
@@ -86,11 +85,12 @@ async fn a_transfer_with_a_short_ttl_lands() {
         chain_now(&provider).await,
         "the self-funded transfer",
     );
+    // The transfer pays its own fee, so a sponsor of its bytes adds nothing.
     provider
-        .submit(&paid)
+        .send_transaction(TransactionRequest::sponsor(paid))
         .await
         .expect("submit the self-funded transfer")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the chain applies a transaction with a short TTL");
 }

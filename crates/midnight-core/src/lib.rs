@@ -40,7 +40,7 @@
 //!         .increment()
 //!         .send()
 //!         .await?
-//!         .wait_finalized()
+//!         .get_receipt()
 //!         .await?
 //!         .value;
 //!     println!("increment returned {returned}");
@@ -75,7 +75,8 @@ pub use midnight_crypto as crypto;
 // Re-export key provider types at top level.
 #[cfg(feature = "provider")]
 pub use midnight_provider::{
-    Health, MidnightProvider, NotApplied, PendingTx, Provider, ProviderError, TxInBlock, Verdict,
+    Health, MidnightProvider, NotApplied, PendingTx, Provider, ProviderError, TransactionReceipt,
+    Verdict,
 };
 
 // Re-export the private-state store types at top level.

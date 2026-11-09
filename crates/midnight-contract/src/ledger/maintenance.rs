@@ -11,9 +11,9 @@ use midnight_helpers::{
 use midnight_provider::MidnightProvider;
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::convert::IntoLedger;
-use midnight_types::{MidnightWallet, TxEnvelope};
+use midnight_types::{MidnightWallet, TransactionRequest, TxEnvelope};
 
-use super::deploy::{build_with_mock_fee_proofs, single_action_tx_info};
+use super::deploy::{assembled, with_single_action};
 
 use crate::error::ContractError;
 use crate::maintenance::OpSpec;
@@ -140,12 +140,13 @@ pub(crate) async fn maintenance_funded<W: MidnightWallet>(
             )
         });
 
-    let context = provider.chain_context().await?;
-    build_with_mock_fee_proofs(
-        provider,
-        single_action_tx_info(provider, context, AttachMaintenance { update }),
-    )
-    .await
+    let tx_info = with_single_action(
+        provider.transaction_info().await?,
+        AttachMaintenance { update },
+    );
+    Ok(provider
+        .fill(TransactionRequest::contract(assembled(tx_info)))
+        .await?)
 }
 
 #[cfg(test)]

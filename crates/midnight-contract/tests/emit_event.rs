@@ -70,7 +70,7 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
         "the Misc payload is the name, then the padded text"
     );
 
-    // `wait_finalized` waits for finality, so the test ends on a final
+    // `get_receipt` waits for finality, so the test ends on a final
     // block. The next test in the suite is another process on the same seed,
     // and its wallet reads finalized state only.
     let outcome = contract
@@ -79,7 +79,7 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
         .send()
         .await
         .expect("submit record")
-        .wait_finalized()
+        .get_receipt()
         .await
         .unwrap_or_else(|e| panic!("the emitting call must apply: {e:?}"));
     assert_eq!(

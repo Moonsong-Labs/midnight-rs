@@ -1,4 +1,4 @@
-//! `balance_transaction` on a **bare** fee-less contract call.
+//! `TransactionRequest::sponsor` on a **bare** fee-less contract call.
 //!
 //! The documented two-party flow is "party 1 builds fee-less, party 2 pays the
 //! fees". When party 1 contributes only a contract call, with nothing merged
@@ -17,7 +17,7 @@ mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
-use midnight_provider::{DustlessBuilder, MidnightProvider};
+use midnight_provider::{MidnightProvider, TransactionRequest};
 
 #[tokio::test]
 async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
@@ -47,31 +47,23 @@ async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
         .expect("round");
 
     // The bare case: one fee-less call, nothing merged into it.
-    let dustless = contract
+    let fee_less = contract
         .circuits()
         .increment()
-        .without_dust()
+        .without_fee()
         .await
         .expect("build fee-less call");
 
-    let funded = provider
-        .balance_transaction(dustless.as_bytes())
+    // The wallet reads finalized state, so the receipt also keeps this spend
+    // from the next test in the suite, another process on the same seed,
+    // which would draw the same Dust.
+    provider
+        .send_transaction(TransactionRequest::sponsor(fee_less.into_bytes()))
         .await
-        .expect("balance the bare call");
-
-    let pending = provider
-        .submit_reserved(funded)
-        .await
-        .expect("submit balanced call");
-    let (_, pending) = pending
-        .wait_best()
+        .expect("submit balanced call")
+        .get_receipt()
         .await
         .expect("the node must accept the call, and its fallible phase must succeed");
-
-    // The wallet reads finalized state, so this spend stays invisible to any
-    // other wallet on this seed until it finalizes. The next test in the suite
-    // is another process on the same seed, and it would draw the same Dust.
-    pending.wait_finalized().await.expect("finalized");
 
     // The call has to have actually run, not merely landed.
     let round_after = contract

@@ -6,6 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 description = "Provider trait and MidnightProvider for Midnight network interaction"
 
+[features]
+# `Prover::custom`, and `Prover` as a ledger `ProofProvider`, for tests in this
+# and downstream crates. Dev-deps only.
+test-util = []
+
 [dependencies]
 # midnight-typed-state, not compact-bindgen, to avoid a cycle: compact-bindgen
 # re-exports midnight-contract, which transitively depends on midnight-provider.
@@ -25,6 +30,9 @@ reqwest = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
+# Self dev-dependency: enables the `test-util` feature for this crate's own
+# integration tests, which prove with test provers.
+midnight-provider = { path = ".", features = ["test-util"] }
 # The devnet tests sync a real wallet with `midnight-wallet`; the library
 # itself never names the implementation.
 midnight-wallet = { workspace = true }

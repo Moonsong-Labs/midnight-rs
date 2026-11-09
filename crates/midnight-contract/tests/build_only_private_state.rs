@@ -1,4 +1,4 @@
-//! A build-only call whose witnesses change the private state refuses before
+//! A fee-less call whose witnesses change the private state refuses before
 //! the build. It reserves no Dust and writes no private-state snapshot.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
@@ -16,9 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use midnight_contract::ContractError;
-use midnight_provider::{
-    DustlessBuilder, FsPrivateStateProvider, MidnightProvider, PrivateStateProvider,
-};
+use midnight_provider::{FsPrivateStateProvider, MidnightProvider, PrivateStateProvider};
 use midnight_wallet::Wallet;
 
 /// The pause between two passes of the background sync.
@@ -68,7 +66,7 @@ async fn a_build_only_call_that_changes_the_private_state_refuses_before_the_bui
         .send()
         .await
         .expect("submit deploy")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("deploy finalized");
     let contract = deployed.into_contract().await.expect("deploy");
@@ -92,20 +90,11 @@ async fn a_build_only_call_that_changes_the_private_state_refuses_before_the_bui
     drop(sync);
 
     let mut circuits = contract.circuits().with_witnesses(&NextSecret);
-    let built = circuits.contribute().build().await.map(drop);
-    assert_refused(&provider, &*store, contract.address(), "build", built).await;
-    let built = circuits.contribute().without_dust().await.map(drop);
-    assert_refused(
-        &provider,
-        &*store,
-        contract.address(),
-        "without_dust",
-        built,
-    )
-    .await;
+    let built = circuits.contribute().without_fee().await.map(drop);
+    assert_refused(&provider, &*store, contract.address(), "without_fee", built).await;
 }
 
-/// Assert that the build-only call `builder` on the contract at `address`
+/// Assert that the fee-less call `builder` on the contract at `address`
 /// gave [`ContractError::UnrecordedPrivateState`], left no Dust of the wallet
 /// reserved, and wrote no snapshot to `store`.
 async fn assert_refused(

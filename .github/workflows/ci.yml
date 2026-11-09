@@ -221,16 +221,18 @@ jobs:
       - name: Run shielded-transfer example
         run: make dev-settle run-shielded-transfer
 
-      # Two-wallet multi-party flows: merge_transactions (each pays own fees)
-      # and balance_transaction (one wallet sponsors the other's fees). Funds
-      # seed 2 from the genesis seed, so it needs the devnet fully up.
+      # Two-wallet multi-party flow: one wallet fills fee-less transactions,
+      # and the other merges them (merge_transactions) and pays their fees
+      # (TransactionRequest::sponsor). Funds seed 2 from the genesis seed, so
+      # it needs the devnet fully up.
       - name: Run combine-and-sponsor example
         run: make dev-settle run-combine-and-sponsor
 
       # Native two-party token swap: each wallet builds one fee-less, unbalanced
-      # half (shielded_swap), a sponsor merges the mirrored halves and pays the
-      # merged swap's fees (balance_transaction). Also seeds the second wallet
-      # with a minted token, so it needs the devnet fully up.
+      # half (TransactionRequest::shielded_swap), a sponsor merges the mirrored
+      # halves and pays the merged swap's fees (TransactionRequest::sponsor).
+      # Also seeds the second wallet with a minted token, so it needs the
+      # devnet fully up.
       - name: Run shielded-swap example
         run: make dev-settle run-shielded-swap
 

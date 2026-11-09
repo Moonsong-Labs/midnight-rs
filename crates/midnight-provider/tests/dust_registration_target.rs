@@ -11,7 +11,7 @@ mod common;
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use midnight_provider::{DustlessBuilder, MidnightProvider, ProviderError};
+use midnight_provider::{MidnightProvider, ProviderError, TransactionRequest};
 use midnight_wallet::{DustBalance, NIGHT, Network, Seed, Wallet, WalletError, parse_dust_address};
 
 /// Enough tNIGHT that the coin carries real generationless dust.
@@ -63,11 +63,10 @@ async fn a_registration_to_another_dust_address_funds_that_wallet() {
 
     let funder = common::synced_provider(&node_url, &indexer_url, common::DEV_WALLET_SEED).await;
     funder
-        .transfer_unshielded(NIGHT, SEND, cold_recipient)
-        .send()
+        .send_transaction(TransactionRequest::unshielded(NIGHT, SEND, cold_recipient))
         .await
         .expect("fund the cold address")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("funding finalized");
 
@@ -83,12 +82,10 @@ async fn a_registration_to_another_dust_address_funds_that_wallet() {
         .expect("the hot wallet's Dust address");
     let hot = hot.with_wallet(hot_wallet);
 
-    cold.register_dust(None)
-        .to(target)
-        .send()
+    cold.send_transaction(TransactionRequest::register_dust_to(target))
         .await
         .expect("build and submit the registration")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the node must accept a registration that names another Dust address");
 
@@ -110,16 +107,19 @@ async fn a_registration_to_another_dust_address_funds_that_wallet() {
         "the registration must not name the cold wallet's own Dust key"
     );
 
-    let dustless = cold
-        .transfer_unshielded(NIGHT, SEND, cold_recipient)
-        .without_dust()
+    let fee_less = cold
+        .fill(TransactionRequest::unshielded(NIGHT, SEND, cold_recipient).without_fee())
         .await
-        .expect("build the fee-less transfer");
+        .expect("build the fee-less transfer")
+        .into_bytes();
     // The hot wallet values its Dust at the time of its last Dust event, so
     // the first attempt can fall short.
     let deadline = Instant::now() + Duration::from_secs(120);
     let funded = loop {
-        match hot.balance_transaction(dustless.as_bytes()).await {
+        match hot
+            .fill(TransactionRequest::sponsor(fee_less.clone()))
+            .await
+        {
             Ok(funded) => break funded,
             Err(ProviderError::Wallet(WalletError::InsufficientDust { .. }))
                 if Instant::now() < deadline =>
@@ -129,10 +129,10 @@ async fn a_registration_to_another_dust_address_funds_that_wallet() {
             Err(err) => panic!("the hot wallet must pay the fee with the Dust it got: {err}"),
         }
     };
-    hot.submit_reserved(funded)
+    hot.send_tx_envelope(funded)
         .await
         .expect("submit the sponsored transfer")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the node must accept a fee paid with the Dust of another wallet's tNIGHT");
 }

@@ -19,9 +19,7 @@ use common::UnreachedWallet;
 use midnight_contract::interpreter::Program;
 use midnight_contract::runtime::NoWitnesses;
 use midnight_contract::{Contract, ShieldedInputs};
-use midnight_provider::{
-    DustlessBuilder, HashOutput, MidnightProvider, ShieldedTokenType, UnshieldedTokenType,
-};
+use midnight_provider::{HashOutput, MidnightProvider, ShieldedTokenType, TransactionRequest};
 use midnight_wallet::Seed;
 
 /// Room for a builder to gain a field, far below the tens of kilobytes an
@@ -72,12 +70,8 @@ fn contract_entry_points_return_small_futures() {
         contract.circuits().increment().send(),
     );
     assert_small(
-        "generated circuit call::build",
-        contract.circuits().increment().build(),
-    );
-    assert_small(
-        "generated circuit call::without_dust",
-        contract.circuits().increment().without_dust(),
+        "generated circuit call::without_fee",
+        contract.circuits().increment().without_fee(),
     );
     assert_small(
         "generated circuit call::simulate",
@@ -145,7 +139,6 @@ fn the_base_contract_call_methods_return_small_futures() {
             &NoWitnesses,
             &[],
             ShieldedInputs::default(),
-            true,
         ),
     );
     assert_small(
@@ -161,58 +154,17 @@ fn the_base_contract_call_methods_return_small_futures() {
 #[test]
 fn provider_entry_points_return_small_futures() {
     let p = provider();
-    let recipient = Seed::from_bytes(&[1; 32]).unwrap();
+    let transfer = || {
+        TransactionRequest::shielded(
+            ShieldedTokenType(HashOutput([0u8; 32])),
+            1,
+            Seed::from_bytes(&[1; 32]).unwrap().shielded_recipient(),
+        )
+    };
 
+    assert_small("MidnightProvider::fill", p.fill(transfer()));
     assert_small(
-        "MidnightProvider::balance_transaction",
-        p.balance_transaction(&[]),
+        "MidnightProvider::send_transaction",
+        p.send_transaction(transfer()),
     );
-    assert_small(
-        "ShieldedTransfer::build",
-        p.transfer_shielded(
-            ShieldedTokenType(HashOutput([0u8; 32])),
-            1,
-            recipient.shielded_recipient(),
-        )
-        .build(),
-    );
-    assert_small(
-        "ShieldedTransfer::send",
-        p.transfer_shielded(
-            ShieldedTokenType(HashOutput([0u8; 32])),
-            1,
-            recipient.shielded_recipient(),
-        )
-        .send(),
-    );
-    assert_small(
-        "UnshieldedTransfer::build",
-        p.transfer_unshielded(
-            UnshieldedTokenType(HashOutput([0u8; 32])),
-            1,
-            recipient.unshielded_recipient(),
-        )
-        .build(),
-    );
-    assert_small(
-        "UnshieldedTransfer::send",
-        p.transfer_unshielded(
-            UnshieldedTokenType(HashOutput([0u8; 32])),
-            1,
-            recipient.unshielded_recipient(),
-        )
-        .send(),
-    );
-    assert_small(
-        "ShieldedSwap::build",
-        p.shielded_swap(
-            ShieldedTokenType(HashOutput([0u8; 32])),
-            1,
-            ShieldedTokenType(HashOutput([1u8; 32])),
-            1,
-        )
-        .build(),
-    );
-    assert_small("DustRegistration::build", p.register_dust(None).build());
-    assert_small("DustRegistration::send", p.register_dust(None).send());
 }

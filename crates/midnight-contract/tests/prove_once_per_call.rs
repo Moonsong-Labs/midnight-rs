@@ -33,7 +33,7 @@ use midnight_helpers::{
     CostModel, DefaultDB, ProofProvider, ProvenTransaction, Resolver, StdRng, Transaction,
     UnprovenTransaction,
 };
-use midnight_provider::{MidnightProvider, ProviderError};
+use midnight_provider::{MidnightProvider, Prover, ProviderError};
 use midnight_types::WalletError;
 
 /// The message of every proof that [`ProofCounter`] fails.
@@ -48,7 +48,7 @@ const MARKER: &str = "the test prover fails on purpose";
 /// While `fail` is set, every proof fails with [`MARKER`].
 struct ProofCounter {
     /// The SDK's prover, which proves the ZKIR v3 circuits of the counter.
-    prover: Arc<dyn ProofProvider<DefaultDB>>,
+    prover: Prover,
     with_contract_action: AtomicUsize,
     dust_only: AtomicUsize,
     fail: AtomicBool,
@@ -76,7 +76,7 @@ impl ZkConfigProvider for SwappedKey {
 }
 
 impl ProofCounter {
-    fn new(prover: Arc<dyn ProofProvider<DefaultDB>>) -> Self {
+    fn new(prover: Prover) -> Self {
         Self {
             prover,
             with_contract_action: AtomicUsize::default(),
@@ -133,8 +133,8 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
     };
 
     let provider = MidnightProvider::new(&node_url);
-    let counter_proofs = Arc::new(ProofCounter::new(provider.proof_provider()));
-    let provider = provider.with_proof_provider(counter_proofs.clone());
+    let counter_proofs = Arc::new(ProofCounter::new(Prover::local()));
+    let provider = provider.with_prover(Prover::custom(counter_proofs.clone()));
     let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
@@ -168,7 +168,7 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         .send()
         .await
         .expect("submit increment")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the node must accept the call");
     eprintln!("increment() tx = {}", hex::encode(outcome.extrinsic_hash));
@@ -243,7 +243,7 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
             .await
             .expect("prepare maintenance")
             .sign(0, &authority)
-            .build()
+            .send()
             .await,
     );
 }

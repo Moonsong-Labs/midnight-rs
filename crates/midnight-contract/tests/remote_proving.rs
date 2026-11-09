@@ -1,6 +1,6 @@
 //! A contract that a remote proof server proves must run on the chain.
 //!
-//! [`RemoteProofServer`] proves both transactions. The deploy pays its fee with
+//! [`Prover::remote`] proves both transactions. The deploy pays its fee with
 //! a Dust spend, which the proof server proves with a built-in key. The call
 //! also proves the counter's circuit, so the client sends that circuit's IR
 //! and keys, which the proof server routes to its ZKIR v3 prover.
@@ -15,9 +15,7 @@ mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
-use std::sync::Arc;
-
-use midnight_provider::{MidnightProvider, RemoteProofServer};
+use midnight_provider::{MidnightProvider, Prover};
 
 #[tokio::test]
 async fn a_remotely_proven_call_advances_the_counter() {
@@ -28,8 +26,7 @@ async fn a_remotely_proven_call_advances_the_counter() {
         return;
     };
 
-    let provider = MidnightProvider::new(&node_url)
-        .with_proof_provider(Arc::new(RemoteProofServer::new(proof_server_url)));
+    let provider = MidnightProvider::new(&node_url).with_prover(Prover::remote(&proof_server_url));
     let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
@@ -55,7 +52,7 @@ async fn a_remotely_proven_call_advances_the_counter() {
         .send()
         .await
         .expect("submit increment")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the node must accept the remotely proven call");
 

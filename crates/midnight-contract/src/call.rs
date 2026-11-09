@@ -103,7 +103,7 @@ pub(crate) async fn call_transaction<W: midnight_types::MidnightWallet>(
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     // When false, skip Dust funding: the call is built proven but fee-less, for
-    // another wallet to sponsor (`MidnightProvider::balance_transaction`).
+    // another wallet to sponsor (`TransactionRequest::sponsor`).
     pay_fees: bool,
 ) -> Result<midnight_types::TxEnvelope, ContractError> {
     // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.

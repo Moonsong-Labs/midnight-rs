@@ -12,18 +12,14 @@ use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
-use crate::{Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit};
+use crate::{
+    Health, PendingTx, Prover, Provider, ProviderError, StateQuery, StateQueryResult, submit,
+};
+use midnight_helpers::LedgerParameters;
 use midnight_helpers::midnight_serialize::tagged_deserialize;
-use midnight_helpers::{
-    DefaultDB, FromContext, LedgerParameters, ProofProvider, StandardTransactionInfo,
-};
 use midnight_private_state::PrivateStateProvider;
-use midnight_types::build::{self, Cover, Fill, MaybeWallet};
-use midnight_types::{
-    BlockHash, CoinPublicKey, MidnightWallet, Network, ShieldedRecipient, ShieldedTokenType,
-    TxEnvelope, UnshieldedRecipient, UnshieldedTokenType,
-};
+use midnight_types::build::{self, MaybeWallet, Reservation};
+use midnight_types::{BlockHash, CoinPublicKey, MidnightWallet, Network, TxEnvelope};
 
 /// The bound of a node query, its connect included.
 ///
@@ -77,16 +73,13 @@ struct NodeConnection {
 /// does not answer in that time returns [`ProviderError::Rpc`].
 /// [`Self::health`] bounds its connect and each of its two queries to 10 s,
 /// and reports a missing answer in its fields. [`Self::prepare`] and
-/// [`Self::submit`] bound their connect and their metadata read to 10 s. The
-/// SDK sets no deadline on the submit call or on the wait for a submitted
-/// transaction (see [`PendingTx`]).
+/// [`Self::send_tx_envelope`] bound their connect and their metadata read to
+/// 10 s. The SDK sets no deadline on the submit call or on the wait for a
+/// sent transaction (see [`PendingTx`]).
 pub struct MidnightProvider<W = ()> {
     node_url: String,
     wallet: W,
-    /// Proof backend for transaction building. Defaults to the local prover
-    /// on first use; override with [`Self::with_proof_provider`] to use a
-    /// remote prover or a custom implementation.
-    proof_provider: Option<Arc<dyn ProofProvider<DefaultDB>>>,
+    pub(crate) prover: Prover,
     /// Optional store for per-contract private state and maintenance signing
     /// keys. Set with [`Self::with_private_state`]; absent for contracts whose
     /// witnesses are stateless.
@@ -99,7 +92,7 @@ impl<W: std::fmt::Debug> std::fmt::Debug for MidnightProvider<W> {
         f.debug_struct("MidnightProvider")
             .field("node_url", &self.node_url)
             .field("wallet", &self.wallet)
-            .field("proof_provider_set", &self.proof_provider.is_some())
+            .field("prover", &self.prover)
             .field("private_state_attached", &self.private_state.is_some())
             .finish_non_exhaustive()
     }
@@ -132,7 +125,7 @@ impl MidnightProvider {
         Self {
             node_url: node_url.to_string(),
             wallet: (),
-            proof_provider: None,
+            prover: Prover::local(),
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
         }
@@ -167,14 +160,14 @@ impl MidnightProvider {
         let MidnightProvider {
             node_url,
             wallet: (),
-            proof_provider,
+            prover,
             private_state,
             conn,
         } = self;
         MidnightProvider {
             node_url,
             wallet,
-            proof_provider,
+            prover,
             private_state,
             conn,
         }
@@ -182,55 +175,21 @@ impl MidnightProvider {
 }
 
 impl<W> MidnightProvider<W> {
-    /// Override the proof backend that proves every transaction of this
-    /// provider: the transfers, the Dust registrations, and the deploys,
-    /// calls and maintenance updates of a `Contract` on it.
-    ///
-    /// Without this call, the provider proves locally, in this process. The
-    /// local prover proves circuits compiled for ZKIR v2 and for ZKIR v3.
-    ///
-    /// The first local proof of each circuit size downloads its public
-    /// parameters when the cache does not hold them. The first proof with a
-    /// built-in Zswap or Dust key downloads that key in the same way. The
-    /// source is `MIDNIGHT_PARAM_SOURCE` (default
-    /// `https://srs.midnight.network/`). The cache is the directory that
-    /// upstream `MidnightDataProvider` picks, `MIDNIGHT_PP` first. For offline
-    /// or container use, fill that cache once with network access. Then point
-    /// `MIDNIGHT_PP` at it.
-    ///
-    /// Pass a [`RemoteProofServer`](crate::RemoteProofServer) to offload
-    /// proving to an HTTP proof server, which downloads none of these files,
-    /// or any custom prover:
+    /// Prove every transaction of this provider with `prover`: each
+    /// [`TransactionRequest`](midnight_types::TransactionRequest), and the
+    /// deploys, calls and maintenance updates of a `Contract` on it. The
+    /// default is [`Prover::local`].
     ///
     /// ```rust,no_run
-    /// # fn f() -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
-    /// use std::sync::Arc;
-    /// use midnight_provider::{MidnightProvider, RemoteProofServer};
+    /// use midnight_provider::{MidnightProvider, Prover};
     ///
-    /// let prover = Arc::new(RemoteProofServer::new("http://localhost:6300".to_string()));
-    /// let provider = MidnightProvider::new(NODE_URL).with_proof_provider(prover);
-    /// # Ok(())
-    /// # }
+    /// let provider =
+    ///     MidnightProvider::new(NODE_URL).with_prover(Prover::remote("http://localhost:6300"));
     /// ```
-    pub fn with_proof_provider(
-        mut self,
-        proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    ) -> Self {
-        self.proof_provider = Some(proof_provider);
+    pub fn with_prover(mut self, prover: Prover) -> Self {
+        self.prover = prover;
         self
-    }
-
-    /// The proof backend used to prove transactions built through this
-    /// provider (transfers, dust registration, and every contract deploy /
-    /// call / maintenance op driven by a `Contract` built on it).
-    ///
-    /// Returns the backend set via [`Self::with_proof_provider`], or the local
-    /// prover when none was configured. Cheap to clone (`Arc`).
-    pub fn proof_provider(&self) -> Arc<dyn ProofProvider<DefaultDB>> {
-        self.proof_provider
-            .clone()
-            .unwrap_or_else(|| Arc::new(crate::local_prover::LocalProver))
     }
 
     /// Attach a [`PrivateStateProvider`] for per-contract private state (and an
@@ -274,120 +233,82 @@ impl<W> MidnightProvider<W> {
         self.private_state.clone()
     }
 
-    /// Submit proven transaction bytes to the node over the WebSocket RPC.
+    /// Make the extrinsic of a signed transaction, so its hashes are known.
+    /// Send nothing.
     ///
-    /// Returns a [`PendingTx`] handle that lets the caller await inclusion
-    /// (`wait_best`) and finalization (`wait_finalized`). The provider's
-    /// `node_url` is used as the connection target — callers don't repeat it.
-    ///
-    /// This is for bytes that this wallet did not build. It carries no
-    /// reservation, so a rejection hands no inputs back. For a [`TxEnvelope`]
-    /// that this wallet signed, use [`Self::submit_reserved`].
-    pub async fn submit(&self, tx_bytes: &[u8]) -> Result<PendingTx, ProviderError> {
-        let conn = query_within(QUERY_TIMEOUT, self.get_or_connect()).await?;
-        submit::submit_bytes(&conn.client, tx_bytes).await
-    }
-
-    /// Wrap proven transaction bytes in the unsigned `send_mn_transaction`
-    /// extrinsic without submitting it, returning a [`crate::PreparedTx`]
-    /// whose extrinsic and transaction hashes are already known. Submit it
-    /// with [`crate::PreparedTx::submit`]. Lets a caller durably record state
-    /// keyed by the extrinsic hash *before* the transaction reaches the
-    /// mempool.
-    ///
-    /// This builds the extrinsic locally from the node's metadata, which
-    /// checks only the call's shape. The node validates the transaction only
-    /// at submit.
-    ///
-    /// This is for bytes that this wallet did not build. The `PreparedTx`
-    /// carries no reservation. For a [`TxEnvelope`] that this wallet signed,
-    /// use [`Self::prepare_reserved`].
-    pub async fn prepare(&self, tx_bytes: &[u8]) -> Result<submit::PreparedTx, ProviderError> {
-        let conn = query_within(QUERY_TIMEOUT, self.get_or_connect()).await?;
-        submit::prepare_bytes(&conn.client, tx_bytes).await
-    }
-
-    /// [`Self::prepare`] for a transaction that a wallet signed, with the
-    /// reservation that `tx` carries on the returned
-    /// [`PreparedTx`](crate::PreparedTx).
+    /// The returned [`PreparedTx`](crate::PreparedTx) holds the reservation
+    /// that `tx` carries. Its extrinsic hash is already known, so a caller can
+    /// durably record state keyed by that hash *before* the transaction
+    /// reaches the mempool, and then [send](crate::PreparedTx::send) it. The
+    /// extrinsic comes from the node's metadata, which checks only the call's
+    /// shape. The node validates the transaction only at the send.
     ///
     /// The inputs that the wallet reserved go back to it when the prepare
     /// fails, before the error returns, and when the `PreparedTx` drops before
-    /// its submit. Its submit moves the reservation to the [`PendingTx`],
-    /// which hands the inputs back when a wait reads
+    /// its send. Its send moves the reservation to the [`PendingTx`], which
+    /// hands the inputs back when [`PendingTx::get_receipt`] reads
     /// [`SubmitError::Invalid`](crate::SubmitError::Invalid).
     ///
-    /// Submit the transaction only through the returned `PreparedTx`. Bytes
+    /// Send the transaction only through the returned `PreparedTx`. Bytes
     /// that you send another way can land after a drop of the `PreparedTx`
-    /// hands their inputs back, and a later build can then spend the same
+    /// hands their inputs back, and a later fill can then spend the same
     /// inputs.
     ///
     /// # Errors
     ///
-    /// The errors of [`Self::prepare`].
-    pub async fn prepare_reserved(
+    /// [`ProviderError::Transaction`] when `tx` pays no fee: it came from a
+    /// request made `without_fee` or from a swap half, and the node refuses
+    /// it. Hand its bytes ([`TxEnvelope::into_bytes`]) to the party that pays
+    /// its fee. [`ProviderError::Rpc`] when the connect fails or gets no
+    /// answer within 10 s. [`ProviderError::Submission`] with
+    /// [`SubmitError::NotSubmitted`](crate::SubmitError::NotSubmitted) when
+    /// the client cannot make the extrinsic.
+    pub async fn prepare(&self, tx: TxEnvelope) -> Result<submit::PreparedTx, ProviderError> {
+        let (bytes, reservation) = build::into_parts(tx).map_err(|_fee_less| {
+            ProviderError::Transaction(
+                "the transaction pays no fee, so the node refuses it; hand its bytes \
+                 (`TxEnvelope::into_bytes`) to the party that pays its fee"
+                    .into(),
+            )
+        })?;
+        self.prepare_parts(bytes, reservation).await
+    }
+
+    /// [`Self::prepare`] for the parts of a transaction that pays its fee.
+    async fn prepare_parts(
         &self,
-        tx: TxEnvelope,
+        bytes: Vec<u8>,
+        reservation: Reservation,
     ) -> Result<submit::PreparedTx, ProviderError> {
-        let (bytes, reservation) = build::into_parts(tx);
         // A prepare sends nothing to the node, so on every error the
         // reservation drops here and hands the inputs back.
-        let prepared = self.prepare(&bytes).await?;
-        Ok(prepared.holding(reservation))
+        let conn = query_within(QUERY_TIMEOUT, self.get_or_connect()).await?;
+        submit::prepare_bytes(&conn.client, bytes, reservation).await
     }
 
-    /// Merge proven transactions into one, for multi-party flows: e.g. combining
-    /// a contract call built without submitting (`Contract::build_call_with`, or
-    /// the generated `circuits().<circuit>().build().await`) with a
-    /// counterparty's already-proven transaction before submitting.
+    /// Send a signed transaction, and carry the reservation that `tx` carries
+    /// on the returned handle.
     ///
-    /// Each input is a tagged-serialized proven transaction (the byte output of
-    /// any build path). The result is the merged transaction, ready for
-    /// [`Self::submit`] / [`Self::prepare`]. Merging combines the transactions'
-    /// intents and Zswap offers and sums their binding randomness; it does NOT
-    /// rebalance, so every input must already balance its own tokens.
-    ///
-    /// **Intent segments must not collide.** The ledger rejects a merge where
-    /// two inputs both carry an intent at the same segment. A self-funded build
-    /// attaches its Dust-fee intent at the fallible segment (1); a contract call
-    /// and an unshielded (UTXO) transfer place their action there too. So at
-    /// most one merged input may carry a segment-1 intent, and two self-funded
-    /// transactions cannot be merged directly. The supported multi-party shape
-    /// is "one party pays": the contributors build fee-less
-    /// ([`crate::DustlessBuilder::without_dust`]) and a single payer covers the
-    /// fees with [`Self::balance_transaction`] (whose fee intent rides a distinct,
-    /// non-colliding segment). A Dustless *shielded* transfer carries no intent
-    /// at all (pure Zswap), so it always merges cleanly.
-    ///
-    /// Errors ([`ProviderError::Transaction`]) when given no transactions, when
-    /// a byte string fails to deserialize, or when two transactions cannot be
-    /// merged (colliding intent segments or mismatched network ids). Purely
-    /// local; nothing is sent to the node.
-    pub fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
-        crate::pipeline::merge_transactions(txs)
-    }
-
-    /// Submit a transaction that a wallet signed, and carry the reservation
-    /// that `tx` carries on the returned handle.
-    ///
-    /// Use it for the [`TxEnvelope`] of a `.build()` on a transfer, of
-    /// `balance_transaction`, or of a deploy. The inputs that the wallet
-    /// reserved then go back to it in two cases:
+    /// The inputs that the wallet reserved go back to it in two cases:
     ///
     /// - The prepare fails: the connect, the metadata read, or the encoding of
     ///   the extrinsic. The transaction never left this process, whatever the
     ///   error, and the release completes before the error returns.
-    /// - A wait on the [`PendingTx`] reads
+    /// - [`PendingTx::get_receipt`] reads
     ///   [`SubmitError::Invalid`](crate::SubmitError::Invalid), the node's
     ///   definitive rejection. It arrives after this method returns, so the
     ///   reservation travels with the handle.
     ///
     /// Any other failure keeps the inputs reserved until their TTL passes,
-    /// because the node can still hold the transaction. Use [`Self::submit`]
-    /// for bytes that this wallet did not build. This is
-    /// [`Self::prepare_reserved`], then [`PreparedTx::submit`](crate::PreparedTx::submit).
-    pub async fn submit_reserved(&self, tx: TxEnvelope) -> Result<PendingTx, ProviderError> {
-        self.prepare_reserved(tx).await?.submit().await
+    /// because the node can still hold the transaction. This is
+    /// [`Self::prepare`], then [`PreparedTx::send`](crate::PreparedTx::send).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Self::prepare`], a refusal of a transaction that pays
+    /// no fee among them, and of [`PreparedTx::send`](crate::PreparedTx::send).
+    pub async fn send_tx_envelope(&self, tx: TxEnvelope) -> Result<PendingTx, ProviderError> {
+        self.prepare(tx).await?.send().await
     }
 
     /// Get or create the node connection.
@@ -465,170 +386,6 @@ impl<W: MidnightWallet> MidnightProvider<W> {
     /// The wallet that this provider received in [`MidnightProvider::with_wallet`].
     pub fn wallet(&self) -> &W {
         &self.wallet
-    }
-
-    /// Build a shielded (Zswap) transfer transaction.
-    ///
-    /// Returns a pending builder. `.send().await?` builds + submits and returns
-    /// the resulting [`PendingTx`]; `.build().await?` returns the signed
-    /// [`TxEnvelope`] without submitting (e.g. for custom routing). Either path
-    /// lets the wallet select the inputs and reserve them as one step, so a
-    /// second build in this process cannot draw the same input. Proving runs
-    /// after that, with the wallet free.
-    ///
-    /// Submit the envelope of `.build()` with [`Self::submit_reserved`]. A drop
-    /// of the envelope hands its inputs back. Its bytes
-    /// ([`TxEnvelope::into_bytes`]) keep the inputs reserved until a sync sees
-    /// the chain spend them, or until their TTL passes.
-    ///
-    /// Read `recipient` from a shielded address with
-    /// [`parse_shielded_recipient`](midnight_types::address::parse_shielded_recipient),
-    /// or derive it from a seed with
-    /// [`Seed::shielded_recipient`](midnight_types::hd::Seed::shielded_recipient).
-    pub fn transfer_shielded<'a>(
-        &'a self,
-        token_type: ShieldedTokenType,
-        amount: u128,
-        recipient: ShieldedRecipient,
-    ) -> ShieldedTransfer<'a, W> {
-        ShieldedTransfer::new(self, token_type, amount, recipient)
-    }
-
-    /// Build one half of a native two-party shielded token swap.
-    ///
-    /// The half spends `give_amount` of `give_token` and creates an output for
-    /// `receive_amount` of `receive_token` payable to this wallet. It is net
-    /// unbalanced (`+give_token`, `-receive_token`) and therefore fee-less by
-    /// construction, so awaiting the returned [`ShieldedSwap`] yields a
-    /// [`DustlessTransaction`](crate::DustlessTransaction) directly rather than
-    /// submitting.
-    ///
-    /// The counterparty builds the exact mirror
-    /// (`shielded_swap(receive_token, receive_amount, give_token, give_amount)`).
-    /// A sponsor (either party or a third party) then combines the two halves
-    /// with [`Self::merge_transactions`] into a balanced, fee-less transaction,
-    /// funds its Dust with [`Self::balance_transaction`], and submits:
-    ///
-    /// ```rust,no_run
-    /// # use midnight_provider::{MidnightProvider, ShieldedTokenType};
-    /// # async fn f(
-    /// #     alice: MidnightProvider<midnight_wallet::Wallet>,
-    /// #     bob: MidnightProvider<midnight_wallet::Wallet>,
-    /// #     sponsor: MidnightProvider<midnight_wallet::Wallet>,
-    /// #     token_x: ShieldedTokenType,
-    /// #     dx: u128,
-    /// #     token_y: ShieldedTokenType,
-    /// #     dy: u128,
-    /// # ) -> anyhow::Result<()> {
-    /// let a_half = alice.shielded_swap(token_x, dx, token_y, dy).await?;
-    /// let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
-    /// let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
-    /// let funded = sponsor.balance_transaction(&merged).await?;
-    /// sponsor.submit_reserved(funded).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// The two halves must carry exactly mirrored `(token, amount)` pairs or the
-    /// merge won't balance; the builder can't enforce the counterparty's side.
-    /// See [`Self::transfer_shielded`] for reservation semantics.
-    pub fn shielded_swap<'a>(
-        &'a self,
-        give_token: ShieldedTokenType,
-        give_amount: u128,
-        receive_token: ShieldedTokenType,
-        receive_amount: u128,
-    ) -> ShieldedSwap<'a, W> {
-        ShieldedSwap::new(self, give_token, give_amount, receive_token, receive_amount)
-    }
-
-    /// Build an unshielded (UTXO) transfer transaction. See
-    /// [`Self::transfer_shielded`] for reservation semantics and the
-    /// `.send()` vs `.build()` distinction.
-    ///
-    /// Read `recipient` from an unshielded address with
-    /// [`parse_unshielded_recipient`](midnight_types::address::parse_unshielded_recipient),
-    /// or derive it from a seed with
-    /// [`Seed::unshielded_recipient`](midnight_types::hd::Seed::unshielded_recipient).
-    pub fn transfer_unshielded<'a>(
-        &'a self,
-        token_type: UnshieldedTokenType,
-        amount: u128,
-        recipient: UnshieldedRecipient,
-    ) -> UnshieldedTransfer<'a, W> {
-        UnshieldedTransfer::new(self, token_type, amount, recipient)
-    }
-
-    /// Build a dust-address registration transaction. See
-    /// [`Self::transfer_shielded`] for reservation semantics and the
-    /// `.send()` vs `.build()` distinction.
-    ///
-    /// One call registers one tNIGHT UTXO and pays its own fee from the Dust
-    /// that the UTXO's age gives it, so a wallet needs no Dust to register.
-    /// The wallet picks the unregistered UTXO that carries the most of that
-    /// Dust, and the build fails when every tNIGHT UTXO is registered. Call it
-    /// again until [`DustBalance::unregistered_night_utxos`] is 0. The Dust
-    /// goes to this wallet's own Dust address, or to another wallet's with
-    /// [`DustRegistration::to`].
-    ///
-    /// `utxo_ctime` is a creation time, in seconds since the epoch, for the
-    /// UTXOs whose own creation time the indexer did not report. With `None`,
-    /// those UTXOs count as created one hour before the build.
-    ///
-    /// [`DustBalance::unregistered_night_utxos`]: midnight_types::DustBalance::unregistered_night_utxos
-    pub fn register_dust(&self, utxo_ctime: Option<u64>) -> DustRegistration<'_, W> {
-        DustRegistration::new(self, utxo_ctime)
-    }
-
-    /// Pay the fees for an external party's proven, fee-less transaction from
-    /// this provider's wallet, returning the completed transaction ready to
-    /// submit.
-    ///
-    /// This is the "one party pays fees" flow (midnight-js `balanceTx`):
-    /// the caller (fee payer) covers the Dust fees for a transaction someone
-    /// else already built and proved, without holding their keys. Purely
-    /// additive, the external transaction's proofs are untouched; a separately
-    /// proven Dust-paying transaction is combined in via `Transaction::merge`.
-    ///
-    /// Covers **fees only**: the transaction must already be balanced on every
-    /// non-fee token. A token deficit (e.g. an unfunded swap side) is rejected.
-    ///
-    /// The wallet draws the Dust and reserves it as one step, so two calls on
-    /// one provider cannot draw the same Dust. Proving and the merge run
-    /// afterwards, with the wallet free, and a failure in either hands the
-    /// Dust back.
-    ///
-    /// The result holds the merged transaction and the reservation of the
-    /// Dust. Submit it with [`Self::submit_reserved`], which hands the Dust
-    /// back when the node never gets the transaction or rejects it. The
-    /// reservation of the Dust expires at the earliest TTL of the intents of
-    /// the transaction. When the transaction has no intent, the reservation
-    /// expires the chain's `global_ttl` after the chain time. A transaction
-    /// that already pays its own fee comes back unchanged, with nothing
-    /// reserved.
-    pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<TxEnvelope, ProviderError> {
-        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
-        Box::pin(self.balance_transaction_inner(tx_bytes)).await
-    }
-
-    async fn balance_transaction_inner(
-        &self,
-        tx_bytes: &[u8],
-    ) -> Result<TxEnvelope, ProviderError> {
-        // Decode before the fill, so bytes that are no transaction fail with
-        // no node access.
-        let external = crate::pipeline::deserialize_transaction(tx_bytes)?;
-        let tx_info = StandardTransactionInfo::new_from_context(
-            self.chain_context().await?,
-            self.proof_provider(),
-            None,
-        );
-        self.fund_prove_sign(build::filled(Fill::Sealed {
-            tx_info: Box::new(tx_info),
-            external: Box::new(external),
-            cover: Cover::Fee,
-        }))
-        .await
     }
 }
 
@@ -1089,40 +846,13 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::sync::oneshot;
 
-    fn test_provider() -> MidnightProvider {
-        MidnightProvider::new("ws://test")
-    }
-
-    /// Merging nothing is a caller error, not an empty transaction.
-    #[test]
-    fn merge_transactions_rejects_empty() {
-        let err = test_provider().merge_transactions(&[]).unwrap_err();
-        assert!(
-            matches!(err, ProviderError::Transaction(ref m) if m.contains("at least one")),
-            "got {err:?}"
-        );
-    }
-
-    /// Undecodable bytes surface as a typed `Transaction` error naming the
-    /// failing step, not a panic inside the ledger deserializer.
-    #[test]
-    fn merge_transactions_rejects_invalid_bytes() {
-        let err = test_provider()
-            .merge_transactions(&[vec![0xFF; 8]])
-            .unwrap_err();
-        assert!(
-            matches!(err, ProviderError::Transaction(ref m) if m.contains("deserialize")),
-            "got {err:?}"
-        );
-    }
-
     /// A wallet that this test never reaches.
     #[derive(Debug)]
     struct UnreachedWallet;
 
     #[async_trait]
     impl MidnightWallet for UnreachedWallet {
-        fn shielded_recipient(&self) -> ShieldedRecipient {
+        fn shielded_recipient(&self) -> midnight_types::ShieldedRecipient {
             unreachable!("the test fails before the wallet")
         }
 
@@ -1142,17 +872,21 @@ mod tests {
         }
     }
 
-    /// `balance_transaction` deserializes before the fill reads the node, so
+    /// A sponsor decodes its bytes before the fill queries the node, so
     /// garbage bytes fail fast with a typed error and no node access.
     #[tokio::test]
-    async fn balance_transaction_rejects_invalid_bytes() {
-        let err = test_provider()
+    async fn a_sponsor_of_bytes_that_are_no_transaction_fails_before_the_node() {
+        let err = MidnightProvider::new("ws://test")
             .with_wallet(UnreachedWallet)
-            .balance_transaction(&[0xFF; 8])
+            .fill(midnight_types::TransactionRequest::sponsor(vec![0xFF; 8]))
             .await
             .unwrap_err();
         assert!(
-            matches!(err, ProviderError::Transaction(ref m) if m.contains("deserialize")),
+            matches!(
+                err,
+                ProviderError::Wallet(midnight_types::WalletError::Transfer(ref m))
+                    if m.contains("deserialize")
+            ),
             "got {err:?}"
         );
     }
@@ -1226,6 +960,11 @@ mod tests {
     ) -> (&'static str, Option<Result<(), String>>) {
         let outcome = tokio::time::timeout(Duration::from_secs(30), read).await;
         (name, outcome.ok().map(expected))
+    }
+
+    /// A reservation of nothing, for a transaction that no wallet funded.
+    fn unreserved() -> Reservation {
+        Reservation::new(midnight_types::build::SpentInputs::default(), |_| {})
     }
 
     /// Whether a read failed as a read that gets no answer does.
@@ -1307,11 +1046,17 @@ mod tests {
                     .ok_or_else(|| format!("{health:?}"))
             })
             .boxed_local(),
-            ended("prepare", provider.prepare(&[0; 8]), |read| match read {
-                Err(ProviderError::Submission(crate::SubmitError::NotSubmitted { .. })) => Ok(()),
-                Err(other) => Err(format!("{other:?}")),
-                Ok(_) => Err("Ok".to_owned()),
-            })
+            ended(
+                "prepare",
+                provider.prepare_parts(vec![0; 8], unreserved()),
+                |read| match read {
+                    Err(ProviderError::Submission(crate::SubmitError::NotSubmitted { .. })) => {
+                        Ok(())
+                    }
+                    Err(other) => Err(format!("{other:?}")),
+                    Ok(_) => Err("Ok".to_owned()),
+                },
+            )
             .boxed_local(),
             ended(
                 "ChainView::finalized_height",

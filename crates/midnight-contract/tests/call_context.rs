@@ -18,7 +18,7 @@ mod call_context {
 }
 
 use compact_bindgen::Bytes;
-use midnight_contract::DustlessBuilder;
+
 use midnight_provider::MidnightProvider;
 
 const DOMAIN_SEP: [u8; 32] = [0x5c; 32];
@@ -75,7 +75,7 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
         .send()
         .await
         .expect("submit unlock")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("an unlock between the best block's time and an hour later must apply");
     let unlocked = contract
@@ -94,7 +94,7 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
         .build()
         .circuits()
         .unlock(now - 1, now + 1)
-        .without_dust()
+        .without_fee()
         .await
         .expect("a call pinned at the block of `now` must run at that block's time");
 
@@ -104,7 +104,7 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
         .send()
         .await
         .expect("submit mint")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the contract must be able to mint to itself")
         .value;
@@ -114,7 +114,7 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
         .send()
         .await
         .expect("submit holds")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the contract must see the balance that its mint gave it");
 }

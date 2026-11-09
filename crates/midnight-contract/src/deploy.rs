@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use midnight_provider::{MidnightProvider, TxInBlock};
+use midnight_provider::{MidnightProvider, TransactionReceipt};
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{ContractAddress, MidnightWallet, TxEnvelope};
 
@@ -26,7 +26,7 @@ pub struct DeployResult {
     pub address: ContractAddress,
     /// The signed deploy transaction, which carries the reservation of the
     /// inputs that the wallet spends: the fee Dust, and the coins of a
-    /// shielded offer. Submit it with [`MidnightProvider::submit_reserved`],
+    /// shielded offer. Send it with [`MidnightProvider::send_tx_envelope`],
     /// which hands the inputs back when the node never gets the deploy or
     /// rejects it.
     pub transaction: TxEnvelope,
@@ -102,7 +102,7 @@ const READ_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 pub(crate) async fn deployed_state<W: Send + Sync>(
     provider: &MidnightProvider<W>,
     address: &str,
-    in_block: TxInBlock,
+    in_block: TransactionReceipt,
     remaining: Duration,
     timeout: Duration,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
@@ -156,7 +156,7 @@ mod tests {
             // Fails every read at once.
             ("a node URL that does not parse", "not a url".to_owned()),
         ];
-        let applied = TxInBlock {
+        let applied = TransactionReceipt {
             block_hash: BlockHash::repeat_byte(1),
             extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),

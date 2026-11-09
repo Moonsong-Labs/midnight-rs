@@ -66,7 +66,7 @@ async fn a_call_spends_the_callers_coin_and_returns_the_change() {
         .send()
         .await
         .expect("submit mint")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("mint to the dev wallet");
     let token_type = midnight_contract::parse_contract_address(mint_contract.address())
@@ -103,7 +103,7 @@ async fn a_call_spends_the_callers_coin_and_returns_the_change() {
         .send()
         .await
         .expect("submit deposit")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("a deposit that spends the caller's own coin");
 

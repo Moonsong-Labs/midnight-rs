@@ -33,7 +33,7 @@ error: unused `IncrementCallBuilder` that must be used
 21 |     contract.circuits().increment();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: does nothing until sent, built or simulated
+   = note: does nothing until sent, filled without a fee, or simulated
 help: use `let _ = ...` to ignore the resulting value
    |
 21 |     let _ = contract.circuits().increment();

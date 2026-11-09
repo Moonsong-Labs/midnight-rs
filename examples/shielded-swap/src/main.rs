@@ -5,16 +5,17 @@
 //! of the swap: a proven, fee-less Zswap transaction that gives one token and
 //! takes the other, net unbalanced. The two halves are exact mirrors, so
 //! merging them cancels both tokens into a balanced transaction a sponsor funds
-//! and submits.
+//! and sends.
 //!
-//! The swap itself is the three calls in `main`:
-//! - `shielded_swap(give, give_amount, receive, receive_amount)`: build one
-//!   fee-less half as a `DustlessTransaction`.
+//! The swap itself is the three steps in `main`:
+//! - `fill(TransactionRequest::shielded_swap(give, give_amount, receive,
+//!   receive_amount))`: fill one fee-less half, and read its bytes with
+//!   `into_bytes`.
 //! - `merge_transactions(&[..])`: fold the two mirrored halves into one balanced
 //!   transaction (the mirror deltas cancel, so no token deficit remains).
-//! - `balance_transaction(bytes)`: a sponsor pays the merged swap's Dust fees,
-//!   and `submit_reserved` submits the result with the reservation of that
-//!   Dust.
+//! - `send_transaction(TransactionRequest::sponsor(bytes))`: a sponsor pays
+//!   the merged swap's Dust fees and sends the result with the reservation of
+//!   that Dust.
 //!
 //! Everything before that is setup: giving B a second token to trade (see
 //! `mint`), so it does not clutter the flow.
@@ -31,6 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
+use midnight_core::provider::{TransactionRequest, merge_transactions};
 use midnight_core::wallet::{BackgroundSync, WalletBalance};
 use midnight_core::{MidnightProvider, Seed, Wallet};
 
@@ -131,24 +133,31 @@ async fn main() -> anyhow::Result<()> {
     );
     println!("pre-swap:  A[X={a_x0}, Y={a_y0}]  B[X={b_x0}, Y={b_y0}]\n");
 
-    // 1. Each party builds its fee-less, unbalanced half. The two are mirrors:
+    // 1. Each party fills its fee-less, unbalanced half. The two are mirrors:
     //    A gives DX of X for DY of Y; B gives DY of Y for DX of X.
-    let a_half = provider_a.shielded_swap(token_x, DX, token_y, DY).await?;
-    let b_half = provider_b.shielded_swap(token_y, DY, token_x, DX).await?;
+    let a_half = provider_a
+        .fill(TransactionRequest::shielded_swap(token_x, DX, token_y, DY))
+        .await?
+        .into_bytes();
+    let b_half = provider_b
+        .fill(TransactionRequest::shielded_swap(token_y, DY, token_x, DX))
+        .await?
+        .into_bytes();
     println!("1. Both halves built (A: give {DX} X take {DY} Y; B: the mirror).");
 
     // 2. Merge the mirrors into one balanced, fee-less transaction.
-    let merged = provider_a.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
+    let merged = merge_transactions(&[a_half, b_half])?;
     println!("2. Merged into one balanced transaction.");
 
-    // 3. A sponsors the merged swap's Dust fees and submits.
-    let sponsored = provider_a.balance_transaction(&merged).await?;
-    let pending = provider_a.submit_reserved(sponsored).await?;
-    let (_best, pending) = pending.wait_best().await?;
-    let (finalized, _) = pending.wait_finalized().await?;
+    // 3. A sponsors the merged swap's Dust fees and sends it.
+    let receipt = provider_a
+        .send_transaction(TransactionRequest::sponsor(merged))
+        .await?
+        .get_receipt()
+        .await?;
     println!(
         "3. Sponsored and finalized in {}.\n",
-        hex::encode(finalized.block_hash)
+        hex::encode(receipt.block_hash)
     );
 
     // Wait only for the token each wallet receives, so a wrong amount fails the

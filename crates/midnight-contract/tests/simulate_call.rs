@@ -32,7 +32,7 @@ async fn a_simulated_call_returns_the_value_and_the_next_ledger_with_no_wallet()
         .send()
         .await
         .expect("submit deploy")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("deploy finalized");
     let contract = deployed.into_contract().await.expect("deploy");

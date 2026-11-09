@@ -27,9 +27,9 @@ pub enum ProviderError {
     #[error(transparent)]
     NotApplied(Box<NotApplied>),
 
-    /// A transaction-manipulation operation failed off-chain (e.g. deserializing
-    /// or merging proven transactions for a multi-party submission via
-    /// `MidnightProvider::merge_transactions`). Nothing was sent to the node.
+    /// A transaction-manipulation operation failed off-chain, such as a
+    /// [`merge_transactions`](crate::merge_transactions), or a send refused a
+    /// transaction that pays no fee. Nothing was sent to the node.
     #[error("transaction: {0}")]
     Transaction(String),
 }

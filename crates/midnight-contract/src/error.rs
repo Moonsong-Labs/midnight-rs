@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use midnight_provider::{NotApplied, ProviderError, SubmitError, TransactionHash, TxInBlock};
+use midnight_provider::{
+    NotApplied, ProviderError, SubmitError, TransactionHash, TransactionReceipt,
+};
 use midnight_types::ExtrinsicHash;
 
 /// Reconciliation guidance appended to the Display of
@@ -180,18 +182,17 @@ pub enum ContractError {
     },
 
     /// The transaction landed in a block, but the chain did not apply it.
-    /// The wrapped [`NotApplied`] carries the [`TxInBlock`], whose `verdict`
+    /// The wrapped [`NotApplied`] carries the [`TransactionReceipt`], whose `verdict`
     /// tells the two cases apart: [`Verdict::PartialSuccess`] (the guaranteed
     /// phase committed, at least one fallible segment failed) and
     /// [`Verdict::Failure`] (the dispatch errored entirely, so no phase ran).
     /// Unlike [`SubmissionWait`] and [`FinalizeTimeout`], the chain gave a
-    /// verdict. `Contract::call_with` and `PendingCall::wait_finalized` drop the
+    /// verdict. `Contract::call_with` and `PendingCall::get_receipt` drop the
     /// orphan `Pending` snapshot, when the call recorded one, with `mark_failed`
     /// before they return this error.
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     /// [`FinalizeTimeout`]: ContractError::FinalizeTimeout
-    /// [`TxInBlock`]: midnight_provider::TxInBlock
     /// [`Verdict::PartialSuccess`]: midnight_provider::Verdict::PartialSuccess
     /// [`Verdict::Failure`]: midnight_provider::Verdict::Failure
     #[error(transparent)]
@@ -241,7 +242,7 @@ pub enum ContractError {
         /// included it before the deadline.
         // Boxed: unboxed, this variant takes `ContractError` past clippy's
         // `result_large_err` limit, and every `Result` here pays that size.
-        in_block: Option<Box<TxInBlock>>,
+        in_block: Option<Box<TransactionReceipt>>,
     },
 
     /// A circuit call or a deploy could not record its pending private-state
@@ -263,17 +264,17 @@ pub enum ContractError {
         source: midnight_provider::PrivateStateError,
     },
 
-    /// A build-only call ran witnesses that change the contract's private
-    /// state, and a build-only call has no way to record the new state.
+    /// A fee-less call ran witnesses that change the contract's private
+    /// state, and a fee-less call has no way to record the new state.
     ///
-    /// The generated `.build()` and `.without_dust()`, and
+    /// The generated `.without_fee()`, and
     /// [`Contract::build_call_with`](crate::Contract::build_call_with), give
     /// this error after the local run of the circuit. The call reserves no
     /// input, makes no proof, and writes no private-state snapshot. Submit the
     /// call with `.send()`, which records the new state.
     #[error(
         "the witnesses of this call change the private state of contract {address}, and a \
-         build-only call does not record it: submit the call with `.send()`"
+         fee-less call does not record it: submit the call with `.send()`"
     )]
     UnrecordedPrivateState {
         /// The address of the contract whose private state the call changes.

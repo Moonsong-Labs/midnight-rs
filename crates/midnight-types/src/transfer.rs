@@ -1,14 +1,8 @@
-//! The vocabulary of a transfer build: the request that names one
-//! ([`TransferRequest`]) and what it spends ([`SpentInputs`]).
-//!
-//! [`crate::build::TransferBuilder`] makes the builds themselves.
+//! What a build spends ([`SpentInputs`]), in the form a reservation takes.
 
 use midnight_helpers::{HashOutput, Timestamp};
 
-use crate::coin::{
-    DustNullifier, DustPublicKey, Nullifier, ShieldedRecipient, ShieldedTokenType,
-    UnshieldedRecipient, UnshieldedTokenType,
-};
+use crate::coin::{DustNullifier, Nullifier};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpentUtxoKey {
@@ -54,83 +48,6 @@ impl SpentInputs {
     /// and nothing to hand back.
     pub fn is_empty(&self) -> bool {
         self.dust.is_empty() && self.unshielded.is_empty() && self.shielded.is_empty()
-    }
-}
-
-/// One transfer a build can make.
-///
-/// Data rather than a closure over the builder, so a caller can hand a build
-/// to a wallet it reaches only through a trait.
-#[derive(Debug)]
-pub enum TransferKind {
-    /// A shielded (Zswap) transfer. See
-    /// `TransferBuilder::prepare_shielded`.
-    Shielded {
-        token_type: ShieldedTokenType,
-        amount: u128,
-        recipient: ShieldedRecipient,
-        /// False leaves the transaction fee-less, for another wallet to fund.
-        pay_fees: bool,
-    },
-    /// An unshielded (UTXO) transfer. See
-    /// `TransferBuilder::prepare_unshielded`.
-    Unshielded {
-        token_type: UnshieldedTokenType,
-        amount: u128,
-        recipient: UnshieldedRecipient,
-        /// False leaves the transaction fee-less, for another wallet to fund.
-        pay_fees: bool,
-    },
-    /// One half of a two-party shielded swap, always fee-less. See
-    /// `TransferBuilder::prepare_shielded_swap`.
-    ShieldedSwap {
-        give_token: ShieldedTokenType,
-        give_amount: u128,
-        receive_token: ShieldedTokenType,
-        receive_amount: u128,
-    },
-    /// A dust-address registration. See
-    /// `TransferBuilder::prepare_register_dust`.
-    DustRegistration {
-        /// Fallback creation time for the UTXOs whose own creation time the
-        /// indexer did not report.
-        utxo_ctime: Option<u64>,
-        /// The Dust public key that gets the Dust of the registered tNIGHT.
-        /// `None` names this wallet's own key.
-        target: Option<DustPublicKey>,
-    },
-}
-
-/// One build, as data: what to make, and how long the transaction stays
-/// valid.
-#[derive(Debug)]
-pub struct TransferRequest {
-    /// The transfer to build.
-    pub kind: TransferKind,
-    /// How long the transaction stays valid after the chain time of the
-    /// build. `None` gives the chain's `global_ttl`, the longest TTL the chain
-    /// accepts. A shorter TTL bounds how long a transaction that never
-    /// confirms can still land, and how long the wallet holds its inputs.
-    ///
-    /// The build fails with
-    /// [`WalletError::TtlOutOfRange`](crate::WalletError::TtlOutOfRange) when
-    /// `ttl` is under one second or longer than `global_ttl`. It fails with
-    /// [`WalletError::TtlWithoutIntent`](crate::WalletError::TtlWithoutIntent)
-    /// for a Dustless shielded transfer or a swap half, which carry no intent
-    /// to hold a TTL.
-    pub ttl: Option<std::time::Duration>,
-}
-
-impl TransferRequest {
-    /// A request whose transaction stays valid for the chain's `global_ttl`.
-    pub fn new(kind: TransferKind) -> Self {
-        Self { kind, ttl: None }
-    }
-}
-
-impl From<TransferKind> for TransferRequest {
-    fn from(kind: TransferKind) -> Self {
-        Self::new(kind)
     }
 }
 

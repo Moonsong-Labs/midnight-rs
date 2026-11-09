@@ -61,17 +61,15 @@ pub use midnight_typed_state::{ContractMaintenanceAuthority, ContractMaintenance
 pub use compact_runtime as runtime;
 
 // Transaction-submission observability. Returned by
-// `PendingDeploy::wait_best` / `wait_finalized` so callers don't need a
-// separate dependency on `midnight-provider` to name the types.
-// `SubmitError` is the structured failure the waits surface (inside
-// `ProviderError::Submission`). `NotApplied` and `Verdict` let a caller match
-// `ContractError::TransactionFailed`.
+// `PendingDeploy::get_receipt` so callers don't need a separate dependency on
+// `midnight-provider` to name the types. `SubmitError` is the structured
+// failure the waits surface (inside `ProviderError::Submission`). `NotApplied`
+// and `Verdict` let a caller match `ContractError::TransactionFailed`.
 pub use midnight_provider::{
-    NotApplied, PendingTx, SubmitError, TransactionHash, TxInBlock, Verdict,
+    NotApplied, PendingTx, SubmitError, TransactionHash, TransactionReceipt, Verdict,
 };
-// Dustless (fee-less) build support, so generated contract-call builders can
-// offer `.without_dust()` producing a sponsorable transaction.
-pub use midnight_provider::{DustlessBuilder, DustlessTransaction};
+// The signed transaction of a generated call builder's `without_fee`.
+pub use midnight_types::TxEnvelope;
 
 // Shielded recipients, their keys, and the shielded offer of a deploy.
 pub use midnight_types::address::parse_shielded_recipient;

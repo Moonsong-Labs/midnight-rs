@@ -12,7 +12,7 @@
 #[expect(dead_code, reason = "this test needs no synced_provider")]
 mod common;
 
-use midnight_provider::{MidnightProvider, NIGHT};
+use midnight_provider::{MidnightProvider, NIGHT, TransactionRequest};
 
 #[tokio::test]
 async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
@@ -27,18 +27,14 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
 
     // A self-transfer is the cheapest transaction that reaches a block.
     let pending = provider
-        .transfer_unshielded(NIGHT, 1, recipient)
-        .send()
+        .send_transaction(TransactionRequest::unshielded(NIGHT, 1, recipient))
         .await
         .expect("submit self-transfer");
     let transaction_hash = pending.transaction_hash();
-    let (in_block, _pending) = pending
-        .wait_finalized()
-        .await
-        .expect("finalized and applied");
+    let receipt = pending.get_receipt().await.expect("finalized and applied");
 
     assert_eq!(
-        in_block.transaction_hash, transaction_hash,
+        receipt.transaction_hash, transaction_hash,
         "the hash must survive inclusion unchanged"
     );
 
@@ -47,7 +43,7 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
     let events = subxt::OnlineClient::<subxt::SubstrateConfig>::from_url(&node_url)
         .await
         .expect("connect to the node")
-        .at_block(in_block.block_hash)
+        .at_block(receipt.block_hash)
         .await
         .expect("the inclusion block")
         .events()

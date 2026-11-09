@@ -70,7 +70,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
             .send()
             .await
             .expect("submit mint")
-            .wait_finalized()
+            .get_receipt()
             .await
             .expect("mint call");
         eprintln!("minted {mint_value} with no discovery ciphertext");

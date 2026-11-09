@@ -108,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .send()
         .await?
-        .wait_finalized()
+        .get_receipt()
         .await?;
     println!("   minted.\n");
 

@@ -14,7 +14,7 @@ use crate::error::ContractError;
 use crate::state::populate_verifier_keys;
 use crate::zk_config::{IntoZkConfig, ZkConfigProvider};
 use midnight_provider::{
-    PendingTx, PreparedTx, PrivateStateProvider, ProviderError, TransactionHash, TxInBlock,
+    PendingTx, PreparedTx, PrivateStateProvider, ProviderError, TransactionHash, TransactionReceipt,
 };
 
 /// A circuit call that landed on chain: the circuit's own result and events,
@@ -185,21 +185,22 @@ fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersi
 }
 
 /// Settle a call from the result of its finality wait: return its
-/// [`TxInBlock`] when the chain applied it, and an error when it did not.
+/// [`TransactionReceipt`] when the chain applied it, and an error when it did
+/// not.
 ///
 /// `store` holds the call's pending snapshot under `extrinsic_hash`, or is
 /// `None` when the call recorded none. [`settle_snapshot`] settles it. A wait
 /// that fails with a
 /// [`SubmitError`](midnight_provider::SubmitError), the only other failure of
-/// [`PendingTx::wait_finalized`], returns [`ContractError::SubmissionWait`] and
+/// [`PendingTx::get_receipt`], returns [`ContractError::SubmissionWait`] and
 /// keeps the snapshot for the caller to reconcile (see that variant).
 async fn settle_call(
     store: Option<&dyn PrivateStateProvider>,
     address: &str,
     extrinsic_hash: ExtrinsicHash,
     transaction_hash: TransactionHash,
-    waited: Result<TxInBlock, ProviderError>,
-) -> Result<TxInBlock, ContractError> {
+    waited: Result<TransactionReceipt, ProviderError>,
+) -> Result<TransactionReceipt, ContractError> {
     if let Some(store) = store {
         settle_snapshot(store, address, extrinsic_hash, waited.as_ref()).await?;
     }
@@ -268,7 +269,7 @@ async fn record_and_submit(
 
     // Keep the snapshot on a failed submit: a `SubmitRpc` does not say
     // whether the node holds the tx.
-    let pending = match prepared.submit().await {
+    let pending = match prepared.send().await {
         Ok(pending) => pending,
         Err(ProviderError::Submission(source)) => {
             return Err(ContractError::SubmissionWait {
@@ -293,7 +294,7 @@ async fn settle_snapshot(
     store: &dyn PrivateStateProvider,
     address: &str,
     extrinsic_hash: ExtrinsicHash,
-    waited: Result<&TxInBlock, &ProviderError>,
+    waited: Result<&TransactionReceipt, &ProviderError>,
 ) -> Result<(), midnight_provider::PrivateStateError> {
     match waited {
         // No height: subxt reports only the block hash, which alone
@@ -308,11 +309,10 @@ async fn settle_snapshot(
     }
 }
 
-/// How long to wait for the chain to finalize a submitted tx before treating
-/// it as a stalled submission. Restores the bound the deleted
-/// `wait_for_contract_update` used to enforce; `wait_finalized` itself has
-/// no internal timeout, so without this wrap a stalled grandpa would block
-/// the caller indefinitely.
+/// How long [`Contract::call_with`] waits for the chain to finalize a
+/// submitted tx before it treats it as a stalled submission.
+/// [`PendingTx::get_receipt`] has no internal timeout, so without this wrap a
+/// stalled grandpa would block the caller indefinitely.
 const DEFAULT_TX_FINALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A submitted circuit call, before the chain's verdict.
@@ -320,17 +320,17 @@ const DEFAULT_TX_FINALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 /// [`Contract::send_call_with`] and the `send` method of a generated call
 /// builder return it. Use it to read the transaction's hashes before the wait,
 /// or to choose the deadline of the wait. Call
-/// [`wait_finalized`](Self::wait_finalized) to finish the call.
+/// [`get_receipt`](Self::get_receipt) to finish the call.
 ///
 /// A dropped `PendingCall` does not retract the transaction, which can still
 /// land. It leaves the call's private-state snapshot `Pending`, as a
 /// [`ContractError::FinalizeTimeout`] does, and the recovery is the same.
 ///
-/// Call `wait_finalized` before you start the next call on the same contract.
+/// Call `get_receipt` before you start the next call on the same contract.
 /// A call that starts before the verdict builds on this call's `Pending`
 /// snapshot. A `mark_failed` of this snapshot then also drops the snapshot of
 /// the later call. `docs/private-state.md` describes the hazard.
-#[must_use = "call `wait_finalized`: a dropped `PendingCall` leaves its private-state snapshot `Pending`"]
+#[must_use = "call `get_receipt`: a dropped `PendingCall` leaves its private-state snapshot `Pending`"]
 pub struct PendingCall<T> {
     pending: PendingTx,
     value: T,
@@ -375,7 +375,7 @@ impl<T> PendingCall<T> {
     ///   call.
     /// - [`ContractError::PrivateState`] when the store cannot confirm or drop
     ///   the snapshot.
-    pub async fn wait_finalized(self) -> Result<CallOutcome<T>, ContractError> {
+    pub async fn get_receipt(self) -> Result<CallOutcome<T>, ContractError> {
         self.finish(None).await
     }
 
@@ -391,7 +391,7 @@ impl<T> PendingCall<T> {
         } = self;
         let extrinsic_hash = pending.extrinsic_hash();
         let transaction_hash = pending.transaction_hash();
-        let wait = pending.wait_finalized();
+        let wait = pending.get_receipt();
         let waited = match deadline {
             None => wait.await,
             Some(timeout) => tokio::time::timeout(timeout, wait)
@@ -403,19 +403,19 @@ impl<T> PendingCall<T> {
                     snapshot_written: snapshot_store.is_some(),
                 })?,
         };
-        let in_block = settle_call(
+        let receipt = settle_call(
             snapshot_store.as_deref(),
             &address,
             extrinsic_hash,
             transaction_hash,
-            waited.map(|(in_block, _pending)| in_block),
+            waited,
         )
         .await?;
         Ok(CallOutcome {
             value,
             extrinsic_hash,
-            transaction_hash: in_block.transaction_hash,
-            block_hash: in_block.block_hash,
+            transaction_hash: receipt.transaction_hash,
+            block_hash: receipt.block_hash,
             logs,
         })
     }
@@ -613,7 +613,7 @@ impl<'a, P> DeployBuilder<'a, P> {
     /// The deploy records the private state that the constructor leaves, or
     /// this one when it runs no constructor, as the first snapshot of the new
     /// contract. The snapshot is `Pending` until
-    /// [`PendingDeploy::wait_finalized`] settles it, and the first call starts
+    /// [`PendingDeploy::get_receipt`] settles it, and the first call starts
     /// from it. An empty private state, the default, is the witnesses'
     /// `Default`, and the deploy records nothing.
     pub fn with_initial_private_state(mut self, private_state: Vec<u8>) -> Self {
@@ -633,10 +633,10 @@ impl<'a, P> DeployBuilder<'a, P> {
     /// Set the deadline of [`PendingDeploy::into_contract`] (default: 60s).
     ///
     /// The deadline starts when `into_contract` starts, after `send` returns.
-    /// It bounds the best-block wait that `into_contract` does when no wait ran
-    /// before it, and then the read of the deployed contract. An explicit
-    /// [`PendingDeploy::wait_best`] or [`PendingDeploy::wait_finalized`] has no
-    /// deadline. See [`PendingTx`] to bound one with `tokio::time::timeout`.
+    /// It bounds the best-block wait that `into_contract` does when no
+    /// [`PendingDeploy::get_receipt`] ran before it, and then the read of the
+    /// deployed contract. An explicit `get_receipt` has no deadline. See
+    /// [`PendingTx`] to bound one with `tokio::time::timeout`.
     pub fn with_deploy_timeout(mut self, timeout: Duration) -> Self {
         self.deploy_timeout = timeout;
         self
@@ -699,15 +699,16 @@ where
     P: AsMidnightProvider + Send,
     P::Wallet: MidnightWallet,
 {
-    /// Build, prove, and submit the deploy transaction without waiting for inclusion.
+    /// Fill, fund, prove, sign and send the deploy transaction without waiting
+    /// for inclusion.
     ///
     /// Returns a [`PendingDeploy`] handle on which you can call
-    /// [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`] to observe
-    /// inclusion states, then [`PendingDeploy::into_contract`] to read the
-    /// deployed contract and obtain the [`Contract`]. Each wait fails with
+    /// [`PendingDeploy::get_receipt`] to wait for finality, then
+    /// [`PendingDeploy::into_contract`] to read the deployed contract and
+    /// obtain the [`Contract`]. Each wait fails with
     /// [`ContractError::TransactionFailed`] when the chain did not apply the
-    /// deploy. `into_contract` waits for the best block itself when no wait
-    /// ran before it.
+    /// deploy. `into_contract` waits for the best block itself when no
+    /// `get_receipt` ran before it.
     ///
     /// Before the submit, the deploy records its private state as a `Pending`
     /// snapshot (see [`with_initial_private_state`](Self::with_initial_private_state)).
@@ -715,6 +716,7 @@ where
     /// shielded offer, go back to the wallet when the node never gets the
     /// deploy, or when a wait reads
     /// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid).
+    /// [`ContractError::Provider`] carries the error of a fill.
     ///
     /// # Errors
     ///
@@ -774,7 +776,7 @@ where
 
         let result = deploy_funded(&state, provider, self.shielded_offer).await?;
         let address = result.address_hex();
-        let prepared = Box::pin(provider.prepare_reserved(result.transaction)).await?;
+        let prepared = Box::pin(provider.prepare(result.transaction)).await?;
         // The address is new, so its journal is empty.
         let private_state = PrivateStateChange {
             baseline: Vec::new(),
@@ -785,13 +787,12 @@ where
             record_and_submit(&address, prepared, private_state, store).await?;
 
         Ok(PendingDeploy {
-            pending,
+            stage: DeployStage::Sent(pending),
             address,
             zk_config,
             provider: self.provider,
             deploy_timeout: self.deploy_timeout,
             declares_witnesses: self.declares_witnesses,
-            seen: None,
             snapshot_store,
         })
     }
@@ -803,28 +804,30 @@ where
 
 /// Handle to an in-flight deploy. Returned by [`DeployBuilder::send`].
 ///
-/// Provides access to the watch stream so you can observe inclusion in the
-/// best block (`wait_best`) and finalization (`wait_finalized`) before
-/// promoting it to a [`Contract`] via [`PendingDeploy::into_contract`] (which
-/// reads the deployed contract from the node).
-///
-/// Only [`wait_finalized`](Self::wait_finalized) settles the deploy's
-/// private-state snapshot. A best-block wait, and so an
-/// [`into_contract`](Self::into_contract) with no wait before it, leaves it
-/// `Pending`.
+/// [`get_receipt`](Self::get_receipt) waits for the deploy to reach a
+/// finalized block and settles the deploy's private-state snapshot.
+/// [`into_contract`](Self::into_contract) reads the deployed contract from the
+/// node and returns the [`Contract`]. With no `get_receipt` before it, it
+/// waits for the best block only, and leaves the snapshot `Pending`.
 pub struct PendingDeploy<P> {
-    pending: PendingTx,
+    stage: DeployStage,
     address: String,
     zk_config: Arc<dyn ZkConfigProvider>,
     provider: P,
     deploy_timeout: Duration,
     declares_witnesses: bool,
-    /// The applied inclusion that the last wait returned. With it,
-    /// `into_contract` skips its own wait, and a `DeployTimeout` reports it.
-    seen: Option<TxInBlock>,
     /// The store that holds the deploy's `Pending` snapshot, until
-    /// `wait_finalized` settles it. `None` when the deploy recorded none.
+    /// `get_receipt` settles it. `None` when the deploy recorded none.
     snapshot_store: Option<Arc<dyn PrivateStateProvider>>,
+}
+
+/// How far a deploy has come.
+enum DeployStage {
+    /// The node has the deploy, and no wait has seen it final.
+    Sent(PendingTx),
+    /// The chain applied the deploy in this finalized block. `into_contract`
+    /// reads the contract there with no wait of its own.
+    Final(TransactionReceipt),
 }
 
 impl<P> PendingDeploy<P> {
@@ -833,50 +836,31 @@ impl<P> PendingDeploy<P> {
         &self.address
     }
 
-    /// The hash of the submitted extrinsic.
+    /// The hash of the submitted extrinsic. Format it with `{:x}` for its hex
+    /// digest.
     pub fn extrinsic_hash(&self) -> ExtrinsicHash {
-        self.pending.extrinsic_hash()
-    }
-
-    /// The extrinsic hash formatted as a hex string (no `0x` prefix, matching
-    /// the convention used by [`Contract::address`]).
-    pub fn extrinsic_hash_hex(&self) -> String {
-        self.pending.extrinsic_hash_hex()
+        match &self.stage {
+            DeployStage::Sent(pending) => pending.extrinsic_hash(),
+            DeployStage::Final(receipt) => receipt.extrinsic_hash,
+        }
     }
 
     /// The hash of the Midnight transaction the deploy extrinsic carries. See
     /// [`PendingTx::transaction_hash`].
     pub fn transaction_hash(&self) -> TransactionHash {
-        self.pending.transaction_hash()
-    }
-
-    /// Wait until the deploy transaction lands in the best block, and return
-    /// the inclusion when the chain applied it there.
-    ///
-    /// Consumes `self` and returns it alongside the inclusion details so
-    /// callers can chain a subsequent `wait_finalized` or `into_contract`
-    /// without `let mut`. See [`PendingTx::wait_best`] for caveats around
-    /// re-orgs and call ordering. An `Err` consumes the handle. When the final
-    /// verdict matters, call [`wait_finalized`](Self::wait_finalized) in place
-    /// of `wait_best`.
-    ///
-    /// # Errors
-    ///
-    /// [`ContractError::TransactionFailed`] when the chain did not apply the
-    /// deploy in the best block. [`ContractError::Provider`] when the wait
-    /// fails for another reason.
-    pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ContractError> {
-        let (in_block, pending) = self.pending.wait_best().await?;
-        self.pending = pending;
-        self.seen = Some(in_block);
-        Ok((in_block, self))
+        match &self.stage {
+            DeployStage::Sent(pending) => pending.transaction_hash(),
+            DeployStage::Final(receipt) => receipt.transaction_hash,
+        }
     }
 
     /// Wait until the deploy transaction is in a finalized block, and return
-    /// the inclusion when the chain applied it there.
+    /// its receipt when the chain applied it there.
     ///
-    /// Consumes `self` and returns it back. May be called without a prior
-    /// `wait_best`; the best-block status is then skipped.
+    /// Consumes `self` and returns it back, so a caller can chain
+    /// [`into_contract`](Self::into_contract), which then reads the contract
+    /// at the receipt's block with no wait of its own. A second call returns
+    /// the same receipt. See [`PendingTx::get_receipt`] for the wait.
     ///
     /// The wait settles the deploy's private-state snapshot as a call's wait
     /// does: an applied deploy confirms it, and a deploy that the chain did not
@@ -887,18 +871,40 @@ impl<P> PendingDeploy<P> {
     /// [`ContractError::TransactionFailed`] when the chain did not apply the
     /// deploy. [`ContractError::PrivateState`] when the store cannot settle
     /// the snapshot. [`ContractError::Provider`] when the wait fails for
-    /// another reason.
-    pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ContractError> {
-        let extrinsic_hash = self.pending.extrinsic_hash();
-        let waited = self.pending.wait_finalized().await;
-        if let Some(store) = self.snapshot_store.take() {
-            let waited = waited.as_ref().map(|(in_block, _)| in_block);
-            settle_snapshot(&*store, &self.address, extrinsic_hash, waited).await?;
-        }
-        let (in_block, pending) = waited?;
-        self.pending = pending;
-        self.seen = Some(in_block);
-        Ok((in_block, self))
+    /// another reason. An `Err` consumes the handle.
+    pub async fn get_receipt(self) -> Result<(TransactionReceipt, Self), ContractError> {
+        let Self {
+            stage,
+            address,
+            zk_config,
+            provider,
+            deploy_timeout,
+            declares_witnesses,
+            mut snapshot_store,
+        } = self;
+        let receipt = match stage {
+            DeployStage::Final(receipt) => receipt,
+            DeployStage::Sent(pending) => {
+                let extrinsic_hash = pending.extrinsic_hash();
+                let waited = pending.get_receipt().await;
+                if let Some(store) = snapshot_store.take() {
+                    settle_snapshot(&*store, &address, extrinsic_hash, waited.as_ref()).await?;
+                }
+                waited?
+            }
+        };
+        Ok((
+            receipt,
+            Self {
+                stage: DeployStage::Final(receipt),
+                address,
+                zk_config,
+                provider,
+                deploy_timeout,
+                declares_witnesses,
+                snapshot_store,
+            },
+        ))
     }
 }
 
@@ -909,10 +915,10 @@ where
     /// Read the deployed contract from the node, at the block that applied the
     /// deploy, and return the [`Contract`].
     ///
-    /// When no [`wait_best`](Self::wait_best) or
-    /// [`wait_finalized`](Self::wait_finalized) ran before it, `into_contract`
-    /// first waits for the best block itself, as `wait_best` does. One
-    /// deadline, the deploy timeout from
+    /// When no [`get_receipt`](Self::get_receipt) ran before it,
+    /// `into_contract` first waits for the best block itself. That verdict is
+    /// provisional, and the wait leaves the deploy's private-state snapshot
+    /// `Pending`. One deadline, the deploy timeout from
     /// [`DeployBuilder::with_deploy_timeout`], bounds that wait and the read
     /// together.
     ///
@@ -933,22 +939,21 @@ where
     ///   [`SubmitError`](midnight_provider::SubmitError) kinds that it carries.
     pub async fn into_contract(self) -> Result<Contract<P>, ContractError> {
         let Self {
-            pending,
+            stage,
             address,
             zk_config,
             provider,
             deploy_timeout,
             declares_witnesses,
-            seen,
             snapshot_store: _,
         } = self;
         let start = tokio::time::Instant::now();
-        let in_block = match seen {
-            Some(in_block) => in_block,
-            None => {
+        let receipt = match stage {
+            DeployStage::Final(receipt) => receipt,
+            DeployStage::Sent(pending) => {
                 let transaction_hash = pending.transaction_hash();
-                match tokio::time::timeout(deploy_timeout, pending.wait_best()).await {
-                    Ok(waited) => waited?.0,
+                match tokio::time::timeout(deploy_timeout, pending.best_block_receipt()).await {
+                    Ok(waited) => waited?,
                     Err(_elapsed) => {
                         return Err(ContractError::DeployTimeout {
                             address,
@@ -963,7 +968,7 @@ where
         deployed_state(
             provider.as_midnight_provider(),
             &address,
-            in_block,
+            receipt,
             deploy_timeout.saturating_sub(start.elapsed()),
             deploy_timeout,
         )
@@ -1315,26 +1320,23 @@ impl<P> Contract<P> {
         })
     }
 
-    /// Build and prove a circuit call transaction, returning its tagged-serialized
-    /// proven bytes **without submitting**.
+    /// Fill, fund, prove and sign a circuit call with no Dust fee, for another
+    /// wallet to pay. Send nothing.
     ///
-    /// Use this to obtain a contract call as a transaction you combine with
-    /// others before submitting: e.g. merge a counterparty's proven transaction
-    /// via [`MidnightProvider::merge_transactions`](midnight_provider::MidnightProvider::merge_transactions),
-    /// then [`submit`](midnight_provider::MidnightProvider::submit) the result.
-    /// It is the build-only mirror of [`Self::call_with`], which builds and
-    /// submits in one step. When `pay_fees` is false, the transaction pays no
-    /// Dust fee, for another wallet to sponsor with
-    /// [`MidnightProvider::balance_transaction`](midnight_provider::MidnightProvider::balance_transaction).
+    /// A send refuses the result. Read its bytes with
+    /// [`TxEnvelope::into_bytes`] and hand them to the payer, who completes
+    /// them with `TransactionRequest::sponsor`, alone or after a
+    /// [`merge_transactions`](midnight_provider::merge_transactions) with
+    /// other transactions.
     ///
-    /// A build-only call records no private-state snapshot. So it refuses a
+    /// A fee-less call records no private-state snapshot. So it refuses a
     /// call whose witnesses change the private state, after the local run of
     /// the circuit and before the build. A call that leaves the private state
     /// as it was, or a contract with no witnesses, builds as usual. The build
     /// reserves the wallet inputs that the transaction spends, as
-    /// [`Self::call_with`] does. The bytes do not name those inputs, so
-    /// nothing can hand them back. They stay reserved until a sync sees the
-    /// chain spend them, or until their TTL passes.
+    /// [`Self::call_with`] does. A drop of the result hands them back. Its
+    /// bytes keep them reserved until a sync sees the chain spend them, or
+    /// until their TTL passes.
     ///
     /// # Errors
     ///
@@ -1362,9 +1364,8 @@ impl<P> Contract<P> {
     ///   or when an argument does not encode.
     /// - [`ContractError::Serialization`] when the transaction or one of its
     ///   ledger values does not serialize.
-    /// - [`ContractError::Provider`] when the provider has no wallet, or when
-    ///   the read of the state or the block time, the build or the proof
-    ///   fails.
+    /// - [`ContractError::Provider`] when the read of the state or the block
+    ///   time, or the fill fails.
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,
@@ -1375,8 +1376,7 @@ impl<P> Contract<P> {
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
-        pay_fees: bool,
-    ) -> Result<Vec<u8>, ContractError>
+    ) -> Result<TxEnvelope, ContractError>
     where
         P: AsMidnightProvider,
         P::Wallet: MidnightWallet,
@@ -1390,7 +1390,6 @@ impl<P> Contract<P> {
             witnesses,
             coin_encryption_keys,
             shielded,
-            pay_fees,
         ))
         .await
     }
@@ -1408,8 +1407,7 @@ impl<P> Contract<P> {
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[crate::ShieldedRecipient],
         shielded: crate::call::ShieldedInputs,
-        pay_fees: bool,
-    ) -> Result<Vec<u8>, ContractError>
+    ) -> Result<TxEnvelope, ContractError>
     where
         P: AsMidnightProvider,
         P::Wallet: MidnightWallet,
@@ -1441,10 +1439,10 @@ impl<P> Contract<P> {
             args,
             coin_encryption_keys,
             shielded,
-            pay_fees,
+            false,
         ))
         .await?;
-        Ok(built.transaction.into_bytes())
+        Ok(built.transaction)
     }
 
     /// The head of the contract's private-state journal, which the witnesses
@@ -1579,14 +1577,14 @@ impl<P> Contract<P> {
     /// a funded transaction, proves it, and submits to the node. The
     /// contract handle is not mutated.
     ///
-    /// It runs [`Self::send_call_with`], then [`PendingCall::wait_finalized`]
+    /// It runs [`Self::send_call_with`], then [`PendingCall::get_receipt`]
     /// with a bound of 60 s on the wait for finality. The snapshot settles
     /// after that wait, so the bound does not cancel the store write.
     ///
     /// # Errors
     ///
     /// The errors of [`Self::send_call_with`] and of
-    /// [`PendingCall::wait_finalized`], and [`ContractError::FinalizeTimeout`]
+    /// [`PendingCall::get_receipt`], and [`ContractError::FinalizeTimeout`]
     /// when the call does not finalize in 60 s.
     #[allow(clippy::too_many_arguments)]
     pub async fn call_with(
@@ -1637,7 +1635,7 @@ impl<P> Contract<P> {
     /// extrinsic. Then it decodes the circuit's result with `decode`, records
     /// the private-state snapshot as `Pending`, and submits. A result that does
     /// not decode stops the call before the store records a snapshot and before
-    /// the node gets the transaction. Call [`PendingCall::wait_finalized`] to
+    /// the node gets the transaction. Call [`PendingCall::get_receipt`] to
     /// finish the call.
     ///
     /// # Errors
@@ -1739,7 +1737,7 @@ impl<P> Contract<P> {
         // process dies after the append but before submit, the tx never
         // reached the mempool, leaving a provisional pending entry that
         // reconciliation resolves.
-        let prepared = Box::pin(provider.prepare_reserved(transaction)).await?;
+        let prepared = Box::pin(provider.prepare(transaction)).await?;
 
         // Decode before the append and the submit: an error after the submit
         // would leave the call in flight with no `PendingCall` to settle it.
@@ -1834,11 +1832,11 @@ mod tests {
     async fn landed_call() -> (
         tempfile::TempDir,
         midnight_provider::FsPrivateStateProvider,
-        TxInBlock,
+        TransactionReceipt,
     ) {
         let dir = tempfile::TempDir::new().unwrap();
         let store = midnight_provider::FsPrivateStateProvider::new(dir.path());
-        let call = TxInBlock {
+        let call = TransactionReceipt {
             block_hash: BlockHash::repeat_byte(1),
             extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),
@@ -1895,7 +1893,7 @@ mod tests {
     #[tokio::test]
     async fn a_call_that_did_not_apply_leaves_the_last_good_snapshot_as_head() {
         let (_dir, store, call) = landed_call().await;
-        let waited = Err(midnight_provider::NotApplied(TxInBlock {
+        let waited = Err(midnight_provider::NotApplied(TransactionReceipt {
             verdict: midnight_provider::Verdict::Failure,
             ..call
         })

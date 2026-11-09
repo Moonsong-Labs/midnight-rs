@@ -103,13 +103,13 @@ async fn main() -> anyhow::Result<()> {
     let sig2 = member_sign(&payload, &members[2]);
 
     // Coordinator attaches the quorum at each member's committee index, then
-    // builds + submits.
+    // sends.
     prepared
         .add_signature(0, sig0)
         .add_signature(2, sig2)
         .send()
         .await?
-        .wait_best()
+        .get_receipt()
         .await?;
     println!("   rotated.");
     print_authority(&contract).await?;
@@ -137,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
         .add_signature(1, sig1)
         .send()
         .await?
-        .wait_best()
+        .get_receipt()
         .await?;
     println!("   replaced. Future updates must be signed by the new committee.");
     print_authority(&contract).await?;

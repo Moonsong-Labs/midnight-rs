@@ -7,7 +7,7 @@
 //!   MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 MIDNIGHT_INDEXER_URL=http://127.0.0.1:8088 \
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
-use midnight_provider::MidnightProvider;
+use midnight_provider::{MidnightProvider, TransactionRequest};
 use midnight_wallet::{NIGHT, Seed, Wallet};
 
 const DEFAULT_SHIELDED_TOKEN: midnight_wallet::ShieldedTokenType =
@@ -147,8 +147,7 @@ async fn build_shielded_transfer_arbitrary_token_id() {
     );
 
     let tx_bytes = provider
-        .transfer_shielded(coin.token_type, 1, recipient)
-        .build()
+        .fill(TransactionRequest::shielded(coin.token_type, 1, recipient))
         .await
         .expect("shielded transfer of arbitrary token id should build (proofs + serialize)")
         .into_bytes();
@@ -191,12 +190,14 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
         .collect();
 
     let pending = provider
-        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, AMOUNT, recipient)
-        .send()
+        .send_transaction(TransactionRequest::shielded(
+            DEFAULT_SHIELDED_TOKEN,
+            AMOUNT,
+            recipient,
+        ))
         .await
         .expect("shielded transfer should build + submit");
-    let (_best, pending) = pending.wait_best().await.expect("wait_best");
-    let (_finalized, _) = pending.wait_finalized().await.expect("wait_finalized");
+    pending.get_receipt().await.expect("get_receipt");
 
     // The payee learns of the coin through its discovery ciphertext, so wait
     // for the indexer to replay the transaction rather than assuming.
@@ -273,8 +274,11 @@ async fn shielded_transfer_conserves_value() {
     // 1 is deliberately far below any coin the dev preset mints, so the
     // remainder is large and an abandoned one would be unmissable.
     let tx_bytes = provider
-        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, 1, recipient)
-        .build()
+        .fill(TransactionRequest::shielded(
+            DEFAULT_SHIELDED_TOKEN,
+            1,
+            recipient,
+        ))
         .await
         .expect("shielded transfer should build")
         .into_bytes();
@@ -334,8 +338,11 @@ async fn shielded_transfer_spans_multiple_coins() {
     // One more than the biggest coin: satisfiable only by combining coins.
     let amount = largest + 1;
     let tx_bytes = provider
-        .transfer_shielded(DEFAULT_SHIELDED_TOKEN, amount, recipient)
-        .build()
+        .fill(TransactionRequest::shielded(
+            DEFAULT_SHIELDED_TOKEN,
+            amount,
+            recipient,
+        ))
         .await
         .unwrap_or_else(|e| {
             panic!(
@@ -386,8 +393,12 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
     const RECEIVE: u128 = 3;
 
     let tx_bytes = provider
-        .shielded_swap(give_token, GIVE, receive_token, RECEIVE)
-        .build()
+        .fill(TransactionRequest::shielded_swap(
+            give_token,
+            GIVE,
+            receive_token,
+            RECEIVE,
+        ))
         .await
         .expect("swap half should build (coin selection + proofs + serialize)")
         .into_bytes();

@@ -35,6 +35,8 @@ tracing = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]
+# `test-util`: the devnet tests prove with test provers (`Prover::custom`).
+midnight-provider = { workspace = true, features = ["test-util"] }
 midnight-coin-structure = { workspace = true }
 midnight-transient-crypto = { workspace = true }
 serde_json = { workspace = true }

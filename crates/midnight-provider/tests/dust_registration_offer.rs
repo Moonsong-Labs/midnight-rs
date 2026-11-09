@@ -18,7 +18,7 @@ use midnight_helpers::{
     CostModel, DefaultDB, LocalProofServer, ProofProvider, ProvenTransaction, Resolver, StdRng,
     UnprovenTransaction,
 };
-use midnight_provider::{MidnightProvider, NIGHT};
+use midnight_provider::{MidnightProvider, NIGHT, Prover, TransactionRequest};
 use midnight_wallet::Wallet;
 
 /// Wraps the real prover and records whether it ran.
@@ -66,7 +66,7 @@ async fn a_second_registration_is_refused_before_proving() {
     let recorder = Arc::new(ProofRecorder::default());
     let provider = common::synced_provider(&node, &indexer, common::DEV_WALLET_SEED)
         .await
-        .with_proof_provider(recorder.clone());
+        .with_prover(Prover::custom(recorder.clone()));
 
     let (total, unregistered) = night_counts(&provider).await;
     assert!(total > 0, "the wallet needs tNIGHT for this test");
@@ -76,7 +76,7 @@ async fn a_second_registration_is_refused_before_proving() {
         ));
     }
 
-    let Err(err) = provider.register_dust(None).build().await else {
+    let Err(err) = provider.fill(TransactionRequest::register_dust()).await else {
         panic!("a registered wallet must not build another registration");
     };
     assert!(

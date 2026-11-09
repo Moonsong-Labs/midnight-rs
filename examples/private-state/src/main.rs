@@ -120,10 +120,10 @@ async fn main() -> anyhow::Result<()> {
         println!("{}. Calling contribute()...", call + 1);
         let mut circuits = contract.circuits().with_witnesses(&SecretWitness);
         // `.send()` returns a `PendingCall` before the chain's verdict.
-        // `wait_finalized` then confirms the `Pending` snapshot of the call.
+        // `get_receipt` then confirms the `Pending` snapshot of the call.
         let pending = circuits.contribute().send().await?;
         println!("   submitted transaction {}", pending.transaction_hash());
-        let returned: u16 = pending.wait_finalized().await?.value;
+        let returned: u16 = pending.get_receipt().await?.value;
         if call == 1 {
             let snapshots = store.snapshots(contract.address()).await?;
             let [head] = snapshots.as_slice() else {
@@ -134,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
             };
             if head.status != SnapshotStatus::Confirmed {
                 bail!(
-                    "wait_finalized left the call's snapshot {:?}, expected Confirmed",
+                    "get_receipt left the call's snapshot {:?}, expected Confirmed",
                     head.status
                 );
             }

@@ -3387,6 +3387,7 @@ dependencies = [
  "midnight-helpers",
  "midnight-indexer-client",
  "midnight-private-state",
+ "midnight-provider",
  "midnight-typed-state",
  "midnight-types",
  "midnight-wallet",

@@ -12,7 +12,7 @@
 
 mod common;
 
-use midnight_provider::ProviderError;
+use midnight_provider::{ProviderError, TransactionRequest};
 use midnight_wallet::{
     HashOutput, NIGHT, Seed, ShieldedTokenType, UnshieldedTokenType, WalletError,
 };
@@ -52,11 +52,10 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
 
     for _ in 0..3 {
         funder
-            .transfer_unshielded(NIGHT, SEND, recipient)
-            .send()
+            .send_transaction(TransactionRequest::unshielded(NIGHT, SEND, recipient))
             .await
             .expect("fund the fresh address")
-            .wait_finalized()
+            .get_receipt()
             .await
             .expect("funding finalized");
     }
@@ -89,8 +88,7 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     // Each shortfall fails before the build reserves anything, so the
     // registration below still sees all three UTXOs.
     let result = fresh
-        .transfer_unshielded(NIGHT, 4 * SEND, recipient)
-        .build()
+        .fill(TransactionRequest::unshielded(NIGHT, 4 * SEND, recipient))
         .await;
     let Err(ProviderError::Wallet(WalletError::InsufficientUnshielded {
         token_type,
@@ -110,8 +108,7 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
 
     let unheld = UnshieldedTokenType(HashOutput([1; 32]));
     let result = fresh
-        .transfer_unshielded(unheld, 1, recipient)
-        .build()
+        .fill(TransactionRequest::unshielded(unheld, 1, recipient))
         .await;
     let Err(ProviderError::Wallet(WalletError::InsufficientUnshielded {
         token_type,
@@ -129,12 +126,11 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     );
 
     let result = fresh
-        .transfer_shielded(
+        .fill(TransactionRequest::shielded(
             ShieldedTokenType(HashOutput([0; 32])),
             1,
             shielded_recipient,
-        )
-        .build()
+        ))
         .await;
     let Err(ProviderError::Wallet(WalletError::InsufficientShielded {
         required,
@@ -147,7 +143,9 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     assert_eq!(required, 1);
     assert_eq!(available, 0, "a fresh wallet holds no shielded coins");
 
-    let result = fresh.transfer_unshielded(NIGHT, 1, recipient).build().await;
+    let result = fresh
+        .fill(TransactionRequest::unshielded(NIGHT, 1, recipient))
+        .await;
     let Err(ProviderError::Wallet(WalletError::InsufficientDust {
         required,
         available,
@@ -159,11 +157,10 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     assert_eq!(available, 0, "an unregistered wallet holds no Dust");
 
     fresh
-        .register_dust(None)
-        .send()
+        .send_transaction(TransactionRequest::register_dust())
         .await
         .expect("build and submit the registration")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the node must accept a registration that spends one tNIGHT input");
 

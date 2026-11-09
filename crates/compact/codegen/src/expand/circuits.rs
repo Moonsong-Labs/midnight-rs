@@ -197,8 +197,8 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
         /// A witness changes the private state when the `serde_json` encoding
         /// of the state after it differs from the encoding before it. Only a
         /// call that changes the state records a new snapshot. A call
-        /// builder's `build` and `without_dust` record no snapshot, so they
-        /// refuse a call that changes the state. A `PrivateState` that holds
+        /// builder's `without_fee` records no snapshot, so it refuses a call
+        /// that changes the state. A `PrivateState` that holds
         /// a `HashMap` can encode in another key order with no change of
         /// value, which reads as a change. Prefer an ordered map, such as a
         /// `BTreeMap`.
