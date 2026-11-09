@@ -67,6 +67,7 @@ pub struct UnshieldedTransfer<'a> {
     token_type: UnshieldedTokenType,
     amount: u128,
     recipient: UnshieldedRecipient,
+    coin_selection: midnight_types::CoinSelectionStrategy,
     ttl: Option<std::time::Duration>,
 }
 
@@ -82,8 +83,18 @@ impl<'a> UnshieldedTransfer<'a> {
             token_type,
             amount,
             recipient,
+            coin_selection: midnight_types::CoinSelectionStrategy::default(),
             ttl: None,
         }
+    }
+
+    /// Order the coins and UTXOs this build draws on. See
+    /// [`TransferBuilder::with_coin_selection`](midnight_types::TransferBuilder::with_coin_selection).
+    /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_types::CoinSelectionStrategy::LargestFirst),
+    /// which spends the fewest inputs.
+    pub fn with_coin_selection(mut self, strategy: midnight_types::CoinSelectionStrategy) -> Self {
+        self.coin_selection = strategy;
+        self
     }
 
     /// Make the transaction expire `ttl` after the chain time of the build.
@@ -123,7 +134,8 @@ impl<'a> UnshieldedTransfer<'a> {
             amount: self.amount,
             recipient: self.recipient,
             pay_fees,
-        });
+        })
+        .with_coin_selection(self.coin_selection);
         request.ttl = self.ttl;
         request
     }
@@ -138,6 +150,7 @@ pub struct ShieldedTransfer<'a> {
     token_type: ShieldedTokenType,
     amount: u128,
     recipient: ShieldedRecipient,
+    coin_selection: midnight_types::CoinSelectionStrategy,
     ttl: Option<std::time::Duration>,
 }
 
@@ -153,8 +166,18 @@ impl<'a> ShieldedTransfer<'a> {
             token_type,
             amount,
             recipient,
+            coin_selection: midnight_types::CoinSelectionStrategy::default(),
             ttl: None,
         }
+    }
+
+    /// Order the coins and UTXOs this build draws on. See
+    /// [`TransferBuilder::with_coin_selection`](midnight_types::TransferBuilder::with_coin_selection).
+    /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_types::CoinSelectionStrategy::LargestFirst),
+    /// which spends the fewest inputs.
+    pub fn with_coin_selection(mut self, strategy: midnight_types::CoinSelectionStrategy) -> Self {
+        self.coin_selection = strategy;
+        self
     }
 
     /// Make the transaction expire `ttl` after the chain time of the build.
@@ -191,7 +214,8 @@ impl<'a> ShieldedTransfer<'a> {
             amount: self.amount,
             recipient: self.recipient,
             pay_fees,
-        });
+        })
+        .with_coin_selection(self.coin_selection);
         request.ttl = self.ttl;
         request
     }
@@ -210,6 +234,7 @@ pub struct ShieldedSwap<'a> {
     give_amount: u128,
     receive_token: ShieldedTokenType,
     receive_amount: u128,
+    coin_selection: midnight_types::CoinSelectionStrategy,
 }
 
 impl<'a> ShieldedSwap<'a> {
@@ -226,7 +251,17 @@ impl<'a> ShieldedSwap<'a> {
             give_amount,
             receive_token,
             receive_amount,
+            coin_selection: midnight_types::CoinSelectionStrategy::default(),
         }
+    }
+
+    /// Order the coins and UTXOs this build draws on. See
+    /// [`TransferBuilder::with_coin_selection`](midnight_types::TransferBuilder::with_coin_selection).
+    /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_types::CoinSelectionStrategy::LargestFirst),
+    /// which spends the fewest inputs.
+    pub fn with_coin_selection(mut self, strategy: midnight_types::CoinSelectionStrategy) -> Self {
+        self.coin_selection = strategy;
+        self
     }
 
     /// Build the swap half without wrapping it, returning the raw
@@ -242,7 +277,8 @@ impl<'a> ShieldedSwap<'a> {
             give_amount: self.give_amount,
             receive_token: self.receive_token,
             receive_amount: self.receive_amount,
-        });
+        })
+        .with_coin_selection(self.coin_selection);
         self.provider.build_then_prove(request).await
     }
 }

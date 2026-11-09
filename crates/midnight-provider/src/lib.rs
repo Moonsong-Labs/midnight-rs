@@ -28,10 +28,11 @@ pub use types::{Health, TransactionHash};
 // them. The implementation types (`Wallet`, `WalletBuilder`) live in
 // midnight-wallet; this crate never names them.
 pub use midnight_types::{
-    BlockHash, CoinInfo, CoinPublicKey, ContractAddress, DustPublicKey, EncryptionPublicKey,
-    ExtrinsicHash, HashOutput, NIGHT, Network, Nonce, Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT,
-    ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, TransferResult,
-    UnshieldedRecipient, UnshieldedTokenType, WalletBalance, WalletError,
+    BlockHash, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress, DustPublicKey,
+    EncryptionPublicKey, ExtrinsicHash, HashOutput, NIGHT, Network, Nonce, Nullifier,
+    SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin,
+    SpentInputs, TransferResult, UnshieldedRecipient, UnshieldedTokenType, WalletBalance,
+    WalletError,
 };
 
 // Re-export the private-state types so callers configure
