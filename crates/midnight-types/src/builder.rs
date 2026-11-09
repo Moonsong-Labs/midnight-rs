@@ -540,7 +540,6 @@ impl TransferBuilder {
         });
         tx_info.use_mock_proofs_for_fees(true);
 
-        // A fee-less build leaves the Dust fee to another wallet.
         let fee = if pay_fees {
             Fee::Dust(&funding.dust)
         } else {
@@ -618,7 +617,6 @@ impl TransferBuilder {
         });
         tx_info.use_mock_proofs_for_fees(true);
 
-        // A fee-less build leaves the Dust fee to another wallet.
         let fee = if pay_fees {
             Fee::Dust(&funding.dust)
         } else {
