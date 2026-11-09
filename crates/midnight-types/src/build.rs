@@ -173,11 +173,6 @@ pub fn pays_fee(request: &TransactionRequest) -> bool {
     request.pays_fee
 }
 
-/// Wrap `fill` as the stage that a wallet funds.
-pub fn filled(fill: Fill) -> FilledTx {
-    FilledTx(fill)
-}
-
 /// What `tx` asks the wallet to fund.
 pub fn fill_of(tx: FilledTx) -> Fill {
     tx.0
@@ -419,11 +414,12 @@ mod tests {
         assert_eq!(*released.lock().unwrap(), [Nullifier(HashOutput([8; 32]))]);
     }
 
-    /// A swap half ignores `without_fee`. A registration or a sponsor that did
-    /// the same would pay the fee that its request skips, and its envelope
-    /// would be marked fee-less, which a send refuses. A sponsor that took a
-    /// TTL would drop it silently: its fee intent keeps the TTL of the
-    /// transaction that it pays for.
+    /// A registration or a sponsor refuses `without_fee`, and a sponsor
+    /// refuses a TTL. A registration or a sponsor that took `without_fee`
+    /// would pay the fee that its request skips, and its envelope would be
+    /// marked fee-less, which a send refuses. A sponsor that took a TTL would
+    /// drop it silently: its fee intent keeps the TTL of the transaction that
+    /// it pays for.
     #[test]
     fn a_registration_or_a_sponsor_refuses_to_skip_its_fee() {
         let refused = |request: TransactionRequest| {
