@@ -26,18 +26,22 @@ midnight-core                    meta-crate; re-exports the public API
   │     │     └── state.rs       a circuit's operation, from the verifier key of its artifact
   │     └── interpreter / runtime  re-exports of compact-interpreter and compact-runtime
   │
-  ├── midnight-provider          network entrypoint; wallet reached only through the facade
-  │     ├── MidnightProvider     Provider impl; transfer_*, register_dust, resync, submit
-  │     ├── builds.rs            Builds: the attached wallet's builds
+  ├── midnight-provider          network entrypoint; wallet reached only through MidnightWallet
+  │     ├── MidnightProvider<W>  Provider impl; transfer_*, register_dust, submit
+  │     ├── pipeline.rs          fill from node queries, then fund, prove and sign
   │     ├── remote_prover.rs     RemoteProofServer (ProofProvider over an HTTP proof server)
   │     ├── proving.rs           RemoteProofServer's ProofProvider impl and its proof server client
   │     ├── submit.rs            PendingTx, PreparedTx, TxInBlock, Verdict, NotApplied
-  │     └── (deps) midnight-types, midnight-wallet-facade, subxt (node RPC)
+  │     └── (deps) midnight-types, subxt (node RPC)
   │
   ├── midnight-types       implementation-free vocabulary and toolkit; a function of
   │     │                        midnight-helpers + H256 + BIP-32/BIP-39
+  │     ├── wallet.rs            MidnightWallet: the trait a provider funds and signs through
+  │     ├── stage.rs             FilledTx, FundedTx, ProvenTx, TxEnvelope
+  │     ├── build.rs             (hidden) the toolkit the SDK crates share: Reservation,
+  │     │                        Fill, MaybeWallet, and the re-exports below
   │     ├── coin.rs              token types, nullifiers, coins, keys
-  │     ├── transfer.rs          TransferRequest, SpentInputs, TransferResult
+  │     ├── transfer.rs          TransferRequest, SpentInputs
   │     ├── builder.rs           TransferBuilder + PreparedTransfer + prove, BuildInputs
   │     ├── inputs.rs            PreparedInput: the shielded inputs that the wallet spends
   │     ├── convert.rs           the conversions to and from the ledger's types
@@ -50,20 +54,15 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap; SyncSource
   │     └── error.rs             WalletError
   │
-  ├── midnight-wallet-facade     the WalletFacade trait, and in builds.rs the
-  │                              WalletBuilds trait (what with_wallet takes) and
-  │                              ReservedBuild, in midnight-types's vocabulary;
-  │                              nothing else
-  │
-  ├── midnight-wallet            the local implementation; depends on the two crates above
+  ├── midnight-wallet            the local implementation; depends on midnight-types
   │     ├── local.rs             Wallet: the identity, and the synced state behind its own locks
   │     ├── background.rs        BackgroundSync: Wallet::sync_in_background syncs until the handle drops
   │     ├── sync.rs              Wallet::from_seed(seed) → WalletBuilder → sync(source), pinned
   │     ├── wallet.rs            WalletState { state }, and the sync that builds it
   │     ├── state.rs             the synced state, and the plan and commit of a resync or a rescan
   │     ├── balance.rs           the balances and the spendable shielded coins
-  │     ├── pending.rs           pending reservations
-  │     ├── builds.rs            Wallet's WalletBuilds impl
+  │     ├── pending.rs           pending reservations, in a book behind a std mutex
+  │     ├── builds.rs            Wallet's MidnightWallet impl
   │     ├── transfer.rs          the state as the BuildInputs of a transfer
   │     ├── snapshot.rs          the state files, under the layout of storage.rs
   │     ├── (private)            the reader of the shielded events from before the fork
@@ -96,10 +95,11 @@ midnight-core                    meta-crate; re-exports the public API
 
 | Type | Crate | Role |
 |---|---|---|
-| `MidnightProvider` | provider | Network entry. Holds node URL, the attached wallet (`Arc<dyn WalletFacade>`), the proof backends and the optional private-state store. |
+| `MidnightProvider<W>` | provider | Network entry. Holds node URL, the attached wallet `W` (or `()` with none), the proof backends and the optional private-state store. It calls the wallet only through `MidnightWallet`. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
-| `Wallet` | wallet | One synced wallet, not `Clone`. It locks its own state, so a `&Wallet` serves every call and an `Arc<Wallet>` shares it. It runs the indexer replays of a sync and a rescan. The provider reaches it through `WalletFacade`. |
-| `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
+| `Wallet` | wallet | One synced wallet, not `Clone`. It locks its own state, so a `&Wallet` serves every call and an `Arc<Wallet>` shares it. It runs the indexer replays of a sync and a rescan. It implements `MidnightWallet`. |
+| `MidnightWallet` | types | The trait that a provider funds and signs through: `shielded_recipient`, `fund_transaction`, `sign_transaction`. Implemented for `&T` and `Arc<T>`. Both `midnight-wallet` and `midnight-provider` depend on `midnight-types`, and neither depends on the other. |
+| `FilledTx` / `FundedTx` / `ProvenTx` / `TxEnvelope` | types | The stages of a transaction: filled by the provider, funded by the wallet, proven by the provider, signed by the wallet. Each from `FundedTx` on carries the reservation of what the wallet spends, and a drop of an unsent one hands it back. |
 | `BackgroundSync` | wallet | The handle of the task that `Wallet::sync_in_background` starts. The task syncs the wallet after each pause. Dropping the handle stops the sync. `last_error()` names the error of the last pass. `wait_until(done)` waits until `done` holds for the balance. It checks at the call and after each pass. |
 | `WalletBuilder` | wallet | The builder that `Wallet::from_seed(seed)` starts and that syncs a `Wallet` from an indexer. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
@@ -110,15 +110,14 @@ midnight-core                    meta-crate; re-exports the public API
 | `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. `wait_finalized` settles the deploy's private-state snapshot as a call's wait does, and a best-block wait leaves it `Pending`. |
 | `ProofProvider` | helpers | Proof backend trait (`midnight_helpers::ProofProvider`). Set on the provider as an `Arc<dyn ProofProvider<DefaultDB>>` with `with_proof_provider`. The in-process prover is the default. |
 | `RemoteProofServer` | provider | `ProofProvider` that delegates to an HTTP proof server (`/check` + `/prove`). |
-| `Builds` | provider | The attached wallet's builds (`midnight_provider::Builds`), from `MidnightProvider::builds`. |
 
 ## Provider ↔ Wallet model
 
-The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every build resyncs the wallet first, and when asked, `Wallet::sync_in_background` syncs it in a background task. A sync replays from the indexer at the `indexer_url` it gets. It asks its `SyncSource`, such as the provider, for the network and the chain pin. The wallet keeps that indexer URL for later replays, and the provider answers a resync's pin queries.
+The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set. It exposes accessors. A provider reaches it only through `MidnightWallet`: the wallet funds a filled transaction and reserves its inputs, and it signs a proven one. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every funding resyncs the wallet first, and when asked, `Wallet::sync_in_background` syncs it in a background task. A sync replays from the indexer at the `indexer_url` it gets. It asks its `SyncSource`, such as the provider, for the network and the chain pin. The wallet keeps that indexer URL for later replays, and the provider answers a resync's pin queries.
 
 Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `Wallet` composes the three under a mutex of its own, which serializes its syncs and coin watches. Under one hold of that mutex, a coin watch registers and then rescans. Outside a provider, `wallet.sync(&provider)` syncs it.
 
-`MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and never names an implementation. The local one is built on its own and attached:
+`MidnightProvider<W>` holds the wallet `W` that it gets and never names an implementation. The local one is built on its own and attached:
 
 ```
 let provider = MidnightProvider::new(node_url)
@@ -130,33 +129,29 @@ Wallet::from_seed(seed)                             // midnight-wallet; Seed::fr
     or .sync_with_progress(&provider, indexer_url).await // streaming progress
 
 provider
-  .with_wallet(wallet)                              // a synced Wallet, an Arc<Wallet>, or another
-                                                    // WalletBuilds
+  .with_wallet(&wallet)                             // a &Wallet, an Arc<Wallet>, a Wallet, or another
+                                                    // MidnightWallet → MidnightProvider<W>
   .with_proof_provider(prover)                      // optional, the in-process prover by default
-  .resync_wallet().await                            // incremental refresh
-  .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext: register, then rescan
-  .builds().await                  → Builds (resyncs first)
-      b.execution_context().await  → the wallet's view a build runs against, with no funding view
-      b.chain_context().await      → the node's view a circuit call runs against
-      b.build_funded(tx_info) / b.balance_transaction(bytes, cover)
+  .wallet()                        → &W, the wallet it received
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
-  .prepare_reserved(result).await  → PreparedTx that holds the reservation of the build
+  .prepare_reserved(envelope).await → PreparedTx that holds the reservation of the envelope
   .submit(tx_bytes).await          → PendingTx
-  .submit_reserved(result).await   → PendingTx that carries the reservation of the build
+  .submit_reserved(envelope).await → PendingTx that carries the reservation of the envelope
   .merge_transactions(&[..])       → one transaction from several proven ones
-  .balance_transaction(bytes).await → TransferResult: someone else's fee-less transaction, funded
-  .balance() / .spendable_shielded_coins()
-  .release(&spent)                 // hand back a build's reserved inputs
+  .balance_transaction(bytes).await → TxEnvelope: someone else's fee-less transaction, funded
   .health().await                  → node reachability
 
-Arc<Wallet>                                         // a handle on the attached wallet
-  .sync(&provider).await                            // one sync, as the provider's resync does
-  .sync_in_background(provider, pause) → BackgroundSync (syncs after each pause until dropped)
+wallet                                              // the wallet itself, or a handle on it
+  .balance() / .spendable_shielded_coins()          // the state of the last sync
+  .sync(&provider).await                            // one sync; a funding runs one first
+  .sync_in_background(provider, pause) → BackgroundSync (syncs after each pause until dropped; an Arc<Wallet>)
       sync.last_error()            → the error of the last pass, None after a commit
       sync.wait_until(done).await  // wait until done(&WalletBalance) holds: at the call and after each pass
-  .watch_for_coins(coins, &provider).await          // the provider's coin watch, on the handle
+  .watch_for_coins(coins, &provider).await          // claim coins with no usable ciphertext: register, then rescan
 ```
+
+Each build that the wallet funds runs one pipeline. The provider fills the transaction from node queries: its network, its ledger parameters, and the time of its best block, which the TTL counts from. The wallet's `fund_transaction` resyncs, then selects, assembles, balances the Dust fee with mock proofs and reserves, under one write lock. The provider proves the result with its prover, with the wallet free. The wallet's `sign_transaction` then keeps the reservation across a restart, and the provider sends. In this release the funding signs the wallet's unshielded inputs already, and the proof leaves those signatures valid.
 
 Each node read of the provider, its connect included, ends within 10 s (60 s for a contract state read), and a read with no answer returns `ProviderError::Rpc`.
 
@@ -166,13 +161,13 @@ Each node read of the provider, its connect included, ends within 10 s (60 s for
 
 `WalletBuilder::sync` replays three indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions): the zswap and unshielded streams at the same time, then the Dust stream. It returns once all three have caught up. A resync replays all three at the same time. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (a per-connection dedupe keeps re-delivered events from being double-applied). The latest-block query that each sync and resync makes retries on the same bound. A sync that gives up on the indexer returns `WalletError::Indexer`, whose `retryable` field tells whether a later sync can succeed. State is persisted under `{base}/{network}/{sha256(unshielded_address)}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup). The sync persists only with `.with_storage(base)`, and `Wallet::default_storage_dir()` gives `~/.midnight/wallets`. `metadata.json` and `pending.json` also name the ledger generation whose types wrote them (`ledger_version`, ledger 8 when absent). The sync refuses a snapshot whose `metadata.json` names ledger 8 with `WalletError::Ledger8Snapshot`.
 
-`PendingReservations` records the spends of builds that the chain has not yet confirmed. Every build reserves its dust spends, unshielded UTXOs and shielded nullifiers before it proves, under the same hold of the wallet that selected them. Thus a second build in this process cannot pick the same input. A reservation reaches `pending.json` only when its proof succeeds (`WalletFacade::persist_reservation`), so a process that stops during the proof leaves the next process no reservation for those inputs.
+`PendingReservations` records the spends of builds that the chain has not yet confirmed. Every funding reserves its dust spends, unshielded UTXOs and shielded nullifiers before the proof, under the same hold of the wallet that selected them. Thus a second build in this process cannot pick the same input. A reservation reaches `pending.json` only when `sign_transaction` marks it proven, so a process that stops during the proof leaves the next process no reservation for those inputs. The set sits in a book behind a std mutex, apart from the wallet's state lock, and the `Reservation` that a funding makes holds the book weakly, so a drop of an unsent stage hands the inputs back with no async runtime.
 
-A `transfer_*` build reserves its inputs through `prepare_transfer`. A deploy with no shielded offer and a maintenance update reserve theirs through `prepare_funded`. A sponsor's build reserves the Dust for the fee it pays through `prepare_fees` with `Cover::Fee`. A call, or a deploy with a shielded offer, proves first. It then reserves the coins that cover its shielded deficits and the Dust for its fee through `prepare_fees` with `Cover::Shortfalls`, in one reservation.
+A `transfer_*` build fills a transfer, which the wallet selects and assembles. A deploy with no shielded offer and a maintenance update fill an assembled transaction, whose fee the wallet pays in its intent. A sponsor fills a sealed transaction with `Cover::Fee`, and the wallet pays only its fee. A call, or a deploy with a shielded offer, proves first. It then fills a sealed transaction with `Cover::Shortfalls`, and the wallet covers its shielded deficits and its fee in a part of its own, in one reservation.
 
 Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `add_funding`) remains as a backstop for transactions that never confirm. Each reservation expires at the earliest TTL of the intents that its build made, which `.with_ttl(..)` on a transfer builder makes shorter than the chain's `global_ttl`, and the wallet compares it with the time of the chain's latest block.
 
-`watch_for_coin` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The wallet records and replays under one hold of its sync lock. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. A resync keeps each registration that its replay did not claim, because the replay starts from the state that holds them. A registration whose rebuilt `CoinInfo` matches no output rides along on every replay. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
+`Wallet::watch_for_coins` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The wallet records and replays under one hold of its sync lock. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. A resync keeps each registration that its replay did not claim, because the replay starts from the state that holds them. A registration whose rebuilt `CoinInfo` matches no output rides along on every replay. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
 
 ## Ledger 9
 
@@ -225,7 +220,7 @@ Internally:
 ```
 the state: initial_state as it is, or else the constructor's run (neither → Construction)
   ├─ Constructor::check_args                  // a missing argument → Construction
-  ├─ provider.shielded_recipient().coin_public_key // ownPublicKey() returns the wallet's coin key
+  ├─ provider.wallet().shielded_recipient().coin_public_key // ownPublicKey() returns the wallet's coin key
   ├─ Constructor::run with no contract address and at the wall-clock time, with the
   │  witnesses and the initial private state (Interpreter on a failure or a kernel.self())
   └─ refuse a ledger effect or a Zswap input or output (Construction)
@@ -237,27 +232,29 @@ populate_verifier_keys(state, zk_config)      // load *.verifier files into stat
   ↓
 deploy_funded(state, provider, shielded_offer)
   ├─ ContractState::new(data, ..)             // charged keys of the data, which the ledger rechecks
-  ├─ provider.builds().await                  // resync wallet, then its Builds
-  ├─ builds.execution_context().await         // build the context
-  ├─ builds.proof_provider()                  // the provider's prover
+  ├─ provider.chain_context().await           // node queries: the network, get_ledger_parameters,
+  │                                           // and the best block's time, which the TTL counts from
+  ├─ provider.proof_provider()                // the provider's prover
   ├─ build deploy intent
-  ├─ no offer: builds.build_funded(tx_info).await  → DeployResult { address, transaction }
-  │   ├─ one transition: add the funding view, balance the fee with mock
-  │   │  proofs (speculative_spend loop), record what it drew
-  │   └─ prove the balanced tx once, for real, with the wallet free
-  └─ an offer:                                → DeployResult { address, transaction }
+  ├─ no offer: an assembled fill              → DeployResult { address, transaction: TxEnvelope }
+  │   ├─ fund_transaction: resync, then one write lock adds the funding view,
+  │   │  balances the fee with mock proofs (speculative_spend loop) and
+  │   │  reserves what it drew
+  │   ├─ prove the balanced tx once, for real, with the wallet free
+  │   └─ sign_transaction: the reservation reaches pending.json
+  └─ an offer:                                → DeployResult { address, transaction: TxEnvelope }
       ├─ guaranteed offer: the payments
       ├─ prepare_no_validate, then PreparedTransfer::prove: prove with no fee
-      ├─ builds.balance_transaction(bytes, Cover::Shortfalls { pins: the offer's coins, .. }):
-      │  one transition spends the coins, selects more for what they leave
+      ├─ a sealed fill with Cover::Shortfalls { pins: the offer's coins, .. }:
+      │  fund_transaction spends the coins, selects more for what they leave
       │  (InsufficientShielded when the wallet holds too little), adds the
       │  change and the Dust fee in a part of its own, and reserves it
-      └─ the part proves on its own and merges in; the result's spent names its reservation
+      └─ the part proves on its own and merges in, and sign_transaction keeps its reservation
   ↓
 provider.prepare_reserved(transaction).await  → PreparedTx (holds the reservation, knows the extrinsic hash)
   ↓
 append_pending(address, extrinsic_hash, None, private_state)   // only for a private state that is not empty
-  (fails → release the reservation, PendingSnapshotFailed)
+  (fails → the PreparedTx drops, which releases the reservation; PendingSnapshotFailed)
   ↓
 prepared.submit().await                       → PendingTx (carries the reservation)
   (fails → SubmissionWait; the snapshot stays Pending)
@@ -307,7 +304,7 @@ zk_config.verifier_key(circuit)               // on a blocking thread
        no operation → VerifierKeyMismatch { reason: Missing }, no key → Keyless,
        another key → Mismatched
   ↓
-provider.shielded_recipient().coin_public_key // the wallet's coin public key, which ownPublicKey() returns
+provider.wallet().shielded_recipient().coin_public_key // the wallet's coin public key, which ownPublicKey() returns
   ↓
 interpreter::execute(ir, program, state, args,
                      Env { witnesses, private_state, address, block_time, coin_public_key })
@@ -318,9 +315,7 @@ build verify-ops:
   → filter empty Idx/Ins
   → Vec<Op<ResultModeVerify, InMemoryDB>>
   ↓
-provider.builds() → the Builds of the wallet (resyncs first)
-  ↓
-builds.chain_context()                        // node queries: the network, get_ledger_parameters,
+provider.chain_context()                      // node queries: the network, get_ledger_parameters,
                                               // and the best block's time, which the TTL counts from
   ↓
 partition_transcripts([PreTranscript { context, program: verify_ops, comm_comm: None }],
@@ -335,22 +330,24 @@ CallAction holding typed transcripts + AlignedValue inputs/outputs
   → StandardTransactionInfo → prepare_no_validate              // fee-less, even when the call pays a fee
   → PreparedTransfer::prove
   ↓
-builds.balance_transaction(bytes, Cover::Shortfalls { pins, pay_fees })
-  └─ one transition (prepare_fees): for each negative shielded (token, segment)
-     entry of the call's balance, the wallet spends the pinned coins first, then
-     selects coins, adds the change at that segment, and with pay_fees the Dust
-     fee in an intent of its own, and reserves what it spends. The part is
-     proved on its own and merged in, so the circuit proof is not redone.
+a sealed fill with Cover::Shortfalls { pins, pay_fees }
+  └─ fund_transaction resyncs, then under one write lock: for each negative
+     shielded (token, segment) entry of the call's balance, the wallet spends
+     the pinned coins first, then selects coins, adds the change at that
+     segment, and with pay_fees the Dust fee in an intent of its own, and
+     reserves what it spends. The provider proves the part on its own and
+     merges it in, so the circuit proof is not redone. sign_transaction then
+     keeps the reservation across a restart.
   ↓
-TransferResult: the merged bytes, and the part's coins and Dust in spent
+TxEnvelope: the merged bytes, and the reservation of the part's coins and Dust
   ↓
-provider.prepare_reserved(result) → PreparedTx            // the extrinsic hash, before the submit
+provider.prepare_reserved(envelope) → PreparedTx          // the extrinsic hash, before the submit
   ↓
 decode the typed return value from ExecutionResult.result
-  └─ an error: PreparedTx::release hands the inputs back
+  └─ an error: the PreparedTx drops, which hands the inputs back
   ↓
 append the Pending private-state snapshot, if the witnesses changed the state
-  └─ an error: PreparedTx::release, then PendingSnapshotFailed
+  └─ an error: the PreparedTx drops, then PendingSnapshotFailed
   ↓
 prepared.submit().await → PendingTx → PendingCall<T>      // .send() returns here
   └─ SubmitRpc: SubmissionWait, the snapshot stays Pending, and the inputs stay reserved
@@ -368,7 +365,7 @@ CallOutcome<T> → caller
 
 ### Transfer (shielded / unshielded / swap / register dust)
 
-Each of the four provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`). The builder defers all work until the caller calls `.send()` or `.build()`, or awaits a `ShieldedSwap`, which builds a `DustlessTransaction` and submits nothing:
+Each of the four provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a, W>`, `UnshieldedTransfer<'a, W>`, `ShieldedSwap<'a, W>`, `DustRegistration<'a, W>`). The provider needs a wallet (`W: MidnightWallet`) for them. The builder defers all work until the caller calls `.send()` or `.build()`, or awaits a `ShieldedSwap`, which builds a `DustlessTransaction` and submits nothing:
 
 ```
 provider.transfer_shielded(token_type, amount, recipient)       // a typed recipient; no work yet
@@ -378,25 +375,28 @@ provider.transfer_shielded(token_type, amount, recipient)       // a typed recip
 
   ↓ .send().await? (or .build().await? for the no-submit escape hatch)
 
-provider.builds()                    // resync_wallet, then the wallet's builds
+provider.chain_context()             // fill: node queries for the network, the ledger
+                                     // parameters and the best block's time
   ↓
-WalletBuilds::prepare_transfer(request, proof_provider)   // one hold of the wallet
-  build_context_inner (execution context + add_funding, which evicts expired pending)
+MidnightWallet::fund_transaction(chain, filled)   // the wallet's sync, then one hold of the wallet
+  add_funding (the funding view, with the wallet's Dust time; evicts expired pending)
   TransferBuilder::prepare(request)
     └─ select inputs from wallet's local state
     └─ balance Dust fees (speculative_spend loop, mock proofs only)
     └─ prepare_no_validate
   reserve_pending(dust_batches, spent_unshielded_inputs, shielded, reserved_at, expires_at)
-  → ReservedBuild
+  → FundedTx, which carries the Reservation
   ↓
-(wallet released)    PreparedTransfer::prove       // the only real proving
-  → TransferResult { tx_bytes, spent, fee_speck }
-  WalletFacade::persist_reservation(spent)          // the reservation reaches pending.json
+(wallet released)    prove with the provider's prover      // the only real proving
+  → ProvenTx
   ↓
-(.send() path only)  provider.submit_reserved(result).await → PendingTx
+MidnightWallet::sign_transaction(proven)          // the reservation reaches pending.json
+  → TxEnvelope
+  ↓
+(.send() path only)  provider.submit_reserved(envelope).await → PendingTx
 ```
 
-`.send()` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops before submitting and returns `TransferResult`, which the caller can submit with `submit_reserved`. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time a funded build runs `add_funding`.
+`.send()` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops before submitting and returns the `TxEnvelope`, which the caller can submit with `submit_reserved`. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time a funded build runs `add_funding`.
 
 ## Transaction submission
 
@@ -418,9 +418,9 @@ Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancel
 
 `MidnightProvider::prepare` stops one step earlier: it builds the unsigned `send_mn_transaction` extrinsic locally from the node's metadata and returns a `PreparedTx` whose extrinsic hash is already known, so a caller can durably record state keyed by that hash before the transaction reaches the mempool. The metadata checks only the call's shape, so the node validates the transaction only at submit. `PreparedTx::submit` then hands back the same `PendingTx`.
 
-`MidnightProvider::prepare_reserved` prepares a `TransferResult`, and the `PreparedTx` holds the reservation of its build. A failed prepare hands the inputs back before it returns. A `PreparedTx` that drops before its submit hands them back too, and `PreparedTx::release` does the same and waits for it. `PreparedTx::submit` moves the reservation to the `PendingTx`, so a wait that reads `Invalid` hands the inputs back. A failed submit keeps them reserved.
+`MidnightProvider::prepare_reserved` prepares a `TxEnvelope`, and the `PreparedTx` holds the reservation that the envelope carries. A failed prepare hands the inputs back before it returns. A `PreparedTx` that drops before its submit hands them back too. `PreparedTx::submit` moves the reservation to the `PendingTx` before the call starts, so a wait that reads `Invalid` hands the inputs back. A failed submit, or a dropped `PendingTx`, keeps them reserved.
 
-`MidnightProvider::submit_reserved` submits a `TransferResult` and carries the reservation of its build on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust` and a maintenance update submit this way, and so does a caller with the result of a `.build()` or of `balance_transaction`. A contract call and a deploy prepare with `prepare_reserved`, because each records its private-state snapshot between the prepare and the submit. So an error before the submit, or an `Invalid` at the wait, hands their inputs back. The build-only calls, `.build()` and `.without_dust()` of a call builder, return bytes that do not name their inputs. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
+`MidnightProvider::submit_reserved` submits a `TxEnvelope` and carries its reservation on the `PendingTx`. A failed prepare (the connect, the metadata read or the encoding) hands the inputs back before it returns, whatever the error, because nothing reached the node. A wait that reads `Invalid`, which can arrive long after the builder returned, hands them back too. Any other failure keeps them reserved until their TTL. The transfers, `register_dust` and a maintenance update submit this way, and so does a caller with the envelope of a `.build()` or of `balance_transaction`. A contract call and a deploy prepare with `prepare_reserved`, because each records its private-state snapshot between the prepare and the submit. So an error before the submit, or an `Invalid` at the wait, hands their inputs back. `TxEnvelope::into_bytes`, and the build-only calls `.build()` and `.without_dust()` of a call builder, give bytes that keep their inputs reserved. Those inputs stay reserved until a sync sees the chain spend them, or until their TTL passes.
 
 ## Block pinning
 
@@ -465,4 +465,4 @@ Ledger 9 ships only as git tags, and upstream's ledger crates and helpers name e
 | Cross-contract calls | Bindings generate for a circuit that calls another contract, but the interpreter refuses the call with `InterpreterError::Unsupported` |
 | Lazy query batching | `query_contract_state` already takes a batch, but each generated `ledger_query()` accessor sends one query of its own |
 | Production proving | `ProofProvider::prove` returns `Transaction`, not `Result`, so a backend signals failure by panicking. The SDK catches that unwind and reports `WalletError::Proving` rather than losing the task, but the trait has no error channel and this is not mainnet-ready |
-| A remote signer | The facade lets a different local wallet stand in, and it asks for no seed. But a build signs inside `prepare_transfer`, so a browser extension or an HSM needs it to return something unsigned plus a separate signing step |
+| A remote signer | `MidnightWallet` has a separate `sign_transaction` step after the proof, but the funding still signs the unshielded inputs, so a browser extension or an HSM cannot hold the unshielded key yet |

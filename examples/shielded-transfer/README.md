@@ -74,7 +74,7 @@ balance: ... SPECK, spendable UTXOs: ...
 
 ## What it covers
 
-- `Wallet::from_seed(Seed::from_hex(DEV_SEED)?).with_network(&network).sync(&provider, &indexer_url)` + `MidnightProvider::with_wallet`: the first wallet sync against the indexer, then the attach step. The example attaches an `Arc<Wallet>`, so it keeps a handle on the wallet.
+- `Wallet::from_seed(Seed::from_hex(DEV_SEED)?).with_network(&network).sync(&provider, &indexer_url)` + `MidnightProvider::with_wallet`: the first wallet sync against the indexer, then the attach step. The example attaches an `Arc<Wallet>`, so it keeps a handle on the wallet for its balance reads and its background sync.
 - `Wallet::shielded_address`: the synced wallet's own address, which the example prints
 - `Wallet::shielded_recipient`: the synced wallet's own shielded keys, which receive the self-transfer
 - `MidnightProvider::balance`: shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))

@@ -20,13 +20,13 @@ ContractProviders = {
 }
 ```
 
-**midnight-rs** bundles all of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider: our `MidnightProvider` owns the node WebSocket connection, the wallet (with persisted state), an optional proof provider, an optional private-state store, and the submission path. The wallet keeps the indexer URL that it synced from.
+**midnight-rs** bundles most of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider: our `MidnightProvider<W>` owns the node WebSocket connection, an optional proof provider, an optional private-state store, and the submission path, and it holds the wallet `W` that it gets. It calls the wallet only through the `MidnightWallet` trait, which funds and signs. The wallet keeps the indexer URL that it synced from.
 
 | midnight-js abstraction       | midnight-rs equivalent                                                                              |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
 | `MidnightProvider.submitTx`   | `MidnightProvider::submit`                                                                          |
 | `PublicDataProvider`          | The `Provider` trait (`get_contract_state`), `StateQueryProvider` for the lazy reads, and `MidnightProvider`'s `get_*` reads |
-| `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers), plus `merge_transactions` / `balance_transaction` (see "Combining and balancing transactions") |
+| `WalletProvider`              | The `MidnightWallet` trait, which `Wallet` implements (`fund_transaction` funds, `sign_transaction` signs), plus `merge_transactions` / `balance_transaction` (see "Combining and balancing transactions") |
 | `ProofProvider`               | `midnight_helpers::ProofProvider`, set with `with_proof_provider`: local by default, or a `RemoteProofServer` |
 | `ZkConfigProvider`            | The `ZkConfigProvider` trait, set with `with_zk_config`, where a path gives the default `FsZkConfigProvider` |
 | `PrivateStateProvider`        | `midnight-private-state` crate (`FsPrivateStateProvider`); threaded through witnesses via `WitnessContext` — see below |
@@ -55,19 +55,20 @@ Each step is a separate provider, so you can plug in a remote prover, a browser 
 provider.transfer_unshielded(...).build().await
     │
     └─ internally:
-       1. resync wallet against indexer
-       2. select inputs from local state
-       3. balance Dust fees (speculative_spend loop)
-       4. prove (with the provider's prover: in process by default, or a
+       1. fill: the network, the ledger parameters and the TTL from node queries
+       2. MidnightWallet::fund_transaction: resync the wallet against the
+          indexer, select inputs from local state, balance Dust fees
+          (speculative_spend loop), and reserve them
+       3. prove (with the provider's prover: in process by default, or a
           RemoteProofServer set with with_proof_provider)
-       5. tagged-serialize → TransferResult { tx_bytes, ... }
+       4. MidnightWallet::sign_transaction → TxEnvelope
 
-provider.submit_reserved(result).await → PendingTx
+provider.submit_reserved(envelope).await → PendingTx
 pending.wait_best().await              → TxInBlock + PendingTx
 pending.wait_finalized().await         → TxInBlock
 ```
 
-The "prove" and "balance" steps live together inside `build` because they're interleaved: `speculative_spend` iterates between balancing and (mock-)proving until the Dust fee is right. For **your own** transaction they stay fused: there is no standalone `proveTx` you call separately.
+The "balance" step runs inside the wallet's funding because it iterates between balancing and mock-proving until the Dust fee is right. The real proof follows in the provider, with the wallet free. For **your own** transaction there is no standalone `proveTx` you call separately.
 
 What you *can* now do is stop before submission and get the proven bytes back: `.build()` on a transfer, or `contract.circuits().<circuit>().build().await` (equivalently `Contract::build_call_with`) for a contract call, returns a proven `Vec<u8>` without submitting. That is the hook the multi-party flows in the next section build on, and it closes most of the "you can't separate building from submitting" gap this section used to describe.
 
@@ -100,7 +101,7 @@ One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only
 **midnight-rs:** the same work is split across two calls, matching the two roles:
 
 - [`transfer_shielded(token, amount, recipient).without_dust()`](../crates/midnight-provider/src/transfer.rs), the Party-1 side. Any builder with fees turned off: a proven, token-balanced but **Dustless** transaction (no Dust). Dust is the general fee token, so `.without_dust()` is not shielded-specific: it is one method on the `DustlessBuilder` trait that yields a `DustlessTransaction`. It is implemented on the shielded-transfer builder, the unshielded-transfer builder, and generated contract-call builders (`contract.circuits().foo().without_dust()`). A `DustlessTransaction` has no submit path (it is not valid alone); hand its bytes to the payer. A contract call's `.without_dust()` and `.build()` refuse a call whose witnesses change the private state, with `ContractError::UnrecordedPrivateState`, because they record no snapshot. midnight-js returns the next private state from a build-only call (`createUnprovenCallTx` gives `private.nextPrivateState`), and midnight-rs refuses for now.
-- [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet. It returns a `TransferResult`: the completed transaction, the Dust it reserved, and the fee of the completed transaction. Submit it with `submit_reserved`, which hands the Dust back when the node never gets the transaction or rejects it. It draws Dust for the fee estimate and prices each round with a mock proof, until the Dust covers the (growing) fee. It then proves the fee intent once and merges it in. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
+- [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet. It returns a `TxEnvelope`: the completed transaction, with the reservation of the Dust it spends. Submit it with `submit_reserved`, which hands the Dust back when the node never gets the transaction or rejects it. It draws Dust for the fee estimate and prices each round with a mock proof, until the Dust covers the (growing) fee. It then proves the fee intent once and merges it in. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
 
 ```rust,ignore
 use midnight_provider::DustlessBuilder; // brings `.without_dust()` into scope
@@ -138,7 +139,7 @@ Because each half carries only a guaranteed Zswap offer and no intent, two halve
 
 Two smaller pieces round out the parity:
 
-- **Naming a coin.** midnight-js's balancer auto-selects coins by amount, and so does the wallet for a call: it covers each shielded deficit of the call, such as a `receiveShielded(coin)`, with coins it selects, and returns the change. [`MidnightProvider::spendable_shielded_coins()`](../crates/midnight-provider/src/provider.rs) enumerates the wallet's coins with their nonces and nullifiers, and `contract.circuits().<circuit>().with_shielded_inputs([coin])` names exact, nullifier-pinned coins that the wallet spends first.
+- **Naming a coin.** midnight-js's balancer auto-selects coins by amount, and so does the wallet for a call: it covers each shielded deficit of the call, such as a `receiveShielded(coin)`, with coins it selects, and returns the change. `Wallet::spendable_shielded_coins()` enumerates the wallet's coins with their nonces and nullifiers, and `contract.circuits().<circuit>().with_shielded_inputs([coin])` names exact, nullifier-pinned coins that the wallet spends first.
 - **Coin discovery.** midnight-js returns the coins that a call creates for the caller as `newCoins`, in the private data of the call result. Our analogue is `with_coin_encryption_keys` on a call: it attaches a discovery ciphertext to circuit-created outputs so the recipient finds them through normal sync (no `watchFor`). Different mechanism, same goal.
 
 ## Guaranteed vs Fallible transaction phases
