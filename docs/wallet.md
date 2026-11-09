@@ -23,7 +23,9 @@ The trait has three methods:
 - `fund_transaction`: resync, then add the wallet's inputs, change and Dust fee to a transaction that the provider filled, and reserve what they spend. Each signature slot that it adds holds a placeholder.
 - `sign_transaction`: add the signatures that the transaction still needs after its proof, then keep its reservation across a restart.
 
-A transaction goes through four stages: the provider fills a `FilledTx` from node queries, the wallet funds it into a `FundedTx`, the provider proves it into a `ProvenTx`, and the wallet signs it into a `TxEnvelope`. The reservation travels with the stages, so the trait has no release method (see [Pending reservations](#pending-reservations)). `FilledTx` and `FundedTx` are opaque, so a custom wallet funds through a `Wallet` that it wraps. Its `sign_transaction` can sign elsewhere, such as in an HSM: `ProvenTx::signature_requests` gives one `SignatureRequest` for each intent segment and signer, and `ProvenTx::add_signature` puts a 64-byte signature over its `data` in every placeholder of that signer. It then ends with the inner `sign_transaction`, which signs nothing more and keeps the reservation.
+A transaction goes through four stages: the provider fills a `FilledTx` from node queries, the wallet funds it into a `FundedTx`, the provider proves it into a `ProvenTx`, and the wallet signs it into a `TxEnvelope`. The reservation travels with the stages, so the trait has no release method (see [Pending reservations](#pending-reservations)). `FilledTx` and `FundedTx` are opaque, so a custom wallet funds through a `Wallet` that it wraps.
+
+The `sign_transaction` of a custom wallet can sign elsewhere, such as in an HSM: `ProvenTx::signature_requests` gives one `SignatureRequest` for each intent segment and signer, and `ProvenTx::add_signature` puts a 64-byte signature over its `data` in every placeholder of that signer. It then ends with the inner `sign_transaction`, which signs nothing more and keeps the reservation. A request can name an intent that another party built, such as in a sponsored transaction. A signature authorizes every spend and Dust registration of its signer in that intent. So a custom wallet signs only the requests of the intents that it funded.
 
 The wallet serializes its own syncs and coin watches. So a handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.sync(&provider)`.
 
@@ -408,7 +410,7 @@ let pending = provider
 1. Fills the transaction context from node queries: the node's network and ledger parameters, and the time of its best block.
 2. Hands it to the wallet's `fund_transaction`, which resyncs, then takes a write lock on the wallet, selects inputs from its local UTXO set, balances the Dust fee with a `speculative_spend` loop over mock proofs, and reserves the selected inputs so the next concurrent build can't re-pick the same coins.
 3. Proves the transaction with the provider's prover, with the wallet free.
-4. Hands it to the wallet's `sign_transaction`, which replaces the placeholder signature of each unshielded input that the funding added. The reservation then reaches `pending.json`.
+4. Hands it to the wallet's `sign_transaction`, which replaces the placeholder signature of each unshielded input and Dust registration that the funding added. The reservation then reaches `pending.json`.
 5. Submits the signed bytes to the node and returns a `PendingTx`.
 
 Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the node's best block that the fill read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships). To make a transaction expire sooner, call `.with_ttl(duration)` on the request:

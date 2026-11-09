@@ -416,11 +416,12 @@ impl TransferBuilder {
     /// `TransactionRequest::sponsor` and sends it.
     ///
     /// `amount` may span several coins: inputs are selected up front, largest
-    /// first, and the remainder returns to this wallet as a change output, so a payment is bounded by the wallet's total
-    /// balance in `token_type` rather than by its largest single coin. Sending
-    /// the full balance to this wallet's own address therefore consolidates it
-    /// into one coin, and sending part of a coin splits it. The spent coins'
-    /// nullifiers are in [`PreparedTransfer::spent_shielded_inputs`].
+    /// first, and the remainder returns to this wallet as a change output, so
+    /// a payment is bounded by the wallet's total balance in `token_type`
+    /// rather than by its largest single coin. Sending the full balance to
+    /// this wallet's own address therefore consolidates it into one coin, and
+    /// sending part of a coin splits it. The spent coins' nullifiers are in
+    /// [`PreparedTransfer::spent_shielded_inputs`].
     pub async fn prepare_shielded(
         self,
         token_type: ShieldedTokenType,
@@ -1102,12 +1103,12 @@ pub enum Cover {
 /// are. Each round prices the merge with a mock proof, which is exact here
 /// because the part carries only built-in proofs.
 ///
-/// The shielded inputs and the Dust come from `funding`. The reservation of the part, and its fee intent, take the
-/// earliest TTL of the intents of `external`, kept between the chain time of
-/// the build (see [`chain_time`]) and the chain's `global_ttl` after it. So
-/// what the part reserves expires when the merged transaction can no longer
-/// land. When `external` has no intent, they get `global_ttl` after the chain
-/// time.
+/// The shielded inputs and the Dust come from `funding`. The reservation of
+/// the part, and its fee intent, take the earliest TTL of the intents of
+/// `external`, kept between the chain time of the build (see [`chain_time`])
+/// and the chain's `global_ttl` after it. So what the part reserves expires
+/// when the merged transaction can no longer land. When `external` has no
+/// intent, they get `global_ttl` after the chain time.
 ///
 /// `None` when the part has nothing to add: no shielded deficit to cover, no
 /// pin, and no Dust to draw. An intent with no spends is one the ledger

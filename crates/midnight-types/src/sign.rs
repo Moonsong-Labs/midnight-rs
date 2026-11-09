@@ -41,9 +41,13 @@ impl ProvenTx {
     /// placeholder.
     ///
     /// The funding writes a placeholder in each signature slot of the
-    /// unshielded inputs and the Dust registrations that it adds. Sign the
-    /// `data` of each request with the key of its `signer`, and give the
-    /// signature to [`Self::add_signature`].
+    /// unshielded inputs and the Dust registrations that it adds. A request
+    /// can also name an intent that another party built, such as in a
+    /// sponsored transaction. A signature authorizes every spend and Dust
+    /// registration of its signer in its intent, so a wallet signs only the
+    /// requests of the intents that it funded. Sign the `data` of such a
+    /// request with the key of its `signer`, and give the signature to
+    /// [`Self::add_signature`].
     pub fn signature_requests(&self) -> Vec<SignatureRequest> {
         let mut requests = Vec::new();
         for (segment, intent) in self.tx.intents() {
