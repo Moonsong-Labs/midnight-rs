@@ -44,7 +44,7 @@ impl ProvenTx {
     /// unshielded inputs and the Dust registrations that it adds. A request
     /// can also name an intent that another party built, such as in a
     /// sponsored transaction. A signature authorizes every spend and Dust
-    /// registration of its signer in its intent, so a wallet signs only the
+    /// registration of its signer in its intent. So a wallet signs only the
     /// requests of the intents that it funded. Sign the `data` of such a
     /// request with the key of its `signer`, and give the signature to
     /// [`Self::add_signature`].
