@@ -66,12 +66,16 @@ impl<W: MidnightWallet> MidnightProvider<W> {
         &self,
         request: TransferRequest,
     ) -> Result<TxEnvelope, ProviderError> {
-        let fill = Fill::Transfer {
-            request,
-            context: self.chain_context().await?,
-            prover: self.proof_provider(),
-        };
-        self.fund_prove_sign(build::filled(fill)).await
+        // Boxed; see the frame-size note on `Self::fund_prove_sign`.
+        Box::pin(async move {
+            let fill = Fill::Transfer {
+                request,
+                context: self.chain_context().await?,
+                prover: self.proof_provider(),
+            };
+            self.fund_prove_sign(build::filled(fill)).await
+        })
+        .await
     }
 }
 

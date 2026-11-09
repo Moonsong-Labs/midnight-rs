@@ -606,6 +606,14 @@ impl<W: MidnightWallet> MidnightProvider<W> {
     /// that already pays its own fee comes back unchanged, with nothing
     /// reserved.
     pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<TxEnvelope, ProviderError> {
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
+        Box::pin(self.balance_transaction_inner(tx_bytes)).await
+    }
+
+    async fn balance_transaction_inner(
+        &self,
+        tx_bytes: &[u8],
+    ) -> Result<TxEnvelope, ProviderError> {
         // Decode before the fill, so bytes that are no transaction fail with
         // no node access.
         let external = crate::pipeline::deserialize_transaction(tx_bytes)?;
