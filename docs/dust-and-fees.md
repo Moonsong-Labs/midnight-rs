@@ -43,29 +43,29 @@ The ledger sums it over the tNIGHT inputs of the registration's guaranteed offer
 
 Two protocol constraints limit this mechanism:
 
-1. **Requires `dust_actions` in the intent.** The ledger's
+1. **Requires a registration in the intent's `dust_actions`.** The ledger's
    `generationless_fee_availability()` function reads
-   `parent_intent.dust_actions.ctime` to compute the UTXO age. Only
-   transactions that include a `DustRegistrationBuilder` produce
-   `dust_actions`. Normal transactions (transfers, contract calls) use
-   `set_funding_seeds()` instead, which goes through the `gather_dust_spends()`
-   path and requires actual dust UTXOs.
+   `parent_intent.dust_actions.ctime` to compute the UTXO age, and only a
+   registration declares `allow_fee_payment`. Normal transactions (transfers,
+   contract calls) carry no registration. They pay with Dust spends instead,
+   which need actual dust UTXOs.
 
 2. **`night_indices` filter.** A registration creates a Dust generation entry for the NIGHT output it creates, and `fresh_dust_output()` stores that output's nonce in the ledger's `night_indices` set. A NIGHT output to an address that is already registered gets the same entry with no registration. `generationless_fee_availability()` skips every input whose nonce is in `night_indices`, so a UTXO that generates Dust has no virtual dust. Each tNIGHT UTXO that reached the wallet before its address was registered funds one registration: the one that spends it. The UTXO that this registration creates, and NIGHT that arrives later, generate real Dust instead.
 
 #### How to use it
 
-Include a `DustRegistrationBuilder` in the transaction. The transaction must
-also spend and re-create the tNIGHT UTXOs in an unshielded offer (the node
-validates the inputs exist and computes their age):
+Send `TransactionRequest::register_dust()`. The wallet puts a `DustRegistration` in the `dust_actions` of the intent that spends and re-creates the tNIGHT UTXO in its guaranteed unshielded offer (the node validates that the input exists and computes its age):
 
 ```rust
-tx_info.add_dust_registration(DustRegistrationBuilder {
-    signing_key,                        // from UnshieldedWallet
-    dust_address: Some(dust_public_key), // from DustWallet
-    allow_fee_payment,                  // computed virtual dust amount
-});
+DustRegistration {
+    night_key,                                      // the wallet's unshielded verifying key
+    dust_address: Some(Sp::new(dust_public_key)),   // the wallet's Dust key, or a target
+    allow_fee_payment,                              // computed virtual dust amount
+    signature: Some(Sp::new(Signature::default())), // a placeholder until the wallet signs
+}
 ```
+
+The registration and the spent input hold a placeholder signature through the proof. After the proof, the wallet signs the intent once, and the signature fills both.
 
 ### 2. Spending Dust UTXOs (normal fee payment)
 
@@ -74,10 +74,9 @@ transaction after the initial dust registration.
 
 After its registration, each tNIGHT UTXO "generates" a corresponding dust UTXO on-chain. These are real UTXOs tracked in two global Merkle trees (commitment tree and generation tree). The dust grows over time following the same linear formula as generationless availability, but tracked on-chain as spendable state.
 
-Normal transactions pay fees by calling `set_funding_seeds()` on the
-`StandardTrasactionInfo`. Internally, `pay_fees()` calls `gather_dust_spends()`,
-which calls `DustWallet::speculative_spend()` to produce ZK proofs with valid
-Merkle paths from both trees.
+Normal transactions pay fees with Dust spends. The fee loop of a funding calls
+`DustWallet::speculative_spend()` on the wallet's Dust, which produces ZK
+proofs with valid Merkle paths from both trees.
 
 #### What this requires
 
@@ -184,7 +183,7 @@ streams.
    |  -- required before any further transactions
    |
 5. Normal transactions (transfers, contract calls, etc.)
-      -- all pay fees by spending real dust UTXOs via set_funding_seeds()
+      -- all pay fees by spending real dust UTXOs
 ```
 
 ## Dust Registration
