@@ -31,7 +31,7 @@ anyhow = "1"
 The Quick start runs against a local devnet (node, indexer and proof server) in Docker. The Quick start proves in its own process. Its first proofs download the public parameters into a local cache (see [Proof backends](#proof-backends)). Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
 
 ```rust
-use midnight_core::provider::{NIGHT, STARS_PER_NIGHT};
+use midnight_core::provider::{NIGHT, STARS_PER_NIGHT, TransactionRequest};
 use midnight_core::{MidnightProvider, Seed, Wallet};
 
 const NODE_URL: &str = "ws://localhost:9944";
@@ -56,20 +56,17 @@ async fn main() -> anyhow::Result<()> {
     let recipient = Seed::generate();
 
     // NIGHT is the native token. Amounts are in STAR, its smallest unit.
-    let pending = provider
-        .transfer_unshielded(NIGHT, STARS_PER_NIGHT, recipient.unshielded_recipient())
-        .send()
-        .await?;
-    println!("unshielded transfer {}", pending.extrinsic_hash_hex());
-    pending.wait_finalized().await?;
+    let request =
+        TransactionRequest::unshielded(NIGHT, STARS_PER_NIGHT, recipient.unshielded_recipient());
+    let pending = provider.send_transaction(request).await?;
+    println!("unshielded transfer {}", pending.transaction_hash());
+    pending.get_receipt().await?;
 
     let token = balance.shielded.coins[0].token_type;
-    let pending = provider
-        .transfer_shielded(token, 1, recipient.shielded_recipient())
-        .send()
-        .await?;
-    println!("shielded transfer {}", pending.extrinsic_hash_hex());
-    pending.wait_finalized().await?;
+    let request = TransactionRequest::shielded(token, 1, recipient.shielded_recipient());
+    let pending = provider.send_transaction(request).await?;
+    println!("shielded transfer {}", pending.transaction_hash());
+    pending.get_receipt().await?;
 
     Ok(())
 }
@@ -83,32 +80,32 @@ To sync a wallet against another network that runs ledger 9, give [`examples/wal
 
 ## Proof backends
 
-A `ProofProvider` proves the transactions that the provider builds: transfers, Dust registrations, deploys, contract calls and maintenance updates. By default, the provider proves in its own process. To prove on a proof server, give a `RemoteProofServer` to `with_proof_provider`:
+A `Prover` proves the transactions that the provider builds: transfers, Dust registrations, deploys, contract calls and maintenance updates. By default, the provider proves in its own process (`Prover::local`). To prove on a proof server, give `Prover::remote` to `with_prover`:
 
 ```rust,ignore
-use std::sync::Arc;
-use midnight_core::provider::RemoteProofServer;
+use midnight_core::provider::Prover;
 
-let provider = provider.with_proof_provider(Arc::new(RemoteProofServer::new(proof_url)));
+let provider = provider.with_prover(Prover::remote(&proof_url));
 ```
 
-`with_proof_provider` takes any `Arc<dyn ProofProvider<DefaultDB>>`, where `ProofProvider` and `DefaultDB` come from `midnight_helpers`. `MidnightProvider::proof_provider` returns the prover that the provider uses. The proof server must prove ledger 9 transactions, as the `proof-server` image of the devnet does.
+The proof server must prove ledger 9 transactions, as the `proof-server` image of the devnet does.
 
-The local prover downloads the public parameters for the first proof of each circuit size, when the cache does not hold them. It downloads a built-in Zswap or Dust key for the first proof that uses that key, in the same way. The source is `MIDNIGHT_PARAM_SOURCE` (default `https://srs.midnight.network/`). The cache is the directory that upstream `MidnightDataProvider` picks, `MIDNIGHT_PP` first. For offline or container use, fill that cache once with network access. Then point `MIDNIGHT_PP` at it. A `RemoteProofServer` proves on the server and downloads none of these files.
+The local prover downloads the public parameters for the first proof of each circuit size, when the cache does not hold them. It downloads a built-in Zswap or Dust key for the first proof that uses that key, in the same way. The source is `MIDNIGHT_PARAM_SOURCE` (default `https://srs.midnight.network/`). The cache is the directory that upstream `MidnightDataProvider` picks, `MIDNIGHT_PP` first. For offline or container use, fill that cache once with network access. Then point `MIDNIGHT_PP` at it. A remote prover proves on the server and downloads none of these files.
 
 ## Swaps and sponsored fees
 
-A shielded swap is one transaction that two parties build in halves, each with its own provider. Each half gives one token and receives the other, so the two halves must mirror each other. A sponsor, either party or a third party, merges the halves, pays the Dust fee and submits:
+A shielded swap is one transaction that two parties fill in halves, each with its own provider. Each half gives one token and receives the other, so the two halves must mirror each other. A sponsor, either party or a third party, merges the halves, pays the Dust fee and sends the result:
 
 ```rust,ignore
-let a_half = alice.shielded_swap(token_x, dx, token_y, dy).await?;
-let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
-let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
-let funded = sponsor.balance_transaction(&merged).await?;
-sponsor.submit_reserved(funded).await?;
+use midnight_core::provider::{TransactionRequest, merge_transactions};
+
+let a_half = alice.fill(TransactionRequest::shielded_swap(token_x, dx, token_y, dy)).await?;
+let b_half = bob.fill(TransactionRequest::shielded_swap(token_y, dy, token_x, dx)).await?;
+let swap = merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
+sponsor.send_transaction(TransactionRequest::sponsor(swap)).await?.get_receipt().await?;
 ```
 
-A party with no Dust builds a transfer or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A contract call built this way, or with `.build()`, records no private state. So it fails with `ContractError::UnrecordedPrivateState` when its witnesses change the private state, before it reserves Dust or makes a proof. A sponsor pays its Dust fee with `balance_transaction` and submits it with `submit_reserved`, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
+A party with no Dust fills a transfer with `TransactionRequest::without_fee`, or a contract call with the call builder's `.without_fee()`, and hands the bytes of the result (`TxEnvelope::into_bytes`) to the sponsor. A send refuses a transaction that pays no fee. A fee-less contract call records no private state. So it fails with `ContractError::UnrecordedPrivateState` when its witnesses change the private state, before it reserves an input or makes a proof. A sponsor pays the Dust fee with `TransactionRequest::sponsor`, after `merge_transactions` when there are several transactions. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
 
 ## Compile a contract
 
@@ -145,12 +142,12 @@ let contract = counter::Contract::deploy(&provider)
 println!("deployed at {}", contract.address());
 println!("round = {}", contract.ledger().await?.round()?);
 
-// `send` submits the call. `wait_finalized` waits for finality and returns
+// `send` submits the call. `get_receipt` waits for finality and returns
 // the outcome, whose `.value` is the typed return value of the circuit.
-let returned: u64 = contract.circuits().increment().send().await?.wait_finalized().await?.value;
+let returned: u64 = contract.circuits().increment().send().await?.get_receipt().await?.value;
 println!("increment returned {returned}");
 
-let returned: u16 = contract.circuits().increment_by(5).send().await?.wait_finalized().await?.value;
+let returned: u16 = contract.circuits().increment_by(5).send().await?.get_receipt().await?.value;
 println!("increment_by(5) returned {returned}");
 ```
 
@@ -191,7 +188,7 @@ let contract = owned_counter::Contract::deploy(&provider)
     .await?;
 ```
 
-The deploy records the private state that the constructor leaves as the first snapshot of the new contract (see [`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy)). An `into_contract` with no wait before it leaves that snapshot `Pending`. To confirm it, call `PendingDeploy::wait_finalized` before `into_contract`. A constructor that mints, claims, or spends or creates a coin fails the deploy with `ContractError::Construction` before any proof. A constructor that reads `kernel.self()` fails the deploy with `ContractError::Interpreter`, because the contract gets its address from the deploy.
+The deploy records the private state that the constructor leaves as the first snapshot of the new contract (see [`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy)). An `into_contract` with no wait before it leaves that snapshot `Pending`. To confirm it, call `PendingDeploy::get_receipt` before `into_contract`. A constructor that mints, claims, or spends or creates a coin fails the deploy with `ContractError::Construction` before any proof. A constructor that reads `kernel.self()` fails the deploy with `ContractError::Interpreter`, because the contract gets its address from the deploy.
 
 ## Deploy with a shielded offer
 
@@ -236,26 +233,25 @@ let contract = counter::Contract::at(&provider, &address)
     .with_zk_config(counter::ZK_CONFIG_DIR)
     .build();
 
-let returned: u64 = contract.circuits().increment().send().await?.wait_finalized().await?.value;
+let returned: u64 = contract.circuits().increment().send().await?.get_receipt().await?.value;
 println!("increment returned {returned}");
 println!("round = {}", contract.ledger().await?.round()?);
 ```
 
 ## Observing inclusion explicitly
 
-`send` submits a deploy and returns a `PendingDeploy`. When no wait ran on it, `into_contract` waits for the best block, then reads the contract from the node at that block. `with_deploy_timeout` sets one deadline for the wait and the read (60 s by default). To see each step, wait on the `PendingDeploy` before `into_contract`:
+`send` submits a deploy and returns a `PendingDeploy`. When no `get_receipt` ran on it, `into_contract` waits for the best block, then reads the contract from the node at that block. `with_deploy_timeout` sets one deadline for the wait and the read (60 s by default). To wait for finality, call `get_receipt` on the `PendingDeploy` before `into_contract`:
 
 ```rust,ignore
 let pending = counter::Contract::deploy(&provider)
     .with_zk_config(counter::ZK_CONFIG_DIR)
     .send().await?;
-println!("ext: {}", pending.extrinsic_hash_hex());
-let (best, pending)      = pending.wait_best().await?;
-let (finalized, pending) = pending.wait_finalized().await?;
-let contract             = pending.into_contract().await?;
+println!("ext: {:x}", pending.extrinsic_hash());
+let (receipt, pending) = pending.get_receipt().await?;
+let contract           = pending.into_contract().await?;
 ```
 
-On this path, the deadline covers only `into_contract`. `wait_best` and `wait_finalized` have no deadline.
+On this path, the deadline covers only `into_contract`. `get_receipt` has no deadline.
 
 A wait fails with `ContractError::TransactionFailed` when the chain did not apply the deploy. When the deadline passes, `into_contract` fails with `ContractError::DeployTimeout`, and the error message says what to do. [`docs/wallet.md`](docs/wallet.md#submission-and-waiting) lists the submission errors and what to do after each one.
 

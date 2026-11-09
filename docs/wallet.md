@@ -240,10 +240,9 @@ use std::time::Duration;
 wallet.sync(&*provider).await?;
 let before = wallet.balance().await.shielded_value(token);
 provider
-    .transfer_shielded(token, amount, recipient)
-    .send()
+    .send_transaction(TransactionRequest::shielded(token, amount, recipient))
     .await?
-    .wait_finalized()
+    .get_receipt()
     .await?;
 // The transfer succeeded, so `before` covered `amount`.
 let after = before - amount;
@@ -316,16 +315,16 @@ Every reading returns an owned value taken under a short read lock, so nothing a
 
 ## Dust registration
 
-Before NIGHT holdings can generate spendable Dust, the wallet must publish a **dust registration** that binds its dust address to its unshielded address. One `register_dust` call registers one tNIGHT UTXO and pays its own fee from that UTXO, so a wallet with no Dust can register. The rustdoc of [`register_dust`](../crates/midnight-provider/src/provider.rs) gives the full rule.
+Before NIGHT holdings can generate spendable Dust, the wallet must publish a **dust registration** that binds its dust address to its unshielded address. One `TransactionRequest::register_dust` registers one tNIGHT UTXO and pays its own fee from that UTXO, so a wallet with no Dust can register. The rustdoc of [`register_dust`](../crates/midnight-types/src/request.rs) gives the full rule.
 
 ```rust
-let pending = provider.register_dust(None).send().await?;     // None = now - 1 hour for a UTXO with no ctime
-pending.wait_best().await?;
+let pending = provider.send_transaction(TransactionRequest::register_dust()).await?;
+pending.get_receipt().await?;
 ```
 
-`utxo_ctime` is a fallback creation time in seconds since the epoch. The build uses it only for a UTXO whose creation time the indexer did not report, and `None` makes that fallback `now - 1 hour`. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
+A UTXO whose creation time the indexer did not report counts as created one hour before the chain time of the fill. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
 
-tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not: call `register_dust` again until `DustBalance::unregistered_night_utxos` is 0. Each call registers one UTXO:
+tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not: send `register_dust` again until `DustBalance::unregistered_night_utxos` is 0. Each registration registers one UTXO:
 
 ```rust
 use std::time::{Duration, Instant};
@@ -334,7 +333,11 @@ use std::time::{Duration, Instant};
 wallet.sync(&provider).await?;
 let mut left = wallet.balance().await.dust.unregistered_night_utxos;
 while left > 0 {
-    provider.register_dust(None).send().await?.wait_finalized().await?;
+    provider
+        .send_transaction(TransactionRequest::register_dust())
+        .await?
+        .get_receipt()
+        .await?;
     // The indexer serves the registration a moment after the node finalizes it.
     let deadline = Instant::now() + Duration::from_secs(60);
     while wallet.balance().await.dust.unregistered_night_utxos == left {
@@ -348,43 +351,47 @@ while left > 0 {
 }
 ```
 
-To send the Dust to another wallet, add `.to(target)` to each `register_dust` call in the loop (see [Registration to another Dust address](#registration-to-another-dust-address)).
+To send the Dust to another wallet, send `TransactionRequest::register_dust_to(target)` in the loop (see [Registration to another Dust address](#registration-to-another-dust-address)).
 
 See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation rate, and how fees are balanced.
 
 ### Registration to another Dust address
 
-A registration can send the Dust to the Dust address of another wallet. For example, a cold wallet that holds the tNIGHT registers it to the Dust address of a hot wallet. The hot wallet then gets the Dust. The cold wallet builds its transactions with `.without_dust()`, and the hot wallet pays their fees with `balance_transaction` ([`examples/combine-and-sponsor`](../examples/combine-and-sponsor) shows that flow). Read the address with `parse_dust_address`, and give the key to `.to()`. `network` is the wallet's network, `wallet.network()`:
+A registration can send the Dust to the Dust address of another wallet. For example, a cold wallet that holds the tNIGHT registers it to the Dust address of a hot wallet. The hot wallet then gets the Dust. The cold wallet fills its transactions `without_fee`, and the hot wallet pays their fees with `TransactionRequest::sponsor` ([`examples/combine-and-sponsor`](../examples/combine-and-sponsor) shows that flow). Read the address with `parse_dust_address`, and give the key to `register_dust_to`. `network` is the wallet's network, `wallet.network()`:
 
 ```rust
 use midnight_core::wallet::parse_dust_address;
 
 let hot_address = hot_wallet.dust_address(); // mn_dust_undeployed1...
 let target = parse_dust_address(&hot_address, &network)?;
-provider.register_dust(None).to(target).send().await?.wait_finalized().await?;
+provider
+    .send_transaction(TransactionRequest::register_dust_to(target))
+    .await?
+    .get_receipt()
+    .await?;
 ```
 
 The registration sets the Dust address of the whole NIGHT address, not only of the UTXO it spends:
 
 - tNIGHT that reaches the address after the registration generates Dust for the Dust address that the last registration set.
-- A later `register_dust` without `.to()` points the address back to the wallet's own Dust address. So pass `.to(target)` to each call until `unregistered_night_utxos` is 0.
+- A later `register_dust` points the address back to the wallet's own Dust address. So send `register_dust_to(target)` each time until `unregistered_night_utxos` is 0.
 - tNIGHT that already generates Dust keeps its Dust address until the wallet spends it.
 
 The cold wallet gets no Dust of its own. Its registrations still pay their own fees, and its other transactions need a sponsor.
 
 ## Transfers
 
-Two flavors, same shape. Each method returns a builder, and `.send().await?` builds and submits in one step:
+Two flavors, same shape. A `TransactionRequest` names the transfer, and `send_transaction` fills, funds, proves, signs and sends it in one step:
 
 ```rust
+use midnight_core::provider::TransactionRequest;
 use midnight_core::wallet::{NIGHT, parse_unshielded_recipient};
 
 let recipient = parse_unshielded_recipient(&recipient_address, &network)?;
 let pending = provider
-    .transfer_unshielded(NIGHT, amount_in_star, recipient)
-    .send()
+    .send_transaction(TransactionRequest::unshielded(NIGHT, amount_in_star, recipient))
     .await?;
-pending.wait_best().await?;
+pending.get_receipt().await?;
 ```
 
 ```rust
@@ -392,12 +399,11 @@ use midnight_core::wallet::parse_shielded_recipient;
 
 let recipient = parse_shielded_recipient(&recipient_shielded_address, &network)?;
 let pending = provider
-    .transfer_shielded(token_type, amount, recipient)
-    .send()
+    .send_transaction(TransactionRequest::shielded(token_type, amount, recipient))
     .await?;
 ```
 
-`recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network against `network`, the wallet's network (`wallet.network()`). A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
+`recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network against `network`, the wallet's network (`wallet.network()`). A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `TransactionRequest::shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. `send_transaction`:
 
 1. Fills the transaction context from node queries: the node's network and ledger parameters, and the time of its best block.
 2. Hands it to the wallet's `fund_transaction`, which resyncs, then takes a write lock on the wallet, selects inputs from its local UTXO set, balances the Dust fee with a `speculative_spend` loop over mock proofs, and reserves the selected inputs so the next concurrent build can't re-pick the same coins.
@@ -405,51 +411,49 @@ let pending = provider
 4. Hands it to the wallet's `sign_transaction`. The reservation then reaches `pending.json`.
 5. Submits the signed bytes to the node and returns a `PendingTx`.
 
-Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the node's best block that the fill read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships). To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
+Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the node's best block that the fill read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships). To make a transaction expire sooner, call `.with_ttl(duration)` on the request:
 
 ```rust
 use std::time::Duration;
 
-let pending = provider
-    .transfer_unshielded(NIGHT, amount_in_star, recipient)
-    .with_ttl(Duration::from_secs(300))
-    .send()
-    .await?;
+let request = TransactionRequest::unshielded(NIGHT, amount_in_star, recipient)
+    .with_ttl(Duration::from_secs(300));
+let pending = provider.send_transaction(request).await?;
 ```
 
-`transfer_shielded`, `transfer_unshielded` and `register_dust` take it. The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the build with `WalletError::TtlOutOfRange`, before it spends or proves anything. A Dustless shielded transfer (`.without_dust()`) is a Zswap offer with no intent, so it cannot carry a TTL, and its build fails with `WalletError::TtlWithoutIntent`. A shielded swap half has no `with_ttl` for the same reason.
+The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the fill with `WalletError::TtlOutOfRange`, before it spends or proves anything. A fee-less shielded transfer (`without_fee`) and a shielded swap half are Zswap offers with no intent, so they cannot carry a TTL, and their fill fails with `WalletError::TtlWithoutIntent`. A sponsor keeps the TTL of the transaction that it pays for, so its fill refuses a TTL with `WalletError::Transfer`.
 
-To build the transaction without a submit, call `.build()` on the builder in place of `.send()`. It returns the signed `TxEnvelope`, which carries the reservation of its inputs:
+To fill the transaction without a send, call `fill` in place of `send_transaction`. It returns the signed `TxEnvelope`, which carries the reservation of its inputs:
 
 ```rust
 let envelope = provider
-    .transfer_shielded(token_type, amount, recipient)
-    .build()
+    .fill(TransactionRequest::shielded(token_type, amount, recipient))
     .await?;
-let pending = provider.submit_reserved(envelope).await?;
+let pending = provider.send_tx_envelope(envelope).await?;
 ```
 
-`.build()` reserves the spent inputs just like `.send()`. `submit_reserved` hands them back when the node never gets the transaction or rejects it, and a drop of the envelope hands them back at once. `TxEnvelope::into_bytes` gives the bytes for another party and keeps the inputs reserved until a sync sees the chain spend them or their TTL ends (see [Pending reservations](#pending-reservations)).
+`fill` reserves the spent inputs just like `send_transaction`. `send_tx_envelope` hands them back when the node never gets the transaction or rejects it, and a drop of the envelope hands them back at once. `TxEnvelope::into_bytes` gives the bytes for another party and keeps the inputs reserved until a sync sees the chain spend them or their TTL ends (see [Pending reservations](#pending-reservations)).
+
+A request made `without_fee`, and a swap half, give a transaction that pays no fee. `send_tx_envelope` and `prepare` refuse it with `ProviderError::Transaction`, because the node refuses it. Hand its bytes to the party that pays its fee with `TransactionRequest::sponsor`.
 
 ## Submission and waiting
 
-`MidnightProvider::submit(tx_bytes)` connects to the node, submits the bytes as an unsigned `Midnight::send_mn_transaction` extrinsic via `submit_and_watch`, and hands back a `PendingTx`:
+`send_tx_envelope` (and so `send_transaction`) connects to the node, submits the bytes as an unsigned `Midnight::send_mn_transaction` extrinsic via `submit_and_watch`, and hands back a `PendingTx`:
 
 ```rust
-let pending = provider.submit(&tx_bytes).await?;
-println!("ext: {}", pending.extrinsic_hash_hex());
+let pending = provider.send_tx_envelope(envelope).await?;
+println!("ext: {:x}", pending.extrinsic_hash());
 
-let (best,      pending) = pending.wait_best().await?;
-let (finalized, _pending) = pending.wait_finalized().await?;
+let receipt = pending.get_receipt().await?;
 ```
 
-`wait_best` / `wait_finalized` consume `self` and return it back so callers re-bind through each step without `let mut`. Cancelling either future is safe but does not retract the extrinsic from the mempool.
+`get_receipt` waits for the transaction to reach a finalized block and returns its `TransactionReceipt`. It consumes the handle, so read the hashes before the wait. Cancelling the future is safe but does not retract the extrinsic from the mempool.
 
-Both waits return `Ok` only when the chain applied the transaction. When the transaction landed but did not apply (`PartialSuccess` or `Failure`), the wait fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TxInBlock` with the verdict. The verdict of `wait_best` is provisional: a reorg can drop the block, and the transaction can land again with another verdict, which `wait_best` does not follow. `wait_finalized` gives the final verdict. An `Err` consumes the handle, so when the final verdict matters, call `wait_finalized` in place of `wait_best`.
+`get_receipt` returns `Ok` only when the chain applied the transaction. When the transaction landed but did not apply (`PartialSuccess` or `Failure`), it fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TransactionReceipt` with the verdict.
 
 When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch variants come from the submit: after `NotSubmitted` the tx never left the process, and after `SubmitRpc` the node can still hold it.
 
-When the fate is unknown, a transaction can still land until its TTL passes. After that, a rebuild from the same inputs is safe from a double spend, and the wallet frees the inputs at its next build. Build with `.with_ttl(duration)` (see [Transfers](#transfers)) to make that wait shorter than `global_ttl`.
+When the fate is unknown, a transaction can still land until its TTL passes. After that, a rebuild from the same inputs is safe from a double spend, and the wallet frees the inputs at its next build. Fill with `.with_ttl(duration)` (see [Transfers](#transfers)) to make that wait shorter than `global_ttl`.
 
 ## Recovering a coin the wallet cannot discover
 
@@ -497,12 +501,12 @@ A reservation reaches `pending.json`, next to the wallet state, once its transac
 The reservation travels with the transaction, from the `FundedTx` to the `ProvenTx`, the `TxEnvelope`, the `PreparedTx` and the `PendingTx`. A release drops it, for a transaction that can never land. It matches each entry by its input and by the stamp of its reservation, so a late release cannot drop an entry that a later build made over the same input. These paths release:
 
 - A drop of a `FundedTx`, `ProvenTx`, `TxEnvelope` or `PreparedTx`, so a build whose proof fails, or that stops before its submit, hands its inputs back at once, with no async runtime. A contract call and a deploy that stop before their submit release this way, for example on a failed `append_pending`.
-- `MidnightProvider::submit_reserved` and `prepare_reserved`, when the prepare fails (the connect included).
-- The `PendingTx`, when a wait reads `Invalid`. A submit moves the reservation to the `PendingTx` before the call starts.
+- `MidnightProvider::send_tx_envelope` and `prepare`, when the prepare fails (the connect included), or when they refuse a transaction that pays no fee.
+- The `PendingTx`, when `get_receipt` reads `Invalid`. A send moves the reservation to the `PendingTx` before the call starts.
 
 A release changes the wallet's memory at once. `pending.json` follows at the next write of the wallet: the next `sign_transaction`, or a sync whose commit moves a cursor or the ledger parameters, clears a confirmed reservation, or follows a failed save. Until then the file keeps a proven entry that a release dropped, and a restart before that write holds the entry until a sync sees the chain spend its inputs or its TTL ends.
 
-A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node can still hold the transaction, and so does a dropped `PendingTx`. The bytes of `TxEnvelope::into_bytes`, and of a contract call's `.build()` or `.without_dust()`, keep their inputs reserved too, so their reservation ends only when a sync sees the chain spend them, or when their TTL ends. Other than that, you don't normally interact with this directly: the funding reserves, and the sync loop clears.
+A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node can still hold the transaction, and so does a dropped `PendingTx`. The bytes of `TxEnvelope::into_bytes` keep their inputs reserved too, so their reservation ends only when a sync sees the chain spend them, or when their TTL ends. Other than that, you don't normally interact with this directly: the funding reserves, and the sync loop clears.
 
 ## Lifecycle summary
 
@@ -525,16 +529,15 @@ provider.with_wallet(&wallet)         or an Arc<Wallet>; provider.wallet() gives
   wallet.sync_in_background(provider, pause)   sync in a task until the handle drops (an Arc<Wallet>)
       sync.wait_until(done)              wait until done holds for the balance (at the call and after each pass)
   wallet.watch_for_coins(coins, &provider)   claim coins with no usable ciphertext: register, then replay
-  provider.register_dust(None)                      registers one tNIGHT UTXO, self-funded
-      .to(dust_key)                                 the Dust goes to another wallet's Dust address
-      .send().await                                 builds + submits → PendingTx
-  provider.transfer_unshielded(...).send().await    builds + submits → PendingTx
-  provider.transfer_shielded(...).send().await      builds + submits → PendingTx
-       │     .build().await → TxEnvelope (escape hatch, no submit)
+  provider.send_transaction(request).await        fills, funds, proves, signs + sends → PendingTx
+      TransactionRequest::unshielded(...)         an unshielded transfer
+      TransactionRequest::shielded(...)           a shielded transfer
+      TransactionRequest::register_dust()         registers one tNIGHT UTXO, self-funded
+      TransactionRequest::register_dust_to(key)   the Dust goes to another wallet's Dust address
+       │  provider.fill(request).await → TxEnvelope (no send)
        │
        └─ PendingTx
-            │ .wait_best().await
-            └ .wait_finalized().await
+            └ .get_receipt().await → TransactionReceipt
 ```
 
 ## Examples
