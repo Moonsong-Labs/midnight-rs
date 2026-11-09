@@ -71,6 +71,9 @@ async fn deploy_funded_with_shielded_offer() {
         .await
         .unwrap();
 
+    let address = result.address_hex();
+    let bytes = result.transaction.into_bytes();
+
     // The result's reservation holds the offer's coin and the fee Dust, and
     // its bytes keep that reservation.
     let spendable = provider.wallet().spendable_shielded_coins().await;
@@ -84,8 +87,6 @@ async fn deploy_funded_with_shielded_offer() {
         "a successful deploy keeps its fee Dust reserved"
     );
 
-    let address = result.address_hex();
-    let bytes = result.transaction.into_bytes();
     let tx: FinalizedTransaction<DefaultDB> =
         tagged_deserialize(&mut &bytes[..]).expect("deserialize the proven deploy");
     let Transaction::Standard(stx) = &tx else {
