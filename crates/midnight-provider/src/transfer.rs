@@ -49,8 +49,8 @@ use std::pin::Pin;
 
 use midnight_types::build::{TransferKind, TransferRequest};
 use midnight_types::{
-    DustPublicKey, MidnightWallet, ShieldedRecipient, ShieldedTokenType, TxEnvelope,
-    UnshieldedRecipient, UnshieldedTokenType,
+    CoinSelectionStrategy, DustPublicKey, MidnightWallet, ShieldedRecipient, ShieldedTokenType,
+    TxEnvelope, UnshieldedRecipient, UnshieldedTokenType,
 };
 
 use crate::{MidnightProvider, PendingTx, ProviderError};
@@ -64,6 +64,7 @@ pub struct UnshieldedTransfer<'a, W> {
     token_type: UnshieldedTokenType,
     amount: u128,
     recipient: UnshieldedRecipient,
+    coin_selection: CoinSelectionStrategy,
     ttl: Option<std::time::Duration>,
 }
 
@@ -79,8 +80,21 @@ impl<'a, W: MidnightWallet> UnshieldedTransfer<'a, W> {
             token_type,
             amount,
             recipient,
+            coin_selection: CoinSelectionStrategy::default(),
             ttl: None,
         }
+    }
+
+    /// Order the coins and UTXOs that this build draws on.
+    ///
+    /// [`CoinSelectionStrategy::LargestFirst`], the default, spends the fewest
+    /// inputs, and each shielded input adds a proof and a fee.
+    /// [`CoinSelectionStrategy::SmallestFirst`] consolidates small coins that
+    /// the default never spends. Nothing caps how many inputs it draws, so use
+    /// it for a deliberate consolidation, not for an ordinary payment.
+    pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
+        self.coin_selection = strategy;
+        self
     }
 
     /// Make the transaction expire `ttl` after the time of the node's best
@@ -122,7 +136,8 @@ impl<'a, W: MidnightWallet> UnshieldedTransfer<'a, W> {
             amount: self.amount,
             recipient: self.recipient,
             pay_fees,
-        });
+        })
+        .with_coin_selection(self.coin_selection);
         request.ttl = self.ttl;
         request
     }
@@ -137,6 +152,7 @@ pub struct ShieldedTransfer<'a, W> {
     token_type: ShieldedTokenType,
     amount: u128,
     recipient: ShieldedRecipient,
+    coin_selection: CoinSelectionStrategy,
     ttl: Option<std::time::Duration>,
 }
 
@@ -152,8 +168,16 @@ impl<'a, W: MidnightWallet> ShieldedTransfer<'a, W> {
             token_type,
             amount,
             recipient,
+            coin_selection: CoinSelectionStrategy::default(),
             ttl: None,
         }
+    }
+
+    /// Order the coins that this build draws on. See
+    /// [`UnshieldedTransfer::with_coin_selection`].
+    pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
+        self.coin_selection = strategy;
+        self
     }
 
     /// Make the transaction expire `ttl` after the chain time of the build.
@@ -190,7 +214,8 @@ impl<'a, W: MidnightWallet> ShieldedTransfer<'a, W> {
             amount: self.amount,
             recipient: self.recipient,
             pay_fees,
-        });
+        })
+        .with_coin_selection(self.coin_selection);
         request.ttl = self.ttl;
         request
     }
@@ -209,6 +234,7 @@ pub struct ShieldedSwap<'a, W> {
     give_amount: u128,
     receive_token: ShieldedTokenType,
     receive_amount: u128,
+    coin_selection: CoinSelectionStrategy,
 }
 
 impl<'a, W: MidnightWallet> ShieldedSwap<'a, W> {
@@ -225,7 +251,15 @@ impl<'a, W: MidnightWallet> ShieldedSwap<'a, W> {
             give_amount,
             receive_token,
             receive_amount,
+            coin_selection: CoinSelectionStrategy::default(),
         }
+    }
+
+    /// Order the coins that this build draws on. See
+    /// [`UnshieldedTransfer::with_coin_selection`].
+    pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
+        self.coin_selection = strategy;
+        self
     }
 
     /// Build the swap half without wrapping it, returning the signed
@@ -239,7 +273,8 @@ impl<'a, W: MidnightWallet> ShieldedSwap<'a, W> {
             give_amount: self.give_amount,
             receive_token: self.receive_token,
             receive_amount: self.receive_amount,
-        });
+        })
+        .with_coin_selection(self.coin_selection);
         self.provider.build_transfer(request).await
     }
 }
