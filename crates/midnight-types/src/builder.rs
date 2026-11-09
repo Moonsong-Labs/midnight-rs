@@ -299,18 +299,11 @@ pub trait BuildInputs: Send + Sync {
     fn unshielded_utxos(&self) -> &[TrackedUtxo];
 }
 
-/// The order in which a build draws the coins and UTXOs it spends.
-///
-/// Largest first spends the fewest inputs, and each shielded input carries its
-/// own proof and adds to the fee. It never absorbs small coins. TODO: replace
-/// it with best-fit selection,
-/// <https://github.com/Moonsong-Labs/midnight-rs/issues/145>
-const COIN_SELECTION: CoinSelectionStrategy = CoinSelectionStrategy::LargestFirst;
-
 pub struct TransferBuilder<'a> {
     state: &'a dyn BuildInputs,
     context: Arc<BuildContext>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
+    coin_selection: CoinSelectionStrategy,
     ttl: Option<std::time::Duration>,
 }
 
@@ -324,8 +317,27 @@ impl<'a> TransferBuilder<'a> {
             state,
             context,
             proof_provider,
+            coin_selection: CoinSelectionStrategy::default(),
             ttl: None,
         }
+    }
+
+    /// Order the coins and UTXOs this build draws on.
+    ///
+    /// [`CoinSelectionStrategy::LargestFirst`], the default, spends the fewest
+    /// inputs, which matters because every shielded input carries its own proof
+    /// and is charged for separately. [`CoinSelectionStrategy::SmallestFirst`]
+    /// spends the most, absorbing small coins that the default would leave
+    /// untouched indefinitely, at the cost of a larger and more expensive
+    /// transaction. Nothing caps how many inputs the latter draws, so prefer it
+    /// for a deliberate cleanup rather than for ordinary payments.
+    ///
+    /// Neither ordering is a good default, since one never absorbs small coins
+    /// and the other is unbounded. TODO: replace both with best-fit selection,
+    /// <https://github.com/Moonsong-Labs/midnight-rs/issues/145>
+    pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
+        self.coin_selection = strategy;
+        self
     }
 
     /// Prepare the transfer that `request` names, with the TTL and the fee
@@ -488,7 +500,7 @@ impl<'a> TransferBuilder<'a> {
             from_seed.clone(),
             spend_amount,
             spend_token,
-            COIN_SELECTION,
+            self.coin_selection,
         )
         .map_err(|e| shielded_selection_error(&self.context, e))?;
 
@@ -573,7 +585,7 @@ impl<'a> TransferBuilder<'a> {
             from_seed.clone(),
             amount,
             token_type,
-            COIN_SELECTION,
+            self.coin_selection,
         )
         .await;
         let (spend_infos, change) = match selected {
@@ -1290,7 +1302,8 @@ struct CoverPlan {
 /// Each coin of `pins` is spent whole, at the segment of the largest deficit
 /// of its token that is left, or at the guaranteed segment when none is left.
 /// Then each deficit that the pins leave takes coins of its token, largest
-/// first, for the reason that [`COIN_SELECTION`] gives. The ledger balances
+/// first. A call or a deploy names no coin order, so the cover takes the
+/// default of [`TransferBuilder::with_coin_selection`]. The ledger balances
 /// each token at each segment, so what the coins at a token and segment hold
 /// beyond its deficit comes back as change at that segment.
 ///

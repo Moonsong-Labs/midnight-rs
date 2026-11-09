@@ -43,7 +43,7 @@ pub use coin::{
 };
 pub use error::WalletError;
 pub use hash::{BlockHash, ExtrinsicHash};
-pub use midnight_helpers::HashOutput;
+pub use midnight_helpers::{CoinSelectionStrategy, HashOutput};
 pub use network::{InvalidNetworkName, Network, NetworkName};
 /// The chain's 32-byte hash, under the names [`BlockHash`] and [`ExtrinsicHash`].
 ///
