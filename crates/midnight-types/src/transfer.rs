@@ -4,7 +4,7 @@
 //!
 //! [`crate::TransferBuilder`] makes the builds themselves.
 
-use midnight_helpers::{HashOutput, Timestamp};
+use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 
 use crate::coin::{
     DustNullifier, DustPublicKey, Nullifier, ShieldedRecipient, ShieldedTokenType,
@@ -163,12 +163,14 @@ pub enum TransferKind {
     },
 }
 
-/// One build, as data: what to make, and how long the transaction stays
-/// valid.
+/// One build, as data: what to make, how to choose the inputs that make it,
+/// and how long the transaction stays valid.
 #[derive(Debug)]
 pub struct TransferRequest {
     /// The transfer to build.
     pub kind: TransferKind,
+    /// How to order the coins and UTXOs the build draws on.
+    pub coin_selection: CoinSelectionStrategy,
     /// How long the transaction stays valid after the chain time of the
     /// build. `None` gives the chain's `global_ttl`, the longest TTL the chain
     /// accepts. A shorter TTL bounds how long a transaction that never
@@ -184,9 +186,21 @@ pub struct TransferRequest {
 }
 
 impl TransferRequest {
-    /// A request whose transaction stays valid for the chain's `global_ttl`.
+    /// A request that orders its inputs the default way, and whose
+    /// transaction stays valid for the chain's `global_ttl`.
     pub fn new(kind: TransferKind) -> Self {
-        Self { kind, ttl: None }
+        Self {
+            kind,
+            coin_selection: CoinSelectionStrategy::default(),
+            ttl: None,
+        }
+    }
+
+    /// Order the coins and UTXOs this build draws on. See
+    /// `TransferBuilder::with_coin_selection`.
+    pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
+        self.coin_selection = strategy;
+        self
     }
 }
 
@@ -219,5 +233,19 @@ mod tests {
         );
         assert_eq!(panic_message(Box::new("literal")), "literal");
         assert!(panic_message(Box::new(42u8)).contains("non-string payload"));
+    }
+
+    #[test]
+    fn the_default_coin_selection_is_largest_first() {
+        assert_eq!(
+            TransferRequest::new(TransferKind::DustRegistration {
+                utxo_ctime: None,
+                target: None
+            })
+            .coin_selection,
+            CoinSelectionStrategy::LargestFirst,
+            "every shielded input carries its own proof, so the default \
+             spends the fewest inputs"
+        );
     }
 }
