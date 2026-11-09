@@ -69,7 +69,7 @@ pending.get_receipt().await             → TransactionReceipt
 
 The "balance" step runs inside the wallet's funding because it iterates between balancing and mock-proving until the Dust fee is right. The real proof follows in the provider, with the wallet free. For **your own** transaction there is no standalone `proveTx` you call separately.
 
-What you *can* do is stop before submission and get the signed transaction back: `fill` returns the `TxEnvelope` without a send, and `TxEnvelope::into_bytes` gives its proven bytes. A contract call's `contract.circuits().<circuit>().without_fee().await` (equivalently `Contract::build_call_with`) returns the call with no fee, for a sponsor. That is the hook the multi-party flows in the next section build on.
+What you *can* do is stop before submission and get the signed transaction back: `fill` returns the `TxEnvelope` without a send, and `TxEnvelope::into_bytes` gives its proven bytes. A contract call's `contract.circuits().<circuit>().without_fee().await` (equivalently `Contract::without_fee_call_with`) returns the call with no fee, for a sponsor. That is the hook the multi-party flows in the next section build on.
 
 The one-shot paths (`provider.send_transaction(request).await` and `Contract::deploy(...).send().await`) collapse the fill, the proof and the submit into one call. The wait is a call on the pending handle that they return.
 

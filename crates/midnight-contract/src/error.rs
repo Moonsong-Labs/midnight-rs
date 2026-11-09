@@ -268,10 +268,10 @@ pub enum ContractError {
     /// state, and a fee-less call has no way to record the new state.
     ///
     /// The generated `.without_fee()`, and
-    /// [`Contract::build_call_with`](crate::Contract::build_call_with), give
-    /// this error after the local run of the circuit. The call reserves no
-    /// input, makes no proof, and writes no private-state snapshot. Submit the
-    /// call with `.send()`, which records the new state.
+    /// [`Contract::without_fee_call_with`](crate::Contract::without_fee_call_with),
+    /// give this error after the local run of the circuit. The call reserves
+    /// no input, makes no proof, and writes no private-state snapshot. Submit
+    /// the call with `.send()`, which records the new state.
     #[error(
         "the witnesses of this call change the private state of contract {address}, and a \
          fee-less call does not record it: submit the call with `.send()`"

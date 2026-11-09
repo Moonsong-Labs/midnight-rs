@@ -276,7 +276,7 @@ async fn a_fee_less_call_with_witnesses_needs_a_store_before_any_node_query() {
     let program = interpreter::Program::new(&[], &witnesses, &[]);
 
     let err = contract
-        .build_call_with(
+        .without_fee_call_with(
             &persistent_hash_witness_ir(),
             &program,
             "test",

@@ -1229,7 +1229,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// The fill reserves the wallet inputs that the transaction spends. A
                 /// drop of the result hands them back. Its bytes keep them reserved until
                 /// a sync sees the chain spend them, or until their TTL passes. See
-                /// `midnight_contract::Contract::build_call_with`.
+                /// `midnight_contract::Contract::without_fee_call_with`.
                 pub async fn without_fee(
                     self,
                 ) -> ::core::result::Result<midnight_contract::TxEnvelope, midnight_contract::ContractError>
@@ -1239,7 +1239,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
                     ::std::boxed::Box::pin(async move {
                         #open
-                        __circuits.contract.build_call_with(#call_args).await
+                        __circuits.contract.without_fee_call_with(#call_args).await
                     })
                     .await
                 }

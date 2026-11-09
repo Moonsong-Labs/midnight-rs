@@ -1367,7 +1367,7 @@ impl<P> Contract<P> {
     /// - [`ContractError::Provider`] when the read of the state or the block
     ///   time, or the fill fails.
     #[allow(clippy::too_many_arguments)]
-    pub async fn build_call_with(
+    pub async fn without_fee_call_with(
         &self,
         circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
@@ -1382,7 +1382,7 @@ impl<P> Contract<P> {
         P::Wallet: MidnightWallet,
     {
         // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
-        Box::pin(self.build_call_with_inner(
+        Box::pin(self.without_fee_call_with_inner(
             circuit,
             program,
             circuit_name,
@@ -1396,9 +1396,9 @@ impl<P> Contract<P> {
 
     #[expect(
         clippy::too_many_arguments,
-        reason = "the arguments of `build_call_with`"
+        reason = "the arguments of `without_fee_call_with`"
     )]
-    async fn build_call_with_inner(
+    async fn without_fee_call_with_inner(
         &self,
         circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
@@ -1530,7 +1530,7 @@ impl<P> Contract<P> {
     /// wallet inputs that its build reserved, and the circuit's raw result.
     #[expect(
         clippy::too_many_arguments,
-        reason = "the inputs of a call, as `build_call_with` and `call_with` take them"
+        reason = "the inputs of a call, as `without_fee_call_with` and `call_with` take them"
     )]
     async fn build_call(
         &self,

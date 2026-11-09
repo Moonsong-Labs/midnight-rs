@@ -130,8 +130,8 @@ fn the_base_contract_call_methods_return_small_futures() {
         ),
     );
     assert_small(
-        "Contract::build_call_with",
-        contract.build_call_with(
+        "Contract::without_fee_call_with",
+        contract.without_fee_call_with(
             circuit,
             &program,
             "increment",
