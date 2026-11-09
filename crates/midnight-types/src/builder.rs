@@ -2156,12 +2156,10 @@ mod tests {
         );
     }
 
-    /// Largest first spends the fewest inputs, and each shielded input adds a
-    /// proof to the fee. A selection that took the smallest first would cost
-    /// more, and one that stopped short of the need would build a transaction
-    /// that the node refuses.
+    /// A selection that stopped short of the need, or that returned the wrong
+    /// change, would build a transaction that the node refuses.
     #[test]
-    fn the_selection_takes_the_largest_inputs_until_they_cover_the_need() {
+    fn the_selection_takes_inputs_until_they_cover_the_need() {
         let candidates = vec![('a', 3), ('b', 10), ('c', 5)];
         assert_eq!(
             select_inputs(candidates.clone(), 12, CoinSelection::LargestFirst),
@@ -2171,6 +2169,62 @@ mod tests {
             select_inputs(candidates, 19, CoinSelection::LargestFirst),
             None
         );
+    }
+
+    /// A transfer that drew its UTXOs in the default order whatever the
+    /// request names would spend the large UTXOs of a consolidation and leave
+    /// the small ones. Nothing fails: the transfer lands with other inputs.
+    #[tokio::test]
+    async fn a_transfer_draws_its_utxos_in_the_order_of_its_request() {
+        use midnight_helpers::UnshieldedWallet;
+
+        let root = crate::hd::Seed::from_bytes(&[5; 32]).unwrap().into_ledger();
+        let utxo = |byte: u8, value: u128| TrackedUtxo {
+            intent_hash: crate::HashOutput([byte; 32]),
+            ..night_utxo(value, None, false)
+        };
+        let utxos = vec![utxo(1, 3), utxo(2, 10), utxo(3, 5)];
+
+        for (selection, drawn) in [
+            (CoinSelection::LargestFirst, [2, 3].as_slice()),
+            (CoinSelection::SmallestFirst, &[1, 3, 2]),
+        ] {
+            let funding = Funding {
+                shielded_keys: ShieldedWallet::<DefaultDB>::default(root.clone())
+                    .secret_keys()
+                    .clone(),
+                shielded: WalletState::new(),
+                night_key: UnshieldedWallet::default(root.clone()).verifying_key(),
+                utxos: utxos.clone(),
+                dust: DustWallet::default(root.clone(), None),
+            };
+            let request = TransactionRequest::unshielded(
+                crate::NIGHT,
+                12,
+                UnshieldedRecipient(crate::HashOutput([9; 32])),
+            )
+            .without_fee()
+            .with_coin_selection(selection);
+
+            let prepared = TransferBuilder::new(
+                funding,
+                context_at(1_000, 1_000),
+                Arc::new(midnight_helpers::LocalProofServer::default()),
+            )
+            .prepare(request)
+            .await
+            .unwrap();
+
+            let expected: Vec<SpentUtxoKey> = drawn
+                .iter()
+                .map(|&byte| utxo(byte, 0).spent_key())
+                .collect();
+            assert_eq!(
+                prepared.spent_unshielded_inputs(),
+                expected,
+                "{selection:?}"
+            );
+        }
     }
 
     /// The fee of a funding counts a placeholder in each signature slot. A
