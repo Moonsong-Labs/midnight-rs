@@ -22,7 +22,8 @@ use crate::stage::FinalizedTx;
 pub use crate::sync::TrackedUtxo;
 pub use crate::transfer::{ReservedInput, SpentInputs, SpentUtxoKey};
 use crate::{
-    CoinPublicKey, FilledTx, FundedTx, MidnightWallet, Nullifier, ProvenTx, TxEnvelope, WalletError,
+    CoinPublicKey, FilledTx, FundedTx, MidnightWallet, Nullifier, ProvenTx, SignatureRequest,
+    TxEnvelope, WalletError,
 };
 
 /// What a fill asks the wallet to fund.
@@ -211,6 +212,12 @@ pub async fn prove(tx: FundedTx) -> Result<ProvenTx, WalletError> {
 /// What the wallet that funded `tx` reserved for it.
 pub fn spent_by(tx: &ProvenTx) -> &SpentInputs {
     tx.reservation.spent()
+}
+
+/// The unshielded inputs of the signer of `request` that hold a placeholder
+/// in the intent at its segment of `tx`.
+pub fn inputs_to_sign(tx: &ProvenTx, request: &SignatureRequest) -> Vec<SpentUtxoKey> {
+    tx.inputs_to_sign(request)
 }
 
 /// Serialize `tx` for the node. Its reservation moves to the envelope.
