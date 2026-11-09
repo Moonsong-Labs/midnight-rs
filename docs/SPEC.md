@@ -151,7 +151,7 @@ wallet                                              // the wallet itself, or a h
   .watch_for_coins(coins, &provider).await          // claim coins with no usable ciphertext: register, then rescan
 ```
 
-Each build that the wallet funds runs one pipeline. The provider fills the transaction from node queries: its network, its ledger parameters, and the time of its best block, which the TTL counts from. The wallet's `fund_transaction` resyncs, then selects, assembles, balances the Dust fee with mock proofs and reserves, under one write lock. The provider proves the result with its prover, with the wallet free. The wallet's `sign_transaction` then keeps the reservation across a restart, and the provider sends. In this release the funding signs the wallet's unshielded inputs already, and the proof leaves those signatures valid.
+Each build that the wallet funds runs one pipeline. The provider fills the transaction from node queries: its network, its ledger parameters, and the time of its best block, which the TTL counts from. The wallet's `fund_transaction` resyncs, then selects, assembles, balances the Dust fee with mock proofs and reserves, under one write lock. The provider proves the result with its prover, with the wallet free. The wallet's `sign_transaction` then keeps the reservation across a restart, and the provider sends. The funding signs the wallet's unshielded inputs, and the proof leaves those signatures valid.
 
 Each node read of the provider, its connect included, ends within 10 s (60 s for a contract state read), and a read with no answer returns `ProviderError::Rpc`.
 
@@ -465,4 +465,4 @@ Ledger 9 ships only as git tags, and upstream's ledger crates and helpers name e
 | Cross-contract calls | Bindings generate for a circuit that calls another contract, but the interpreter refuses the call with `InterpreterError::Unsupported` |
 | Lazy query batching | `query_contract_state` already takes a batch, but each generated `ledger_query()` accessor sends one query of its own |
 | Production proving | `ProofProvider::prove` returns `Transaction`, not `Result`, so a backend signals failure by panicking. The SDK catches that unwind and reports `WalletError::Proving` rather than losing the task, but the trait has no error channel and this is not mainnet-ready |
-| A remote signer | `MidnightWallet` has a separate `sign_transaction` step after the proof, but the funding still signs the unshielded inputs, so a browser extension or an HSM cannot hold the unshielded key yet |
+| A remote signer | `MidnightWallet` has a separate `sign_transaction` step after the proof, but the funding signs the unshielded inputs, so a browser extension or an HSM cannot hold the unshielded key |

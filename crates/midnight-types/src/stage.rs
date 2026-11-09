@@ -44,8 +44,8 @@ impl TxEnvelope {
     /// merge or submit.
     ///
     /// The inputs that its wallet reserved stay reserved, because the bytes
-    /// can still land. They go back when a sync sees the chain spend them, or
-    /// when their TTL passes.
+    /// can still land. The reservation ends when a sync sees the chain spend
+    /// them, or when their TTL passes.
     pub fn into_bytes(self) -> Vec<u8> {
         let TxEnvelope { bytes, reservation } = self;
         drop(reservation.keep_on_drop());

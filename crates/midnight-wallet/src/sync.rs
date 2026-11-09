@@ -177,7 +177,7 @@ impl std::future::Future for SyncHandle {
 /// # async fn example(seed: midnight_wallet::Seed) -> Result<(), Box<dyn std::error::Error>> {
 /// let provider = MidnightProvider::new(NODE_URL);
 /// let wallet = Wallet::from_seed(seed).sync(&provider, INDEXER_URL).await?;
-/// let provider = provider.with_wallet(wallet);
+/// let provider = provider.with_wallet(&wallet);
 /// # Ok(())
 /// # }
 /// ```
