@@ -32,7 +32,7 @@ pub type UnprovenIntent<D> = Intent<Signature, ProofPreimageMarker, PedersenRand
 /// a [`ProofProvider`] returns it.
 pub type ProvenTransaction<D> = Transaction<Signature, ProofMarker, PedersenRandomness, D>;
 
-pub use midnight_ledger_unsafe_helpers::{CoinSelectionStrategy, ContractVerifyingKeyBytes};
+pub use midnight_ledger_unsafe_helpers::ContractVerifyingKeyBytes;
 
 /// Ledger 8, which a chain ran until its hard fork to ledger 9.
 pub mod ledger_8 {
