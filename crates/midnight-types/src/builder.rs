@@ -756,7 +756,7 @@ impl TransferBuilder {
 
         let spent_unshielded_inputs = vec![chosen.spent_key()];
         let mut prepared =
-            prepare_with_ttl(tx_info, Fee::Registration(registration), self.ttl).await?;
+            prepare_with_ttl(tx_info, Fee::Registration(Box::new(registration)), self.ttl).await?;
         prepared.set_spent_unshielded_inputs(spent_unshielded_inputs);
         Ok(prepared)
     }
@@ -954,7 +954,7 @@ enum Fee<'a> {
     Dust(&'a DustWallet<DefaultDB>),
     /// The generationless Dust of the tNIGHT that this registration spends
     /// pays it. The registration holds a placeholder signature.
-    Registration(DustRegistration<Signature, DefaultDB>),
+    Registration(Box<DustRegistration<Signature, DefaultDB>>),
 }
 
 impl Fee<'_> {
@@ -971,7 +971,7 @@ impl Fee<'_> {
 
     fn registration(&self) -> Option<&DustRegistration<Signature, DefaultDB>> {
         match self {
-            Fee::Registration(registration) => Some(registration),
+            Fee::Registration(registration) => Some(registration.as_ref()),
             Fee::None | Fee::Dust(_) => None,
         }
     }
