@@ -8,7 +8,7 @@
 
 use crate::types::TransactionHash;
 
-use midnight_types::build::Reservation;
+use midnight_types::build::{KeptReservation, Reservation};
 use midnight_types::{BlockHash, ExtrinsicHash};
 use sha2::{Digest, Sha256};
 use subxt::tx::{TransactionInBlock, TransactionStatus};
@@ -317,8 +317,7 @@ impl std::fmt::Display for Verdict {
 /// a sync sees the chain spend them, or until their TTL passes.
 pub struct PendingTx {
     progress: subxt::tx::TransactionProgress<subxt::SubstrateConfig, AtBlock>,
-    /// Kept on a drop, because the node can still hold the transaction.
-    reservation: Reservation,
+    reservation: KeptReservation,
     transaction_hash: TransactionHash,
 }
 

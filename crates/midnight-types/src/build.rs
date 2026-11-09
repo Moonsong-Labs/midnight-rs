@@ -124,13 +124,8 @@ type Release = Box<dyn FnOnce(&SpentInputs) + Send + Sync>;
 /// The wallet makes it when it funds a transaction, and the stages of the
 /// transaction carry it. A drop hands the inputs back, so an unsent
 /// transaction cannot strand them. Once the node can hold the transaction,
-/// [`Self::keep_on_drop`] stops that, and only [`Self::release`] hands them
-/// back.
-pub struct Reservation {
-    spent: SpentInputs,
-    release: Option<Release>,
-    release_on_drop: bool,
-}
+/// [`Self::keep_on_drop`] turns it into a [`KeptReservation`].
+pub struct Reservation(KeptReservation);
 
 impl Reservation {
     /// A reservation of `spent`, which `release` hands back.
@@ -138,32 +133,64 @@ impl Reservation {
         spent: SpentInputs,
         release: impl FnOnce(&SpentInputs) + Send + Sync + 'static,
     ) -> Self {
-        Self {
+        Self(KeptReservation {
             spent,
             release: Some(Box::new(release)),
-            release_on_drop: true,
-        }
+        })
     }
 
+    /// What this reservation holds.
+    pub fn spent(&self) -> &SpentInputs {
+        self.0.spent()
+    }
+
+    /// Keep the inputs reserved past a drop, because the node can hold the
+    /// transaction.
+    pub fn keep_on_drop(mut self) -> KeptReservation {
+        std::mem::take(&mut self.0)
+    }
+}
+
+/// Nothing reserved, for a transaction that no wallet of this process funded.
+impl Default for Reservation {
+    fn default() -> Self {
+        Self(KeptReservation::default())
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        std::mem::take(&mut self.0).release();
+    }
+}
+
+impl std::fmt::Debug for Reservation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reservation")
+            .field("spent", self.spent())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A [`Reservation`] of a transaction that the node can hold.
+///
+/// A drop keeps the inputs reserved, and only [`Self::release`] hands them
+/// back.
+#[derive(Default)]
+pub struct KeptReservation {
+    spent: SpentInputs,
+    release: Option<Release>,
+}
+
+impl KeptReservation {
     /// What this reservation holds.
     pub fn spent(&self) -> &SpentInputs {
         &self.spent
     }
 
-    /// Keep the inputs reserved when this drops. [`Self::release`] still
-    /// hands them back.
-    pub fn keep_on_drop(mut self) -> Self {
-        self.release_on_drop = false;
-        self
-    }
-
     /// Hand the inputs back now, because the transaction can no longer land.
-    pub fn release(mut self) {
-        self.hand_back();
-    }
-
-    fn hand_back(&mut self) {
-        if let Some(release) = self.release.take()
+    pub fn release(self) {
+        if let Some(release) = self.release
             && !self.spent.is_empty()
         {
             release(&self.spent);
@@ -171,30 +198,10 @@ impl Reservation {
     }
 }
 
-/// Nothing reserved, for a transaction that no wallet of this process funded.
-impl Default for Reservation {
-    fn default() -> Self {
-        Self {
-            spent: SpentInputs::default(),
-            release: None,
-            release_on_drop: true,
-        }
-    }
-}
-
-impl Drop for Reservation {
-    fn drop(&mut self) {
-        if self.release_on_drop {
-            self.hand_back();
-        }
-    }
-}
-
-impl std::fmt::Debug for Reservation {
+impl std::fmt::Debug for KeptReservation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Reservation")
+        f.debug_struct("KeptReservation")
             .field("spent", &self.spent)
-            .field("release_on_drop", &self.release_on_drop)
             .finish_non_exhaustive()
     }
 }
