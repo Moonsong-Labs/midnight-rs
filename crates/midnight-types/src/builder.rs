@@ -323,16 +323,7 @@ impl<'a> TransferBuilder<'a> {
 
     /// Order the coins and UTXOs this build draws on.
     ///
-    /// [`CoinSelectionStrategy::LargestFirst`], the default, spends the fewest
-    /// inputs, which matters because every shielded input carries its own proof
-    /// and is charged for separately. [`CoinSelectionStrategy::SmallestFirst`]
-    /// spends the most, absorbing small coins that the default would leave
-    /// untouched indefinitely, at the cost of a larger and more expensive
-    /// transaction. Nothing caps how many inputs the latter draws, so prefer it
-    /// for a deliberate cleanup rather than for ordinary payments.
-    ///
-    /// Neither ordering is a good default, since one never absorbs small coins
-    /// and the other is unbounded. TODO: replace both with best-fit selection,
+    /// TODO: replace both orders with best-fit selection,
     /// <https://github.com/Moonsong-Labs/midnight-rs/issues/145>
     pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
         self.coin_selection = strategy;
