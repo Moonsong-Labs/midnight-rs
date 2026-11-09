@@ -129,7 +129,9 @@ impl MidnightWallet for Wallet {
     async fn sign_transaction(&self, tx: ProvenTx) -> Result<TxEnvelope, WalletError> {
         let spent = build::spent_by(&tx).clone();
         let envelope = build::envelope(tx)?;
-        pending::lock(self.pending()).mark_proven(&spent);
+        if !spent.is_empty() {
+            pending::lock(self.pending()).mark_proven(&spent);
+        }
         Ok(envelope)
     }
 }
