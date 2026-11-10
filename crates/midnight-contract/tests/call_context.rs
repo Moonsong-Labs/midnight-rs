@@ -51,15 +51,9 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
         .await
         .expect("deploy");
 
-    // Read the best block's time by its height, apart from the read that the
+    // Read the best block's time by its hash, apart from the read that the
     // call path makes, so a call path on the wrong block disagrees with it.
-    let best = provider.get_block_number().await.expect("best height");
-    let hash = *provider
-        .get_block_hashes_by_height(best)
-        .await
-        .expect("hashes at the best height")
-        .first()
-        .expect("the best height has a block");
+    let hash = provider.best_block_hash().await.expect("best block hash");
     let now = provider
         .get_block_timestamp(hash)
         .await

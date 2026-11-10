@@ -16,7 +16,7 @@ pub use pipeline::merge_transactions;
 pub use prover::Prover;
 pub use provider::{MidnightProvider, NodeHeader};
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TransactionReceipt, Verdict};
-pub use types::{Health, TransactionHash};
+pub use types::TransactionHash;
 
 // Re-export the coin, token, key and hash vocabulary, the types that
 // `MidnightProvider`'s own signatures name, and the NIGHT and DUST units, so a
@@ -25,9 +25,9 @@ pub use types::{Health, TransactionHash};
 // names them.
 pub use midnight_types::{
     BlockHash, CoinInfo, CoinPublicKey, CoinSelection, ContractAddress, DustPublicKey,
-    EncryptionPublicKey, ExtrinsicHash, HashOutput, MidnightWallet, NIGHT, Network, Nonce,
-    Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType,
-    TransactionRequest, TxEnvelope, UnshieldedRecipient, UnshieldedTokenType, WalletError,
+    EncryptionPublicKey, ExtrinsicHash, HashOutput, MidnightWallet, NIGHT, Nonce, Nullifier,
+    SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, TransactionRequest,
+    TxEnvelope, UnshieldedRecipient, UnshieldedTokenType, WalletError,
 };
 
 // Re-export the private-state types so callers configure

@@ -140,7 +140,6 @@ provider
   .fill(request).await             → TxEnvelope: fill, fund, prove and sign; send nothing
   .prepare(envelope).await         → PreparedTx that holds the reservation (hashes known, not sent)
   .send_tx_envelope(envelope).await → PendingTx that carries the reservation of the envelope
-  .health().await                  → node reachability
 
 merge_transactions(&[..])          → one transaction from several proven ones (a free function)
 
