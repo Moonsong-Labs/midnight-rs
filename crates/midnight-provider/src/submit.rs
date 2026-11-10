@@ -366,7 +366,7 @@ impl PendingTx {
             }
             if let Some(in_block) = landed(&status) {
                 let (receipt, outcome) =
-                    receipt_with_verdict(in_block, self.transaction_hash).await?;
+                    receipt_with_outcome(in_block, self.transaction_hash).await?;
                 return Ok(applied(receipt, outcome)?);
             }
         }
@@ -378,7 +378,7 @@ impl PendingTx {
 /// `Midnight` pallet's `TxApplied` / `TxPartialSuccess` events. Default to
 /// `Failure` when neither is present (the dispatch errored and only
 /// `System::ExtrinsicFailed` was emitted).
-async fn receipt_with_verdict(
+async fn receipt_with_outcome(
     in_block: &InBlock,
     transaction_hash: TransactionHash,
 ) -> Result<(TransactionReceipt, Outcome), ProviderError> {
@@ -650,7 +650,7 @@ mod tests {
     /// key an indexer query takes, not the extrinsic hash, which no indexer
     /// stores.
     #[test]
-    fn only_success_counts_as_applied() {
+    fn only_tx_applied_counts_as_applied() {
         let tx = TransactionReceipt {
             block_hash: BlockHash::repeat_byte(1),
             extrinsic_hash: ExtrinsicHash::repeat_byte(2),
