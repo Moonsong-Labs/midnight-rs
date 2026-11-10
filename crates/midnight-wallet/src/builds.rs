@@ -105,9 +105,7 @@ impl MidnightWallet for Wallet {
         chain: &dyn ChainView,
         tx: FilledTx,
     ) -> Result<FundedTx, WalletError> {
-        // Boxed: a debug build makes the replay future tens of kilobytes, and
-        // every funding awaits it.
-        Box::pin(self.sync(chain)).await?;
+        self.sync(chain).await?;
         let (funded, spent) = {
             let mut guard = self.state().write().await;
             fund(guard.state_mut(), build::fill_of(tx)).await?
