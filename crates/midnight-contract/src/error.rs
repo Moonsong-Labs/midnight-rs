@@ -127,8 +127,7 @@ pub enum ContractError {
     ///
     /// [`VerdictFetch`]: midnight_provider::SubmitError::VerdictFetch
     #[error(
-        "transaction {transaction_hash} (extrinsic {extrinsic_hash:x}) has no verdict: \
-         {source}.{}",
+        "transaction {transaction_hash} (extrinsic {extrinsic_hash:x}) has no verdict.{}",
         if *snapshot_written { PENDING_SNAPSHOT_HINT } else { "" }
     )]
     SubmissionWait {

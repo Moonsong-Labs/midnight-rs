@@ -255,10 +255,9 @@ impl<W> MidnightProvider<W> {
     /// [`ProviderError::Transaction`] when `tx` pays no fee: it came from a
     /// request made `without_fee` or from a swap half, and the node refuses
     /// it. Hand its bytes ([`TxEnvelope::into_bytes`]) to the party that pays
-    /// its fee. [`ProviderError::Rpc`] when the connect fails or gets no
-    /// answer within 10 s. [`ProviderError::Submission`] with
-    /// [`SubmitError::NotSubmitted`](crate::SubmitError::NotSubmitted) when
-    /// the client cannot make the extrinsic.
+    /// its fee. [`ProviderError::Rpc`] when the connect or the metadata read
+    /// fails or gets no answer within 10 s, and when the node's metadata has no
+    /// matching call.
     pub async fn prepare(&self, tx: TxEnvelope) -> Result<submit::PreparedTx, ProviderError> {
         let (bytes, reservation) = build::into_parts(tx).map_err(|_fee_less| fee_less_refusal())?;
         self.prepare_parts(bytes, reservation).await
@@ -886,13 +885,7 @@ mod tests {
             ended(
                 "prepare",
                 provider.prepare_parts(vec![0; 8], unreserved()),
-                |read| match read {
-                    Err(ProviderError::Submission(crate::SubmitError::NotSubmitted { .. })) => {
-                        Ok(())
-                    }
-                    Err(other) => Err(format!("{other:?}")),
-                    Ok(_) => Err("Ok".to_owned()),
-                },
+                gave_no_answer,
             )
             .boxed_local(),
             ended(
