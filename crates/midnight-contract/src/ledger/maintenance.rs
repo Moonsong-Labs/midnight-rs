@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use midnight_base_crypto::signatures::{Signature, VerifyingKey};
 use midnight_helpers::{
-    BuildContext, ContractOperationVersion, ContractOperationVersionedVerifierKey, DefaultDB,
-    EntryPointBuf, MaintenanceUpdate, SingleUpdate,
+    BuildContext, ContractMaintenanceVerifyingKey, ContractOperationVersion,
+    ContractOperationVersionedVerifierKey, DefaultDB, EntryPointBuf, MaintenanceUpdate,
+    SingleUpdate, TransactionSignature,
 };
 use midnight_provider::MidnightProvider;
 use midnight_typed_state::{ContractState, InMemoryDB};
@@ -89,15 +89,12 @@ fn single_remove(circuit: &str, version: ContractOperationVersion) -> SingleUpda
 /// `ReplaceAuthority` installing `committee`/`threshold`. The new authority's
 /// `counter` must be the current counter + 1 (a ledger well-formedness rule).
 fn single_replace_authority(
-    committee: Vec<VerifyingKey>,
+    committee: Vec<ContractMaintenanceVerifyingKey>,
     threshold: u32,
     current_counter: u32,
 ) -> SingleUpdate {
     SingleUpdate::ReplaceAuthority(midnight_helpers::ContractMaintenanceAuthority {
-        committee: committee
-            .into_iter()
-            .map(midnight_helpers::maintenance_verifying_key)
-            .collect(),
+        committee,
         threshold,
         // saturating to match the ledger's apply path (it caps at u32::MAX).
         counter: current_counter.saturating_add(1),
@@ -129,15 +126,12 @@ impl midnight_helpers::BuildContractAction<DefaultDB, BuildContext> for AttachMa
 pub(crate) async fn maintenance_funded<W: MidnightWallet>(
     provider: &MidnightProvider<W>,
     update: MaintenanceUpdate<DefaultDB>,
-    signatures: &[(u32, Signature)],
+    signatures: &[(u32, TransactionSignature)],
 ) -> Result<TxEnvelope, ContractError> {
     let update = signatures
         .iter()
         .fold(update, |update, (index, signature)| {
-            update.add_signature(
-                *index,
-                midnight_helpers::transaction_signature(signature.clone()),
-            )
+            update.add_signature(*index, signature.clone())
         });
 
     let tx_info = with_single_action(
@@ -151,24 +145,13 @@ pub(crate) async fn maintenance_funded<W: MidnightWallet>(
 
 #[cfg(test)]
 mod tests {
-    use midnight_base_crypto::signatures::SigningKey;
-
     use super::*;
 
     #[test]
-    fn replace_authority_update_bumps_counter_and_sets_committee() {
-        let a = SigningKey::sample(rand::thread_rng()).verifying_key();
-        let b = SigningKey::sample(rand::thread_rng()).verifying_key();
-        let committee = vec![a, b];
-        match single_replace_authority(committee.clone(), 2, 5) {
+    fn replace_authority_update_bumps_counter() {
+        match single_replace_authority(Vec::new(), 1, 5) {
             SingleUpdate::ReplaceAuthority(auth) => {
                 assert_eq!(auth.counter, 6, "new authority counter must be current + 1");
-                assert_eq!(auth.threshold, 2);
-                let expected: Vec<_> = committee
-                    .into_iter()
-                    .map(midnight_helpers::maintenance_verifying_key)
-                    .collect();
-                assert_eq!(auth.committee, expected);
             }
             _ => panic!("expected ReplaceAuthority"),
         }

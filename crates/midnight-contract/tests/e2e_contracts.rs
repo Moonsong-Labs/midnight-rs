@@ -612,13 +612,14 @@ fn execute_all_compiled_circuits() {
 // maintenance update to it.
 // ---------------------------------------------------------------------------
 
-/// Exercises the governance path end to end: deploy with a 1-of-1 committee
-/// (`with_maintenance_authority`), rotate a verifier key by removing and
-/// re-inserting it in one atomic signed transaction, then rotate the committee
-/// itself via `replace_authority`. Each update is prepared, signed with the
-/// current committee key, and submitted. No key is stored by the SDK.
+/// Exercises the governance path end to end: deploy with a 1-of-1 Schnorr
+/// committee (`with_maintenance_authority`), rotate a verifier key by removing
+/// and re-inserting it in one atomic signed transaction, rotate the committee
+/// itself to an ECDSA key via `replace_authority`, then rotate the verifier key
+/// again under the ECDSA key. Each update is prepared, signed with the current
+/// committee key, and submitted. No key is stored by the SDK.
 ///
-/// One deploy serves both updates. Two deploys from the dev seed race: a build
+/// One deploy serves every update. Two deploys from the dev seed race: a build
 /// only avoids inputs its own wallet reserved, `into_contract` returns at the
 /// best block rather than at finalization, and a second wallet syncing before
 /// the indexer surfaces the first spend re-selects it. That is ledger custom
@@ -629,7 +630,7 @@ fn execute_all_compiled_circuits() {
 /// Requires a devnet + indexer (MIDNIGHT_NODE_URL, MIDNIGHT_INDEXER_URL).
 #[tokio::test]
 async fn governance_deploy_then_apply_both_updates() {
-    use midnight_contract::{Contract, SigningKey};
+    use midnight_contract::{Contract, ContractMaintenanceSigningKey, ecdsa, schnorr};
     use midnight_onchain_runtime::state::EntryPointBuf;
 
     let Some((node_url, indexer_url)) = common::devnet_urls() else {
@@ -647,11 +648,13 @@ async fn governance_deploy_then_apply_both_updates() {
 
     // The caller owns the committee signing key; the SDK only learns its public
     // half.
-    let authority = SigningKey::sample(rand::thread_rng());
+    let authority_key = schnorr::SigningKey::sample(rand::thread_rng());
+    let member = ContractMaintenanceVerifyingKey::Schnorr(authority_key.verifying_key());
+    let authority = ContractMaintenanceSigningKey::Schnorr(authority_key);
     let contract = Contract::deploy(&provider)
         .with_initial_state(initial)
         .with_zk_config(&keys_dir)
-        .with_maintenance_authority(vec![authority.verifying_key()], 1)
+        .with_maintenance_authority(vec![member.clone()], 1)
         .send()
         .await
         .expect("submit deploy")
@@ -663,12 +666,7 @@ async fn governance_deploy_then_apply_both_updates() {
 
     // On-chain authority is the 1-of-1 committee we set, at counter 0.
     let on_chain = contract.maintenance_authority().await.unwrap();
-    assert_eq!(
-        on_chain.committee,
-        vec![ContractMaintenanceVerifyingKey::Schnorr(
-            authority.verifying_key()
-        )]
-    );
+    assert_eq!(on_chain.committee, vec![member]);
     assert_eq!(on_chain.threshold, 1);
     assert_eq!(on_chain.counter, 0);
 
@@ -677,7 +675,7 @@ async fn governance_deploy_then_apply_both_updates() {
     let batch = contract
         .maintenance()
         .remove_verifier_key("increment")
-        .insert_verifier_key("increment", vk_bytes)
+        .insert_verifier_key("increment", vk_bytes.clone())
         .prepare()
         .await
         .expect("prepare batch")
@@ -703,13 +701,14 @@ async fn governance_deploy_then_apply_both_updates() {
     );
     eprintln!("governance: verifier key rotated in one batched tx ✓");
 
-    // Rotate the committee itself. The original key is still the authority, so
-    // it signs this one too.
-    let new_authority = SigningKey::sample(rand::thread_rng());
-    let new_vk = new_authority.verifying_key();
+    // Rotate the committee itself, to an ECDSA key. The original key is still
+    // the authority, so it signs this one too.
+    let new_authority_key = ecdsa::SigningKey::sample(rand::thread_rng());
+    let new_member = ContractMaintenanceVerifyingKey::ECDSA(new_authority_key.verifying_key());
+    let new_authority = ContractMaintenanceSigningKey::ECDSA(new_authority_key);
     contract
         .maintenance()
-        .replace_authority(vec![new_vk.clone()], 1)
+        .replace_authority(vec![new_member.clone()], 1)
         .prepare()
         .await
         .expect("prepare replace_authority")
@@ -724,7 +723,7 @@ async fn governance_deploy_then_apply_both_updates() {
     let updated = contract.maintenance_authority().await.unwrap();
     assert_eq!(
         updated.committee,
-        vec![ContractMaintenanceVerifyingKey::Schnorr(new_vk)],
+        vec![new_member],
         "committee should be the new key"
     );
     assert_eq!(
@@ -732,6 +731,28 @@ async fn governance_deploy_then_apply_both_updates() {
         "a second maintenance update → counter 2"
     );
     eprintln!("governance: authority rotated on-chain ✓");
+
+    // The ECDSA committee signs the next update.
+    contract
+        .maintenance()
+        .remove_verifier_key("increment")
+        .insert_verifier_key("increment", vk_bytes)
+        .prepare()
+        .await
+        .expect("prepare the ECDSA-signed batch")
+        .sign(0, &new_authority)
+        .send()
+        .await
+        .expect("submit the ECDSA-signed batch")
+        .get_receipt()
+        .await
+        .expect("ECDSA-signed batch applied");
+    assert_eq!(
+        contract.maintenance_authority().await.unwrap().counter,
+        3,
+        "a third maintenance update → counter 3"
+    );
+    eprintln!("governance: ECDSA committee signed an update ✓");
 
     let pinned = Contract::at(&provider, &address)
         .at_block(batch.block_hash)

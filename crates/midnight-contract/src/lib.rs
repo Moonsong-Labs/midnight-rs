@@ -51,8 +51,26 @@ pub use midnight_types::ContractAddress;
 // committees and sign maintenance ops without depending on `midnight-base-crypto`
 // directly.
 pub use maintenance::{ContractMaintenance, PreparedMaintenance};
-pub use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
+pub use midnight_helpers::{
+    TransactionSignature as ContractMaintenanceSignature,
+    TransactionSigningKey as ContractMaintenanceSigningKey,
+};
 pub use midnight_typed_state::{ContractMaintenanceAuthority, ContractMaintenanceVerifyingKey};
+
+/// BIP-340 Schnorr keys and signatures over secp256k1: the
+/// [`ContractMaintenanceVerifyingKey::Schnorr`] kind of committee member.
+pub mod schnorr {
+    pub use midnight_base_crypto::schnorr::{Signature, SigningKey, VerifyingKey};
+}
+
+/// ECDSA keys and signatures over secp256k1: the
+/// [`ContractMaintenanceVerifyingKey::ECDSA`] kind of committee member.
+///
+/// A member signs SHA-256 of [`PreparedMaintenance::data_to_sign`], and the
+/// ledger accepts only the low-S form of a signature.
+pub mod ecdsa {
+    pub use midnight_base_crypto::ecdsa::{Signature, SigningKey, VerifyingKey};
+}
 
 // The execution-runtime primitives (Value domain, witnesses, execution
 // results, builtins, type-aware encoding) live in `compact-runtime`.

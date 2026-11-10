@@ -12,13 +12,17 @@
 //!   coordinator: `add_signature(index, sig)` for a quorum, then submits
 //!
 //! With 2-of-3 any two members suffice, so one can be offline. A member's signer
-//! index is its position in the committee `Vec` passed at deploy.
+//! index is its position in the committee `Vec` passed at deploy. The members
+//! here hold ECDSA keys, the kind a KMS or an HSM can hold: each signs SHA-256 of
+//! the payload. A Schnorr (BIP-340) member works the same way.
 //!
 //! Reuses the counter contract, so deploying it gives a contract with the
 //! `increment` / `increment_by` circuits to rotate. Runs against the shared
 //! local devnet (`devnet/docker-compose.yml`); see README.md.
 
-use midnight_core::contract::{Signature, SigningKey};
+use midnight_core::contract::{
+    ContractMaintenanceSignature, ContractMaintenanceVerifyingKey, ecdsa,
+};
 use midnight_core::{MidnightProvider, Seed, Wallet};
 
 mod counter {
@@ -40,8 +44,16 @@ const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000
 /// member's signing key and the payload to sign — no provider, no wallet, no
 /// other member's key. It returns just the signature, which the coordinator
 /// collects out of band.
-fn member_sign(payload: &[u8], key: &SigningKey) -> Signature {
-    key.sign(&mut rand::thread_rng(), payload)
+fn member_sign(payload: &[u8], key: &ecdsa::SigningKey) -> ContractMaintenanceSignature {
+    ContractMaintenanceSignature::ECDSA(key.sign(payload))
+}
+
+/// The committee entries of `members`, in order.
+fn committee(members: &[ecdsa::SigningKey]) -> Vec<ContractMaintenanceVerifyingKey> {
+    members
+        .iter()
+        .map(|key| ContractMaintenanceVerifyingKey::ECDSA(key.verifying_key()))
+        .collect()
 }
 
 #[tokio::main]
@@ -63,17 +75,16 @@ async fn main() -> anyhow::Result<()> {
     // no single process holds more than one. Committee order defines the signer
     // indices: members[0] → 0, members[1] → 1, members[2] → 2.
     let members = [
-        SigningKey::sample(rand::thread_rng()),
-        SigningKey::sample(rand::thread_rng()),
-        SigningKey::sample(rand::thread_rng()),
+        ecdsa::SigningKey::sample(rand::thread_rng()),
+        ecdsa::SigningKey::sample(rand::thread_rng()),
+        ecdsa::SigningKey::sample(rand::thread_rng()),
     ];
-    let committee: Vec<_> = members.iter().map(|k| k.verifying_key()).collect();
 
     // 1. Deploy the counter contract governed by a 2-of-3 committee.
     println!("1. Deploying a governable contract (2-of-3 committee)...");
     let contract = counter::Contract::deploy(&provider)
         .with_zk_config(counter::ZK_CONFIG_DIR)
-        .with_maintenance_authority(committee, 2)
+        .with_maintenance_authority(committee(&members), 2)
         .send()
         .await?
         .into_contract()
@@ -118,14 +129,13 @@ async fn main() -> anyhow::Result<()> {
     //    authorizes the handover; this time members 0 and 1 sign (any two work).
     println!("\n3. Replacing the maintenance authority (members 0 and 1 sign)...");
     let new_members = [
-        SigningKey::sample(rand::thread_rng()),
-        SigningKey::sample(rand::thread_rng()),
-        SigningKey::sample(rand::thread_rng()),
+        ecdsa::SigningKey::sample(rand::thread_rng()),
+        ecdsa::SigningKey::sample(rand::thread_rng()),
+        ecdsa::SigningKey::sample(rand::thread_rng()),
     ];
-    let new_committee: Vec<_> = new_members.iter().map(|k| k.verifying_key()).collect();
     let prepared = contract
         .maintenance()
-        .replace_authority(new_committee, 2)
+        .replace_authority(committee(&new_members), 2)
         .prepare()
         .await?;
 

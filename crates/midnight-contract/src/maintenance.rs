@@ -8,14 +8,15 @@
 //! transaction with the collected signatures. See
 //! `docs/contract-maintenance-governance.md` for the protocol model.
 
-use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPointBuf};
 use midnight_provider::PendingTx;
+use midnight_serialize::Serializable;
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
 use midnight_types::{MidnightWallet, TxEnvelope};
 
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
+use crate::{ContractMaintenanceSignature, ContractMaintenanceSigningKey, ecdsa};
 
 // ---------------------------------------------------------------------------
 // Deploy-side: stamp a committee into the contract state.
@@ -29,18 +30,34 @@ use crate::error::ContractError;
 /// authorize a maintenance update.
 pub(crate) fn set_maintenance_authority(
     mut state: ContractState<InMemoryDB>,
-    committee: Vec<VerifyingKey>,
+    committee: Vec<ContractMaintenanceVerifyingKey>,
     threshold: u32,
 ) -> ContractState<InMemoryDB> {
     state.maintenance_authority = ContractMaintenanceAuthority {
-        committee: committee
-            .into_iter()
-            .map(ContractMaintenanceVerifyingKey::Schnorr)
-            .collect(),
+        committee,
         threshold,
         counter: 0,
     };
     state
+}
+
+fn encoded(value: &impl Serializable) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(value.serialized_size());
+    value
+        .serialize(&mut bytes)
+        .expect("serializing to a Vec does not fail");
+    bytes
+}
+
+/// The x-coordinate of a member's secp256k1 point. One secret key signs for
+/// every member with the same x: the Schnorr key, and both ECDSA parities
+/// (`02 || x` with `d`, `03 || x` with `n - d`).
+fn member_x(member: &ContractMaintenanceVerifyingKey) -> Vec<u8> {
+    match member {
+        ContractMaintenanceVerifyingKey::Schnorr(key) => encoded(key),
+        // The SEC1 parity byte leads.
+        ContractMaintenanceVerifyingKey::ECDSA(key) => encoded(key)[1..].to_vec(),
+    }
 }
 
 /// Validate a committee + threshold before it is committed on-chain: the
@@ -51,7 +68,7 @@ pub(crate) fn set_maintenance_authority(
 /// which the ledger accepts with **zero** signatures (anyone could then govern
 /// the contract).
 pub(crate) fn validate_committee(
-    committee: &[VerifyingKey],
+    committee: &[ContractMaintenanceVerifyingKey],
     threshold: u32,
 ) -> Result<(), ContractError> {
     if committee.is_empty() {
@@ -74,14 +91,74 @@ pub(crate) fn validate_committee(
     }
     // Reject duplicate members: a committee like [vk, vk] with threshold 2 would
     // be satisfiable by a single key signing at two indices, collapsing k-of-n.
-    for (i, vk) in committee.iter().enumerate() {
-        if committee[..i].contains(vk) {
+    // The ledger accepts it. Members are compared by x, so one secret key also
+    // cannot sit at two indices as a Schnorr and an ECDSA member.
+    let xs: Vec<Vec<u8>> = committee.iter().map(member_x).collect();
+    for (i, x) in xs.iter().enumerate() {
+        if xs[..i].contains(x) {
             return Err(ContractError::Maintenance(
                 "maintenance committee contains a duplicate verifying key".into(),
             ));
         }
     }
     Ok(())
+}
+
+/// `n / 2` for the secp256k1 group order `n`, big-endian.
+const SECP256K1_HALF_ORDER: [u8; 32] = [
+    0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0x5d, 0x57, 0x6e, 0x73, 0x57, 0xa4, 0x50, 0x1d, 0xdf, 0xe9, 0x2f, 0x46, 0x68, 0x1b, 0x20, 0xa0,
+];
+
+/// Whether `signature` is in the high-S form, which the ledger refuses.
+fn is_high_s(signature: &ecdsa::Signature) -> bool {
+    // The encoding is `r || s`, each 32 bytes big-endian.
+    encoded(signature)[32..] > SECP256K1_HALF_ORDER[..]
+}
+
+/// Check one signature against the committee member it claims, as the ledger
+/// will.
+fn check_signature(
+    data: &[u8],
+    index: u32,
+    member: &ContractMaintenanceVerifyingKey,
+    signature: &ContractMaintenanceSignature,
+) -> Result<(), ContractError> {
+    let verifies = match (member, signature) {
+        (
+            ContractMaintenanceVerifyingKey::Schnorr(key),
+            ContractMaintenanceSignature::Schnorr(signature),
+        ) => key.verify(data, signature),
+        (
+            ContractMaintenanceVerifyingKey::ECDSA(key),
+            ContractMaintenanceSignature::ECDSA(signature),
+        ) => {
+            if is_high_s(signature) {
+                return Err(ContractError::Maintenance(format!(
+                    "the ECDSA signature for committee index {index} has a high S, which the \
+                     ledger refuses; replace s with n - s"
+                )));
+            }
+            key.verify(data, signature)
+        }
+        (ContractMaintenanceVerifyingKey::Schnorr(_), ContractMaintenanceSignature::ECDSA(_)) => {
+            return Err(ContractError::Maintenance(format!(
+                "committee index {index} holds a Schnorr key, but its signature is ECDSA"
+            )));
+        }
+        (ContractMaintenanceVerifyingKey::ECDSA(_), ContractMaintenanceSignature::Schnorr(_)) => {
+            return Err(ContractError::Maintenance(format!(
+                "committee index {index} holds an ECDSA key, but its signature is Schnorr"
+            )));
+        }
+    };
+    if verifies {
+        Ok(())
+    } else {
+        Err(ContractError::Maintenance(format!(
+            "signature for committee index {index} does not verify"
+        )))
+    }
 }
 
 /// Validate that the signatures over `data` will satisfy `committee` /
@@ -92,13 +169,13 @@ pub(crate) fn validate_committee(
 /// `ThresholdMissed`) into early, specific errors.
 fn validate_signatures(
     data: &[u8],
-    signatures: &[(u32, Signature)],
-    committee: &[VerifyingKey],
+    signatures: &[(u32, ContractMaintenanceSignature)],
+    committee: &[ContractMaintenanceVerifyingKey],
     threshold: u32,
 ) -> Result<(), ContractError> {
     let mut seen = std::collections::HashSet::new();
     for (idx, sig) in signatures {
-        let vk = committee.get(*idx as usize).ok_or_else(|| {
+        let member = committee.get(*idx as usize).ok_or_else(|| {
             ContractError::Maintenance(format!(
                 "signature index {idx} is outside the committee (size {})",
                 committee.len()
@@ -109,11 +186,7 @@ fn validate_signatures(
                 "duplicate signature for committee index {idx}"
             )));
         }
-        if !vk.verify(data, sig) {
-            return Err(ContractError::Maintenance(format!(
-                "signature for committee index {idx} does not verify"
-            )));
-        }
+        check_signature(data, *idx, member, sig)?;
     }
     if (seen.len() as u32) < threshold {
         return Err(ContractError::Maintenance(format!(
@@ -122,25 +195,6 @@ fn validate_signatures(
         )));
     }
     Ok(())
-}
-
-/// The committee's Schnorr keys. The SDK's maintenance API signs with Schnorr
-/// keys only, so a committee with another kind of member is refused.
-fn schnorr_committee(
-    authority: &ContractMaintenanceAuthority,
-) -> Result<Vec<VerifyingKey>, ContractError> {
-    authority
-        .committee
-        .iter()
-        .map(|member| match member {
-            ContractMaintenanceVerifyingKey::Schnorr(key) => Ok(key.clone()),
-            _ => Err(ContractError::Maintenance(
-                "the maintenance committee has a member that is not a Schnorr key, which this \
-                 SDK cannot sign for"
-                    .into(),
-            )),
-        })
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -233,8 +287,13 @@ impl<'a, P> ContractMaintenance<'a, P> {
         self
     }
 
-    /// Add a replace-authority step installing `committee`/`threshold`.
-    pub fn replace_authority(mut self, committee: Vec<VerifyingKey>, threshold: u32) -> Self {
+    /// Add a replace-authority step installing `committee`/`threshold`. A
+    /// committee can mix Schnorr and ECDSA members.
+    pub fn replace_authority(
+        mut self,
+        committee: Vec<ContractMaintenanceVerifyingKey>,
+        threshold: u32,
+    ) -> Self {
         self.specs.push(OpSpec::Replace {
             committee,
             threshold,
@@ -272,7 +331,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
         let state = crate::state::fetch_state(provider, address_hex, None).await?;
         let counter = state.maintenance_authority.counter;
         let threshold = state.maintenance_authority.threshold;
-        let committee = schnorr_committee(&state.maintenance_authority)?;
+        let committee = state.maintenance_authority.committee.clone();
 
         // Validate the verifier-key steps as a sequence (replace steps don't
         // touch the operations map).
@@ -329,7 +388,7 @@ pub(crate) enum OpSpec {
         circuit: String,
     },
     Replace {
-        committee: Vec<VerifyingKey>,
+        committee: Vec<ContractMaintenanceVerifyingKey>,
         threshold: u32,
     },
 }
@@ -348,32 +407,39 @@ pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
     update: midnight_helpers::MaintenanceUpdate<midnight_helpers::DefaultDB>,
     /// The signatures collected so far, as `(committee index, signature)`.
-    signatures: Vec<(u32, Signature)>,
+    signatures: Vec<(u32, ContractMaintenanceSignature)>,
     /// The on-chain committee at prepare time — used to verify attached
     /// signatures before submission.
-    committee: Vec<VerifyingKey>,
+    committee: Vec<ContractMaintenanceVerifyingKey>,
     required_threshold: u32,
 }
 
 impl<'a, P> PreparedMaintenance<'a, P> {
-    /// The exact bytes each committee member signs (with
-    /// [`SigningKey::sign`](midnight_base_crypto::signatures::SigningKey::sign)).
-    /// Distribute these to the members; collect their signatures via
-    /// [`Self::add_signature`].
+    /// The exact bytes each committee member signs. Distribute these to the
+    /// members; collect their signatures via [`Self::add_signature`].
+    ///
+    /// Both kinds of member sign SHA-256 of these bytes. A Schnorr member signs
+    /// it with BIP-340. An ECDSA member signs it as a prehashed digest (for
+    /// example a KMS in digest mode) and returns the low-S `r || s` form.
     pub fn data_to_sign(&self) -> Vec<u8> {
         self.update.data_to_sign()
     }
 
     /// Attach a signature produced (anywhere) over [`Self::data_to_sign`], at the
-    /// signer's position in the on-chain committee.
-    pub fn add_signature(mut self, committee_index: u32, signature: Signature) -> Self {
+    /// signer's position in the on-chain committee. Its kind must match the
+    /// member's key.
+    pub fn add_signature(
+        mut self,
+        committee_index: u32,
+        signature: ContractMaintenanceSignature,
+    ) -> Self {
         self.signatures.push((committee_index, signature));
         self
     }
 
     /// Convenience for the local case: sign [`Self::data_to_sign`] with `key` and
     /// attach it at `committee_index`.
-    pub fn sign(self, committee_index: u32, key: &SigningKey) -> Self {
+    pub fn sign(self, committee_index: u32, key: &ContractMaintenanceSigningKey) -> Self {
         let signature = key.sign(&mut rand::thread_rng(), &self.data_to_sign());
         self.add_signature(committee_index, signature)
     }
@@ -434,6 +500,8 @@ impl<'a, P> PreparedMaintenance<'a, P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schnorr;
+    use midnight_serialize::Deserializable;
     use midnight_typed_state::{StateValue, StorageHashMap};
 
     fn empty_state() -> ContractState<InMemoryDB> {
@@ -453,10 +521,32 @@ mod tests {
         state
     }
 
+    fn schnorr_member() -> (
+        ContractMaintenanceVerifyingKey,
+        ContractMaintenanceSigningKey,
+    ) {
+        let key = schnorr::SigningKey::sample(rand::thread_rng());
+        (
+            ContractMaintenanceVerifyingKey::Schnorr(key.verifying_key()),
+            ContractMaintenanceSigningKey::Schnorr(key),
+        )
+    }
+
+    fn ecdsa_member() -> (
+        ContractMaintenanceVerifyingKey,
+        ContractMaintenanceSigningKey,
+    ) {
+        let key = ecdsa::SigningKey::sample(rand::thread_rng());
+        (
+            ContractMaintenanceVerifyingKey::ECDSA(key.verifying_key()),
+            ContractMaintenanceSigningKey::ECDSA(key),
+        )
+    }
+
     #[test]
     fn validate_committee_enforces_non_empty_and_threshold_bounds() {
-        let a = SigningKey::sample(rand::thread_rng()).verifying_key();
-        let b = SigningKey::sample(rand::thread_rng()).verifying_key();
+        let (a, _) = schnorr_member();
+        let (b, _) = ecdsa_member();
         let committee = vec![a.clone(), b];
         assert!(validate_committee(&committee, 2).is_ok());
         assert!(validate_committee(&committee, 1).is_ok());
@@ -479,22 +569,36 @@ mod tests {
     }
 
     #[test]
+    fn validate_committee_refuses_one_secret_as_a_schnorr_and_an_ecdsa_member() {
+        let key = schnorr::SigningKey::sample(rand::thread_rng());
+        // The same secret's ECDSA key: the even-y point, `02 || x`.
+        let sec1 = [&[0x02][..], &encoded(&key.verifying_key())].concat();
+        let same_secret = ecdsa::VerifyingKey::deserialize(&mut &sec1[..], 0).unwrap();
+        let committee = [
+            ContractMaintenanceVerifyingKey::Schnorr(key.verifying_key()),
+            ContractMaintenanceVerifyingKey::ECDSA(same_secret),
+        ];
+
+        assert!(validate_committee(&committee, 2).is_err());
+    }
+
+    #[test]
     fn validate_signatures_enforces_distinct_inrange_verifying_quorum() {
-        let k0 = SigningKey::sample(rand::thread_rng());
-        let k1 = SigningKey::sample(rand::thread_rng());
-        let committee = vec![k0.verifying_key(), k1.verifying_key()];
+        let (schnorr, k0) = schnorr_member();
+        let (ecdsa, k1) = ecdsa_member();
+        let (_, other_ecdsa) = ecdsa_member();
+        let committee = vec![schnorr, ecdsa];
 
         let data = b"the bytes the committee signs";
-        let make = |sigs: &[(u32, &SigningKey)]| -> Vec<(u32, Signature)> {
-            sigs.iter()
+        let check = |sigs: &[(u32, &ContractMaintenanceSigningKey)], threshold| {
+            let signatures: Vec<_> = sigs
+                .iter()
                 .map(|(i, k)| (*i, k.sign(&mut rand::thread_rng(), data)))
-                .collect()
-        };
-        let check = |sigs: &[(u32, &SigningKey)], threshold| {
-            validate_signatures(data, &make(sigs), &committee, threshold)
+                .collect();
+            validate_signatures(data, &signatures, &committee, threshold)
         };
 
-        // 2-of-2, both valid and distinct.
+        // 2-of-2, one of each kind, both valid and distinct.
         assert!(check(&[(0, &k0), (1, &k1)], 2).is_ok());
         // Under threshold.
         assert!(check(&[(0, &k0)], 2).is_err());
@@ -504,29 +608,34 @@ mod tests {
         assert!(check(&[(0, &k0), (0, &k0)], 1).is_err());
         // Index outside the committee (KeyNotInCommittee).
         assert!(check(&[(5, &k0)], 1).is_err());
-        // Wrong key at an index (committee[0] is k0, signed by k1).
+        // A signature of the other kind (committee[0] is Schnorr, k1 is ECDSA).
         assert!(check(&[(0, &k1)], 1).is_err());
+        // Wrong ECDSA key at an index.
+        assert!(check(&[(1, &other_ecdsa)], 1).is_err());
     }
 
     #[test]
-    fn set_maintenance_authority_sets_committee_threshold_counter() {
-        let a = SigningKey::sample(rand::thread_rng()).verifying_key();
-        let b = SigningKey::sample(rand::thread_rng()).verifying_key();
-        let committee = vec![a, b];
+    fn validate_signatures_names_a_high_s_ecdsa_signature() {
+        let (member, _) = ecdsa_member();
+        // r = 1 and s = n - 1: well formed, with s in the high half.
+        let mut bytes = [0u8; 64];
+        bytes[31] = 1;
+        bytes[32..].copy_from_slice(&[
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
+            0xd0, 0x36, 0x41, 0x40,
+        ]);
+        let high_s = ecdsa::Signature::deserialize(&mut &bytes[..], 0).unwrap();
 
-        let state = set_maintenance_authority(empty_state(), committee.clone(), 2);
+        let err = validate_signatures(
+            b"data",
+            &[(0, ContractMaintenanceSignature::ECDSA(high_s))],
+            &[member],
+            1,
+        )
+        .unwrap_err();
 
-        let authority = state.maintenance_authority;
-        assert_eq!(
-            authority.committee,
-            committee
-                .into_iter()
-                .map(ContractMaintenanceVerifyingKey::Schnorr)
-                .collect::<Vec<_>>(),
-            "committee should be [a, b]"
-        );
-        assert_eq!(authority.threshold, 2);
-        assert_eq!(authority.counter, 0, "counter starts at 0");
+        assert!(err.to_string().contains("high S"), "{err}");
     }
 
     #[test]

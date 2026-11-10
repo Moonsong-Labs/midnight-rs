@@ -11,7 +11,7 @@ A contract's maintenance authority is a k-of-n committee of verifying keys
 allowed to change its verifier keys or replace itself. This SDK holds no signing
 key: you set the committee (public keys) at deploy and sign each update
 externally, so a real k-of-n committee works without the SDK ever seeing a
-member's secret. Here the committee is **2-of-3**, with each key modeled as
+member's secret. Here the committee is **2-of-3** ECDSA keys (the kind a KMS or an HSM can hold), with each key modeled as
 living on a separate machine — every update is signed off-process and only the
 signatures are collected for submission. Each update is signed by a different
 pair of members to show that any two of the three satisfy the quorum.

@@ -27,7 +27,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use midnight_contract::{
-    ContractError, FsZkConfigProvider, KeyMismatch, ZkConfigError, ZkConfigProvider,
+    ContractError, ContractMaintenanceSigningKey, ContractMaintenanceVerifyingKey,
+    FsZkConfigProvider, KeyMismatch, ZkConfigError, ZkConfigProvider,
 };
 use midnight_helpers::{
     CostModel, DefaultDB, ProofProvider, ProvenTransaction, Resolver, StdRng, Transaction,
@@ -138,11 +139,13 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
     let wallet = common::synced_wallet(&provider, &indexer_url, common::DEV_WALLET_SEED).await;
     let provider = provider.with_wallet(wallet);
 
-    let authority = midnight_contract::SigningKey::sample(rand::thread_rng());
+    let key = midnight_contract::schnorr::SigningKey::sample(rand::thread_rng());
+    let member = ContractMaintenanceVerifyingKey::Schnorr(key.verifying_key());
+    let authority = ContractMaintenanceSigningKey::Schnorr(key);
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(counter::ZK_CONFIG_DIR)
-        .with_maintenance_authority(vec![authority.verifying_key()], 1)
+        .with_maintenance_authority(vec![member.clone()], 1)
         .send()
         .await
         .expect("submit deploy")
@@ -238,7 +241,7 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         "a maintenance update",
         contract
             .maintenance()
-            .replace_authority(vec![authority.verifying_key()], 1)
+            .replace_authority(vec![member], 1)
             .prepare()
             .await
             .expect("prepare maintenance")

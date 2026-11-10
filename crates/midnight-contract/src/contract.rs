@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use midnight_base_crypto::signatures::VerifyingKey;
 use midnight_provider::MidnightProvider;
-use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_typed_state::{ContractMaintenanceVerifyingKey, ContractState, InMemoryDB};
 use midnight_types::build::MaybeWallet;
 use midnight_types::{BlockHash, ExtrinsicHash, MidnightWallet, TxEnvelope};
 
@@ -529,7 +528,7 @@ pub struct DeployBuilder<'a, P> {
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
     deploy_timeout: Duration,
     shielded_offer: Option<crate::ShieldedOffer>,
-    maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
+    maintenance_authority: Option<(Vec<ContractMaintenanceVerifyingKey>, u32)>,
     declared_circuits: Option<Vec<String>>,
     declares_witnesses: bool,
 }
@@ -678,15 +677,16 @@ impl<'a, P> DeployBuilder<'a, P> {
     ///
     /// The SDK stores no signing key: each committee member keeps their own and
     /// signs maintenance operations externally (see
-    /// [`Contract::maintenance`]). For a single-owner contract, pass
-    /// `vec![key.verifying_key()]` and `1`.
+    /// [`Contract::maintenance`]). For a single-owner contract with a Schnorr
+    /// key, pass `vec![ContractMaintenanceVerifyingKey::Schnorr(key.verifying_key())]`
+    /// and `1`. A committee can mix Schnorr and ECDSA members.
     ///
     /// Without this the contract deploys with an empty committee and can never
     /// accept a maintenance update (verifier-key rotation, authority
     /// replacement).
     pub fn with_maintenance_authority(
         mut self,
-        committee: Vec<VerifyingKey>,
+        committee: Vec<ContractMaintenanceVerifyingKey>,
         threshold: u32,
     ) -> Self {
         self.maintenance_authority = Some((committee, threshold));
@@ -1179,7 +1179,7 @@ impl<P> Contract<P> {
     /// ```rust,no_run
     /// # async fn find_index(
     /// #     contract: &midnight_contract::Contract<midnight_provider::MidnightProvider<midnight_wallet::Wallet>>,
-    /// #     my_key: &midnight_contract::SigningKey,
+    /// #     my_key: &midnight_contract::schnorr::SigningKey,
     /// # ) -> Result<(), midnight_contract::ContractError> {
     /// use midnight_contract::ContractMaintenanceVerifyingKey;
     ///
