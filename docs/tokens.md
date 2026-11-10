@@ -65,8 +65,7 @@ A shielded coin can only exist if one of the following created it:
 - **Contract `shielded_mints` effect** (Compact: `sendShielded`). Off-chain,
   the wallet matches the effect with a coin commitment in a `ZswapOffer`
   output. See [`intents-and-zswap-mechanics.md`](intents-and-zswap-mechanics.md).
-- **Receiving a shielded transfer** (someone else sent you coins via
-  `transfer_shielded` against your shielded address).
+- **Receiving a shielded transfer** (someone else sent you coins with `TransactionRequest::shielded` to your shielded address).
 
 There is no SDK-level operation to convert unshielded NIGHT into a shielded
 representation. Anyone wanting to do so today must deploy or use a contract
@@ -113,11 +112,7 @@ for coin in &balance.shielded.coins {
 
 ## Where the SDK is NIGHT-aware
 
-Only `MidnightProvider::register_dust` (and the helpers it composes) is
-intrinsically NIGHT-specific — dust generation only flows from NIGHT holdings,
-so registration filters unshielded UTXOs by the NIGHT token type. Every other
-transfer path (`transfer_shielded`, `transfer_unshielded`) is generic over
-its token type.
+Only `TransactionRequest::register_dust` (and the helpers it composes) is intrinsically NIGHT-specific. Dust generation only flows from NIGHT holdings, so registration filters unshielded UTXOs by the NIGHT token type. Every other transfer path (`TransactionRequest::shielded`, `TransactionRequest::unshielded`) is generic over its token type.
 
 ## See also
 

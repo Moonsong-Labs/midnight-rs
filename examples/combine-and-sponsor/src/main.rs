@@ -2,25 +2,25 @@
 //!
 //! B wants to do two things atomically, a shielded transfer and a contract
 //! call, but holds **no Dust**, so it can't pay fees. A (funded at genesis)
-//! sponsors: it combines B's two proven-but-Dustless transactions into one and
+//! sponsors: it combines B's two proven, fee-less transactions into one and
 //! pays all the fees. B never needs Dust of its own.
 //!
 //! Roles:
 //! - A (seed 1, genesis-funded with NIGHT + Dust): deploys the counter, and is
 //!   the fee payer. It seeds B with a shielded coin to spend.
-//! - B (seed 2, no Dust): builds a Dustless contract call and a Dustless
+//! - B (seed 2, no Dust): fills a fee-less contract call and a fee-less
 //!   shielded transfer, and hands both to A.
 //!
 //! The pieces this demonstrates:
-//! - `.without_dust()` on **both** a contract call and a transfer (the
-//!   `DustlessBuilder` trait) — Dust is the general fee token, so it is not
-//!   transaction-specific. Each yields a `DustlessTransaction`.
-//! - `provider.merge_transactions(&[..])` (↔ midnight-js `Transaction.merge`) —
+//! - A fee-less contract call (`.without_fee()` on the call builder) and a
+//!   fee-less transfer (`TransactionRequest::without_fee`). Each gives a
+//!   `TxEnvelope` whose bytes (`into_bytes`) go to the payer.
+//! - `merge_transactions(&[..])` (↔ midnight-js `Transaction.merge`):
 //!   combine proven transactions into one that lands atomically.
-//! - `provider.balance_transaction(bytes)` (↔ midnight-js
+//! - `TransactionRequest::sponsor(bytes)` (↔ midnight-js
 //!   `walletProvider.balanceTx`): pay another party's Dust fees.
-//!   `provider.submit_reserved(result)` submits it, and hands the fee Dust
-//!   back when the node never gets the transaction or rejects it.
+//!   `send_transaction` sends the result, and hands the fee Dust back when
+//!   the node never gets the transaction or rejects it.
 //!
 //! Nobody but the genesis-funded A needs Dust, so this runs on a fresh devnet
 //! (a freshly funded wallet accrues Dust only over ~a week, so B could not
@@ -36,7 +36,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use midnight_core::provider::DustlessBuilder;
+use midnight_core::provider::{TransactionRequest, merge_transactions};
 use midnight_core::{MidnightProvider, Seed, Wallet};
 
 mod counter {
@@ -50,7 +50,7 @@ fn env_or(name: &str, default: &str) -> String {
 
 /// Genesis-funded dev wallet (NIGHT + Dust + shielded test tokens).
 const SEED_A: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-/// Second wallet, holds no Dust — it only ever builds Dustless transactions.
+/// Second wallet. It holds no Dust, so it fills only fee-less transactions.
 const SEED_B: &str = "0000000000000000000000000000000000000000000000000000000000000002";
 
 /// Shielded units A seeds B with, so B has a coin to transfer.
@@ -116,10 +116,13 @@ async fn main() -> anyhow::Result<()> {
     // grow, not for any coin of the token.
     let b_before = wallet_b.balance().await.shielded_value(coin.token_type);
     provider_a
-        .transfer_shielded(coin.token_type, SHIELDED_TO_B, recipient_b)
-        .send()
+        .send_transaction(TransactionRequest::shielded(
+            coin.token_type,
+            SHIELDED_TO_B,
+            recipient_b,
+        ))
         .await?
-        .wait_finalized()
+        .get_receipt()
         .await?;
     let sync_b = wallet_b.sync_in_background(provider_b.clone(), SYNC_PAUSE);
     tokio::time::timeout(
@@ -135,39 +138,41 @@ async fn main() -> anyhow::Result<()> {
     .context("B did not see the coin from A")??;
     println!("   B holds a coin (and no Dust).\n");
 
-    // --- B builds its two Dustless transactions (it pays nothing) ---
-    println!("3. B builds a Dustless contract call (increment)...");
+    // --- B fills its two fee-less transactions (it pays nothing) ---
+    println!("3. B fills a fee-less contract call (increment)...");
     let contract_b = counter::Contract::at(&provider_b, address.as_str())
         .with_zk_config(counter::ZK_CONFIG_DIR)
         .build();
-    let call_tx = contract_b.circuits().increment().without_dust().await?;
-    println!(
-        "   proven, Dustless call: {} bytes",
-        call_tx.as_bytes().len()
-    );
+    // B's inputs stay reserved until a sync sees them spent or their TTL ends.
+    let call_tx = contract_b
+        .circuits()
+        .increment()
+        .without_fee()
+        .await?
+        .into_bytes();
+    println!("   proven, fee-less call: {} bytes", call_tx.len());
 
-    println!("   B builds a Dustless shielded transfer to A...");
+    println!("   B fills a fee-less shielded transfer to A...");
     let transfer_tx = provider_b
-        .transfer_shielded(coin.token_type, 1, recipient_a)
-        .without_dust()
-        .await?;
+        .fill(TransactionRequest::shielded(coin.token_type, 1, recipient_a).without_fee())
+        .await?
+        .into_bytes();
     println!(
-        "   proven, Dustless transfer: {} bytes\n",
-        transfer_tx.as_bytes().len()
+        "   proven, fee-less transfer: {} bytes\n",
+        transfer_tx.len()
     );
 
     // --- A combines B's transactions and pays all the fees ---
     println!("4. A merges B's two transactions and sponsors the fees...");
-    let merged =
-        provider_a.merge_transactions(&[call_tx.into_bytes(), transfer_tx.into_bytes()])?;
-    let sponsored = provider_a.balance_transaction(&merged).await?;
-    let pending = provider_a.submit_reserved(sponsored).await?;
-    println!("   ext hash:  {}", pending.extrinsic_hash_hex());
-    let (_best, pending) = pending.wait_best().await?;
-    let (finalized, _) = pending.wait_finalized().await?;
-    println!("   finalized in {}\n", hex::encode(finalized.block_hash));
+    let merged = merge_transactions(&[call_tx, transfer_tx])?;
+    let pending = provider_a
+        .send_transaction(TransactionRequest::sponsor(merged))
+        .await?;
+    println!("   ext hash:  {:x}", pending.extrinsic_hash());
+    let receipt = pending.get_receipt().await?;
+    println!("   finalized in {}\n", hex::encode(receipt.block_hash));
 
-    // The whole point of the flow: B's Dustless increment, carried by A's
+    // The whole point of the flow: B's fee-less increment, carried by A's
     // sponsored transaction, must have applied exactly once.
     let round = contract.ledger().await?.round()?;
     if round != initial_round + 1 {

@@ -119,8 +119,8 @@ pub(crate) fn is_transient(err: &anyhow::Error) -> bool {
 }
 
 // The deadline, the retry count and the backoff are those of midnight-js.
-/// The default deadline of one `/check` or `/prove` request, retries included.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+/// The deadline of one `/check` or `/prove` request, retries included.
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 /// The most retries of one request.
 const MAX_RETRIES: u32 = 3;
 /// The delay before the first retry. Each retry doubles it.
@@ -128,50 +128,17 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 
 /// Proof backend that delegates proving to a remote HTTP proof server.
 ///
-/// Construct one with [`RemoteProofServer::new`] and hand it to
-/// [`MidnightProvider::with_proof_provider`](crate::MidnightProvider::with_proof_provider):
-///
-/// ```rust,no_run
-/// # fn f() -> anyhow::Result<()> {
-/// # const NODE_URL: &str = "ws://localhost:9944";
-/// use std::sync::Arc;
-/// use midnight_provider::{MidnightProvider, RemoteProofServer};
-///
-/// let prover = Arc::new(RemoteProofServer::new("http://localhost:6300".to_string()));
-/// let provider = MidnightProvider::new(NODE_URL).with_proof_provider(prover);
-/// # Ok(())
-/// # }
-/// ```
-///
-/// A failed proof unwinds `prove` with a `String` message. A build through
-/// `with_proof_provider` returns that message as
-/// [`WalletError::Proving`](midnight_types::WalletError::Proving). A caller
-/// of `prove` outside a build must catch the unwind (for example with
-/// `FutureExt::catch_unwind`) to get the message.
+/// A failed proof unwinds `prove` with a `String` message, which a fill
+/// returns as [`WalletError::Proving`](midnight_types::WalletError::Proving).
 #[derive(Debug)]
-pub struct RemoteProofServer {
+pub(crate) struct RemoteProofServer {
+    /// The base URL of the server. Each request appends `/check` or `/prove`.
     pub(crate) url: String,
-    pub(crate) timeout: Duration,
 }
 
 impl RemoteProofServer {
-    /// Create a client for the proof server reachable at `url` (its base URL,
-    /// e.g. `http://localhost:6300`; the `/check` and `/prove` paths are
-    /// appended per request).
-    pub fn new(url: String) -> Self {
-        Self {
-            url,
-            timeout: DEFAULT_TIMEOUT,
-        }
-    }
-
-    /// Set the deadline of each `/check` or `/prove` request (default: 300 s).
-    ///
-    /// The deadline covers the retries of the request. When a request does not
-    /// succeed before its deadline, the proof fails.
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
+    pub(crate) fn new(url: String) -> Self {
+        Self { url }
     }
 }
 

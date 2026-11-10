@@ -33,10 +33,13 @@ pub struct ProvenTx {
 /// A signed transaction, ready to send.
 ///
 /// A drop before the send hands the inputs that its wallet reserved back to
-/// the wallet.
+/// the wallet. A transaction that pays no fee, from a request made
+/// `without_fee` or a swap half, is for another party: a send refuses it, and
+/// [`Self::into_bytes`] gives its bytes.
 pub struct TxEnvelope {
     pub(crate) bytes: Vec<u8>,
     pub(crate) reservation: Reservation,
+    pub(crate) pays_fee: bool,
 }
 
 impl TxEnvelope {
@@ -47,9 +50,8 @@ impl TxEnvelope {
     /// can still land. The reservation ends when a sync sees the chain spend
     /// them, or when their TTL passes.
     pub fn into_bytes(self) -> Vec<u8> {
-        let TxEnvelope { bytes, reservation } = self;
-        drop(reservation.keep_on_drop());
-        bytes
+        drop(self.reservation.keep_on_drop());
+        self.bytes
     }
 }
 
@@ -87,6 +89,7 @@ impl std::fmt::Debug for TxEnvelope {
         f.debug_struct("TxEnvelope")
             .field("bytes", &format_args!("{} bytes", self.bytes.len()))
             .field("reservation", &self.reservation)
+            .field("pays_fee", &self.pays_fee)
             .finish()
     }
 }

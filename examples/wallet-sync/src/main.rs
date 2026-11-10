@@ -5,7 +5,7 @@
 use std::env;
 
 use anyhow::Context;
-use midnight_core::provider::SPECKS_PER_DUST;
+use midnight_core::provider::{SPECKS_PER_DUST, TransactionRequest};
 use midnight_core::wallet::NIGHT;
 use midnight_core::{MidnightProvider, Network, Seed, SyncProgress, Wallet};
 use tracing_subscriber::EnvFilter;
@@ -119,10 +119,12 @@ async fn main() -> anyhow::Result<()> {
     if env::var("REGISTER_DUST").is_ok() {
         println!("\n--- Dust Registration ---");
         println!("Building + submitting dust registration transaction...");
-        let pending = provider.register_dust(None).send().await?;
-        println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
-        pending.wait_best().await?;
-        println!("Included in best block.");
+        let pending = provider
+            .send_transaction(TransactionRequest::register_dust())
+            .await?;
+        println!("Submitted! Tx hash: {:x}", pending.extrinsic_hash());
+        pending.get_receipt().await?;
+        println!("Finalized and applied.");
     }
 
     if let Ok(amount_str) = env::var("TRANSFER_AMOUNT") {
@@ -137,12 +139,15 @@ async fn main() -> anyhow::Result<()> {
         println!("Recipient: {}", seed.unshielded_address(&network));
         println!("Building + submitting unshielded transfer (fees paid with real dust UTXOs)...");
         let pending = provider
-            .transfer_unshielded(NIGHT, amount, seed.unshielded_recipient())
-            .send()
+            .send_transaction(TransactionRequest::unshielded(
+                NIGHT,
+                amount,
+                seed.unshielded_recipient(),
+            ))
             .await?;
-        println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
-        pending.wait_best().await?;
-        println!("Included in best block.");
+        println!("Submitted! Tx hash: {:x}", pending.extrinsic_hash());
+        pending.get_receipt().await?;
+        println!("Finalized and applied.");
     }
 
     println!("\n=== Done ===");

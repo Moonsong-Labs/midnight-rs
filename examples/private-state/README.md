@@ -49,7 +49,7 @@ Run the example:
 make run-private-state   # from the repo root
 ```
 
-Each call uses `.send()`, which returns a `PendingCall`. The example prints the transaction hash from it before the chain's verdict. Its `wait_finalized` then confirms the private-state snapshot, and the first call checks that snapshot in the journal.
+Each call uses `.send()`, which returns a `PendingCall`. The example prints the transaction hash from it before the chain's verdict. Its `get_receipt` then confirms the private-state snapshot, and the first call checks that snapshot in the journal.
 
 Output:
 

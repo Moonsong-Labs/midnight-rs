@@ -73,7 +73,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         .send()
         .await
         .expect("submit mint")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("mint call");
     eprintln!("mint call submitted");

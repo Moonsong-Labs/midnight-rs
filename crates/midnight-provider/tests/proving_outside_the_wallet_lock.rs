@@ -34,9 +34,10 @@ use midnight_helpers::{
     UnprovenTransaction,
 };
 use midnight_provider::{
-    MidnightProvider, NIGHT, ProviderError, ShieldedTokenType, UnshieldedRecipient,
+    MidnightProvider, NIGHT, Prover, ProviderError, ShieldedTokenType, TransactionRequest,
+    UnshieldedRecipient,
 };
-use midnight_types::build::{self, Fill, TransferKind, TransferRequest};
+use midnight_types::build;
 use midnight_wallet::{FundedTx, MidnightWallet, Wallet, WalletError};
 use tokio::sync::Notify;
 
@@ -52,20 +53,19 @@ async fn fund_night_self_transfer(
     source: Arc<MidnightProvider>,
     recipient: UnshieldedRecipient,
 ) -> Result<FundedTx, WalletError> {
-    let request = TransferRequest::new(TransferKind::Unshielded {
-        token_type: NIGHT,
-        amount: 1,
-        recipient,
-        pay_fees: true,
-    });
     let prover: Arc<dyn ProofProvider<DefaultDB>> = Arc::new(LocalProofServer::default());
-    let context = source.chain_context().await.expect("the chain context");
-    let fill = Fill::Transfer {
-        request,
-        context,
+    let context = source
+        .transaction_info()
+        .await
+        .expect("the chain context")
+        .context;
+    let filled = build::fill(
+        TransactionRequest::unshielded(NIGHT, 1, recipient),
+        std::future::ready(Ok::<_, WalletError>(context)),
         prover,
-    };
-    wallet.fund_transaction(&*source, build::filled(fill)).await
+    )
+    .await?;
+    wallet.fund_transaction(&*source, filled).await
 }
 
 /// The number of the wallet's tNIGHT UTXOs that a reservation holds.
@@ -127,7 +127,7 @@ async fn the_wallet_is_readable_while_a_build_proves() {
         return;
     };
     let prover = Arc::new(ParkedProver::default());
-    let provider = MidnightProvider::new(&node).with_proof_provider(prover.clone());
+    let provider = MidnightProvider::new(&node).with_prover(Prover::custom(prover.clone()));
     let wallet = common::synced_wallet(&provider, &indexer, common::DEV_WALLET_SEED).await;
     let recipient = wallet.shielded_recipient();
     let provider = Arc::new(provider.with_wallet(wallet));
@@ -136,8 +136,7 @@ async fn the_wallet_is_readable_while_a_build_proves() {
         let provider = provider.clone();
         tokio::spawn(async move {
             provider
-                .transfer_shielded(night(), 1, recipient)
-                .build()
+                .fill(TransactionRequest::shielded(night(), 1, recipient))
                 .await
         })
     };
@@ -296,11 +295,10 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
         return common::skip("a spendable shielded coin");
     }
 
-    let broken = provider.with_proof_provider(Arc::new(BrokenProver));
+    let broken = provider.with_prover(Prover::custom(Arc::new(BrokenProver)));
 
     let outcome = broken
-        .transfer_shielded(night(), 1, recipient)
-        .build()
+        .fill(TransactionRequest::shielded(night(), 1, recipient))
         .await;
 
     // Match the proving failure specifically. Any earlier error (coin

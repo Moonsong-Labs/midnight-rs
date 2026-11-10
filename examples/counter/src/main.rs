@@ -39,17 +39,15 @@ async fn main() -> anyhow::Result<()> {
     let provider = provider.with_wallet(&wallet);
     println!("   synced.\n");
 
-    // 1. Deploy the contract; observe Best then Finalized inclusion.
+    // 1. Deploy the contract, and wait for its receipt.
     println!("1. Deploying counter contract...");
     let pending = counter::Contract::deploy(&provider)
         .with_zk_config(counter::ZK_CONFIG_DIR)
         .send()
         .await?;
-    println!("   ext hash:  {}", pending.extrinsic_hash_hex());
-    let (best, pending) = pending.wait_best().await?;
-    println!("   best:      {}", hex::encode(best.block_hash));
-    let (finalized, pending) = pending.wait_finalized().await?;
-    println!("   finalized: {}", hex::encode(finalized.block_hash));
+    println!("   ext hash:  {:x}", pending.extrinsic_hash());
+    let (receipt, pending) = pending.get_receipt().await?;
+    println!("   finalized: {}", hex::encode(receipt.block_hash));
     let contract = pending.into_contract().await?;
     let contract_address = contract.address().to_string();
     println!("   address:   {contract_address}");
@@ -64,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
         .increment()
         .send()
         .await?
-        .wait_finalized()
+        .get_receipt()
         .await?;
     println!("   returned = {}", call.value);
     println!("   tx = {}", hex::encode(call.extrinsic_hash));
@@ -77,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
         .increment_by(5)
         .send()
         .await?
-        .wait_finalized()
+        .get_receipt()
         .await?
         .value;
     println!("   returned = {returned}");
@@ -95,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
         .increment()
         .send()
         .await?
-        .wait_finalized()
+        .get_receipt()
         .await?
         .value;
     println!("   returned = {returned}");

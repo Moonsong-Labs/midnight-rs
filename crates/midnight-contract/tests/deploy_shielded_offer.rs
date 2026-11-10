@@ -15,7 +15,7 @@ use compact_bindgen::{AlignedValue, StateValue};
 use midnight_contract::{ShieldedOffer, ShieldedPayment, ShieldedTokenType};
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_helpers::{DefaultDB, FinalizedTransaction, Transaction};
-use midnight_provider::MidnightProvider;
+use midnight_provider::{MidnightProvider, TransactionRequest};
 
 /// The offer's coin and payment must reach the guaranteed Zswap offer of the
 /// proven transaction, with a change output when the coin holds more than the
@@ -107,16 +107,17 @@ async fn deploy_funded_with_shielded_offer() {
         "the guaranteed offer must carry the payment, and the change when the coin holds more"
     );
 
-    let (in_block, _) = provider
-        .submit(&bytes)
+    // The deploy pays its own fee, so a sponsor of its bytes adds nothing.
+    let receipt = provider
+        .send_transaction(TransactionRequest::sponsor(bytes.clone()))
         .await
         .expect("submit the deploy")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the chain must apply a deploy that carries a shielded offer");
     eprintln!(
         "deploy_funded with shielded offer: addr={address} bytes={} block={}",
         bytes.len(),
-        hex::encode(in_block.block_hash),
+        hex::encode(receipt.block_hash),
     );
 }

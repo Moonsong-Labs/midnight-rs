@@ -4,21 +4,18 @@ mod error;
 mod local_prover;
 pub mod node_error;
 mod pipeline;
+mod prover;
 mod provider;
 mod proving;
 mod remote_prover;
 mod submit;
-mod transfer;
 mod types;
 
 pub use error::ProviderError;
+pub use pipeline::merge_transactions;
+pub use prover::Prover;
 pub use provider::{MidnightProvider, NodeHeader};
-pub use remote_prover::RemoteProofServer;
-pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
-pub use transfer::{
-    DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedSwap, ShieldedTransfer,
-    UnshieldedTransfer,
-};
+pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TransactionReceipt, Verdict};
 pub use types::{Health, TransactionHash};
 
 // Re-export the coin, token, key and hash vocabulary, the types that
@@ -27,10 +24,10 @@ pub use types::{Health, TransactionHash};
 // types (`Wallet`, `WalletBuilder`) live in midnight-wallet; this crate never
 // names them.
 pub use midnight_types::{
-    BlockHash, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress, DustPublicKey,
+    BlockHash, CoinInfo, CoinPublicKey, CoinSelection, ContractAddress, DustPublicKey,
     EncryptionPublicKey, ExtrinsicHash, HashOutput, MidnightWallet, NIGHT, Network, Nonce,
-    Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, TxEnvelope,
-    UnshieldedRecipient, UnshieldedTokenType, WalletError,
+    Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType,
+    TransactionRequest, TxEnvelope, UnshieldedRecipient, UnshieldedTokenType, WalletError,
 };
 
 // Re-export the private-state types so callers configure

@@ -7,7 +7,8 @@ pub enum ProviderError {
     Rpc(String),
 
     /// An error surfaced from the wallet (its sync, its funding or its
-    /// signing) or from the proof.
+    /// signing), from the proof, or from a fill that refuses its request,
+    /// such as a sponsor of bytes that do not decode.
     /// Match the inner [`WalletError`], whose `Display` and `source()` this
     /// variant forwards.
     #[error(transparent)]
@@ -27,9 +28,9 @@ pub enum ProviderError {
     #[error(transparent)]
     NotApplied(Box<NotApplied>),
 
-    /// A transaction-manipulation operation failed off-chain (e.g. deserializing
-    /// or merging proven transactions for a multi-party submission via
-    /// `MidnightProvider::merge_transactions`). Nothing was sent to the node.
+    /// A transaction-manipulation operation failed off-chain, such as a
+    /// [`merge_transactions`](crate::merge_transactions), or a send refused a
+    /// transaction that pays no fee. Nothing was sent to the node.
     #[error("transaction: {0}")]
     Transaction(String),
 }

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use midnight_core::provider::TransactionRequest;
 use midnight_core::{MidnightProvider, Network, Seed, Wallet};
 use tracing_subscriber::EnvFilter;
 
@@ -84,14 +85,11 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Building + submitting...");
     let pending = provider
-        .transfer_shielded(coin.token_type, 1, recipient)
-        .send()
+        .send_transaction(TransactionRequest::shielded(coin.token_type, 1, recipient))
         .await?;
-    println!("Submitted: ext hash {}", pending.extrinsic_hash_hex());
-    let (best, pending) = pending.wait_best().await?;
-    println!("Best:      {}", hex::encode(best.block_hash));
-    let (finalized, _) = pending.wait_finalized().await?;
-    println!("Finalized: {}\n", hex::encode(finalized.block_hash));
+    println!("Submitted: ext hash {:x}", pending.extrinsic_hash());
+    let receipt = pending.get_receipt().await?;
+    println!("Finalized: {}\n", hex::encode(receipt.block_hash));
 
     // The self-transfer spends one coin and outputs 1 unit plus the change, so
     // the wallet holds one more coin once a pass sees it.

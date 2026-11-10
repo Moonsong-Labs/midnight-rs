@@ -20,19 +20,19 @@ ContractProviders = {
 }
 ```
 
-**midnight-rs** bundles most of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider: our `MidnightProvider<W>` owns the node WebSocket connection, an optional proof provider, an optional private-state store, and the submission path, and it holds the wallet `W` that it gets. It calls the wallet only through the `MidnightWallet` trait, which funds and signs. The wallet keeps the indexer URL that it synced from.
+**midnight-rs** bundles most of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider: our `MidnightProvider<W>` owns the node WebSocket connection, a `Prover`, an optional private-state store, and the submission path, and it holds the wallet `W` that it gets. It calls the wallet only through the `MidnightWallet` trait, which funds and signs. The wallet keeps the indexer URL that it synced from.
 
 | midnight-js abstraction       | midnight-rs equivalent                                                                              |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
-| `MidnightProvider.submitTx`   | `MidnightProvider::submit`                                                                          |
+| `MidnightProvider.submitTx`   | `MidnightProvider::send_tx_envelope`, or `send_transaction` for a `TransactionRequest`              |
 | `PublicDataProvider`          | The `Provider` trait (`get_contract_state`), `StateQueryProvider` for the lazy reads, and `MidnightProvider`'s `get_*` reads |
-| `WalletProvider`              | The `MidnightWallet` trait, which `Wallet` implements (`fund_transaction` funds, `sign_transaction` signs), plus `merge_transactions` / `balance_transaction` (see "Combining and balancing transactions") |
-| `ProofProvider`               | `midnight_helpers::ProofProvider`, set with `with_proof_provider`: local by default, or a `RemoteProofServer` |
+| `WalletProvider`              | The `MidnightWallet` trait, which `Wallet` implements (`fund_transaction` funds, `sign_transaction` signs), plus `merge_transactions` / `TransactionRequest::sponsor` (see "Combining and balancing transactions") |
+| `ProofProvider`               | `Prover`, set with `with_prover`: `Prover::local()` by default, or `Prover::remote(url)` |
 | `ZkConfigProvider`            | The `ZkConfigProvider` trait, set with `with_zk_config`, where a path gives the default `FsZkConfigProvider` |
 | `PrivateStateProvider`        | `midnight-private-state` crate (`FsPrivateStateProvider`); threaded through witnesses via `WitnessContext` — see below |
 | `LoggerProvider`              | The `tracing` crate facade — implicit, not a provider                                               |
 
-Neither shape is right or wrong. The TS split lets you swap a remote prover, a browser-wallet-based balancer, or an HTTP-fed `ZkConfigProvider` without touching the rest. Our bundled shape is shorter to set up and statically typed end-to-end at the cost of less swappability. The proof backend (`with_proof_provider`) and the zk artifact source (`with_zk_config`) are pluggable.
+Neither shape is right or wrong. The TS split lets you swap a remote prover, a browser-wallet-based balancer, or an HTTP-fed `ZkConfigProvider` without touching the rest. Our bundled shape is shorter to set up and statically typed end-to-end at the cost of less swappability. The proof backend (`with_prover`) and the zk artifact source (`with_zk_config`) are pluggable.
 
 ## Transaction lifecycle
 
@@ -49,30 +49,29 @@ publicDataProvider.watchForTxData(id)  → FinalizedTxData  (waits indefinitely)
 
 Each step is a separate provider, so you can plug in a remote prover, a browser wallet, etc.
 
-### midnight-rs: combined `build` then `submit`
+### midnight-rs: combined `fill` then `send`
 
 ```
-provider.transfer_unshielded(...).build().await
+provider.fill(TransactionRequest::unshielded(...)).await
     │
     └─ internally:
        1. fill: the network, the ledger parameters and the TTL from node queries
        2. MidnightWallet::fund_transaction: resync the wallet against the
           indexer, select inputs from local state, balance Dust fees
           (speculative_spend loop), and reserve them
-       3. prove (with the provider's prover: in process by default, or a
-          RemoteProofServer set with with_proof_provider)
+       3. prove (with the provider's prover: in process by default, or
+          Prover::remote set with with_prover)
        4. MidnightWallet::sign_transaction → TxEnvelope
 
-provider.submit_reserved(envelope).await → PendingTx
-pending.wait_best().await              → TxInBlock + PendingTx
-pending.wait_finalized().await         → TxInBlock
+provider.send_tx_envelope(envelope).await → PendingTx
+pending.get_receipt().await             → TransactionReceipt
 ```
 
 The "balance" step runs inside the wallet's funding because it iterates between balancing and mock-proving until the Dust fee is right. The real proof follows in the provider, with the wallet free. For **your own** transaction there is no standalone `proveTx` you call separately.
 
-What you *can* now do is stop before submission and get the proven bytes back: `.build()` on a transfer, or `contract.circuits().<circuit>().build().await` (equivalently `Contract::build_call_with`) for a contract call, returns a proven `Vec<u8>` without submitting. That is the hook the multi-party flows in the next section build on, and it closes most of the "you can't separate building from submitting" gap this section used to describe.
+What you *can* do is stop before submission and get the signed transaction back: `fill` returns the `TxEnvelope` without a send, and `TxEnvelope::into_bytes` gives its proven bytes. A contract call's `contract.circuits().<circuit>().without_fee().await` (equivalently `Contract::without_fee_call_with`) returns the call with no fee, for a sponsor. That is the hook the multi-party flows in the next section build on.
 
-The one-shot paths (`provider.transfer_*(...).send().await` and `Contract::deploy(...).send().await`) collapse the build, the proof and the submit into one call. The wait is a call on the pending handle that `send` returns.
+The one-shot paths (`provider.send_transaction(request).await` and `Contract::deploy(...).send().await`) collapse the fill, the proof and the submit into one call. The wait is a call on the pending handle that they return.
 
 ## Combining and balancing transactions (multi-party)
 
@@ -82,15 +81,15 @@ Several parties can contribute to one transaction (atomic swaps, or "one wallet 
 
 **midnight-js:** `Transaction.merge(other)` combines two already-proven, each-self-funded transactions into one, unioning their Zswap offers and intents and summing the binding randomness. This is the symmetric case: each party already paid its own fees.
 
-**midnight-rs:** [`MidnightProvider::merge_transactions(&[bytes, ...])`](../crates/midnight-provider/src/provider.rs) does the same, deserializing proven `FinalizedTransaction`s and folding them with the ledger's `Transaction::merge`. Feed it the bytes from `.build()`:
+**midnight-rs:** the free function [`merge_transactions(&[bytes, ...])`](../crates/midnight-provider/src/pipeline.rs) does the same, deserializing proven `FinalizedTransaction`s and folding them with the ledger's `Transaction::merge`. Feed it the bytes of `TxEnvelope::into_bytes`:
 
 ```rust,ignore
-let mine = contract.circuits().withdraw(coin).build().await?;   // proven, not submitted
-let merged = provider.merge_transactions(&[mine, counterparty_bytes])?;
-provider.submit(&merged).await?;
+let mine = contract.circuits().withdraw(coin).without_fee().await?.into_bytes();   // proven, not sent
+let merged = merge_transactions(&[mine, counterparty_bytes])?;
+provider.send_transaction(TransactionRequest::sponsor(merged)).await?;
 ```
 
-**Segment constraint.** `Transaction::merge` rejects two inputs that both carry an intent at the same segment. A self-funded build attaches its Dust-fee intent at the fallible segment (1), and a contract call and an unshielded (UTXO) transfer put their action there too, so you cannot merge two self-funded transactions: they collide at segment 1. A Dustless *shielded* transfer carries no intent (pure Zswap) and merges freely. So the practical multi-party shape is "one party pays": the contributors build fee-less (`.without_dust()`), one party sponsors via `balance_transaction` (next section), and its fee intent rides a distinct segment. The `.build()`-then-`merge` example above works only when at most one side carries a segment-1 intent.
+**Segment constraint.** `Transaction::merge` rejects two inputs that both carry an intent at the same segment. A contract call and an unshielded (UTXO) transfer put their action at the fallible segment (1), so at most one input may carry a segment-1 intent. A fee-less *shielded* transfer carries no intent (pure Zswap) and merges freely. So the practical multi-party shape is "one party pays": the contributors fill fee-less (`without_fee`), one party sponsors with `TransactionRequest::sponsor` (next section), and its fee intent rides a segment that the merge leaves free.
 
 One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only a whole transaction carries the binding randomness the merge needs, and proving discards the per-input randomness a loose offer would require. So the artifacts exchanged are always full transactions, not offers.
 
@@ -100,40 +99,39 @@ One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only
 
 **midnight-rs:** the same work is split across two calls, matching the two roles:
 
-- [`transfer_shielded(token, amount, recipient).without_dust()`](../crates/midnight-provider/src/transfer.rs), the Party-1 side. Any builder with fees turned off: a proven, token-balanced but **Dustless** transaction (no Dust). Dust is the general fee token, so `.without_dust()` is not shielded-specific: it is one method on the `DustlessBuilder` trait that yields a `DustlessTransaction`. It is implemented on the shielded-transfer builder, the unshielded-transfer builder, and generated contract-call builders (`contract.circuits().foo().without_dust()`). A `DustlessTransaction` has no submit path (it is not valid alone); hand its bytes to the payer. A contract call's `.without_dust()` and `.build()` refuse a call whose witnesses change the private state, with `ContractError::UnrecordedPrivateState`, because they record no snapshot. midnight-js returns the next private state from a build-only call (`createUnprovenCallTx` gives `private.nextPrivateState`), and midnight-rs refuses for now.
-- [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet. It returns a `TxEnvelope`: the completed transaction, with the reservation of the Dust it spends. Submit it with `submit_reserved`, which hands the Dust back when the node never gets the transaction or rejects it. It draws Dust for the fee estimate and prices each round with a mock proof, until the Dust covers the (growing) fee. It then proves the fee intent once and merges it in. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
+- [`TransactionRequest::without_fee`](../crates/midnight-types/src/request.rs), the Party-1 side. A request with the fee turned off fills a proven, token-balanced transaction that pays no Dust. Dust is the general fee token, so `without_fee` is not shielded-specific: it applies to a shielded or an unshielded transfer, and a generated contract-call builder has its own `.without_fee()`. The result is a `TxEnvelope` that a send refuses (it is not valid alone); hand its bytes (`into_bytes`) to the payer. A contract call's `.without_fee()` refuses a call whose witnesses change the private state, with `ContractError::UnrecordedPrivateState`, because it records no snapshot. midnight-js returns the next private state from a build-only call (`createUnprovenCallTx` gives `private.nextPrivateState`), and midnight-rs refuses for now.
+- [`TransactionRequest::sponsor(bytes)`](../crates/midnight-types/src/request.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet. `send_transaction` sends the completed transaction, and hands the Dust back when the node never gets it or rejects it. The fill draws Dust for the fee estimate and prices each round with a mock proof, until the Dust covers the (growing) fee. It then proves the fee intent once and merges it in. It is the same balancing loop a transfer runs, but against a finished external transaction and leaving its proofs untouched.
 
 ```rust,ignore
-use midnight_provider::DustlessBuilder; // brings `.without_dust()` into scope
-
-// Party 1 (owns the coin, pays nothing): a Dustless transaction.
-let partial = alice.transfer_shielded(token, 5, alice_recipient).without_dust().await?;
+// Party 1 (owns the coin, pays nothing): a fee-less transaction.
+let partial = alice
+    .fill(TransactionRequest::shielded(token, 5, alice_recipient).without_fee())
+    .await?
+    .into_bytes();
 // Party 2 (pays all the fees):
-let complete = bob.balance_transaction(partial.as_bytes()).await?;
-bob.submit_reserved(complete).await?;
+bob.send_transaction(TransactionRequest::sponsor(partial)).await?;
 ```
 
-**The remaining gap.** midnight-js's `balanceTx` also covers a **token deficit** from the balancing wallet: the balancer can supply its *own* tokens, not just fees, in a *single* unbalanced transaction. Our `balance_transaction` is **fee-only**: a leftover shielded-token deficit is rejected with a clear error. This matters only for the asymmetric shape where one wallet both provides the missing tokens and pays the fees for another's transaction; the native two-party swap (next section) no longer needs it, because the two mirrored halves cancel their tokens on merge and only the Dust fee is left to cover. Supplying the balancer's own coins for the asymmetric case is the tracked follow-up.
+**The remaining gap.** midnight-js's `balanceTx` also covers a **token deficit** from the balancing wallet: the balancer can supply its *own* tokens, not just fees, in a *single* unbalanced transaction. Our `TransactionRequest::sponsor` is **fee-only**: a leftover shielded-token deficit is rejected with a clear error. This matters only for the asymmetric shape where one wallet both provides the missing tokens and pays the fees for another's transaction; the native two-party swap (next section) no longer needs it, because the two mirrored halves cancel their tokens on merge and only the Dust fee is left to cover. Supplying the balancer's own coins for the asymmetric case is the tracked follow-up.
 
 ### Native two-party token swaps
 
 **midnight-js:** the wallet-SDK's `initSwap` builds one side of a cross-token swap: a proven, fee-less transaction that gives one token and takes another, net unbalanced. Two mirrored halves merge into a balanced swap a sponsor funds and submits.
 
-**midnight-rs:** [`MidnightProvider::shielded_swap(give_token, give_amount, receive_token, receive_amount)`](../crates/midnight-provider/src/provider.rs) is the equivalent. Each party builds its half: a fee-less Zswap offer that spends `give_amount` of `give_token` and creates an output for `receive_amount` of `receive_token` payable to itself, with give-side change returned. The half is net unbalanced (`+give_token`, `-receive_token`) and so inherently fee-less, so awaiting it yields a `DustlessTransaction` directly (there is no `pay_fees` flag and no `.without_dust()` step). The two halves are exact mirrors, so merging them cancels both tokens into a balanced, fee-less transaction whose only shortfall is Dust, which `balance_transaction` covers:
+**midnight-rs:** [`TransactionRequest::shielded_swap(give, give_amount, receive, receive_amount)`](../crates/midnight-types/src/request.rs) is the equivalent. Each party fills its half: a fee-less Zswap offer that spends `give_amount` of `give` and creates an output for `receive_amount` of `receive` payable to itself, with give-side change returned. The half is net unbalanced (`+give`, `-receive`) and so inherently fee-less. The two halves are exact mirrors, so merging them cancels both tokens into a balanced, fee-less transaction whose only shortfall is Dust, which `TransactionRequest::sponsor` covers:
 
 ```rust,ignore
 // Party A: give dx of X, receive dy of Y (to A's own wallet).
-let a_half = alice.shielded_swap(token_x, dx, token_y, dy).await?; // DustlessTransaction
+let a_half = alice.fill(TransactionRequest::shielded_swap(token_x, dx, token_y, dy)).await?;
 // Party B: the exact mirror.
-let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
+let b_half = bob.fill(TransactionRequest::shielded_swap(token_y, dy, token_x, dx)).await?;
 
 // A sponsor (either party or a third party) combines and pays the fees:
-let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
-let funded = sponsor.balance_transaction(&merged).await?;
-sponsor.submit_reserved(funded).await?;
+let swap = merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
+sponsor.send_transaction(TransactionRequest::sponsor(swap)).await?;
 ```
 
-Because each half carries only a guaranteed Zswap offer and no intent, two halves merge without the segment-1 collision above, and `balance_transaction`'s fee intent rides its own segment. The two halves must carry exactly mirrored `(token, amount)` pairs or the merge won't balance; the builder can't enforce the counterparty's side. See [`examples/shielded-swap`](../examples/shielded-swap) for the end-to-end flow.
+Because each half carries only a guaranteed Zswap offer and no intent, two halves merge without the segment-1 collision above, and the sponsor's fee intent rides its own segment. The two halves must carry exactly mirrored `(token, amount)` pairs or the merge won't balance; the builder can't enforce the counterparty's side. See [`examples/shielded-swap`](../examples/shielded-swap) for the end-to-end flow.
 
 ### Spending your own coin in a call, and coin discovery
 
@@ -152,22 +150,24 @@ A Midnight transaction has **two phases** that execute in order. midnight-js's g
 
 Practical consequences for SDK callers:
 
-- `pending.wait_best().await` returning successfully means the extrinsic carrying the transaction is in a best block, and the chain applied the transaction there. A transaction that landed but did not apply fails the wait with `ProviderError::NotApplied`. The verdict in a best block is provisional until finality.
-- A contract call can land on-chain and still do nothing useful. `Contract::call_with` reports that as `ContractError::TransactionFailed`, and on the raw `provider.submit` path the wait reports it as `ProviderError::NotApplied`. An `Ok` from either means the call applied.
+- `pending.get_receipt().await` returning successfully means the extrinsic carrying the transaction is in a finalized block, and the chain applied the transaction there. A transaction that landed but did not apply fails the wait with `ProviderError::NotApplied`.
+- A contract call can land on-chain and still do nothing useful. `Contract::call_with` reports that as `ContractError::TransactionFailed`, and on the `send_transaction` path `get_receipt` reports it as `ProviderError::NotApplied`. An `Ok` from either means the call applied.
 - For multi-step intents (e.g. shielded offer + contract call), one segment can succeed while another fails. The chain records this as `PartialSuccess`.
 
-`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. Only `Success` reaches the caller as `Ok`. For `PartialSuccess` and `Failure`, the wait fails with `ProviderError::NotApplied`, so `?` stops on a transaction that did not apply:
+`get_receipt` returns [`TransactionReceipt`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. Only `Success` reaches the caller as `Ok`. For `PartialSuccess` and `Failure`, the wait fails with `ProviderError::NotApplied`, so `?` stops on a transaction that did not apply:
 
 ```rust,ignore
-let pending = provider.transfer_unshielded(NIGHT, 100, recipient).send().await?;
-pending.wait_finalized().await?;
+let pending = provider
+    .send_transaction(TransactionRequest::unshielded(NIGHT, 100, recipient))
+    .await?;
+pending.get_receipt().await?;
 ```
 
-A caller that branches on the outcome matches the result of the wait. The `NotApplied` holds the `TxInBlock`, so its `verdict` tells the two failures apart:
+A caller that branches on the outcome matches the result of the wait. The `NotApplied` holds the `TransactionReceipt`, so its `verdict` tells the two failures apart:
 
 ```rust,ignore
-match pending.wait_finalized().await {
-    Ok((in_block, _)) => { /* applied */ }
+match pending.get_receipt().await {
+    Ok(receipt) => { /* applied */ }
     Err(ProviderError::NotApplied(not_applied)) => match not_applied.0.verdict {
         Verdict::PartialSuccess => { /* guaranteed phase committed, a fallible segment did not */ }
         Verdict::Failure        => { /* the dispatch errored: the extrinsic is on chain, the
@@ -178,15 +178,15 @@ match pending.wait_finalized().await {
 }
 ```
 
-What the events do not carry is which segment failed. Every transaction the SDK builds holds one fallible segment, so `PartialSuccess` is unambiguous there. A merged multi-party transaction (`merge_transactions`, `shielded_swap`) holds several, and the SDK does not report which of them failed.
+What the events do not carry is which segment failed. Every transaction the SDK builds holds one fallible segment, so `PartialSuccess` is unambiguous there. A merged multi-party transaction (`merge_transactions`, two `shielded_swap` halves) holds several, and the SDK does not report which of them failed.
 
-When `wait_best` / `wait_finalized` fail with no verdict, the error is `ProviderError::Submission` carrying a typed [`SubmitError`](../crates/midnight-provider/src/submit.rs) instead of a string to parse. The variants encode the retry semantics: `Invalid` is a definitive node rejection (safe to rebuild and resubmit), `Dropped` and `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means the watch subscription itself broke while the tx's fate stayed unknown.
+When `get_receipt` fails with no verdict, the error is `ProviderError::Submission` carrying a typed [`SubmitError`](../crates/midnight-provider/src/submit.rs) instead of a string to parse. The variants encode the retry semantics: `Invalid` is a definitive node rejection (safe to rebuild and resubmit), `Dropped` and `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means the watch subscription itself broke while the tx's fate stayed unknown.
 
 ## Contract events
 
 A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes the payloads.
 
-midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::wait_finalized` or `Contract::call_with`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
+midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::get_receipt` or `Contract::call_with`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
 
 The differences:
 
@@ -259,7 +259,7 @@ These are real Midnight chain features that midnight-js exposes and this SDK doe
 
 ### Wallet observability
 
-midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams backed by indexer subscriptions, such as `contractStateObservable` and `unshieldedBalancesObservable`. It also has promises that wait for one record, such as `watchForContractState` and `watchForTxData`. midnight-rs has no contract-state or contract-balance stream. `WalletBuilder::sync_with_progress` reports the progress of the sync that builds a wallet as `SyncProgress` events. After that sync, `Wallet::sync_in_background` returns a `BackgroundSync`. Its `wait_until` waits until a condition on the balance holds. Its `last_error` gives the error of the last pass. For a transaction that this SDK submits, `PendingTx::wait_best` / `wait_finalized` take the place of `watchForTxData`.
+midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams backed by indexer subscriptions, such as `contractStateObservable` and `unshieldedBalancesObservable`. It also has promises that wait for one record, such as `watchForContractState` and `watchForTxData`. midnight-rs has no contract-state or contract-balance stream. `WalletBuilder::sync_with_progress` reports the progress of the sync that builds a wallet as `SyncProgress` events. After that sync, `Wallet::sync_in_background` returns a `BackgroundSync`. Its `wait_until` waits until a condition on the balance holds. Its `last_error` gives the error of the last pass. For a transaction that this SDK submits, `PendingTx::get_receipt` takes the place of `watchForTxData`.
 
 ### Cross-contract calls
 

@@ -208,7 +208,7 @@ async fn a_deploy_or_a_call_that_the_node_never_gets_hands_its_inputs_back() {
         .send()
         .await
         .expect("submit deploy")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("deploy finalized");
     let contract = deployed.into_contract().await.expect("deploy");

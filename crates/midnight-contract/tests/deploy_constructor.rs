@@ -87,7 +87,7 @@ async fn a_deploy_runs_the_constructor_and_records_its_private_state() {
         .send()
         .await
         .expect("deploy")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the deploy finalizes");
     let contract = pending
@@ -146,7 +146,7 @@ async fn a_deploy_runs_the_constructor_and_records_its_private_state() {
         .send()
         .await
         .expect("submit bump")
-        .wait_finalized()
+        .get_receipt()
         .await
         .expect("the owner bumps");
     assert_eq!(

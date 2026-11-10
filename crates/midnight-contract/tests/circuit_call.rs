@@ -253,12 +253,12 @@ fn witness_context_threads_private_state() {
 // Build-only calls
 // ---------------------------------------------------------------------------
 
-/// A build-only call of a contract with witnesses needs a private-state store,
+/// A fee-less call of a contract with witnesses needs a private-state store,
 /// as a submitted call does, and it checks for one before it queries the node.
 /// The provider's node URL is a closed port, so a check after the state read
 /// fails with a node error instead. The wallet is never reached.
 #[tokio::test]
-async fn a_build_only_call_with_witnesses_needs_a_store_before_any_node_query() {
+async fn a_fee_less_call_with_witnesses_needs_a_store_before_any_node_query() {
     use midnight_base_crypto::hash::HashOutput;
     use midnight_contract::runtime::NoWitnesses;
     use midnight_contract::{Contract, ContractError, ShieldedInputs};
@@ -276,7 +276,7 @@ async fn a_build_only_call_with_witnesses_needs_a_store_before_any_node_query() 
     let program = interpreter::Program::new(&[], &witnesses, &[]);
 
     let err = contract
-        .build_call_with(
+        .without_fee_call_with(
             &persistent_hash_witness_ir(),
             &program,
             "test",
@@ -284,7 +284,6 @@ async fn a_build_only_call_with_witnesses_needs_a_store_before_any_node_query() 
             &NoWitnesses,
             &[],
             ShieldedInputs::default(),
-            true,
         )
         .await
         .expect_err("a contract with witnesses and no store must not build");

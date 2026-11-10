@@ -1,8 +1,7 @@
-//! [`RemoteProofServer`] as the ledger's `ProofProvider`, and the proof
-//! server client it proves through.
+//! `RemoteProofServer` as the ledger's `ProofProvider`, and the proof server
+//! client it proves through.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use midnight_helpers::midnight_serialize::tagged_deserialize;
@@ -15,7 +14,7 @@ use midnight_helpers::{
 };
 use tracing::info;
 
-use crate::remote_prover::{ProofServerError, RemoteProofServer, post};
+use crate::remote_prover::{ProofServerError, REQUEST_TIMEOUT, RemoteProofServer, post};
 
 #[async_trait]
 impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
@@ -28,7 +27,6 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
     ) -> ProvenTransaction<D> {
         info!(url = %self.url, "remote proving");
         let base_url = self.url.clone();
-        let timeout = self.timeout;
 
         // A ledger 9 proof is not `Send`, so it runs to completion on a thread
         // of its own, as the upstream local prover does. The HTTP client lives
@@ -38,7 +36,6 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
             let client = ProofServerClient {
                 server: ProofServerProvider { base_url, resolver },
                 http: reqwest::Client::new(),
-                timeout,
             };
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -71,7 +68,6 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
 struct ProofServerClient<'a> {
     server: ProofServerProvider<'a>,
     http: reqwest::Client,
-    timeout: Duration,
 }
 
 impl ProofServerClient<'_> {
@@ -89,7 +85,7 @@ impl ProofServerClient<'_> {
             &self.server.base_url,
             "/check",
             ser,
-            self.timeout,
+            REQUEST_TIMEOUT,
         )
         .await?;
         let res: Vec<Option<u64>> = tagged_deserialize(bytes.as_slice())?;
@@ -114,7 +110,7 @@ impl ProofServerClient<'_> {
             &self.server.base_url,
             "/prove",
             ser,
-            self.timeout,
+            REQUEST_TIMEOUT,
         )
         .await?;
         let proof: ProofVersioned = tagged_deserialize(bytes.as_slice())?;

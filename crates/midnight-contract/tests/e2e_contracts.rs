@@ -674,7 +674,7 @@ async fn governance_deploy_then_apply_both_updates() {
 
     // Batch maintenance: `with_zk_config` loaded the `increment` verifier key at
     // deploy, so it is defined. Rotate it, remove + insert in one signed update.
-    let (batch, _) = contract
+    let batch = contract
         .maintenance()
         .remove_verifier_key("increment")
         .insert_verifier_key("increment", vk_bytes)
@@ -685,9 +685,9 @@ async fn governance_deploy_then_apply_both_updates() {
         .send()
         .await
         .expect("submit batch")
-        .wait_best()
+        .get_receipt()
         .await
-        .expect("batch included in best block");
+        .expect("batch applied");
 
     let rotated = midnight_contract::state::fetch_state(contract.provider(), &address, None)
         .await
@@ -717,9 +717,9 @@ async fn governance_deploy_then_apply_both_updates() {
         .send()
         .await
         .expect("submit replace_authority")
-        .wait_best()
+        .get_receipt()
         .await
-        .expect("replace_authority included in best block");
+        .expect("replace_authority applied");
 
     let updated = contract.maintenance_authority().await.unwrap();
     assert_eq!(

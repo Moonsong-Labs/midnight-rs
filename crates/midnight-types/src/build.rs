@@ -5,28 +5,32 @@
 //! These items name the ledger's own types. They are outside the semver
 //! promise of this crate.
 
+use std::future::Future;
 use std::sync::Arc;
 
-use midnight_helpers::midnight_serialize::tagged_serialize;
-use midnight_helpers::{BuildContext, DefaultDB, ProofProvider, StandardTransactionInfo};
+use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+use midnight_helpers::{
+    BuildContext, DefaultDB, FromContext, ProofProvider, StandardTransactionInfo,
+};
 
 pub use crate::builder::{
     BuildInputs, Cover, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external,
     chain_time, execution_context, prepare_no_validate,
 };
+use crate::request::{RequestKind, TransactionRequest};
 use crate::stage::FinalizedTx;
 pub use crate::sync::TrackedUtxo;
-pub use crate::transfer::{
-    ReservedInput, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
+pub use crate::transfer::{ReservedInput, SpentInputs, SpentUtxoKey};
+use crate::{
+    CoinPublicKey, FilledTx, FundedTx, MidnightWallet, Nullifier, ProvenTx, TxEnvelope, WalletError,
 };
-use crate::{CoinPublicKey, FilledTx, FundedTx, MidnightWallet, ProvenTx, TxEnvelope, WalletError};
 
 /// What a fill asks the wallet to fund.
 pub enum Fill {
     /// A transfer, which the wallet selects and assembles on `context` and
-    /// proves with `prover`.
+    /// proves with `prover`. [`fill`] makes it only for a transfer request.
     Transfer {
-        request: TransferRequest,
+        request: TransactionRequest,
         context: Arc<BuildContext>,
         prover: Arc<dyn ProofProvider<DefaultDB>>,
     },
@@ -52,9 +56,121 @@ pub enum Funded {
     Unchanged(Box<FinalizedTx>),
 }
 
-/// Wrap `fill` as the stage that a wallet funds.
-pub fn filled(fill: Fill) -> FilledTx {
-    FilledTx(fill)
+/// What midnight-contract adds to a transaction. Each part carries the
+/// context that it executes on and the prover that proves it.
+pub enum ContractPart {
+    /// A deploy or a maintenance update, which carries no user circuit. The
+    /// wallet pays its fee in its own intents, against mock proofs.
+    Assembled(Box<StandardTransactionInfo<DefaultDB, BuildContext>>),
+    /// A contract call, or a deploy with a shielded offer. The fill proves it
+    /// with no fee. The wallet then covers its shortfalls in a part of its
+    /// own, and spends the coins of `pins` first.
+    Covered {
+        tx_info: Box<StandardTransactionInfo<DefaultDB, BuildContext>>,
+        pins: Vec<Nullifier>,
+    },
+}
+
+impl std::fmt::Debug for ContractPart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Assembled(_) => f.write_str("Assembled"),
+            Self::Covered { pins, .. } => f
+                .debug_struct("Covered")
+                .field("pins", pins)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+/// Fill the transaction that `request` names, for a wallet to fund.
+///
+/// A transfer or a sponsor executes on the context that `chain_context`
+/// gives, and proves with `prover`. A contract part carries its own context
+/// and prover, so its fill awaits neither. A covered contract part is proven
+/// here, with no fee.
+///
+/// # Errors
+///
+/// [`WalletError::Transfer`] for a request that its kind refuses (see
+/// [`TransactionRequest::without_fee`] and [`TransactionRequest::with_ttl`]),
+/// and for sponsored bytes that are no transaction. A sponsor decodes its
+/// bytes before it awaits `chain_context`. [`WalletError::Proving`] when the
+/// proof of a covered contract part fails. The error of `chain_context`.
+pub async fn fill<E: From<WalletError>>(
+    request: TransactionRequest,
+    chain_context: impl Future<Output = Result<Arc<BuildContext>, E>>,
+    prover: Arc<dyn ProofProvider<DefaultDB>>,
+) -> Result<FilledTx, E> {
+    refuse_unsupported(&request)?;
+    let fill = match request.kind {
+        RequestKind::Sponsor(tx) => {
+            let external: FinalizedTx = tagged_deserialize(&mut &tx.0[..])
+                .map_err(|e| WalletError::Transfer(format!("deserialize transaction: {e}")))?;
+            let tx_info =
+                StandardTransactionInfo::new_from_context(chain_context.await?, prover, None);
+            Fill::Sealed {
+                tx_info: Box::new(tx_info),
+                external: Box::new(external),
+                cover: Cover::Fee,
+            }
+        }
+        RequestKind::Contract(ContractPart::Assembled(tx_info)) => Fill::Assembled(tx_info),
+        RequestKind::Contract(ContractPart::Covered { tx_info, pins }) => {
+            let context = tx_info.context.clone();
+            let prover = tx_info.prover.clone();
+            // The fee of a user circuit is priced after its proof:
+            // `mock_prove` refuses a user circuit, and a real proof on each
+            // round of the fee loop would prove the circuit again.
+            let external = prepare_no_validate(*tx_info).await?.prove().await?;
+            Fill::Sealed {
+                tx_info: Box::new(StandardTransactionInfo::new_from_context(
+                    context, prover, None,
+                )),
+                external: Box::new(external),
+                cover: Cover::Shortfalls {
+                    pins,
+                    pay_fees: request.pays_fee,
+                },
+            }
+        }
+        transfer => Fill::Transfer {
+            request: TransactionRequest {
+                kind: transfer,
+                ..request
+            },
+            context: chain_context.await?,
+            prover,
+        },
+    };
+    Ok(FilledTx(fill))
+}
+
+/// Refuse a modifier that the kind of `request` cannot honour.
+fn refuse_unsupported(request: &TransactionRequest) -> Result<(), WalletError> {
+    let refusal = match (&request.kind, request.pays_fee, request.ttl) {
+        (RequestKind::RegisterDust { .. }, false, _) => {
+            "a Dust registration pays its own fee, so it cannot be built without one"
+        }
+        (RequestKind::Sponsor(_), false, _) => {
+            "a sponsor pays the fee, so it cannot be built without one"
+        }
+        (RequestKind::Sponsor(_), _, Some(_)) => {
+            "a sponsor keeps the TTL of the transaction that it pays for"
+        }
+        (RequestKind::Contract(ContractPart::Assembled(_)), false, _) => {
+            "a deploy or a maintenance update pays its own fee"
+        }
+        (RequestKind::Contract(_), _, Some(_)) => "a contract part takes no TTL",
+        _ => return Ok(()),
+    };
+    Err(WalletError::Transfer(refusal.into()))
+}
+
+/// Whether the transaction of `request` pays its own fee. A request made
+/// [`without_fee`](TransactionRequest::without_fee) and a swap half do not.
+pub fn pays_fee(request: &TransactionRequest) -> bool {
+    request.pays_fee
 }
 
 /// What `tx` asks the wallet to fund.
@@ -108,12 +224,32 @@ pub fn envelope(tx: ProvenTx) -> Result<TxEnvelope, WalletError> {
     let mut bytes = Vec::new();
     tagged_serialize(&tx, &mut bytes)
         .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
-    Ok(TxEnvelope { bytes, reservation })
+    Ok(TxEnvelope {
+        bytes,
+        reservation,
+        pays_fee: true,
+    })
 }
 
-/// The tagged bytes of `tx`, and its reservation.
-pub fn into_parts(tx: TxEnvelope) -> (Vec<u8>, Reservation) {
-    (tx.bytes, tx.reservation)
+/// Mark `tx` as a transaction that pays no fee, for another party to pay.
+pub fn fee_less(tx: TxEnvelope) -> TxEnvelope {
+    TxEnvelope {
+        pays_fee: false,
+        ..tx
+    }
+}
+
+/// The tagged bytes of `tx` and its reservation, for a send.
+///
+/// # Errors
+///
+/// `tx` itself when it pays no fee, because the node refuses it. A drop of
+/// `tx` hands its inputs back.
+pub fn into_parts(tx: TxEnvelope) -> Result<(Vec<u8>, Reservation), TxEnvelope> {
+    if !tx.pays_fee {
+        return Err(tx);
+    }
+    Ok((tx.bytes, tx.reservation))
 }
 
 /// Hands the inputs of a reservation back to its wallet.
@@ -148,13 +284,6 @@ impl Reservation {
     /// transaction.
     pub fn keep_on_drop(mut self) -> KeptReservation {
         std::mem::take(&mut self.0)
-    }
-}
-
-/// Nothing reserved, for a transaction that no wallet of this process funded.
-impl Default for Reservation {
-    fn default() -> Self {
-        Self(KeptReservation::default())
     }
 }
 
@@ -283,5 +412,28 @@ mod tests {
         let (reservation, released) = recorded(spending(8));
         reservation.keep_on_drop().release();
         assert_eq!(*released.lock().unwrap(), [Nullifier(HashOutput([8; 32]))]);
+    }
+
+    /// A registration or a sponsor refuses `without_fee`, and a sponsor
+    /// refuses a TTL. A registration or a sponsor that took `without_fee`
+    /// would pay the fee that its request skips, and its envelope would be
+    /// marked fee-less, which a send refuses. A sponsor that took a TTL would
+    /// drop it silently: its fee intent keeps the TTL of the transaction that
+    /// it pays for.
+    #[test]
+    fn a_registration_or_a_sponsor_refuses_to_skip_its_fee() {
+        let refused = |request: TransactionRequest| {
+            matches!(refuse_unsupported(&request), Err(WalletError::Transfer(_)))
+        };
+        assert!(refused(TransactionRequest::register_dust().without_fee()));
+        assert!(refused(
+            TransactionRequest::sponsor(Vec::new()).without_fee()
+        ));
+        assert!(refused(
+            TransactionRequest::sponsor(Vec::new()).with_ttl(std::time::Duration::from_secs(60))
+        ));
+
+        assert!(refuse_unsupported(&TransactionRequest::register_dust()).is_ok());
+        assert!(refuse_unsupported(&TransactionRequest::sponsor(Vec::new())).is_ok());
     }
 }

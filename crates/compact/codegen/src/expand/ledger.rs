@@ -120,7 +120,7 @@ pub(crate) fn emit_ledger_wrapper(
         ///     .into_contract()
         ///     .await?;
         ///
-        /// contract.circuits().increment().send().await?.wait_finalized().await?;
+        /// contract.circuits().increment().send().await?.get_receipt().await?;
         /// let ledger = contract.ledger().await?;
         /// ```
         pub struct Contract<P>(midnight_contract::Contract<P>);
@@ -159,14 +159,10 @@ pub(crate) fn emit_ledger_wrapper(
                 self.0.address()
             }
 
-            /// The hash of the submitted extrinsic.
+            /// The hash of the submitted extrinsic. Format it with `{:x}` for
+            /// its hex digest.
             pub fn extrinsic_hash(&self) -> midnight_contract::ExtrinsicHash {
                 self.0.extrinsic_hash()
-            }
-
-            /// The extrinsic hash formatted as a hex string (no `0x` prefix).
-            pub fn extrinsic_hash_hex(&self) -> String {
-                self.0.extrinsic_hash_hex()
             }
 
             /// The hash of the Midnight transaction the deploy extrinsic
@@ -175,32 +171,22 @@ pub(crate) fn emit_ledger_wrapper(
                 self.0.transaction_hash()
             }
 
-            /// Wait until the deploy transaction lands in the best block, and
-            /// return the inclusion when the chain applied it there.
-            ///
-            /// Consumes `self` and returns it back so callers can chain. Fails
-            /// with `ContractError::TransactionFailed` when the chain did not
-            /// apply the deploy.
-            pub async fn wait_best(
-                self,
-            ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
-                let (in_block, inner) = self.0.wait_best().await?;
-                Ok((in_block, Self(inner)))
-            }
-
             /// Wait until the deploy transaction is in a finalized block, and
-            /// return the inclusion when the chain applied it there.
+            /// return its receipt when the chain applied it there.
             ///
-            /// Consumes `self` and returns it back. May be called without a
-            /// prior `wait_best`; the best-block status is then skipped. Fails
-            /// with `ContractError::TransactionFailed` when the chain did not
-            /// apply the deploy. The wait settles the deploy's private-state
-            /// snapshot.
-            pub async fn wait_finalized(
+            /// Consumes `self` and returns it back, so `into_contract` can
+            /// follow with no wait of its own. Fails with
+            /// `ContractError::TransactionFailed` when the chain did not apply
+            /// the deploy. The wait settles the deploy's private-state
+            /// snapshot. See `midnight_contract::PendingDeploy::get_receipt`.
+            pub async fn get_receipt(
                 self,
-            ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
-                let (in_block, inner) = self.0.wait_finalized().await?;
-                Ok((in_block, Self(inner)))
+            ) -> Result<
+                (midnight_contract::TransactionReceipt, Self),
+                midnight_contract::ContractError,
+            > {
+                let (receipt, inner) = self.0.get_receipt().await?;
+                Ok((receipt, Self(inner)))
             }
         }
 
@@ -211,9 +197,9 @@ pub(crate) fn emit_ledger_wrapper(
             /// Read the deployed contract from the node, at the block that applied the
             /// deploy, and return the typed `Contract<P>`.
             ///
-            /// When no `wait_best` or `wait_finalized` ran, `into_contract`
-            /// first waits for the best block itself, under the same deadline
-            /// as the read. See `midnight_contract::PendingDeploy::into_contract`.
+            /// When no `get_receipt` ran, `into_contract` first waits for the
+            /// best block itself, under the same deadline as the read. See
+            /// `midnight_contract::PendingDeploy::into_contract`.
             pub async fn into_contract(self) -> Result<Contract<P>, midnight_contract::ContractError> {
                 self.0.into_contract().await.map(Contract)
             }
@@ -515,9 +501,9 @@ fn emit_deploy(
             /// (default: 60s).
             ///
             /// The deadline starts when `into_contract` starts, after `send` returns.
-            /// It bounds the best-block wait that `into_contract` does when no wait
-            /// ran before it, and then the read of the deployed contract. The SDK sets
-            /// no deadline on an explicit `wait_best` or `wait_finalized`. See
+            /// It bounds the best-block wait that `into_contract` does when no
+            /// `get_receipt` ran before it, and then the read of the deployed
+            /// contract. The SDK sets no deadline on an explicit `get_receipt`. See
             /// `midnight_contract::PendingTx` to bound one with `tokio::time::timeout`.
             pub fn with_deploy_timeout(self, timeout: std::time::Duration) -> Self {
                 Self { inner: self.inner.with_deploy_timeout(timeout), ..self }
@@ -525,12 +511,13 @@ fn emit_deploy(
 
             /// Submit the deploy transaction and return a `PendingDeploy` handle.
             ///
-            /// Use [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`]
-            /// to observe inclusion states, then [`PendingDeploy::into_contract`]
-            /// to obtain the typed `Contract<P>`. Each wait fails with
+            /// Use [`PendingDeploy::get_receipt`] to wait for finality, then
+            /// [`PendingDeploy::into_contract`] to obtain the typed
+            /// `Contract<P>`. Each wait fails with
             /// `ContractError::TransactionFailed` when the chain did not apply
             /// the deploy. `into_contract` waits for the best block itself when
-            /// no wait ran, and then reads the deployed contract from the node.
+            /// no `get_receipt` ran, and then reads the deployed contract from
+            /// the node.
             /// See `midnight_contract::DeployBuilder::send` for the errors.
             pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
             where
@@ -1146,18 +1133,9 @@ fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
 
 fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) -> TokenStream {
     // Per circuit we emit a constructor on `Circuits` (returns a call builder)
-    // plus a standalone call struct with `build()`, `send()` and `simulate()`.
+    // plus a standalone call struct with `send()`, `without_fee()` and `simulate()`.
     let mut constructors = Vec::new();
     let mut call_items = Vec::new();
-    let send_bounds = quote! {
-        P: midnight_contract::AsMidnightProvider
-            + ::core::marker::Send
-            + ::core::marker::Sync,
-        <P as midnight_contract::AsMidnightProvider>::Wallet: midnight_contract::MidnightWallet,
-        Wp: midnight_contract::runtime::WitnessProvider
-            + ::core::marker::Send
-            + ::core::marker::Sync,
-    };
 
     for circuit in &info.circuits {
         // A pure circuit is evaluated off-chain and has no call path.
@@ -1172,20 +1150,19 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let doc = format!(
             "Start a call to the `{}` circuit.\n\n\
              Returns a call builder. `.send().await` submits the call and returns \
-             a `PendingCall` before the chain's verdict. Its `wait_finalized` waits for \
-             finality and returns the circuit's result. `.build().await` builds and \
-             proves the transaction and returns its bytes *without* a submit, to merge \
-             with other transactions. `.simulate().await` runs the circuit with no \
-             proof, fee or transaction.",
+             a `PendingCall` before the chain's verdict. Its `get_receipt` waits for \
+             finality and returns the circuit's result. `.without_fee().await` fills \
+             the call with no fee, for a sponsor, and sends nothing. \
+             `.simulate().await` runs the circuit with no proof, fee or transaction.",
             circuit.name
         );
         let call_doc = format!(
             "Call builder for the `{}` circuit.\n\n\
              [`send`](Self::send) submits the call and returns a `PendingCall` \
-             before the chain's verdict. [`build`](Self::build) returns the proven \
-             transaction bytes without a submit. [`simulate`](Self::simulate) runs the \
-             circuit and returns its value, the ledger after it and its events, with no \
-             proof, fee or transaction.",
+             before the chain's verdict. [`without_fee`](Self::without_fee) returns \
+             the call with no fee, for a sponsor, without a submit. \
+             [`simulate`](Self::simulate) runs the circuit and returns its value, the \
+             ledger after it and its events, with no proof, fee or transaction.",
             circuit.name
         );
 
@@ -1225,7 +1202,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         call_items.push(quote! {
             #[doc = #call_doc]
-            #[must_use = "does nothing until sent, built or simulated"]
+            #[must_use = "does nothing until sent, filled without a fee, or simulated"]
             pub struct #call_ty<'c, 'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
                 circuits: &'c mut Circuits<'a, P, Wp>
                 #params
@@ -1236,30 +1213,33 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 P: midnight_contract::AsMidnightProvider,
                 Wp: midnight_contract::runtime::WitnessProvider,
             {
-                /// Build and prove the call transaction and return its bytes,
-                /// **without** submitting. Combine it with other transactions via
-                /// `MidnightProvider::merge_transactions`, then submit yourself.
+                /// The call without its fee, for a sponsor. Read the bytes with
+                /// `into_bytes`.
                 ///
-                /// The build records no private-state snapshot. So it fails with
+                /// It fills, funds, proves and signs the call with no Dust fee, and
+                /// sends nothing. A send refuses the result. The payer completes the
+                /// bytes with `TransactionRequest::sponsor`, alone or after a
+                /// `merge_transactions` with other transactions.
+                ///
+                /// The call records no private-state snapshot. So it fails with
                 /// `ContractError::UnrecordedPrivateState` when the witnesses change the
-                /// private state, after the local run and before the build reserves an
+                /// private state, after the local run and before the fill reserves an
                 /// input or makes a proof. Submit such a call with `.send()`.
                 ///
-                /// The build reserves the wallet inputs that the transaction spends. The
-                /// bytes do not name them, so they stay reserved until a sync sees the chain
-                /// spend them, or until their TTL passes.
-                /// See `midnight_contract::Contract::build_call_with`.
-                pub async fn build(
+                /// The fill reserves the wallet inputs that the transaction spends. A
+                /// drop of the result hands them back. Its bytes keep them reserved until
+                /// a sync sees the chain spend them, or until their TTL passes. See
+                /// `midnight_contract::Contract::without_fee_call_with`.
+                pub async fn without_fee(
                     self,
-                ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError>
+                ) -> ::core::result::Result<midnight_contract::TxEnvelope, midnight_contract::ContractError>
                 where
                     <P as midnight_contract::AsMidnightProvider>::Wallet: midnight_contract::MidnightWallet,
                 {
-                    // Boxed for the same reason `without_dust` below is.
+                    // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
                     ::std::boxed::Box::pin(async move {
                         #open
-                        let __bytes = __circuits.contract.build_call_with(#call_args, true).await?;
-                        ::core::result::Result::Ok(__bytes)
+                        __circuits.contract.without_fee_call_with(#call_args).await
                     })
                     .await
                 }
@@ -1268,7 +1248,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// the chain's verdict.
                 ///
                 /// Read the transaction's hashes from the handle. Then call its
-                /// `wait_finalized` to settle the private state and get the `CallOutcome`.
+                /// `get_receipt` to settle the private state and get the `CallOutcome`.
                 /// See `midnight_contract::Contract::send_call_with`.
                 pub async fn send(
                     self,
@@ -1279,7 +1259,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 where
                     <P as midnight_contract::AsMidnightProvider>::Wallet: midnight_contract::MidnightWallet,
                 {
-                    // Boxed for the same reason `without_dust` below is.
+                    // Boxed for the same reason `without_fee` above is.
                     ::std::boxed::Box::pin(async move {
                         #open
                         #decode
@@ -1303,7 +1283,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     midnight_contract::Simulated<#value_ty, #ledger_name>,
                     midnight_contract::ContractError,
                 > {
-                    // Boxed for the same reason `without_dust` below is.
+                    // Boxed for the same reason `without_fee` above is.
                     ::std::boxed::Box::pin(async move {
                         #open
                         #decode
@@ -1316,40 +1296,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         })
                     })
                     .await
-                }
-                // `.without_dust()` comes from the `midnight_contract::DustlessBuilder`
-                // trait impl below (bring the trait into scope to call it).
-            }
-
-            // Build + prove the **Dustless** (fee-less) call, for another wallet
-            // to sponsor via `MidnightProvider::balance_transaction`.
-            impl<'c, 'a, P, Wp> midnight_contract::DustlessBuilder for #call_ty<'c, 'a, P, Wp>
-            where
-                #send_bounds
-            {
-                type Error = midnight_contract::ContractError;
-                // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
-                /// Build and prove the call with no Dust fee, for another wallet to
-                /// sponsor with `MidnightProvider::balance_transaction`.
-                ///
-                /// As with `build`, it fails with `ContractError::UnrecordedPrivateState`
-                /// when the witnesses change the private state, before the build reserves
-                /// an input or makes a proof. Submit such a call with `.send()`.
-                /// As with `build`, the inputs that the build reserves stay reserved until
-                /// a sync sees the chain spend them, or until their TTL passes.
-                fn without_dust(
-                    self,
-                ) -> impl ::core::future::Future<
-                    Output = ::core::result::Result<
-                        midnight_contract::DustlessTransaction,
-                        midnight_contract::ContractError,
-                    >,
-                > + ::core::marker::Send {
-                    ::std::boxed::Box::pin(async move {
-                        #open
-                        let __bytes = __circuits.contract.build_call_with(#call_args, false).await?;
-                        ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_proven_bytes(__bytes))
-                    })
                 }
             }
         });
@@ -1369,7 +1315,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// threads it through the witnesses, and persists it after.
                 ///
                 /// Only a submitted call (`.send()`) records the state.
-                /// A call builder's `build` and `without_dust` refuse a call whose
+                /// A call builder's `without_fee` refuses a call whose
                 /// witnesses change the state, with
                 /// `ContractError::UnrecordedPrivateState`. [`Witnesses`] says when
                 /// the state counts as changed.

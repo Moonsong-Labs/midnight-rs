@@ -3,8 +3,7 @@
 //! Lives on the provider because it is pure transport — rides the
 //! provider's shared node connection, submits the proven tx bytes as an
 //! unsigned `Midnight::send_mn_transaction` extrinsic, and returns a
-//! [`PendingTx`] handle that drives the watch stream to inclusion /
-//! finalization.
+//! [`PendingTx`] handle that drives the watch stream to finality.
 
 use crate::types::TransactionHash;
 
@@ -63,8 +62,9 @@ pub enum SubmitError {
     ///
     /// Treat the fate as unknown. Before you build again from the same inputs,
     /// make sure that the chain does not hold the transaction. You can also
-    /// wait until its TTL passes. A build with `with_ttl` (on the transfer
-    /// builders) makes that wait shorter than `global_ttl`.
+    /// wait until its TTL passes. A request made
+    /// [`with_ttl`](midnight_types::TransactionRequest::with_ttl) makes that
+    /// wait shorter than `global_ttl`.
     #[error("submit RPC: {message}")]
     SubmitRpc { message: String },
 
@@ -87,8 +87,9 @@ pub enum SubmitError {
     /// and can still be included in a later block. Resubmitting a
     /// transaction that spends the same inputs risks a double-spend
     /// conflict — confirm the original is absent from the chain (or let its
-    /// TTL expire) before rebuilding. A build with `with_ttl` (on the
-    /// transfer builders) makes that wait shorter than `global_ttl`.
+    /// TTL expire) before rebuilding. A request made
+    /// [`with_ttl`](midnight_types::TransactionRequest::with_ttl) makes that
+    /// wait shorter than `global_ttl`.
     #[error("dropped: {message}")]
     Dropped { message: String },
 
@@ -100,18 +101,16 @@ pub enum SubmitError {
     NodeError { message: String },
 
     /// The watch subscription failed or ended before the transaction
-    /// reached the awaited status (a transport/stream issue, or the stream
-    /// was already consumed by a previous wait). Says nothing about the
-    /// transaction itself: it stays in the node's pool and may still land.
-    /// Re-query the chain instead of resubmitting.
+    /// reached the awaited status (a transport/stream issue). Says nothing
+    /// about the transaction itself: it stays in the node's pool and may still
+    /// land. Re-query the chain instead of resubmitting.
     #[error("watch stream: {message}")]
     WatchStream { message: String },
 
     /// The transaction landed in a block, but fetching or decoding the
     /// extrinsic's events failed, so the chain's [`Verdict`] could not be
-    /// derived. The transaction is on chain (provisionally, for a
-    /// best-block wait); do **not** resubmit. Re-query the chain for the
-    /// extrinsic's events to learn whether it applied.
+    /// derived. The transaction is on chain; do **not** resubmit. Re-query
+    /// the chain for the extrinsic's events to learn whether it applied.
     #[error("verdict fetch: {message}")]
     VerdictFetch { message: String },
 }
@@ -120,7 +119,7 @@ impl SubmitError {
     /// Map a terminal subxt watch status to the structured error it
     /// surfaces. Returns `None` for non-terminal statuses and for the two
     /// success terminals (`InBestBlock` / `InFinalizedBlock`), which the
-    /// wait loops handle themselves.
+    /// wait loop handles itself.
     fn from_terminal_status<T: subxt::Config, C>(status: &TransactionStatus<T, C>) -> Option<Self> {
         match status {
             TransactionStatus::Invalid { message } => Some(Self::Invalid {
@@ -159,18 +158,18 @@ impl SubmitError {
     }
 }
 
-/// Inclusion details for a transaction that landed in a block, together with
-/// the chain's verdict on whether it actually applied.
+/// Where and how the chain included a transaction: its block, its hashes, and
+/// the chain's verdict on whether it applied.
 ///
-/// `block_hash` and `extrinsic_hash` come from subxt's
-/// `TransactionStatus::InBestBlock` / `InFinalizedBlock`. `verdict` is the
+/// [`PendingTx::get_receipt`] returns it. `block_hash` and `extrinsic_hash`
+/// come from subxt's `TransactionStatus::InFinalizedBlock`. `verdict` is the
 /// SDK's interpretation of the Midnight pallet's outcome events: the
 /// `Midnight` pallet always emits `TxApplied` (all segments applied) or
 /// `TxPartialSuccess` (at least one fallible segment failed) for a
 /// successful dispatch, and falls back to `System::ExtrinsicFailed` when the
 /// dispatch errored entirely. See [`Verdict`].
 #[derive(Debug, Clone, Copy)]
-pub struct TxInBlock {
+pub struct TransactionReceipt {
     pub block_hash: BlockHash,
     pub extrinsic_hash: ExtrinsicHash,
     /// The Midnight transaction the extrinsic carried, the ledger's own
@@ -180,24 +179,23 @@ pub struct TxInBlock {
     pub verdict: Verdict,
 }
 
-/// Return `in_block` when the chain applied the transaction, and
+/// Return `receipt` when the chain applied the transaction, and
 /// [`NotApplied`] when it did not. Only [`Verdict::Success`] counts as applied:
 /// a partial success paid the fee, but a fallible segment did not apply.
-fn applied(in_block: TxInBlock) -> Result<TxInBlock, NotApplied> {
-    match in_block.verdict {
-        Verdict::Success => Ok(in_block),
-        Verdict::PartialSuccess | Verdict::Failure => Err(NotApplied(in_block)),
+fn applied(receipt: TransactionReceipt) -> Result<TransactionReceipt, NotApplied> {
+    match receipt.verdict {
+        Verdict::Success => Ok(receipt),
+        Verdict::PartialSuccess | Verdict::Failure => Err(NotApplied(receipt)),
     }
 }
 
 /// A transaction that landed in a block, but that the chain did not apply.
 ///
-/// [`PendingTx::wait_best`] and [`PendingTx::wait_finalized`] return it, inside
+/// [`PendingTx::get_receipt`] returns it, inside
 /// [`ProviderError::NotApplied`], for a [`Verdict::PartialSuccess`] or a
-/// [`Verdict::Failure`]. The wrapped [`TxInBlock`] names the transaction, the
-/// block and the verdict, so a caller who handles a partial success reads the
-/// verdict here. A `NotApplied` from `wait_best` is provisional: a reorg can
-/// change the verdict before finality.
+/// [`Verdict::Failure`]. The wrapped [`TransactionReceipt`] names the
+/// transaction, the block and the verdict, so a caller who handles a partial
+/// success reads the verdict here.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error(
     "transaction {} landed in block {} but the chain did not apply it ({})",
@@ -205,7 +203,7 @@ fn applied(in_block: TxInBlock) -> Result<TxInBlock, NotApplied> {
     hex::encode(.0.block_hash),
     .0.verdict
 )]
-pub struct NotApplied(pub TxInBlock);
+pub struct NotApplied(pub TransactionReceipt);
 
 /// What actually happened to a Midnight transaction once it landed in a block.
 ///
@@ -247,26 +245,22 @@ impl std::fmt::Display for Verdict {
     }
 }
 
-/// Handle to a submitted transaction whose progress can be awaited.
+/// A sent transaction. [`get_receipt`](Self::get_receipt) waits for its
+/// receipt.
 ///
-/// Returned by [`crate::MidnightProvider::submit`]. Both
-/// [`PendingTx::wait_best`] and [`PendingTx::wait_finalized`] consume
-/// `self` and return the handle back alongside the inclusion details,
-/// so callers re-bind the same name through each step without needing
-/// `let mut`. Either may be called first; `wait_finalized` skips the
-/// best-block status if `wait_best` was not used. Calling either method
-/// twice (or `wait_best` after `wait_finalized`) returns a
-/// [`SubmitError::WatchStream`] error because subxt closes the stream once
-/// the transaction reaches a terminal state.
+/// [`MidnightProvider::send_transaction`],
+/// [`MidnightProvider::send_tx_envelope`] and [`PreparedTx::send`] return it.
+/// Read the hashes before the wait, because the wait consumes the handle.
 ///
-/// Both waits return `Ok` only when the chain applied the transaction, so the
-/// returned [`TxInBlock`] has the verdict [`Verdict::Success`].
+/// [`MidnightProvider::send_transaction`]: crate::MidnightProvider::send_transaction
+/// [`MidnightProvider::send_tx_envelope`]: crate::MidnightProvider::send_tx_envelope
 ///
 /// # Errors
 ///
-/// Both wait methods fail with [`ProviderError::NotApplied`] when the
-/// transaction landed but the chain did not apply it. Its [`NotApplied`] holds
-/// the [`TxInBlock`] with the verdict.
+/// [`get_receipt`](Self::get_receipt) fails with
+/// [`ProviderError::NotApplied`] when the transaction landed but the chain did
+/// not apply it. Its [`NotApplied`] holds the [`TransactionReceipt`] with the
+/// verdict.
 ///
 /// Every other failure is [`ProviderError::Submission`] carrying a
 /// [`SubmitError`]; match its variants instead of parsing error text. The
@@ -285,23 +279,19 @@ impl std::fmt::Display for Verdict {
 ///
 /// # Timeouts and cancellation
 ///
-/// The SDK sets no deadline on either wait method, but subxt can end a wait.
-/// On a node that offers the `chainHead_v1` RPC methods, as the Midnight node
-/// does, subxt has a transaction timeout. The timeout starts at the submit,
-/// and it is 240 s by default. When it passes, subxt ends the watch, and the
-/// wait fails with [`SubmitError::WatchStream`]. subxt checks the timeout only
-/// when a block arrives, so a chain that produces no blocks keeps the wait
-/// open. Callers that need a deadline should wrap the wait in
-/// [`tokio::time::timeout`]:
+/// The SDK sets no deadline on the wait, but subxt can end it. On a node that
+/// offers the `chainHead_v1` RPC methods, as the Midnight node does, subxt has
+/// a transaction timeout. The timeout starts at the submit, and it is 240 s by
+/// default. When it passes, subxt ends the watch, and the wait fails with
+/// [`SubmitError::WatchStream`]. subxt checks the timeout only when a block
+/// arrives, so a chain that produces no blocks keeps the wait open. Callers
+/// that need a deadline should wrap the wait in [`tokio::time::timeout`]:
 ///
 /// ```rust,no_run
 /// # async fn f(pending: midnight_provider::PendingTx) -> anyhow::Result<()> {
 /// use std::time::Duration;
 ///
-/// let (best, pending) = tokio::time::timeout(
-///     Duration::from_secs(60),
-///     pending.wait_best(),
-/// ).await??;
+/// let receipt = tokio::time::timeout(Duration::from_secs(60), pending.get_receipt()).await??;
 /// # Ok(())
 /// # }
 /// ```
@@ -315,6 +305,7 @@ impl std::fmt::Display for Verdict {
 /// to the wallet before it returns (see [`PreparedTx`]). A drop of the handle,
 /// or of the wait before it reads `Invalid`, leaves the inputs reserved until
 /// a sync sees the chain spend them, or until their TTL passes.
+#[must_use = "a sent transaction can still fail; call `get_receipt` for its verdict"]
 pub struct PendingTx {
     progress: subxt::tx::TransactionProgress<subxt::SubstrateConfig, AtBlock>,
     reservation: KeptReservation,
@@ -332,14 +323,10 @@ impl std::fmt::Debug for PendingTx {
 }
 
 impl PendingTx {
-    /// The hash of the submitted extrinsic.
+    /// The hash of the submitted extrinsic. Format it with `{:x}` for its hex
+    /// digest.
     pub fn extrinsic_hash(&self) -> ExtrinsicHash {
         self.progress.extrinsic_hash()
-    }
-
-    /// The extrinsic hash formatted as a hex string (no `0x` prefix).
-    pub fn extrinsic_hash_hex(&self) -> String {
-        format!("{:x}", self.extrinsic_hash())
     }
 
     /// The hash of the Midnight transaction the extrinsic carries.
@@ -352,28 +339,8 @@ impl PendingTx {
         self.transaction_hash
     }
 
-    /// Drive the watch stream until the transaction lands in the best block,
-    /// and return the inclusion when the chain applied it there.
-    ///
-    /// The verdict of this wait is provisional. A reorg can drop the block,
-    /// and the transaction can then land again with another verdict, which
-    /// this wait does not follow. [`Self::wait_finalized`] gives the final
-    /// verdict. An `Err` consumes the handle. When the final verdict matters,
-    /// call [`Self::wait_finalized`] in place of `wait_best`.
-    ///
-    /// # Errors
-    ///
-    /// [`ProviderError::NotApplied`] when the verdict in the best block is not
-    /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
-    /// the [`SubmitError`] kinds of the other failures and what each implies
-    /// about retrying.
-    pub async fn wait_best(self) -> Result<(TxInBlock, Self), ProviderError> {
-        self.wait_for(TransactionStatus::as_in_block, "reaching best block")
-            .await
-    }
-
     /// Drive the watch stream until the transaction is in a finalized block,
-    /// and return the inclusion when the chain applied it there.
+    /// and return its receipt when the chain applied it there.
     ///
     /// Past finality the block can't be reorged out under honest-majority
     /// assumptions, so the verdict of this wait is final.
@@ -384,8 +351,19 @@ impl PendingTx {
     /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
     /// the [`SubmitError`] kinds of the other failures and what each implies
     /// about retrying.
-    pub async fn wait_finalized(self) -> Result<(TxInBlock, Self), ProviderError> {
+    pub async fn get_receipt(self) -> Result<TransactionReceipt, ProviderError> {
         self.wait_for(TransactionStatus::as_finalized, "finalization")
+            .await
+    }
+
+    /// Drive the watch stream until the transaction lands in the best block,
+    /// and return its receipt when the chain applied it there.
+    ///
+    /// The verdict is provisional: a reorg can drop the block, and the
+    /// transaction can land again with another verdict.
+    #[doc(hidden)]
+    pub async fn best_block_receipt(self) -> Result<TransactionReceipt, ProviderError> {
+        self.wait_for(TransactionStatus::as_in_block, "reaching best block")
             .await
     }
 
@@ -393,7 +371,7 @@ impl PendingTx {
         mut self,
         landed: fn(&Status) -> Option<&InBlock>,
         awaiting: &'static str,
-    ) -> Result<(TxInBlock, Self), ProviderError> {
+    ) -> Result<TransactionReceipt, ProviderError> {
         while let Some(status) = self.progress.next().await {
             let status = status.map_err(SubmitError::watch)?;
             if let Some(err) = SubmitError::from_terminal_status(&status) {
@@ -403,8 +381,8 @@ impl PendingTx {
                 return Err(err.into());
             }
             if let Some(in_block) = landed(&status) {
-                let tx = tx_in_block_with_verdict(in_block, self.transaction_hash).await?;
-                return Ok((applied(tx)?, self));
+                let receipt = receipt_with_verdict(in_block, self.transaction_hash).await?;
+                return Ok(applied(receipt)?);
             }
         }
         Err(SubmitError::stream_ended(awaiting).into())
@@ -415,10 +393,10 @@ impl PendingTx {
 /// `Midnight` pallet's `TxApplied` / `TxPartialSuccess` events. Default to
 /// `Failure` when neither is present (the dispatch errored and only
 /// `System::ExtrinsicFailed` was emitted).
-async fn tx_in_block_with_verdict(
+async fn receipt_with_verdict(
     in_block: &InBlock,
     transaction_hash: TransactionHash,
-) -> Result<TxInBlock, ProviderError> {
+) -> Result<TransactionReceipt, ProviderError> {
     let block_hash = in_block.block_hash();
     let extrinsic_hash = in_block.extrinsic_hash();
     let events = in_block
@@ -444,7 +422,7 @@ async fn tx_in_block_with_verdict(
             _ => {}
         }
     }
-    Ok(TxInBlock {
+    Ok(TransactionReceipt {
         block_hash,
         extrinsic_hash,
         transaction_hash,
@@ -452,28 +430,28 @@ async fn tx_in_block_with_verdict(
     })
 }
 
-/// A transaction wrapped in its unsigned extrinsic but **not yet submitted**.
+/// A signed transaction in its unsigned extrinsic, not sent.
+///
+/// [`MidnightProvider::prepare`](crate::MidnightProvider::prepare) makes it.
 /// The extrinsic comes from the node's metadata, which checks only the call's
-/// shape: the node validates the transaction only at
-/// [`submit`](Self::submit). Its [`extrinsic_hash`](Self::extrinsic_hash) is
-/// already known, so a caller can durably record state keyed by that hash
-/// (e.g. a private-state journal entry) *before* the transaction hits the
-/// mempool, then [`submit`](Self::submit) it. This closes the window where
-/// a crash between submit and record would leave a transaction on the wire
-/// with no local handle to reconcile it.
+/// shape: the node validates the transaction only at [`send`](Self::send).
+/// Its [`extrinsic_hash`](Self::extrinsic_hash) is already known, so a caller
+/// can durably record state keyed by that hash (e.g. a private-state journal
+/// entry) *before* the transaction hits the mempool, then
+/// [`send`](Self::send) it. This closes the window where a crash between the
+/// send and the record would leave a transaction on the wire with no local
+/// handle to reconcile it.
 ///
-/// A `PreparedTx` from [`MidnightProvider::prepare_reserved`] holds the
-/// reservation that its wallet made:
+/// It holds the reservation that its wallet made:
 ///
-/// - A drop before [`submit`](Self::submit) hands the inputs back to the
-///   wallet at once.
-/// - A submit moves the reservation to the [`PendingTx`] before the call
-///   starts. The `PendingTx` hands the inputs back when a wait reads
-///   [`SubmitError::Invalid`].
-/// - A submit that fails, or a drop of the submit future, keeps the inputs
+/// - A drop before [`send`](Self::send) hands the inputs back to the wallet
+///   at once.
+/// - A send moves the reservation to the [`PendingTx`] before the call
+///   starts. The `PendingTx` hands the inputs back when
+///   [`PendingTx::get_receipt`] reads [`SubmitError::Invalid`].
+/// - A send that fails, or a drop of the send future, keeps the inputs
 ///   reserved, because the node can hold the transaction.
-///
-/// [`MidnightProvider::prepare_reserved`]: crate::MidnightProvider::prepare_reserved
+#[must_use = "a prepared transaction does nothing until sent; a drop hands its inputs back"]
 pub struct PreparedTx {
     tx: subxt::tx::SubmittableTransaction<subxt::SubstrateConfig, AtBlock>,
     transaction_hash: TransactionHash,
@@ -491,37 +469,31 @@ impl std::fmt::Debug for PreparedTx {
 }
 
 impl PreparedTx {
-    /// Hold `reservation` until the submit.
-    pub(crate) fn holding(mut self, reservation: Reservation) -> Self {
-        self.reservation = reservation;
-        self
-    }
-
-    /// The hash subxt will report for this extrinsic once submitted,
-    /// computed here from the encoded transaction without contacting the
-    /// node. Identical to the eventual [`PendingTx::extrinsic_hash`].
+    /// The hash subxt will report for this extrinsic once sent, computed here
+    /// from the encoded transaction without contacting the node. Identical to
+    /// the eventual [`PendingTx::extrinsic_hash`].
     pub fn extrinsic_hash(&self) -> ExtrinsicHash {
         self.tx.hash()
     }
 
     /// The hash of the Midnight transaction these bytes carry, known before
-    /// submission. See [`PendingTx::transaction_hash`].
+    /// the send. See [`PendingTx::transaction_hash`].
     pub fn transaction_hash(&self) -> TransactionHash {
         self.transaction_hash
     }
 
-    /// Submit the prepared transaction and return a [`PendingTx`] that waits for
-    /// inclusion and finalization.
+    /// Submit the transaction, and return the [`PendingTx`] that waits for
+    /// its receipt.
     ///
-    /// The returned [`PendingTx`] carries the reservation that this value
-    /// holds. See the [type-level docs](PreparedTx).
+    /// The reservation moves to the [`PendingTx`] before the RPC starts. See
+    /// the [type-level docs](PreparedTx).
     ///
     /// # Errors
     ///
     /// [`ProviderError::Submission`] with [`SubmitError::SubmitRpc`] when the
     /// submit call fails. The node can still hold the transaction, so the
     /// inputs stay reserved.
-    pub async fn submit(self) -> Result<PendingTx, ProviderError> {
+    pub async fn send(self) -> Result<PendingTx, ProviderError> {
         let Self {
             tx,
             transaction_hash,
@@ -547,11 +519,13 @@ impl PreparedTx {
 /// Wrap proven transaction bytes in the unsigned `send_mn_transaction`
 /// extrinsic, built locally from the node's metadata, and compute its hashes.
 /// It does not submit, and the node does not see the transaction. The
-/// returned [`PreparedTx`] exposes the hashes and a `submit` step.
+/// returned [`PreparedTx`] holds `reservation` until its send.
 pub(crate) async fn prepare_bytes(
     client: &subxt::OnlineClient<subxt::SubstrateConfig>,
-    tx_bytes: &[u8],
+    tx_bytes: Vec<u8>,
+    reservation: Reservation,
 ) -> Result<PreparedTx, ProviderError> {
+    let transaction_hash = midnight_transaction_hash(&tx_bytes);
     let call = subxt::dynamic::tx(
         "Midnight",
         "send_mn_transaction",
@@ -573,8 +547,8 @@ pub(crate) async fn prepare_bytes(
         })?;
     Ok(PreparedTx {
         tx,
-        transaction_hash: midnight_transaction_hash(tx_bytes),
-        reservation: Reservation::default(),
+        transaction_hash,
+        reservation,
     })
 }
 
@@ -585,15 +559,6 @@ pub(crate) async fn prepare_bytes(
 /// bytes reproduces the value the chain and the indexer report.
 fn midnight_transaction_hash(tx_bytes: &[u8]) -> TransactionHash {
     <[u8; 32]>::from(Sha256::digest(tx_bytes)).into()
-}
-
-/// Submit proven transaction bytes to a Midnight node and return a handle
-/// for awaiting inclusion / finalization.
-pub(crate) async fn submit_bytes(
-    client: &subxt::OnlineClient<subxt::SubstrateConfig>,
-    tx_bytes: &[u8],
-) -> Result<PendingTx, ProviderError> {
-    prepare_bytes(client, tx_bytes).await?.submit().await
 }
 
 #[cfg(test)]
@@ -709,8 +674,8 @@ mod tests {
         }
     }
 
-    fn in_block(verdict: Verdict) -> TxInBlock {
-        TxInBlock {
+    fn receipt(verdict: Verdict) -> TransactionReceipt {
+        TransactionReceipt {
             block_hash: BlockHash::repeat_byte(1),
             extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),
@@ -724,10 +689,10 @@ mod tests {
     /// stores.
     #[test]
     fn only_success_counts_as_applied() {
-        assert!(applied(in_block(Verdict::Success)).is_ok());
+        assert!(applied(receipt(Verdict::Success)).is_ok());
 
         for verdict in [Verdict::PartialSuccess, Verdict::Failure] {
-            let tx = in_block(verdict);
+            let tx = receipt(verdict);
             let err = applied(tx).expect_err("only Success counts as applied");
             let message = err.to_string();
             assert!(

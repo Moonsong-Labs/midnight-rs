@@ -336,15 +336,14 @@ pub(crate) enum OpSpec {
 
 /// An unsigned (or partially-signed) maintenance update. Collect the committee
 /// signatures with [`Self::sign`] / [`Self::add_signature`], then
-/// [`Self::send`] (build + submit → [`PendingTx`]) or [`Self::build`] (proven
-/// bytes only).
+/// [`Self::send`] it, which returns a [`PendingTx`].
 ///
-/// The caller chooses the wait on the [`PendingTx`] (as with transfers). The
-/// wait checks the verdict: [`PendingTx::wait_finalized`] fails with
+/// The caller waits on the [`PendingTx`] (as with a `TransactionRequest`).
+/// The wait checks the verdict: [`PendingTx::get_receipt`] fails with
 /// [`ProviderError::NotApplied`](midnight_provider::ProviderError::NotApplied)
 /// when the update did not apply. (A call and a deploy surface the same
 /// failure as [`ContractError::TransactionFailed`].)
-#[must_use = "does nothing until sent or built"]
+#[must_use = "does nothing until sent"]
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
     update: midnight_helpers::MaintenanceUpdate<midnight_helpers::DefaultDB>,
@@ -392,29 +391,14 @@ impl<'a, P> PreparedMaintenance<'a, P> {
         )
     }
 
-    /// Build, prove, and balance the transaction without submitting it. Errors if
-    /// fewer than the authority threshold of signatures have been attached.
+    /// Fill, fund, prove and sign the transaction, then send it and return the
+    /// [`PendingTx`] to wait on. Errors if fewer than the authority threshold
+    /// of signatures have been attached.
     ///
-    /// The build reserves the Dust that pays the fee, and returns only the
-    /// bytes. So when the bytes never land, nothing can hand that Dust back,
-    /// and it stays reserved until its TTL passes. [`Self::send`] submits with
-    /// the reservation instead.
-    pub async fn build(self) -> Result<Vec<u8>, ContractError>
-    where
-        P: AsMidnightProvider,
-        P::Wallet: MidnightWallet,
-    {
-        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
-        Ok(Box::pin(self.build_inner()).await?.into_bytes())
-    }
-
-    /// Build, prove, and balance the transaction as [`Self::build`] does, then
-    /// submit it and return the [`PendingTx`] to wait on.
-    ///
-    /// The submit goes through
-    /// [`MidnightProvider::submit_reserved`](midnight_provider::MidnightProvider::submit_reserved),
+    /// The send goes through
+    /// [`MidnightProvider::send_tx_envelope`](midnight_provider::MidnightProvider::send_tx_envelope),
     /// so the fee Dust goes back to the wallet when the node never gets the
-    /// update, or when a wait on the [`PendingTx`] reads
+    /// update, or when [`PendingTx::get_receipt`] reads
     /// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid).
     pub async fn send(self) -> Result<PendingTx, ContractError>
     where
@@ -425,7 +409,7 @@ impl<'a, P> PreparedMaintenance<'a, P> {
         // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(async move {
             let transaction = self.build_inner().await?;
-            Ok(provider.submit_reserved(transaction).await?)
+            Ok(provider.send_tx_envelope(transaction).await?)
         })
         .await
     }

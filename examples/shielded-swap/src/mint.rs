@@ -53,7 +53,7 @@ pub async fn mint_token_to<W: MidnightWallet>(
         )
         .send()
         .await?
-        .wait_finalized()
+        .get_receipt()
         .await?;
 
     Ok(parse_contract_address(mint.address())?.custom_shielded_token_type(HashOutput(domain_sep)))

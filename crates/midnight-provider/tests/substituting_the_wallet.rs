@@ -1,5 +1,5 @@
 //! The provider serves a wallet it did not write, and hands back what a
-//! signed transaction reserved when its submit never reaches the node.
+//! signed transaction reserved when its send never reaches the node.
 //!
 //! The provider holds any `W: MidnightWallet` and calls it only through that
 //! trait. This file implements one that is not a `Wallet` and attaches it.
@@ -16,7 +16,7 @@ use midnight_helpers::{
 };
 use midnight_provider::{
     HashOutput, MidnightProvider, MidnightWallet, Nullifier, ProviderError, ShieldedRecipient,
-    TxEnvelope, WalletError,
+    ShieldedTokenType, TransactionRequest, TxEnvelope, WalletError,
 };
 use midnight_types::build::{self, Funded, Reservation, ReservedInput, SpentInputs};
 use midnight_types::chain_pin::ChainView;
@@ -91,10 +91,45 @@ async fn a_reserved_transaction_whose_connect_fails_gets_its_inputs_back() {
     let nullifier = Nullifier(HashOutput([7; 32]));
     let (envelope, released) = signed_reserving(nullifier).await;
 
-    let Err(err) = provider.submit_reserved(envelope).await else {
-        panic!("a submit whose connect fails must fail");
+    let Err(err) = provider.send_tx_envelope(envelope).await else {
+        panic!("a send whose connect fails must fail");
     };
 
     assert!(matches!(err, ProviderError::Rpc(_)), "{err:?}");
     assert_eq!(*released.lock().unwrap(), vec![nullifier]);
+}
+
+/// The node refuses a transaction that pays no fee, so a send refuses it
+/// before the connect, and its inputs go back. A send that skipped the check
+/// would reach the connect and fail with `ProviderError::Rpc`.
+#[tokio::test]
+async fn a_send_refuses_a_fee_less_transaction_and_hands_its_inputs_back() {
+    let provider = MidnightProvider::new("not a node url").with_wallet(StubWallet);
+    let nullifier = Nullifier(HashOutput([8; 32]));
+    let (envelope, released) = signed_reserving(nullifier).await;
+
+    let Err(err) = provider.send_tx_envelope(build::fee_less(envelope)).await else {
+        panic!("a send of a fee-less transaction must fail");
+    };
+
+    assert!(matches!(err, ProviderError::Transaction(_)), "{err:?}");
+    assert_eq!(*released.lock().unwrap(), vec![nullifier]);
+}
+
+/// A send of a request that pays no fee fails before its fill, so it makes no
+/// proof. A send that filled first would query the node for the fill and fail
+/// with `ProviderError::Rpc`.
+#[tokio::test]
+async fn a_send_refuses_a_fee_less_request_before_its_fill() {
+    let provider = MidnightProvider::new("not a node url").with_wallet(StubWallet);
+    let token = ShieldedTokenType(HashOutput([0; 32]));
+
+    let Err(err) = provider
+        .send_transaction(TransactionRequest::shielded_swap(token, 1, token, 1))
+        .await
+    else {
+        panic!("a send of a fee-less request must fail");
+    };
+
+    assert!(matches!(err, ProviderError::Transaction(_)), "{err:?}");
 }

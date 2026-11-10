@@ -199,7 +199,7 @@ pub enum WalletError {
     /// A build asked for a transaction TTL, and its transaction has no intent
     /// to carry one.
     ///
-    /// Only an intent holds a TTL. A Dustless shielded transfer is a Zswap
+    /// Only an intent holds a TTL. A fee-less shielded transfer is a Zswap
     /// offer alone, so the fee intent that its sponsor adds sets when it
     /// expires. Build it with no TTL.
     #[error("the transaction has no intent to carry a TTL")]
