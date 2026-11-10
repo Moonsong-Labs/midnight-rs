@@ -66,8 +66,9 @@ pub mod schnorr {
 /// ECDSA keys and signatures over secp256k1: the
 /// [`ContractMaintenanceVerifyingKey::ECDSA`] kind of committee member.
 ///
-/// A member signs SHA-256 of [`PreparedMaintenance::data_to_sign`], and the
-/// ledger accepts only the low-S form of a signature.
+/// A member signs SHA-256 of [`PreparedMaintenance::data_to_sign`].
+/// [`PreparedMaintenance::add_signature`] attaches the low-S form of a
+/// signature, the only one the ledger accepts.
 pub mod ecdsa {
     pub use midnight_base_crypto::ecdsa::{Signature, SigningKey, VerifyingKey};
 }

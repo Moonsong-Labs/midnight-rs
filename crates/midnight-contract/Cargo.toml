@@ -23,6 +23,7 @@ midnight-onchain-runtime = { workspace = true }
 midnight-serialize = { workspace = true }
 midnight-base-crypto = { workspace = true }
 midnight-helpers = { workspace = true }
+k256 = { workspace = true }
 compact-codegen = { workspace = true }
 compact-interpreter = { workspace = true }
 async-trait = { workspace = true }

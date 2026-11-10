@@ -10,7 +10,7 @@
 
 use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPointBuf};
 use midnight_provider::PendingTx;
-use midnight_serialize::Serializable;
+use midnight_serialize::{Deserializable, Serializable};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
 use midnight_types::{MidnightWallet, TxEnvelope};
 
@@ -104,16 +104,16 @@ pub(crate) fn validate_committee(
     Ok(())
 }
 
-/// `n / 2` for the secp256k1 group order `n`, big-endian.
-const SECP256K1_HALF_ORDER: [u8; 32] = [
-    0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    0x5d, 0x57, 0x6e, 0x73, 0x57, 0xa4, 0x50, 0x1d, 0xdf, 0xe9, 0x2f, 0x46, 0x68, 0x1b, 0x20, 0xa0,
-];
-
-/// Whether `signature` is in the high-S form, which the ledger refuses.
-fn is_high_s(signature: &ecdsa::Signature) -> bool {
-    // The encoding is `r || s`, each 32 bytes big-endian.
-    encoded(signature)[32..] > SECP256K1_HALF_ORDER[..]
+/// The low-S form of `signature`, the only one the ledger accepts. Both forms
+/// sign the same message under the same key.
+fn low_s(signature: ecdsa::Signature) -> ecdsa::Signature {
+    let parsed = k256::ecdsa::Signature::from_slice(&encoded(&signature))
+        .expect("a ledger ECDSA signature encodes as `r || s`");
+    match parsed.normalize_s() {
+        Some(low) => ecdsa::Signature::deserialize(&mut &low.to_bytes()[..], 0)
+            .expect("k256 encodes a signature as `r || s`"),
+        None => signature,
+    }
 }
 
 /// Check one signature against the committee member it claims, as the ledger
@@ -132,15 +132,7 @@ fn check_signature(
         (
             ContractMaintenanceVerifyingKey::ECDSA(key),
             ContractMaintenanceSignature::ECDSA(signature),
-        ) => {
-            if is_high_s(signature) {
-                return Err(ContractError::Maintenance(format!(
-                    "the ECDSA signature for committee index {index} has a high S, which the \
-                     ledger refuses; replace s with n - s"
-                )));
-            }
-            key.verify(data, signature)
-        }
+        ) => key.verify(data, signature),
         (ContractMaintenanceVerifyingKey::Schnorr(_), ContractMaintenanceSignature::ECDSA(_)) => {
             return Err(ContractError::Maintenance(format!(
                 "committee index {index} holds a Schnorr key, but its signature is ECDSA"
@@ -420,19 +412,28 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     ///
     /// Both kinds of member sign SHA-256 of these bytes. A Schnorr member signs
     /// it with BIP-340. An ECDSA member signs it as a prehashed digest (for
-    /// example a KMS in digest mode) and returns the low-S `r || s` form.
+    /// example a KMS in digest mode) and returns `r || s`.
     pub fn data_to_sign(&self) -> Vec<u8> {
         self.update.data_to_sign()
     }
 
     /// Attach a signature produced (anywhere) over [`Self::data_to_sign`], at the
     /// signer's position in the on-chain committee. Its kind must match the
-    /// member's key.
+    /// member's key. An ECDSA signature with a high S is attached in its low-S
+    /// form, the only one the ledger accepts.
     pub fn add_signature(
         mut self,
         committee_index: u32,
         signature: ContractMaintenanceSignature,
     ) -> Self {
+        let signature = match signature {
+            ContractMaintenanceSignature::Schnorr(signature) => {
+                ContractMaintenanceSignature::Schnorr(signature)
+            }
+            ContractMaintenanceSignature::ECDSA(signature) => {
+                ContractMaintenanceSignature::ECDSA(low_s(signature))
+            }
+        };
         self.signatures.push((committee_index, signature));
         self
     }
@@ -501,7 +502,6 @@ impl<'a, P> PreparedMaintenance<'a, P> {
 mod tests {
     use super::*;
     use crate::schnorr;
-    use midnight_serialize::Deserializable;
     use midnight_typed_state::{StateValue, StorageHashMap};
 
     fn empty_state() -> ContractState<InMemoryDB> {
@@ -615,27 +615,16 @@ mod tests {
     }
 
     #[test]
-    fn validate_signatures_names_a_high_s_ecdsa_signature() {
-        let (member, _) = ecdsa_member();
-        // r = 1 and s = n - 1: well formed, with s in the high half.
-        let mut bytes = [0u8; 64];
-        bytes[31] = 1;
-        bytes[32..].copy_from_slice(&[
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
-            0xd0, 0x36, 0x41, 0x40,
-        ]);
-        let high_s = ecdsa::Signature::deserialize(&mut &bytes[..], 0).unwrap();
+    fn low_s_turns_a_high_s_signature_into_the_one_the_ledger_accepts() {
+        let key = ecdsa::SigningKey::sample(rand::thread_rng());
+        let signature = key.sign(b"data");
+        let (r, s) = k256::ecdsa::Signature::from_slice(&encoded(&signature))
+            .unwrap()
+            .split_scalars();
+        let high = k256::ecdsa::Signature::from_scalars(r, -*s).unwrap();
+        let high = ecdsa::Signature::deserialize(&mut &high.to_bytes()[..], 0).unwrap();
 
-        let err = validate_signatures(
-            b"data",
-            &[(0, ContractMaintenanceSignature::ECDSA(high_s))],
-            &[member],
-            1,
-        )
-        .unwrap_err();
-
-        assert!(err.to_string().contains("high S"), "{err}");
+        assert_eq!(low_s(high), signature);
     }
 
     #[test]
