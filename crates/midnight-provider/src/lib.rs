@@ -15,7 +15,7 @@ pub use error::ProviderError;
 pub use pipeline::merge_transactions;
 pub use prover::Prover;
 pub use provider::{MidnightProvider, NodeHeader};
-pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TransactionReceipt, Verdict};
+pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TransactionReceipt};
 pub use types::TransactionHash;
 
 // Re-export the types that `MidnightProvider`'s own signatures name, so a

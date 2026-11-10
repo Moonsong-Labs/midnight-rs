@@ -463,7 +463,7 @@ let receipt = pending.get_receipt().await?;
 
 `get_receipt` waits for the transaction to reach a finalized block and returns its `TransactionReceipt`. It consumes the handle, so read the hashes before the wait. Cancelling the future is safe but does not retract the extrinsic from the mempool.
 
-`get_receipt` returns `Ok` only when the chain applied the transaction. When the transaction landed but did not apply (`PartialSuccess` or `Failure`), it fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TransactionReceipt` with the verdict.
+`get_receipt` returns `Ok` only when the chain applied the transaction. When the transaction landed but did not apply, it fails with `ProviderError::NotApplied`. Its `NotApplied` is `PartialSuccess` or `Failure`, and each variant holds the `TransactionReceipt`.
 
 When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The send itself fails with `SubmitRpc`, and after it the node can still hold the tx.
 

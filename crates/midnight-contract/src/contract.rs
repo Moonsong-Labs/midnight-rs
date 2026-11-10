@@ -1840,7 +1840,6 @@ mod tests {
             block_hash: BlockHash::repeat_byte(1),
             extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),
-            verdict: midnight_provider::Verdict::Success,
         };
         store
             .append_pending(CALL_ADDRESS, LAST_GOOD, None, b"before")
@@ -1893,11 +1892,7 @@ mod tests {
     #[tokio::test]
     async fn a_call_that_did_not_apply_leaves_the_last_good_snapshot_as_head() {
         let (_dir, store, call) = landed_call().await;
-        let waited = Err(midnight_provider::NotApplied(TransactionReceipt {
-            verdict: midnight_provider::Verdict::Failure,
-            ..call
-        })
-        .into());
+        let waited = Err(midnight_provider::NotApplied::Failure(call).into());
 
         let err = settle_call(
             Some(&store),

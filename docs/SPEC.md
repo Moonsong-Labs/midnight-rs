@@ -33,7 +33,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── prover.rs            Prover: local, remote, or custom (test-util)
   │     ├── remote_prover.rs     the HTTP proof server client of Prover::remote
   │     ├── proving.rs           its ProofProvider impl
-  │     ├── submit.rs            PendingTx, PreparedTx, TransactionReceipt, Verdict, NotApplied
+  │     ├── submit.rs            PendingTx, PreparedTx, TransactionReceipt, NotApplied
   │     └── (deps) midnight-types, subxt (node RPC)
   │
   ├── midnight-types       implementation-free vocabulary and toolkit; a function of
@@ -416,10 +416,9 @@ One auto-reconnecting websocket carries everything the node serves: raw Substrat
   - `extrinsic_hash() → ExtrinsicHash`; format it with `{:x}` for its hex digest
   - `transaction_hash() → TransactionHash`: the ledger's own identity for the tx
   - `get_receipt(self) → Result<TransactionReceipt, _>`: waits for finality; its verdict is final
-  - it returns `Ok` only for `Success`, and `ProviderError::NotApplied` for any other verdict
-- `TransactionReceipt { block_hash, extrinsic_hash, transaction_hash, verdict }`
-- `NotApplied(TransactionReceipt)`: a transaction that landed but did not apply
-- `Verdict`: `Success` (`TxApplied`), `PartialSuccess` (`TxPartialSuccess`: the guaranteed phase committed, a fallible segment did not), or `Failure`.
+  - it returns `Ok` only for `TxApplied`, and `ProviderError::NotApplied` for any other verdict
+- `TransactionReceipt { block_hash, extrinsic_hash, transaction_hash }`
+- `NotApplied`: a transaction that landed but did not apply, either `PartialSuccess(TransactionReceipt)` (`TxPartialSuccess`: the guaranteed phase committed, a fallible segment did not) or `Failure(TransactionReceipt)` (`System::ExtrinsicFailed`).
 
 `get_receipt` consumes the handle, so read the hashes before the wait. Cancelling the future is safe but does not retract the extrinsic from the mempool. Failures with no verdict surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a wait/decode issue that leaves the tx in flight (`WatchStream`: transport-only; `VerdictFetch`: landed but events undecodable; re-query the chain rather than resubmit). `SubmitRpc` does not say whether the node holds the tx, so a resubmit after it also risks a double spend.
 
