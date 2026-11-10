@@ -293,6 +293,8 @@ Persistence is not a one-shot at initial sync: every successful `Wallet::sync` r
 ## Balance
 
 ```rust
+use midnight_core::NIGHT;
+
 let balance = wallet.balance().await;
 
 balance.shielded.coins;                    // Vec<ShieldedCoinBalance { token_type, value, spendable }>
@@ -311,7 +313,7 @@ A build reserves the inputs it spends: shielded coins, unshielded UTXOs and Dust
 
 A reserved coin or UTXO reads `spendable: false`. `spendable_shielded_value` and `spendable_unshielded_value` leave it out, and `shielded_value` and `unshielded_value` count it. In the same way, `spendable_utxos` and `spendable_speck` leave the reserved Dust out, and `balance_speck` counts it. So a wallet whose only Dust UTXO a pending build reserves reads a `spendable_speck` of 0 and a positive `balance_speck`.
 
-`token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_core::wallet::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT. See [`tokens.md`](tokens.md) for the two-ledger model.
+`token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_core::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT. See [`tokens.md`](tokens.md) for the two-ledger model.
 
 Every reading returns an owned value taken under a short read lock, so nothing a caller holds can block a resync running in another task.
 
@@ -386,8 +388,9 @@ The cold wallet gets no Dust of its own. Its registrations still pay their own f
 Two flavors, same shape. A `TransactionRequest` names the transfer, and `send_transaction` fills, funds, proves, signs and sends it in one step:
 
 ```rust
+use midnight_core::NIGHT;
 use midnight_core::provider::TransactionRequest;
-use midnight_core::wallet::{NIGHT, parse_unshielded_recipient};
+use midnight_core::wallet::parse_unshielded_recipient;
 
 let recipient = parse_unshielded_recipient(&recipient_address, &network)?;
 let pending = provider
@@ -473,7 +476,8 @@ A shielded coin reaches its owner through the discovery ciphertext on its output
 Hand the rebuilt coin to `watch_for_coins` and the wallet claims it from the chain's own output, decrypting nothing:
 
 ```rust
-use midnight_core::provider::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
+use midnight_core::crypto::base::hash::HashOutput;
+use midnight_core::wallet::{CoinInfo, Nonce, ShieldedTokenType};
 
 let coin = CoinInfo {
     nonce: Nonce(HashOutput(nonce)),                  // rebuilt from chain state

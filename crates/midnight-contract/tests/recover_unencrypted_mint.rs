@@ -112,8 +112,8 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     //     chain's own output, decrypting nothing. Registering the second must
     //     not cost us the first ---
     for (index, (nonce, value)) in mints.iter().copied().enumerate() {
-        let coin = midnight_provider::CoinInfo {
-            nonce: midnight_provider::Nonce(midnight_base_crypto::hash::HashOutput(nonce)),
+        let coin = midnight_types::CoinInfo {
+            nonce: midnight_types::Nonce(midnight_base_crypto::hash::HashOutput(nonce)),
             type_: token_type,
             value: u128::from(value),
         };

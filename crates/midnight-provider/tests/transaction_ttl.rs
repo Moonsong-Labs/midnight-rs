@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_helpers::{DefaultDB, FinalizedTransaction};
-use midnight_provider::{MidnightProvider, NIGHT, TransactionRequest};
+use midnight_provider::{MidnightProvider, TransactionRequest};
+use midnight_types::NIGHT;
 
 /// Long enough for a build, its proof and its inclusion, and well short of
 /// the devnet's `global_ttl`.

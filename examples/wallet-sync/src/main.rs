@@ -5,9 +5,10 @@
 use std::env;
 
 use anyhow::Context;
-use midnight_core::provider::{SPECKS_PER_DUST, TransactionRequest};
-use midnight_core::wallet::NIGHT;
-use midnight_core::{MidnightProvider, Network, Seed, SyncProgress, Wallet};
+use midnight_core::provider::TransactionRequest;
+use midnight_core::{
+    MidnightProvider, NIGHT, Network, SPECKS_PER_DUST, Seed, SyncProgress, Wallet,
+};
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded at genesis on the local devnet. Do NOT use in

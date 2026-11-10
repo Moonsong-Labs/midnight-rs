@@ -2939,6 +2939,7 @@ dependencies = [
  "midnight-contract",
  "midnight-crypto",
  "midnight-provider",
+ "midnight-types",
  "midnight-wallet",
 ]
 

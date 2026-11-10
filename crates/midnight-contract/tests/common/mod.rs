@@ -82,7 +82,7 @@ pub(crate) struct UnreachedWallet;
 
 #[async_trait::async_trait]
 impl midnight_provider::MidnightWallet for UnreachedWallet {
-    fn shielded_recipient(&self) -> midnight_provider::ShieldedRecipient {
+    fn shielded_recipient(&self) -> midnight_types::ShieldedRecipient {
         unreachable!("the test stops before the wallet")
     }
 

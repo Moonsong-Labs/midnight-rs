@@ -19,7 +19,8 @@ use common::UnreachedWallet;
 use midnight_contract::interpreter::Program;
 use midnight_contract::runtime::NoWitnesses;
 use midnight_contract::{Contract, ShieldedInputs};
-use midnight_provider::{HashOutput, MidnightProvider, ShieldedTokenType, TransactionRequest};
+use midnight_provider::{MidnightProvider, TransactionRequest};
+use midnight_types::{HashOutput, ShieldedTokenType};
 use midnight_wallet::Seed;
 
 /// Room for a builder to gain a field, far below the tens of kilobytes an

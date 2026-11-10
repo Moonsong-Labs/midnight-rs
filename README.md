@@ -31,8 +31,8 @@ anyhow = "1"
 The Quick start runs against a local devnet (node, indexer and proof server) in Docker. The Quick start proves in its own process. Its first proofs download the public parameters into a local cache (see [Proof backends](#proof-backends)). Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
 
 ```rust
-use midnight_core::provider::{NIGHT, STARS_PER_NIGHT, TransactionRequest};
-use midnight_core::{MidnightProvider, Seed, Wallet};
+use midnight_core::provider::TransactionRequest;
+use midnight_core::{MidnightProvider, NIGHT, STARS_PER_NIGHT, Seed, Wallet};
 
 const NODE_URL: &str = "ws://localhost:9944";
 const INDEXER_URL: &str = "http://localhost:8088";
@@ -162,6 +162,8 @@ The deploy runs the contract's Compact constructor locally, before any proof, as
 The [`owned-counter`](devnet/contracts/owned-counter) contract keeps the owner's secret in its private state, and its constructor takes the first round. Bind it with `contract!` as above, then deploy it:
 
 ```rust,ignore
+use midnight_core::provider::FsPrivateStateProvider;
+
 struct OwnerKey;
 
 impl owned_counter::Witnesses for OwnerKey {

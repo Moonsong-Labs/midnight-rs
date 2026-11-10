@@ -8,7 +8,8 @@
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
 use midnight_provider::{MidnightProvider, TransactionRequest};
-use midnight_wallet::{NIGHT, Seed, Wallet};
+use midnight_types::NIGHT;
+use midnight_wallet::{Seed, Wallet};
 
 const DEFAULT_SHIELDED_TOKEN: midnight_wallet::ShieldedTokenType =
     midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0; 32]));
