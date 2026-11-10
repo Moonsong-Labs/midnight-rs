@@ -24,7 +24,9 @@
 
 use k256::ecdsa::SigningKey;
 use k256::ecdsa::signature::Signer;
-use midnight_core::contract::{ContractMaintenanceVerifyingKey, parse_maintenance_key};
+use midnight_core::contract::{
+    ContractMaintenanceSignature, ContractMaintenanceVerifyingKey, parse_maintenance_key,
+};
 use midnight_core::{MidnightProvider, Seed, Wallet};
 
 mod counter {
@@ -124,8 +126,8 @@ async fn main() -> anyhow::Result<()> {
     // Coordinator attaches the quorum at each member's committee index, then
     // sends.
     prepared
-        .add_signature(0, sig0)
-        .add_signature(2, sig2)
+        .add_signature(0, ContractMaintenanceSignature::ecdsa(sig0)?)
+        .add_signature(2, ContractMaintenanceSignature::ecdsa(sig2)?)
         .send()
         .await?
         .get_receipt()
@@ -151,8 +153,8 @@ async fn main() -> anyhow::Result<()> {
     let sig0 = member_sign(&payload, &members[0]);
     let sig1 = member_sign(&payload, &members[1]);
     prepared
-        .add_signature(0, sig0)
-        .add_signature(1, sig1)
+        .add_signature(0, ContractMaintenanceSignature::ecdsa(sig0)?)
+        .add_signature(1, ContractMaintenanceSignature::ecdsa(sig1)?)
         .send()
         .await?
         .get_receipt()

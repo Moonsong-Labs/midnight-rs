@@ -50,7 +50,9 @@ pub use midnight_types::ContractAddress;
 // replacement). The signature primitives are re-exported so callers can build
 // committees and sign maintenance ops without depending on `midnight-base-crypto`
 // directly.
-pub use maintenance::{ContractMaintenance, PreparedMaintenance, parse_maintenance_key};
+pub use maintenance::{
+    ContractMaintenance, ContractMaintenanceSignature, PreparedMaintenance, parse_maintenance_key,
+};
 pub use midnight_helpers::TransactionSigningKey as ContractMaintenanceSigningKey;
 pub use midnight_typed_state::{ContractMaintenanceAuthority, ContractMaintenanceVerifyingKey};
 
@@ -64,7 +66,7 @@ pub mod schnorr {
 /// [`ContractMaintenanceVerifyingKey::ECDSA`] kind of committee member.
 ///
 /// A member signs SHA-256 of [`PreparedMaintenance::data_to_sign`], and
-/// [`PreparedMaintenance::add_signature`] takes the signature as `r || s`.
+/// [`ContractMaintenanceSignature::ecdsa`] reads the signature from `r || s`.
 pub mod ecdsa {
     pub use midnight_base_crypto::ecdsa::{Signature, SigningKey, VerifyingKey};
 }
