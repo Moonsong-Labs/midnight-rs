@@ -72,6 +72,10 @@ struct NodeConnection {
 /// [`Self::prepare`] and [`Self::send_tx_envelope`] bound their connect and
 /// their metadata read to 10 s. The SDK sets no deadline on the submit call or
 /// on the wait for a sent transaction (see [`PendingTx`]).
+///
+/// An archive node is a node whose state pruning and block pruning are both in
+/// an archive mode. Only an archive node serves the `archive_v1` methods, and
+/// another node refuses them as unknown methods.
 pub struct MidnightProvider<W = ()> {
     node_url: String,
     wallet: W,
@@ -476,10 +480,8 @@ impl<W> MidnightProvider<W> {
     /// are safe for observers that must never see a block twice. Part of the
     /// `archive_v1` spec, the replacement for the legacy `chain_*` RPCs.
     ///
-    /// It needs an archive node. A node serves the `archive_v1` methods only
-    /// when its state pruning and its block pruning are both in an archive
-    /// mode. A node in another mode refuses the query as an unknown method,
-    /// and the query returns [`ProviderError::Rpc`].
+    /// It needs an archive node (see [`MidnightProvider`]). On another node, it
+    /// returns [`ProviderError::Rpc`].
     pub async fn get_finalized_block_height(&self) -> Result<u64, ProviderError> {
         query_within(QUERY_TIMEOUT, async {
             let conn = self.get_or_connect().await?;
@@ -501,10 +503,8 @@ impl<W> MidnightProvider<W> {
     /// A finalized height's hash pins historical reads such as
     /// [`get_contract_state`](Self::get_contract_state).
     ///
-    /// It needs an archive node. A node serves the `archive_v1` methods only
-    /// when its state pruning and its block pruning are both in an archive
-    /// mode. A node in another mode refuses the query as an unknown method,
-    /// and the query returns [`ProviderError::Rpc`].
+    /// It needs an archive node (see [`MidnightProvider`]). On another node, it
+    /// returns [`ProviderError::Rpc`].
     pub async fn get_block_hashes_by_height(
         &self,
         height: u64,
@@ -526,10 +526,8 @@ impl<W> MidnightProvider<W> {
     /// Get the header of the block with `hash` (`archive_v1_header`), or
     /// `None` when the node does not know the hash.
     ///
-    /// It needs an archive node. A node serves the `archive_v1` methods only
-    /// when its state pruning and its block pruning are both in an archive
-    /// mode. A node in another mode refuses the query as an unknown method,
-    /// and the query returns [`ProviderError::Rpc`].
+    /// It needs an archive node (see [`MidnightProvider`]). On another node, it
+    /// returns [`ProviderError::Rpc`].
     pub async fn get_block_header(
         &self,
         hash: BlockHash,
