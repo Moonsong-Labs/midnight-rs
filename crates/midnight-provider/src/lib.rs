@@ -37,12 +37,6 @@ pub use midnight_private_state::{
     ImportResult, PrivateStateError, PrivateStateProvider, Snapshot, SnapshotStatus,
 };
 
-// Re-export the state query model that `Provider` and the generated lazy
-// accessors share, so callers need no separate dep on midnight-typed-state.
-pub use midnight_typed_state::lazy::{
-    StateQuery, StateQueryProvider, StateQueryResult, StorageKey,
-};
-
 use std::sync::Arc;
 
 /// Read-only interface to the Midnight network.
@@ -52,8 +46,7 @@ use std::sync::Arc;
 /// well-defined surface to implement. Reachability checks
 /// (`MidnightProvider::health`, block / network metadata, etc.) are
 /// inherent methods on [`MidnightProvider`] — they aren't part of the
-/// generic abstraction. The generated lazy reads go through
-/// [`StateQueryProvider`] instead.
+/// generic abstraction.
 ///
 /// Automatically implemented for `&T`, `Arc<T>`, and `Box<T>` where `T: Provider`.
 #[async_trait::async_trait]
@@ -71,24 +64,6 @@ pub trait Provider: Send + Sync {
         address: &str,
         at: Option<BlockHash>,
     ) -> Result<Option<String>, ProviderError>;
-}
-
-// ---------------------------------------------------------------------------
-// Bridge: MidnightProvider → StateQueryProvider (from compact-bindgen)
-// ---------------------------------------------------------------------------
-
-impl<W: Send + Sync> StateQueryProvider for MidnightProvider<W> {
-    type Error = ProviderError;
-
-    async fn query_contract_state(
-        &self,
-        address: &str,
-        queries: Vec<StateQuery>,
-        at_block_hash: Option<BlockHash>,
-    ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        self.query_contract_state_at(address, queries, at_block_hash)
-            .await
-    }
 }
 
 // ---------------------------------------------------------------------------

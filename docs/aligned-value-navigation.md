@@ -76,17 +76,3 @@ The circuit interpreter's `Idx` ledger op navigates the state tree using `Aligne
 | `BoundedMerkleTree` | Convert to `u64` leaf position |
 
 The `literal_key()` function in the interpreter encodes an `(align value bytes)` path entry as an `AlignedValue` key, at the byte width that the instruction declares.
-
-## Lazy query paths
-
-The `midnight_queryContractState` RPC uses serialized `AlignedValue`s as path steps:
-
-```json
-{
-  "path": ["4001", "0141"]
-}
-```
-
-Where `"4001"` is hex-encoded `AlignedValue::from(0u8)` (field index 0) and `"0141"` is `AlignedValue::from(Fr(1))` (map key).
-
-The generated `LedgerQuery` struct (lazy accessor) builds these paths automatically via `index_to_query_key()` and `value_to_query_key()`.

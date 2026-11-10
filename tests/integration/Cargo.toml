@@ -6,13 +6,8 @@ publish = false
 
 [dependencies]
 compact-bindgen = { workspace = true }
-hex = { workspace = true }
-
-# Test deps
-tokio = { workspace = true }
 
 [dev-dependencies]
 conformance = { path = "../conformance" }
 midnight-base-crypto = { workspace = true }
-midnight-serialize = { workspace = true }
 serde_json = { workspace = true }

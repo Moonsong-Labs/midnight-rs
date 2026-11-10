@@ -28,35 +28,11 @@
 //! - **Field constants** -- `FIELD_THRESHOLD`, `FIELD_VALIDATORS`, etc.
 //! - **Data types** -- Structs and enums mirroring Compact type definitions
 //! - **Ledger struct** -- Typed synchronous accessors for each ledger field (eager, full state in memory)
-//! - **Lazy query struct** -- `{Name}Query<P>` with async accessors that fetch individual fields via RPC
 //! - **Return types** -- `*Return` type aliases for the result type of each circuit and witness
 //! - **Pure circuits** -- a `pure_circuits` module, with one function per exported pure circuit that runs it in process with no chain, proof or wallet
 //! - **Deploy and call** -- `Contract::deploy`, which runs the contract's constructor and deploys the state that it leaves, `Contract::at`, and `Circuits`, with one call builder per impure circuit
 //! - **Simulator** -- `Simulator`, which runs the impure circuits, and the constructor with `run_constructor`, in process with no chain, proof or wallet. The caller sets the block time, the address and the coin public key, and the ledger and the private state carry from call to call.
 //! - **ZK config directory** -- `ZK_CONFIG_DIR`, the compactc output directory to pass to `with_zk_config`, for an artifact at `compiler/analyzed-ir.sexp` (see [`contract!`])
-//!
-//! # Lazy queries
-//!
-//! ```no_run
-//! # compact_bindgen::contract!(
-//! #     Gateway,
-//! #     "../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp"
-//! # );
-//! # use compact_bindgen::lazy;
-//! use gateway::GatewayQuery;
-//!
-//! # async fn read<P: lazy::StateQueryProvider>(provider: P) -> Result<(), lazy::ContractError> {
-//! let query = GatewayQuery::new(provider, "contract_address", None);
-//! let threshold: u8 = query.threshold().await?;
-//! # Ok(())
-//! # }
-//! # fn main() {}
-//! ```
-//!
-//! The provider must implement [`lazy::StateQueryProvider`]. Lazy accessors
-//! go directly to the node RPC. They need no indexer. The last argument of
-//! `new` is a block hash that pins every read to that block. `None` reads the
-//! latest state.
 
 /// Re-export the proc macro.
 pub use compact_bindgen_macro::contract;

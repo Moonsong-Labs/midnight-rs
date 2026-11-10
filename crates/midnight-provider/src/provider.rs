@@ -12,9 +12,7 @@ use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::{
-    Health, PendingTx, Prover, Provider, ProviderError, StateQuery, StateQueryResult, submit,
-};
+use crate::{Health, PendingTx, Prover, Provider, ProviderError, submit};
 use midnight_helpers::LedgerParameters;
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_private_state::PrivateStateProvider;
@@ -718,9 +716,7 @@ impl<W> MidnightProvider<W> {
     /// at `at_block_hash`, or at the node's best block when it is `None`.
     ///
     /// Returns the hex-encoded serialized contract state, or `None` if no
-    /// contract exists at `address` in that block. This uses the standard
-    /// node RPC that is available on all devnet nodes (unlike
-    /// `midnight_queryContractState` which requires a custom node build).
+    /// contract exists at `address` in that block.
     ///
     /// # Errors
     ///
@@ -745,29 +741,6 @@ impl<W> MidnightProvider<W> {
                 Err(e) if names_no_contract(&e) => Ok(None),
                 Err(e) => Err(ProviderError::Rpc(e.to_string())),
             }
-        })
-        .await
-    }
-
-    /// Query contract state with an optional block hash pin.
-    ///
-    /// When `at_block_hash` is `None`, the node returns state at the latest
-    /// block. When set, the node returns state as of that specific block hash.
-    pub(crate) async fn query_contract_state_at(
-        &self,
-        address: &str,
-        queries: Vec<StateQuery>,
-        at_block_hash: Option<BlockHash>,
-    ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        query_within(STATE_QUERY_TIMEOUT, async {
-            let conn = self.get_or_connect().await?;
-            conn.rpc
-                .request(
-                    "midnight_queryContractState",
-                    rpc_params![address, queries, at_block_hash],
-                )
-                .await
-                .map_err(|e| ProviderError::Rpc(e.to_string()))
         })
         .await
     }
