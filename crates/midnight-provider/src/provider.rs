@@ -831,9 +831,9 @@ mod tests {
     }
 
     /// Every node read ends during a node outage (see `QUERY_TIMEOUT`). It
-    /// catches a read left outside its bound. The two contract state reads
-    /// have a 60 s bound, so the test leaves them out. It takes about ten
-    /// seconds: paused time does not work with real sockets.
+    /// catches a read left outside its bound. The contract state read has a
+    /// 60 s bound, so the test leaves it out. It takes about ten seconds:
+    /// paused time does not work with real sockets.
     #[tokio::test]
     async fn every_node_read_ends_during_a_node_outage() {
         use midnight_types::chain_pin::ChainView;
