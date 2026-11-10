@@ -50,11 +50,8 @@ pub use midnight_types::ContractAddress;
 // replacement). The signature primitives are re-exported so callers can build
 // committees and sign maintenance ops without depending on `midnight-base-crypto`
 // directly.
-pub use maintenance::{ContractMaintenance, PreparedMaintenance};
-pub use midnight_helpers::{
-    TransactionSignature as ContractMaintenanceSignature,
-    TransactionSigningKey as ContractMaintenanceSigningKey,
-};
+pub use maintenance::{ContractMaintenance, PreparedMaintenance, parse_maintenance_key};
+pub use midnight_helpers::TransactionSigningKey as ContractMaintenanceSigningKey;
 pub use midnight_typed_state::{ContractMaintenanceAuthority, ContractMaintenanceVerifyingKey};
 
 /// BIP-340 Schnorr keys and signatures over secp256k1: the
@@ -66,9 +63,8 @@ pub mod schnorr {
 /// ECDSA keys and signatures over secp256k1: the
 /// [`ContractMaintenanceVerifyingKey::ECDSA`] kind of committee member.
 ///
-/// A member signs SHA-256 of [`PreparedMaintenance::data_to_sign`].
-/// [`PreparedMaintenance::add_signature`] attaches the low-S form of a
-/// signature, the only one the ledger accepts.
+/// A member signs SHA-256 of [`PreparedMaintenance::data_to_sign`], and
+/// [`PreparedMaintenance::add_signature`] takes the signature as `r || s`.
 pub mod ecdsa {
     pub use midnight_base_crypto::ecdsa::{Signature, SigningKey, VerifyingKey};
 }

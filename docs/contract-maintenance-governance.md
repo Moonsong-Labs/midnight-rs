@@ -38,7 +38,7 @@ pub enum ContractMaintenanceVerifyingKey {
 
 So the authority is a **k-of-n committee**. The ledger supports full k-of-n. The struct above is ledger 9's (`midnight-onchain-state` 4.x). A member is a Schnorr key (BIP-340 over secp256k1, `midnight_contract::schnorr`) or an ECDSA key (secp256k1, `midnight_contract::ecdsa`), and one committee can mix both kinds.
 
-Both kinds sign SHA-256 of the same payload. A Schnorr member signs it with BIP-340. An ECDSA member signs it as a prehashed digest, so a KMS or an HSM that signs a supplied SHA-256 digest can hold the key. The ledger refuses an ECDSA signature with a high S. `add_signature` attaches the low-S form of a signature, so a signature from a KMS that returns either form attaches as it is.
+Both kinds sign SHA-256 of the same payload. A Schnorr member signs it with BIP-340. An ECDSA member signs it as a prehashed digest, so a KMS or an HSM that signs a supplied SHA-256 digest can hold the key. The ledger refuses an ECDSA signature with a high S. `add_signature` takes either form and attaches the low-S one, so a KMS that returns a high S needs no step of its own.
 
 ## What you can change: `SingleUpdate`
 
@@ -89,7 +89,7 @@ b"midnight:contract-maintenance-update-signing-envelope[v3]:"
     || serialize(address) || serialize(updates) || serialize(counter)
 ```
 
-i.e. `SigningKey::sign(rng, &update.data_to_sign())`, attached at the member's committee index. A signature is the `Signature` enum (`Schnorr` or `ECDSA`), which the SDK re-exports as `ContractMaintenanceSignature`.
+i.e. `SigningKey::sign(rng, &update.data_to_sign())`, attached at the member's committee index. A signature is the `Signature` enum (`Schnorr` or `ECDSA`). The SDK builds it from the 64 bytes that `add_signature` takes, in the scheme of the member at that index.
 
 ### Validation rules (the ones that bite)
 
@@ -134,7 +134,9 @@ Governance is **opt-in and key-custodial-free**: the SDK never assigns an author
 `with_maintenance_authority` takes the committee (`ContractMaintenanceVerifyingKey`s) and a threshold:
 
 ```rust
-use midnight_contract::{ContractMaintenanceSigningKey, ContractMaintenanceVerifyingKey, schnorr};
+use midnight_contract::{
+    ContractMaintenanceSigningKey, ContractMaintenanceVerifyingKey, parse_maintenance_key, schnorr,
+};
 
 // Single-owner contract (1-of-1): you keep `authority`, the SDK only sees its public half.
 let key = schnorr::SigningKey::sample(rand::thread_rng());
@@ -149,13 +151,14 @@ let contract = Contract::deploy(provider)
     .into_contract()
     .await?;
 
-// k-of-n: collect the members' public keys, pick a threshold. An ECDSA member
-// is its 33-byte SEC1 key, read with `Deserializable`.
+// k-of-n: collect the members' public keys, pick a threshold.
+// `parse_maintenance_key` reads a 32-byte BIP-340 key as a Schnorr member, and
+// a 33- or 65-byte SEC1 key (for example from a KMS) as an ECDSA member.
 .with_maintenance_authority(
     vec![
-        ContractMaintenanceVerifyingKey::ECDSA(vk_a),
-        ContractMaintenanceVerifyingKey::ECDSA(vk_b),
-        ContractMaintenanceVerifyingKey::Schnorr(vk_c),
+        parse_maintenance_key(&sec1_a)?,
+        parse_maintenance_key(&sec1_b)?,
+        parse_maintenance_key(&x_only_c)?,
     ],
     2,
 )
@@ -208,18 +211,19 @@ For a **k-of-n** committee, distribute the bytes to sign and collect signatures 
 ```rust
 let prepared = contract.maintenance().remove_verifier_key("increment").prepare().await?;
 let payload = prepared.data_to_sign();           // send to each member
-// each member signs SHA-256(payload): BIP-340 for a Schnorr key, ECDSA
-// (`r || s`) for an ECDSA key
+// each member signs SHA-256(payload) and returns 64 bytes: a BIP-340
+// signature for a Schnorr key, `r || s` for an ECDSA key (a KMS that returns
+// DER needs it converted first)
 let pending = prepared
-    .add_signature(0, ContractMaintenanceSignature::ECDSA(sig_from_member_0))
-    .add_signature(2, ContractMaintenanceSignature::ECDSA(sig_from_member_2)) // any >= threshold members, by committee index
+    .add_signature(0, sig_from_member_0)
+    .add_signature(2, sig_from_member_2)         // any >= threshold members, by committee index
     .send()                                      // build + submit
     .await?;
 ```
 
-`prepare()` fetches the current authority `counter` (the update must carry it) and runs the precondition check (`insert` fails if the circuit already exists; `remove` fails if it doesn't). The returned [`PreparedMaintenance`] exposes `data_to_sign()` (the exact bytes a member signs, in the form above: the prefix, then the serialized contract address, the ordered update list, and the replay `counter` last; the `signatures` are not part of it), `add_signature(index, sig)` (attach an externally-produced signature at the signer's committee position), and `sign(index, &key)` (the local convenience). `.send().await` fills, funds, proves, signs and submits the update, and returns a `PendingTx`. The signed update rides the same dust-balancing path as a deploy. `.send()` submits with `send_tx_envelope`, so the fee Dust goes back to the wallet when the node never gets the update or rejects it as `Invalid`.
+`prepare()` fetches the current authority `counter` (the update must carry it) and runs the precondition check (`insert` fails if the circuit already exists; `remove` fails if it doesn't). The returned [`PreparedMaintenance`] exposes `data_to_sign()` (the exact bytes a member signs, in the form above: the prefix, then the serialized contract address, the ordered update list, and the replay `counter` last; the `signatures` are not part of it), `add_signature(index, bytes)` (attach the 64 bytes of an externally-produced signature at the signer's committee position), and `sign(index, &key)` (the local convenience). `.send().await` fills, funds, proves, signs and submits the update, and returns a `PendingTx`. The signed update rides the same dust-balancing path as a deploy. `.send()` submits with `send_tx_envelope`, so the fee Dust goes back to the wallet when the node never gets the update or rejects it as `Invalid`.
 
-Before building, the attached signatures are checked against the committee captured at `prepare()`: indices must be **distinct** and in range, each signature must be of the member's kind and **verify** over `data_to_sign`, and the count must meet the threshold. A duplicate index, an out-of-range index, a signature of the other kind, a wrong-key signature, or too few all fail here with a specific `ContractError::Maintenance`, rather than after paying to build and submit a transaction the chain would reject. At most one `replace_authority` is allowed per update (a second would silently overwrite the first on apply).
+Before building, the attached signatures are checked against the committee captured at `prepare()`: indices must be **distinct** and in range, each signature must decode in the scheme of its member and **verify** over `data_to_sign`, and the count must meet the threshold. A duplicate index, an out-of-range index, bytes that do not decode, a wrong-key signature, or too few all fail here with a specific `ContractError::Maintenance`, rather than after paying to build and submit a transaction the chain would reject. At most one `replace_authority` is allowed per update (a second would silently overwrite the first on apply).
 
 **Confirming success.** Like any contract action, a maintenance update runs in the fallible phase: a *well-formed* update (valid signatures, threshold met, correct counter) is included even if its effect can't apply. For example, an insert of a key for a circuit that was concurrently defined lands as a *partial success* (fees paid, no change). So `.send()` returning a `PendingTx` that reaches a block does not by itself prove the rotation applied. Wait for it: [`PendingTx::get_receipt`](../crates/midnight-provider/src/submit.rs) fails with `ProviderError::NotApplied` when the update did not apply.
 
@@ -230,16 +234,16 @@ Replacing the authority does **not** touch any local state — the SDK has none.
 `Contract::maintenance_authority()` returns the on-chain `ContractMaintenanceAuthority` (committee, threshold, counter). A member uses it to find the index they sign at:
 
 ```rust
-use midnight_contract::ContractMaintenanceVerifyingKey;
+use midnight_contract::parse_maintenance_key;
 
 let authority = contract.maintenance_authority().await?;
-let me = ContractMaintenanceVerifyingKey::ECDSA(my_key.verifying_key());
+let me = parse_maintenance_key(&my_sec1_key)?;
 let my_index = authority
     .committee
     .iter()
     .position(|member| *member == me)
     .expect("not on the committee") as u32;
-// ... prepared.add_signature(my_index, ContractMaintenanceSignature::ECDSA(my_key.sign(&payload))) ...
+// ... prepared.add_signature(my_index, my_signature_bytes) ...
 ```
 
 ## Type reference
@@ -254,7 +258,7 @@ let my_index = authority
 | Version tag | `ContractOperationVersion::V3` or `V4` | `midnight-ledger-v9` (`structure`) |
 | Versioned verifier key | `ContractOperationVersionedVerifierKey::V3(VerifierKey)` or `V4(VerifierKey)` | `midnight-ledger-v9` (`structure`) |
 | Entry-point / circuit name | `EntryPointBuf` | `midnight-onchain-state` |
-| Signature, signing key (`Schnorr` or `ECDSA`) | `ContractMaintenanceSignature` / `ContractMaintenanceSigningKey` | `midnight-ledger-v9` (`structure`, re-exported by `midnight-contract`) |
+| Signing key (`Schnorr` or `ECDSA`) | `SigningKey` | `midnight-ledger-v9` (`structure`, re-exported as `midnight_contract::ContractMaintenanceSigningKey`) |
 | Schnorr key, signature | `SigningKey` / `VerifyingKey` / `Signature` | `midnight-base-crypto` (`schnorr`, re-exported as `midnight_contract::schnorr`) |
 | ECDSA key, signature | `SigningKey` / `VerifyingKey` / `Signature` | `midnight-base-crypto` (`ecdsa`, re-exported as `midnight_contract::ecdsa`) |
 | Verifier key | `VerifierKey` | `midnight-transient-crypto` (`proofs`) |

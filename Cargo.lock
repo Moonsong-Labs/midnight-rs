@@ -1441,6 +1441,7 @@ name = "example-contract-maintenance"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "k256",
  "midnight-core",
  "rand 0.8.6",
  "tokio",

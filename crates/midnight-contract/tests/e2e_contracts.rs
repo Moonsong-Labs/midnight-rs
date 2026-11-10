@@ -629,7 +629,7 @@ fn execute_all_compiled_circuits() {
 ///
 /// Requires a devnet + indexer (MIDNIGHT_NODE_URL, MIDNIGHT_INDEXER_URL).
 #[tokio::test]
-async fn governance_deploy_then_apply_both_updates() {
+async fn governance_applies_updates_under_each_kind_of_committee() {
     use midnight_contract::{Contract, ContractMaintenanceSigningKey, ecdsa, schnorr};
     use midnight_onchain_runtime::state::EntryPointBuf;
 

@@ -8,6 +8,7 @@
 //! transaction with the collected signatures. See
 //! `docs/contract-maintenance-governance.md` for the protocol model.
 
+use midnight_helpers::TransactionSignature;
 use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPointBuf};
 use midnight_provider::PendingTx;
 use midnight_serialize::{Deserializable, Serializable};
@@ -16,7 +17,7 @@ use midnight_types::{MidnightWallet, TxEnvelope};
 
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
-use crate::{ContractMaintenanceSignature, ContractMaintenanceSigningKey, ecdsa};
+use crate::{ContractMaintenanceSigningKey, ecdsa, schnorr};
 
 // ---------------------------------------------------------------------------
 // Deploy-side: stamp a committee into the contract state.
@@ -104,48 +105,82 @@ pub(crate) fn validate_committee(
     Ok(())
 }
 
-/// The low-S form of `signature`, the only one the ledger accepts. Both forms
-/// sign the same message under the same key.
-fn low_s(signature: ecdsa::Signature) -> ecdsa::Signature {
-    let parsed = k256::ecdsa::Signature::from_slice(&encoded(&signature))
-        .expect("a ledger ECDSA signature encodes as `r || s`");
-    match parsed.normalize_s() {
-        Some(low) => ecdsa::Signature::deserialize(&mut &low.to_bytes()[..], 0)
-            .expect("k256 encodes a signature as `r || s`"),
-        None => signature,
+/// Read a committee member's public key from its bytes. A 32-byte BIP-340
+/// (x-only) key is a Schnorr member, and a SEC1 key (33 bytes compressed or 65
+/// bytes uncompressed) is an ECDSA member.
+///
+/// # Errors
+///
+/// [`ContractError::Maintenance`] when `bytes` has another length, or is not a
+/// point on secp256k1.
+pub fn parse_maintenance_key(
+    bytes: &[u8],
+) -> Result<ContractMaintenanceVerifyingKey, ContractError> {
+    let invalid = |e: &dyn std::fmt::Display| {
+        ContractError::Maintenance(format!("invalid maintenance key: {e}"))
+    };
+    match bytes.len() {
+        32 => schnorr::VerifyingKey::deserialize(&mut &bytes[..], 0)
+            .map(ContractMaintenanceVerifyingKey::Schnorr)
+            .map_err(|e| invalid(&e)),
+        33 | 65 => {
+            let key = k256::ecdsa::VerifyingKey::from_sec1_bytes(bytes).map_err(|e| invalid(&e))?;
+            ecdsa::VerifyingKey::deserialize(&mut key.to_encoded_point(true).as_bytes(), 0)
+                .map(ContractMaintenanceVerifyingKey::ECDSA)
+                .map_err(|e| invalid(&e))
+        }
+        len => Err(ContractError::Maintenance(format!(
+            "a maintenance key is 32 bytes (BIP-340) or 33 or 65 bytes (SEC1), got {len}"
+        ))),
     }
 }
 
-/// Check one signature against the committee member it claims, as the ledger
-/// will.
-fn check_signature(
+/// The 64-byte encoding of `signature`, which [`PreparedMaintenance::add_signature`]
+/// takes.
+fn signature_bytes(signature: &TransactionSignature) -> [u8; 64] {
+    match signature {
+        TransactionSignature::Schnorr(signature) => encoded(signature),
+        TransactionSignature::ECDSA(signature) => encoded(signature),
+    }
+    .try_into()
+    .expect("a signature encodes to 64 bytes")
+}
+
+/// The signature that `bytes` encode in the scheme of `member`, checked
+/// against it over `data`, as the ledger will.
+///
+/// An ECDSA signature with a high S becomes its low-S form, the only one the
+/// ledger accepts. Both forms sign the same message under the same key.
+fn member_signature(
     data: &[u8],
     index: u32,
     member: &ContractMaintenanceVerifyingKey,
-    signature: &ContractMaintenanceSignature,
-) -> Result<(), ContractError> {
-    let verifies = match (member, signature) {
-        (
-            ContractMaintenanceVerifyingKey::Schnorr(key),
-            ContractMaintenanceSignature::Schnorr(signature),
-        ) => key.verify(data, signature),
-        (
-            ContractMaintenanceVerifyingKey::ECDSA(key),
-            ContractMaintenanceSignature::ECDSA(signature),
-        ) => key.verify(data, signature),
-        (ContractMaintenanceVerifyingKey::Schnorr(_), ContractMaintenanceSignature::ECDSA(_)) => {
-            return Err(ContractError::Maintenance(format!(
-                "committee index {index} holds a Schnorr key, but its signature is ECDSA"
-            )));
+    bytes: &[u8; 64],
+) -> Result<TransactionSignature, ContractError> {
+    let undecodable = |e: &dyn std::fmt::Display| {
+        ContractError::Maintenance(format!(
+            "the signature for committee index {index} does not decode: {e}"
+        ))
+    };
+    let (signature, verifies) = match member {
+        ContractMaintenanceVerifyingKey::Schnorr(key) => {
+            let signature =
+                schnorr::Signature::deserialize(&mut &bytes[..], 0).map_err(|e| undecodable(&e))?;
+            let verifies = key.verify(data, &signature);
+            (TransactionSignature::Schnorr(signature), verifies)
         }
-        (ContractMaintenanceVerifyingKey::ECDSA(_), ContractMaintenanceSignature::Schnorr(_)) => {
-            return Err(ContractError::Maintenance(format!(
-                "committee index {index} holds an ECDSA key, but its signature is Schnorr"
-            )));
+        ContractMaintenanceVerifyingKey::ECDSA(key) => {
+            let signature =
+                k256::ecdsa::Signature::from_slice(bytes).map_err(|e| undecodable(&e))?;
+            let low_s = signature.normalize_s().unwrap_or(signature);
+            let signature = ecdsa::Signature::deserialize(&mut &low_s.to_bytes()[..], 0)
+                .map_err(|e| undecodable(&e))?;
+            let verifies = key.verify(data, &signature);
+            (TransactionSignature::ECDSA(signature), verifies)
         }
     };
     if verifies {
-        Ok(())
+        Ok(signature)
     } else {
         Err(ContractError::Maintenance(format!(
             "signature for committee index {index} does not verify"
@@ -159,14 +194,17 @@ fn check_signature(
 /// distinct valid signatures meets the threshold. Turns on-chain rejections
 /// (`NotNormalized` / `KeyNotInCommittee` / `InvalidCommitteeSignature` /
 /// `ThresholdMissed`) into early, specific errors.
+///
+/// Returns the signatures in the form the ledger takes.
 fn validate_signatures(
     data: &[u8],
-    signatures: &[(u32, ContractMaintenanceSignature)],
+    signatures: &[(u32, [u8; 64])],
     committee: &[ContractMaintenanceVerifyingKey],
     threshold: u32,
-) -> Result<(), ContractError> {
+) -> Result<Vec<(u32, TransactionSignature)>, ContractError> {
     let mut seen = std::collections::HashSet::new();
-    for (idx, sig) in signatures {
+    let mut decoded = Vec::with_capacity(signatures.len());
+    for (idx, bytes) in signatures {
         let member = committee.get(*idx as usize).ok_or_else(|| {
             ContractError::Maintenance(format!(
                 "signature index {idx} is outside the committee (size {})",
@@ -178,7 +216,7 @@ fn validate_signatures(
                 "duplicate signature for committee index {idx}"
             )));
         }
-        check_signature(data, *idx, member, sig)?;
+        decoded.push((*idx, member_signature(data, *idx, member, bytes)?));
     }
     if (seen.len() as u32) < threshold {
         return Err(ContractError::Maintenance(format!(
@@ -186,7 +224,7 @@ fn validate_signatures(
             seen.len()
         )));
     }
-    Ok(())
+    Ok(decoded)
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +437,7 @@ pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
     update: midnight_helpers::MaintenanceUpdate<midnight_helpers::DefaultDB>,
     /// The signatures collected so far, as `(committee index, signature)`.
-    signatures: Vec<(u32, ContractMaintenanceSignature)>,
+    signatures: Vec<(u32, [u8; 64])>,
     /// The on-chain committee at prepare time — used to verify attached
     /// signatures before submission.
     committee: Vec<ContractMaintenanceVerifyingKey>,
@@ -418,22 +456,14 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     }
 
     /// Attach a signature produced (anywhere) over [`Self::data_to_sign`], at the
-    /// signer's position in the on-chain committee. Its kind must match the
-    /// member's key. An ECDSA signature with a high S is attached in its low-S
-    /// form, the only one the ledger accepts.
-    pub fn add_signature(
-        mut self,
-        committee_index: u32,
-        signature: ContractMaintenanceSignature,
-    ) -> Self {
-        let signature = match signature {
-            ContractMaintenanceSignature::Schnorr(signature) => {
-                ContractMaintenanceSignature::Schnorr(signature)
-            }
-            ContractMaintenanceSignature::ECDSA(signature) => {
-                ContractMaintenanceSignature::ECDSA(low_s(signature))
-            }
-        };
+    /// signer's position in the on-chain committee.
+    ///
+    /// `signature` is the 64-byte encoding of the signature in the scheme of
+    /// that member's key: a BIP-340 signature for a Schnorr member, `r || s`
+    /// for an ECDSA member. An ECDSA signature with a high S is attached in its
+    /// low-S form, the only one the ledger accepts. [`Self::send`] checks
+    /// each signature against its member before it builds anything.
+    pub fn add_signature(mut self, committee_index: u32, signature: [u8; 64]) -> Self {
         self.signatures.push((committee_index, signature));
         self
     }
@@ -442,14 +472,14 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     /// attach it at `committee_index`.
     pub fn sign(self, committee_index: u32, key: &ContractMaintenanceSigningKey) -> Self {
         let signature = key.sign(&mut rand::thread_rng(), &self.data_to_sign());
-        self.add_signature(committee_index, signature)
+        self.add_signature(committee_index, signature_bytes(&signature))
     }
 
     /// Check the attached signatures against the committee/threshold captured at
     /// prepare time — distinct in-range indices, each verifying, count >=
     /// threshold — so an under-signed or malformed set fails here rather than
     /// after paying to build and submit.
-    fn check_signatures(&self) -> Result<(), ContractError> {
+    fn check_signatures(&self) -> Result<Vec<(u32, TransactionSignature)>, ContractError> {
         validate_signatures(
             &self.data_to_sign(),
             &self.signatures,
@@ -486,13 +516,13 @@ impl<'a, P> PreparedMaintenance<'a, P> {
         P: AsMidnightProvider,
         P::Wallet: MidnightWallet,
     {
-        self.check_signatures()?;
+        let signatures = self.check_signatures()?;
         let provider = self.contract.provider().as_midnight_provider();
         // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(crate::ledger::maintenance::maintenance_funded(
             provider,
             self.update,
-            &self.signatures,
+            &signatures,
         ))
         .await
     }
@@ -501,7 +531,6 @@ impl<'a, P> PreparedMaintenance<'a, P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schnorr;
     use midnight_typed_state::{StateValue, StorageHashMap};
 
     fn empty_state() -> ContractState<InMemoryDB> {
@@ -593,7 +622,7 @@ mod tests {
         let check = |sigs: &[(u32, &ContractMaintenanceSigningKey)], threshold| {
             let signatures: Vec<_> = sigs
                 .iter()
-                .map(|(i, k)| (*i, k.sign(&mut rand::thread_rng(), data)))
+                .map(|(i, k)| (*i, signature_bytes(&k.sign(&mut rand::thread_rng(), data))))
                 .collect();
             validate_signatures(data, &signatures, &committee, threshold)
         };
@@ -608,23 +637,49 @@ mod tests {
         assert!(check(&[(0, &k0), (0, &k0)], 1).is_err());
         // Index outside the committee (KeyNotInCommittee).
         assert!(check(&[(5, &k0)], 1).is_err());
-        // A signature of the other kind (committee[0] is Schnorr, k1 is ECDSA).
-        assert!(check(&[(0, &k1)], 1).is_err());
-        // Wrong ECDSA key at an index.
+        // Wrong key at an index.
         assert!(check(&[(1, &other_ecdsa)], 1).is_err());
     }
 
     #[test]
-    fn low_s_turns_a_high_s_signature_into_the_one_the_ledger_accepts() {
+    fn a_high_s_ecdsa_signature_is_taken_in_its_low_s_form() {
         let key = ecdsa::SigningKey::sample(rand::thread_rng());
+        let member = ContractMaintenanceVerifyingKey::ECDSA(key.verifying_key());
         let signature = key.sign(b"data");
         let (r, s) = k256::ecdsa::Signature::from_slice(&encoded(&signature))
             .unwrap()
             .split_scalars();
-        let high = k256::ecdsa::Signature::from_scalars(r, -*s).unwrap();
-        let high = ecdsa::Signature::deserialize(&mut &high.to_bytes()[..], 0).unwrap();
+        let high_s: [u8; 64] = k256::ecdsa::Signature::from_scalars(r, -*s)
+            .unwrap()
+            .to_bytes()
+            .into();
 
-        assert_eq!(low_s(high), signature);
+        let taken = validate_signatures(b"data", &[(0, high_s)], &[member], 1).unwrap();
+
+        assert_eq!(taken, vec![(0, TransactionSignature::ECDSA(signature))]);
+    }
+
+    #[test]
+    fn parse_maintenance_key_reads_each_encoding_as_its_kind() {
+        let schnorr = schnorr::SigningKey::sample(rand::thread_rng()).verifying_key();
+        let ecdsa = ecdsa::SigningKey::sample(rand::thread_rng()).verifying_key();
+        let compressed = encoded(&ecdsa);
+        let uncompressed = k256::ecdsa::VerifyingKey::from_sec1_bytes(&compressed)
+            .unwrap()
+            .to_encoded_point(false);
+
+        assert_eq!(
+            parse_maintenance_key(&encoded(&schnorr)).unwrap(),
+            ContractMaintenanceVerifyingKey::Schnorr(schnorr)
+        );
+        assert_eq!(
+            parse_maintenance_key(&compressed).unwrap(),
+            ContractMaintenanceVerifyingKey::ECDSA(ecdsa.clone())
+        );
+        assert_eq!(
+            parse_maintenance_key(uncompressed.as_bytes()).unwrap(),
+            ContractMaintenanceVerifyingKey::ECDSA(ecdsa)
+        );
     }
 
     #[test]
