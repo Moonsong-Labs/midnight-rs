@@ -217,10 +217,10 @@ pub enum NotApplied {
         hex::encode(.0.block_hash)
     )]
     PartialSuccess(TransactionReceipt),
-    /// The dispatch errored entirely (`System::ExtrinsicFailed`). Nothing
-    /// landed on chain; no Zswap I/O, no fees taken. Rare in normal
-    /// operation, since guaranteed-phase failures are normally rejected at
-    /// submission.
+    /// The dispatch errored entirely (`System::ExtrinsicFailed`). The
+    /// extrinsic is in the block, but the chain applied no part of the
+    /// transaction: no Zswap I/O and no fees. This is rare, because the node
+    /// normally refuses a guaranteed-phase failure at submission.
     #[error(
         "transaction {} landed in block {} but the chain did not apply it (failure)",
         .0.transaction_hash,
