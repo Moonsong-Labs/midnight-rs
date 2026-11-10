@@ -2,14 +2,6 @@
 //! passes, or formats, with no I/O of their own. The modules that produce them
 //! stay about their own job.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Health {
-    pub node_connected: bool,
-    pub block_height: Option<u64>,
-    pub peers: Option<u64>,
-    pub is_syncing: Option<bool>,
-}
-
 /// The Midnight ledger's identity for a transaction: SHA-256 over its tagged
 /// serialization.
 ///

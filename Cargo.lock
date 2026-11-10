@@ -2295,11 +2295,8 @@ version = "0.1.0"
 dependencies = [
  "compact-bindgen",
  "conformance",
- "hex",
  "midnight-base-crypto",
- "midnight-serialize",
  "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -3390,7 +3387,6 @@ dependencies = [
  "midnight-indexer-client",
  "midnight-private-state",
  "midnight-provider",
- "midnight-typed-state",
  "midnight-types",
  "midnight-wallet",
  "midnight-zkir-v3",
@@ -3565,7 +3561,6 @@ dependencies = [
  "midnight-serialize",
  "midnight-storage",
  "midnight-transient-crypto 3.0.0",
- "primitive-types",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

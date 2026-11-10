@@ -6,7 +6,7 @@
 mod common;
 
 use midnight_indexer_client::{BlockOffset, IndexerClient};
-use midnight_provider::{BlockHash, MidnightProvider, Provider};
+use midnight_provider::{BlockHash, MidnightProvider};
 
 fn provider() -> Option<MidnightProvider> {
     let (node, _indexer) = common::devnet_urls()?;
@@ -14,20 +14,17 @@ fn provider() -> Option<MidnightProvider> {
 }
 
 #[tokio::test]
-async fn health_check() {
-    let Some(p) = provider() else { return };
-    let health = p.health().await;
-    assert!(health.node_connected);
-    assert!(health.block_height.unwrap() > 0);
-    eprintln!("health: {health:?}");
-}
-
-#[tokio::test]
 async fn finalized_height_trails_the_best_head() {
     let Some(p) = provider() else { return };
     let finalized = p.get_finalized_block_height().await.unwrap();
     // Read best after finalized: finalized(t1) <= best(t1) <= best(t2).
-    let best = p.get_block_number().await.unwrap();
+    let best_hash = p.best_block_hash().await.unwrap();
+    let best = p
+        .get_block_header(best_hash)
+        .await
+        .unwrap()
+        .expect("the best block must have a header")
+        .number;
     assert!(finalized > 0);
     assert!(
         finalized <= best,
@@ -87,7 +84,7 @@ async fn an_address_with_no_contract_reads_as_none() {
     let best = p.best_block_hash().await.unwrap();
     assert_eq!(p.get_contract_state(&address, None).await.unwrap(), None);
     assert_eq!(
-        p.get_state_from_node(&address, Some(best)).await.unwrap(),
+        p.get_contract_state(&address, Some(best)).await.unwrap(),
         None
     );
 }

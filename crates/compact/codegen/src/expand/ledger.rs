@@ -9,12 +9,7 @@ use super::circuits::return_type_ident;
 use super::constants::field_const_ident;
 use super::emit_ir::type_ref;
 use super::helpers::{make_ident, to_pascal_case};
-use super::types::{encode_to_aligned_value, type_to_tokens};
-
-/// The name of the lazy query struct of the contract `contract_name`.
-fn query_struct_ident(contract_name: &str) -> Ident {
-    format_ident!("{}Query", contract_name)
-}
+use super::types::type_to_tokens;
 
 pub(crate) fn emit_ledger_wrapper(
     fields: &[LedgerField],
@@ -23,7 +18,6 @@ pub(crate) fn emit_ledger_wrapper(
     info: &crate::types::ContractInfo,
 ) -> TokenStream {
     let struct_name = format_ident!("{}", name);
-    let query_struct_name = query_struct_ident(name);
 
     // Circuits that carry an on-chain entry point, and so a verifier key.
     // Pure circuits are evaluated off-chain and have neither.
@@ -88,15 +82,6 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn from_hex(hex_state: &str) -> Result<Self, StateError> {
                 let bytes = hex::decode(hex_state).map_err(|e| StateError::HexDecode(e.to_string()))?;
                 Ok(Self::new(tagged_deserialize(bytes.as_slice())?))
-            }
-
-            /// Fetch the contract state at the node's best block from a provider and wrap it.
-            pub async fn from_provider<P: midnight_contract::Provider>(
-                provider: &P,
-                address: &str,
-            ) -> Result<Self, midnight_contract::ContractError> {
-                let state = midnight_contract::state::fetch_state(provider, address, None).await?;
-                Ok(Self::new(state))
             }
 
             #state_accessor
@@ -218,7 +203,7 @@ pub(crate) fn emit_ledger_wrapper(
             }
 
             /// Pin queries to the block `hash`. Default is the node's best block.
-            /// Both circuit calls and lazy ledger queries honour the pin through the
+            /// Both circuit calls and `ledger` reads honour the pin through the
             /// node RPC, and a circuit call runs at the time of that block.
             pub fn at_block(self, hash: midnight_contract::BlockHash) -> Self {
                 Self(self.0.at_block(hash))
@@ -288,20 +273,6 @@ pub(crate) fn emit_ledger_wrapper(
                 midnight_contract::ContractError,
             > {
                 self.0.maintenance_authority().await
-            }
-        }
-
-        impl<P> Contract<P>
-        where
-            for<'p> &'p P: lazy::StateQueryProvider,
-        {
-            /// Get a lazy query handle for per-field state access.
-            ///
-            /// This uses the `midnight_queryContractState` node RPC which is
-            /// only available on custom node builds. For standard devnet nodes,
-            /// use `ledger()` instead.
-            pub fn ledger_query(&self) -> #query_struct_name<&P> {
-                #query_struct_name::new(self.0.provider(), self.0.address().to_string(), self.0.at_block())
             }
         }
 
@@ -539,6 +510,17 @@ fn emit_deploy(
     };
 
     (deploy_fn, deploy_builder)
+}
+
+/// Generate a `&[usize]` expression for a field constant's index path.
+///
+/// For `Single(idx)` the constant is `usize`, so we wrap it: `&[FIELD_X]`.
+/// For `Path(p)` the constant is already `&[usize]`.
+fn field_indices_expr(const_name: &Ident, field_index: &FieldIndex) -> TokenStream {
+    match field_index {
+        FieldIndex::Single(_) => quote! { &[#const_name] },
+        FieldIndex::Path(_) => quote! { #const_name },
+    }
 }
 
 fn emit_field_accessor(field: &LedgerField, const_name: &Ident) -> TokenStream {
@@ -875,255 +857,6 @@ fn merkle_tree_default(field: &LedgerField) -> TokenStream {
                 .into(),
             )
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Lazy wrapper (query-per-field via Provider)
-// ---------------------------------------------------------------------------
-
-pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> TokenStream {
-    let struct_name = query_struct_ident(name);
-
-    let accessors: Vec<_> = fields
-        .iter()
-        .filter_map(|field| {
-            let const_name = field_const_ident(&field.name);
-            emit_lazy_field_accessor(field, &const_name)
-        })
-        .collect();
-
-    quote! {
-        /// Lazy query interface — each accessor calls the RPC to fetch only
-        /// the requested field instead of downloading the full contract state.
-        pub struct #struct_name<P: lazy::StateQueryProvider> {
-            address: String,
-            provider: P,
-            at_block_hash: Option<midnight_contract::BlockHash>,
-        }
-
-        impl<P: lazy::StateQueryProvider> #struct_name<P> {
-            /// Create a new lazy query handle for the given contract address:
-            /// a hex string or a typed `ContractAddress`.
-            pub fn new(provider: P, address: impl midnight_contract::IntoContractAddress, at_block_hash: Option<midnight_contract::BlockHash>) -> Self {
-                Self {
-                    address: midnight_contract::IntoContractAddress::into_contract_address_string(address),
-                    provider,
-                    at_block_hash,
-                }
-            }
-
-            #(#accessors)*
-        }
-    }
-}
-
-/// Generate a `&[usize]` expression for a field constant's index path.
-///
-/// For `Single(idx)` the constant is `usize`, so we wrap it: `&[FIELD_X]`.
-/// For `Path(p)` the constant is already `&[usize]`.
-fn field_indices_expr(const_name: &Ident, field_index: &FieldIndex) -> TokenStream {
-    match field_index {
-        FieldIndex::Single(_) => quote! { &[#const_name] },
-        FieldIndex::Path(_) => quote! { #const_name },
-    }
-}
-
-fn emit_lazy_field_accessor(field: &LedgerField, const_name: &Ident) -> Option<TokenStream> {
-    let method_name = make_ident(&field.name);
-    let doc = format!(
-        "Query the `{}` ledger field ({}) from the node.",
-        field.name, field.storage
-    );
-    let field_indices = field_indices_expr(const_name, &field.index);
-    let path_expr = quote! { lazy::build_query_path(#field_indices) };
-
-    match field.storage {
-        StorageKind::Cell => Some(emit_lazy_cell_accessor(
-            &method_name,
-            &doc,
-            &path_expr,
-            field.element_type.as_ref(),
-        )),
-        StorageKind::Counter => Some(emit_lazy_typed_cell_accessor(
-            &method_name,
-            &doc,
-            &path_expr,
-            &quote! { u64 },
-        )),
-        StorageKind::Map => Some(emit_lazy_map_accessor(&method_name, &path_expr, field)),
-        StorageKind::Set => Some(emit_lazy_set_accessor(&method_name, &path_expr, field)),
-        StorageKind::List => Some(emit_lazy_list_accessor(&method_name, &field_indices, field)),
-        // Merkle trees don't support single-value lookup via the RPC.
-        StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => None,
-    }
-}
-
-fn emit_lazy_cell_accessor(
-    method_name: &Ident,
-    doc: &str,
-    path_expr: &TokenStream,
-    cell_type: Option<&Type>,
-) -> TokenStream {
-    match cell_type {
-        Some(ty) => emit_lazy_typed_cell_accessor(method_name, doc, path_expr, &type_to_tokens(ty)),
-        None => {
-            let query_body = lazy_query_body(path_expr);
-            quote! {
-                #[doc = #doc]
-                pub async fn #method_name(&self) -> Result<StateValue<InMemoryDB>, lazy::ContractError> {
-                    #query_body
-                    Ok(sv)
-                }
-            }
-        }
-    }
-}
-
-fn emit_lazy_typed_cell_accessor(
-    method_name: &Ident,
-    doc: &str,
-    path_expr: &TokenStream,
-    ret_type: &TokenStream,
-) -> TokenStream {
-    let query_body = lazy_query_body(path_expr);
-    quote! {
-        #[doc = #doc]
-        pub async fn #method_name(&self) -> Result<#ret_type, lazy::ContractError> {
-            #query_body
-            Ok(cell_as::<#ret_type>(&sv)?)
-        }
-    }
-}
-
-fn emit_lazy_map_accessor(
-    method_name: &Ident,
-    path_expr: &TokenStream,
-    field: &LedgerField,
-) -> TokenStream {
-    let (key_ty, key_av) = lazy_key(field.key.as_ref());
-    let val_ty = storage_arg_tokens(field.value.as_ref());
-    let doc = format!("Look up a value by key in the `{}` map (map).", field.name);
-    let query = lazy_query_result(&quote! { key_path });
-    quote! {
-        #[doc = #doc]
-        pub async fn #method_name(&self, key: #key_ty) -> Result<Option<#val_ty>, lazy::ContractError> {
-            let mut key_path = #path_expr;
-            key_path.push(lazy::value_to_query_key(&#key_av));
-            #query
-            // No value and no error means key not found
-            if result.value.is_none() && result.error.is_none() {
-                return Ok(None);
-            }
-            let sv = lazy::decode_state_value(result)?;
-            Ok(Some(cell_as::<#val_ty>(&sv)?))
-        }
-    }
-}
-
-fn emit_lazy_set_accessor(
-    method_name: &Ident,
-    path_expr: &TokenStream,
-    field: &LedgerField,
-) -> TokenStream {
-    let (key_ty, key_av) = lazy_key(field.element_type.as_ref());
-    let doc = format!("Check if a key exists in the `{}` set (set).", field.name);
-    let query = lazy_query_result(&quote! { key_path });
-    quote! {
-        #[doc = #doc]
-        pub async fn #method_name(&self, key: #key_ty) -> Result<bool, lazy::ContractError> {
-            let mut key_path = #path_expr;
-            key_path.push(lazy::value_to_query_key(&#key_av));
-            #query
-            // Sets store Null for present keys; absent keys have no value
-            if result.value.is_none() && result.error.is_none() {
-                return Ok(false);
-            }
-            let _sv = lazy::decode_state_value(result)?;
-            Ok(true)
-        }
-    }
-}
-
-/// The Rust type of a lazy map key or set element `key`, and the expression
-/// that encodes `key` at the layout of `ty`.
-fn lazy_key(ty: Option<&Type>) -> (TokenStream, TokenStream) {
-    let key = quote! { key };
-    let encode = ty.map_or_else(
-        || quote! { AlignedValue::from(#key) },
-        |ty| encode_to_aligned_value(&key, ty),
-    );
-    (storage_arg_tokens(ty), encode)
-}
-
-fn emit_lazy_list_accessor(
-    method_name: &Ident,
-    field_indices: &TokenStream,
-    field: &LedgerField,
-) -> TokenStream {
-    let elem_ty = storage_arg_tokens(field.element_type.as_ref());
-    let doc = format!(
-        "Get an element by index from the `{}` list (list), counted from the front.\n\n\
-         Returns `Ok(None)` if `index` is not less than the list's length. For a large \
-         `index`, the read downloads the end of the list (see `lazy::list_element_path`).",
-        field.name
-    );
-    // One call, so that the length and the element come from the same state.
-    quote! {
-        #[doc = #doc]
-        pub async fn #method_name(&self, index: usize) -> Result<Option<#elem_ty>, lazy::ContractError> {
-            let field: &[usize] = #field_indices;
-            let lazy::ListElementPath { path, tails_left } = lazy::list_element_path(field, index);
-            let results = self.provider.query_contract_state(
-                &self.address,
-                vec![
-                    lazy::StateQuery { path: lazy::list_length_path(field) },
-                    lazy::StateQuery { path },
-                ],
-                self.at_block_hash,
-            ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
-            let [length, element] = results.as_slice() else {
-                return Err(lazy::ContractError::NoValue);
-            };
-            let sv = lazy::decode_state_value(length)?;
-            let len = cell_as::<u64>(&sv)?;
-            if index as u64 >= len {
-                return Ok(None);
-            }
-            let sv = lazy::decode_state_value(element)?;
-            let value = match tails_left {
-                None => cell_as::<#elem_ty>(&sv)?,
-                Some(n) => ListAccessor::<#elem_ty>::from_state(&sv)?
-                    .get(n)
-                    .ok_or(StateError::IndexOutOfBounds(n))??,
-            };
-            Ok(Some(value))
-        }
-    }
-}
-
-/// Statements that send one `provider.query_contract_state` call for the path
-/// `path_expr` and bind its single result as `result`.
-fn lazy_query_result(path_expr: &TokenStream) -> TokenStream {
-    quote! {
-        let results = self.provider.query_contract_state(
-            &self.address,
-            vec![lazy::StateQuery { path: #path_expr }],
-            self.at_block_hash,
-        ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
-        // One query was sent; a missing result is a malformed RPC response,
-        // not a panic.
-        let result = results.first().ok_or(lazy::ContractError::NoValue)?;
-    }
-}
-
-/// Statements that query the path `path_expr` and bind the decoded
-/// `StateValue` as `sv`.
-fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
-    let query = lazy_query_result(path_expr);
-    quote! {
-        #query
-        let sv = lazy::decode_state_value(result)?;
     }
 }
 
