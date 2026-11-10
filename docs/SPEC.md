@@ -80,7 +80,7 @@ midnight-core                    meta-crate; re-exports the public API
   │
   ├── compact-bindgen           `contract!` macro entry point
   │     ├── compact-bindgen-macro      proc-macro → compact-codegen
-  │     └── midnight-typed-state    accessors, nav, lazy::StateQueryProvider
+  │     └── midnight-typed-state    accessors, nav
   │
   ├── compact-codegen            Compact IR types + Rust codegen
   ├── compact-analyzed-ir        reader for the compiler's analyzed-ir.sexp artifact
@@ -174,7 +174,7 @@ Reservations clear when event replay (sync or resync) observes the corresponding
 
 ## Ledger 9
 
-The SDK runs on chains that run ledger 9. The wallet reads the encoding tag of the tip block's ledger parameters and of each ledger event. A tag that this build does not read fails the sync with `WalletError::UnknownLedger`, which names the tag, so a chain that runs ledger 8 fails the first sync. A full contract state read at a block before the fork (`at_block`) fails with `ContractError::StateFetch`, which names the tag `contract-state[v6]`. The lazy field queries read `impact-state-value[v2]`, which has the same tag before and after the fork.
+The SDK runs on chains that run ledger 9. The wallet reads the encoding tag of the tip block's ledger parameters and of each ledger event. A tag that this build does not read fails the sync with `WalletError::UnknownLedger`, which names the tag, so a chain that runs ledger 8 fails the first sync. A full contract state read at a block before the fork (`at_block`) fails with `ContractError::StateFetch`, which names the tag `contract-state[v6]`.
 
 A chain that forked from ledger 8 to ledger 9, such as mainnet, keeps its history from before the fork. The indexer serves those events in the ledger 8 encoding (`event[v9]`), in the same id sequence as the ledger 9 events (`event[v14]`). So the wallet keeps one private reader for the shielded events before the fork:
 
@@ -198,7 +198,7 @@ MidnightProvider.get_state_from_node(address, at)     → hex string
   → hex decode → tagged_deserialize → ContractState<InMemoryDB>
 ```
 
-Generated bindings expose this as `contract.ledger().await?`, which calls `midnight_contractState` over node RPC and returns a sync `Ledger` struct with typed field accessors. `contract.ledger_query()` (custom node builds only) routes per-field reads through `midnight_queryContractState` via the `StateQueryProvider` bridge in `midnight-provider`.
+Generated bindings expose this as `contract.ledger().await?`, which calls `midnight_contractState` over node RPC and returns a sync `Ledger` struct with typed field accessors.
 
 ### Deploy
 
@@ -434,7 +434,7 @@ The `PreparedTx` holds the reservation that the envelope carries. A failed prepa
 
 ## Block pinning
 
-A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the hash is a node block hash. Both paths that honour it are node RPCs: `midnight_contractState` for a whole `ContractState`, and `midnight_queryContractState` for a lazy per-field read. Neither accepts a height, so a caller holding a height resolves it to a hash first (`MidnightProvider::get_block_hashes_by_height`). A circuit call on a pinned handle also reads the block time (`Timestamp::Now`) at the pin, so its clock checks run at the time of that block.
+A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the hash is a node block hash. The state read that honours it is the node RPC `midnight_contractState`, for a whole `ContractState`. It takes only a block hash, so a caller holding a height resolves it to a hash first (`MidnightProvider::get_block_hashes_by_height`). A circuit call on a pinned handle also reads the block time (`Timestamp::Now`) at the pin, so its clock checks run at the time of that block.
 
 `Provider::get_contract_state` reads through `midnight_contractState` too, and takes the same optional hash. The generated `Ledger::from_provider(provider, address)` constructor passes none, so it reads at the best block.
 
@@ -446,7 +446,7 @@ A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the
 | `midnight-ledger` 8.1.2 (+ its `midnight-zswap`, `midnight-onchain-*`) | `RomarQ/midnight-ledger`, branch `rq/midnight-rs-ledger-8` | Ledger 8 types, which the wallet's reader of the shielded events before the fork uses, and which the helpers link |
 | `midnight-serialize`, `midnight-base-crypto`, `midnight-storage` | one instance, from the ledger 9 branch | The tagged codec, `HashOutput`, `AlignedValue`, `Sp` |
 | `midnight-ledger-unsafe-helpers` (+ the `midnight-node-ledger-helpers` it builds on) | `RomarQ/midnight-node`, branch `rq/midnight-rs-toolkit-2.1.0-rc.3` | A `ledger_9` module: the type surface, and the transaction and wallet builders. A `ledger_8` module for the wallet's reader |
-| `subxt` | crates.io | Substrate RPC (including `midnight_contractState` and `midnight_queryContractState`), extrinsic submission, watch streams, reconnecting client |
+| `subxt` | crates.io | Substrate RPC (including `midnight_contractState`), extrinsic submission, watch streams, reconnecting client |
 | `tokio-tungstenite` | crates.io | Indexer WebSocket subscriptions |
 
 Ledger 9 ships only as git tags, and upstream's ledger crates and helpers name each other by crates.io version, which a git consumer can only redirect with a `[patch.crates-io]` table. The forks name every ledger crate by `path` or by revision, so a crate that depends on midnight-rs needs no table. The root `Cargo.toml` pins each fork by revision. The helpers must build against the same ledger 9 set, so the branches move together, in the order that the root `Cargo.toml` gives.
@@ -473,6 +473,6 @@ Ledger 9 ships only as git tags, and upstream's ledger crates and helpers name e
 |---|---|
 | State change subscriptions | WebSocket subscription support for contract state updates |
 | Cross-contract calls | Bindings generate for a circuit that calls another contract, but the interpreter refuses the call with `InterpreterError::Unsupported` |
-| Lazy query batching | `query_contract_state` already takes a batch, but each generated `ledger_query()` accessor sends one query of its own |
+| Lazy field queries | A read of one ledger field through the `midnight_queryContractState` RPC of MIP-0009, with no download of the whole state. No released node serves the RPC. [midnightntwrk/midnight-node#2348](https://github.com/midnightntwrk/midnight-node/pull/2348) adds it, with tagged keys and a tagged `AlignedValue` for each result |
 | Production proving | `ProofProvider::prove` returns `Transaction`, not `Result`, so a backend signals failure by panicking. The SDK catches that unwind and reports `WalletError::Proving` rather than losing the task, but the trait has no error channel and this is not mainnet-ready |
 | A remote signer | `sign_transaction` signs after the proof, and `ProvenTx::signature_requests` and `ProvenTx::add_signature` let a custom wallet sign each request elsewhere, such as in an HSM. A custom wallet still funds through a `Wallet`, which derives the unshielded secret key from its seed: no constructor takes the role keys alone |

@@ -1044,7 +1044,7 @@ impl<P> ConnectBuilder<P> {
     }
 
     /// Pin queries to the block `hash`. Default is the node's best block.
-    /// Both circuit calls and lazy ledger queries honour the pin through the
+    /// Both circuit calls and full state reads honour the pin through the
     /// node RPC, and a circuit call runs at the time of that block. A circuit
     /// call or a full state read pinned to a block before the chain's hard
     /// fork to ledger 9 fails with [`ContractError::StateFetch`], which names
