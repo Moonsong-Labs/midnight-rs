@@ -4,6 +4,8 @@
 //! with a [`TransferBuilder`]; proving it ([`PreparedTransfer::prove`]) needs
 //! the build context alone.
 
+use std::cmp::Reverse;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures_util::FutureExt;
@@ -11,20 +13,23 @@ use midnight_helpers::{
     BlockContext, BuildContext, BuildUtxoOutput, BuildUtxoSpend, BuilderContext,
     CoinSelectionStrategy, DefaultDB, DustActions, DustLocalState, DustRegistration,
     DustRegistrationBuilder, DustSpend, DustWallet, FromContext, HashMapStorage, InputInfo, Intent,
-    IntentInfo, LedgerParameters, NIGHT, Nullifier, OfferInfo, OutputInfo, ProofPreimageMarker,
-    ProofProvider, Segment, ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet,
-    Signature, Sp, SplittableRng, StandardTransactionInfo, StdRng, Timestamp, TokenType,
-    Transaction, TransactionSigningKey, UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType,
-    UnshieldedWallet, UtxoOutputInfo, UtxoSelectionError, UtxoSpendInfo,
+    IntentInfo, LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, NIGHT, Nullifier, Offer,
+    OfferInfo, OutputInfo, ProofPreimage, ProofPreimageMarker, ProofProvider, Segment,
+    ShieldedCoinSelectionError, ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng,
+    StandardTransactionInfo, StdRng, Timestamp, TokenType, Transaction, TransactionSigningKey,
+    UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo,
+    UtxoSelectionError, UtxoSpendInfo,
 };
 
 use super::convert::{IntoLedger, IntoSdk, sdk_seed};
+use crate::error::refuse_repeated_nullifiers;
 use crate::hd::Seed;
+use crate::inputs::prepare_shielded_inputs;
 use crate::sync::TrackedUtxo;
 use crate::transfer::panic_message;
 use crate::{
-    DustPublicKey, ReservedInput, ShieldedRecipient, SpentInputs, SpentUtxoKey, TransferKind,
-    TransferRequest, TransferResult, UnshieldedRecipient, WalletError,
+    DustPublicKey, Network, ReservedInput, ShieldedRecipient, SpentInputs, SpentUtxoKey,
+    TransferKind, TransferRequest, TransferResult, UnshieldedRecipient, WalletError,
 };
 
 type UnprovenTx = midnight_helpers::UnprovenTransaction<DefaultDB>;
@@ -62,8 +67,8 @@ pub struct PreparedTransfer {
     reserved_at: Timestamp,
     /// The time after which the transaction can no longer land.
     expires_at: Timestamp,
-    /// The finished transaction whose fee this build pays, which
-    /// [`Self::prove`] merges the proven fee into.
+    /// The finished transaction that this build covers, which
+    /// [`Self::prove`] merges the proven part into.
     external: Option<FinalizedTx>,
 }
 
@@ -132,7 +137,9 @@ impl PreparedTransfer {
     /// land: the earliest TTL of its intents. Reserve its inputs until then.
     ///
     /// A transaction with no intent carries no TTL, and it gets the chain's
-    /// `global_ttl` after the chain time of the build.
+    /// `global_ttl` after the chain time of the build. A build from
+    /// [`balance_external`] expires with the transaction that it covers, as
+    /// that function describes.
     pub fn expires_at(&self) -> Timestamp {
         self.expires_at
     }
@@ -159,10 +166,10 @@ impl PreparedTransfer {
     /// Prove the transaction and serialize it. The slowest step in a build,
     /// and it touches no wallet.
     ///
-    /// A build from [`balance_external`] proves the fee intent and merges it
-    /// into the transaction whose fee it pays. The result then holds the
-    /// merged transaction and its fee, and its `spent` names only the Dust of
-    /// this build.
+    /// A build from [`balance_external`] proves its part and merges it into
+    /// the transaction that the part covers. The result then holds the merged
+    /// transaction and its fee, and its `spent` names only the inputs of this
+    /// build.
     pub async fn prove(self) -> Result<TransferResult, WalletError> {
         let spent = self.spent_inputs();
         let PreparedTransfer {
@@ -180,7 +187,7 @@ impl PreparedTransfer {
         let finalized = match external {
             Some(external) => external
                 .merge(&proven)
-                .map_err(transfer_err("merge fee intent"))?,
+                .map_err(transfer_err("merge the part"))?,
             None => proven,
         };
 
@@ -561,7 +568,7 @@ impl<'a> TransferBuilder<'a> {
         let context = self.context.clone();
         let mut tx_info =
             StandardTransactionInfo::new_from_context(self.context, self.proof_provider, None);
-        let prepared = super::inputs::prepare_shielded_inputs(
+        let prepared = prepare_shielded_inputs(
             &context,
             seed,
             &spent_shielded_inputs,
@@ -925,6 +932,30 @@ pub fn longest_ttl(context: &BuildContext) -> Timestamp {
         + context.with_ledger_state(|ls| ls.parameters.global_ttl)
 }
 
+/// The context a build executes against: a ledger of `network` with
+/// `parameters`, the default proving resolver, and `block_context`. It holds
+/// no wallet, so a build funds nothing from it until a wallet adds its view.
+///
+/// # Errors
+///
+/// [`WalletError::Transfer`] when the ledger refuses the genesis settings.
+pub fn execution_context(
+    network: impl Into<Network>,
+    parameters: LedgerParameters,
+    block_context: Option<BlockContext>,
+) -> Result<Arc<BuildContext>, WalletError> {
+    let network = network.into();
+    // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
+    let ledger_state =
+        LedgerState::with_genesis_settings(network.as_str(), parameters, 0, MAX_SUPPLY, 0)
+            .map_err(transfer_err("construct ledger state"))?;
+    Ok(Arc::new(LedgerContext {
+        ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
+        latest_block_context: std::sync::Mutex::new(block_context),
+        ..LedgerContext::new(network.as_str())
+    }))
+}
+
 /// `ttl` after `chain_time`, or `global_ttl` after it for `None`. See
 /// [`intent_ttl`].
 fn ttl_after(
@@ -1076,16 +1107,17 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
         .ok_or_else(|| WalletError::Transfer("no intent segment left for the fee".into()))
 }
 
-/// The TTL of the fee intent for `external`: the earliest TTL of its intents,
-/// kept between the chain time of `context` and [`longest_ttl`]. With no
-/// intent, it is [`longest_ttl`].
+/// The TTL of the cover's fee intent for `external`, and the expiry of
+/// everything that the cover reserves. It is the earliest TTL of the intents
+/// of `external`, kept between the chain time of `context` and
+/// [`longest_ttl`]. With no intent, it is [`longest_ttl`].
 ///
 /// The upper bound: `external` comes from another party, and an uncapped TTL
-/// would let that party set how long the sponsor's Dust stays reserved.
+/// would let that party set how long the inputs of the wallet stay reserved.
 ///
 /// The lower bound: a TTL that already passed would let the next build at the
-/// same chain time evict this reservation. That build would take the same Dust
-/// with the same stamp. A release of this build would then drop the
+/// same chain time evict this reservation. That build would take the same
+/// inputs with the same stamp. A release of this build would then drop the
 /// reservation of that build too. The wallet keeps a reservation while its TTL
 /// is at or after the chain time. So a TTL at the chain time keeps the
 /// reservation through every build at that chain time.
@@ -1099,26 +1131,61 @@ fn fee_ttl(external: &FinalizedTx, context: &BuildContext) -> Timestamp {
         .min(longest)
 }
 
-/// Draw the fee for a finished transaction this wallet did not build, and
-/// stop before proving.
+/// What a wallet adds to a proven transaction that it did not build.
 ///
-/// The fee rides an intent of its own at a segment `external` does not use.
-/// [`PreparedTransfer::prove`] merges it in after proving, so `external` and
-/// its proofs stay as they are.
-/// Each round prices the merge with a mock proof, which is exact here
-/// because the fee intent carries only Dust spends.
+/// The wallet adds it in a part of its own, which [`PreparedTransfer::prove`]
+/// proves and merges in, so the transaction and its proofs stay as they are.
+#[derive(Debug, Clone)]
+pub enum Cover {
+    /// The Dust fee alone, as a sponsor pays it. A deficit of any other token
+    /// is refused.
+    Fee,
+    /// Each shielded deficit, with the change back to the wallet, and the Dust
+    /// fee when `pay_fees` is true.
+    ///
+    /// The part spends the coins of `pins` first. It then selects coins of the
+    /// wallet for each deficit that the pins leave.
+    Shortfalls {
+        /// Coins of the wallet that the part spends whole, by nullifier.
+        pins: Vec<crate::Nullifier>,
+        /// Whether the part also pays the Dust fee.
+        pay_fees: bool,
+    },
+}
+
+/// Cover what `cover` names in `external`, a finished transaction that this
+/// wallet did not build, and stop before proving.
 ///
-/// The fee intent takes the earliest TTL of the intents of `external`, kept
-/// between the chain time of the build (see [`chain_time`]) and
-/// [`longest_ttl`]. So the Dust that the fee intent reserves expires when the
-/// merged transaction can no longer land. When `external` has no intent, the
-/// fee intent gets [`longest_ttl`].
+/// The cover rides a part of its own. Its shielded inputs and change ride an
+/// offer at the segment of each deficit that they cover, and its Dust rides an
+/// intent at a segment `external` does not use. [`PreparedTransfer::prove`]
+/// merges the part in after proving, so `external` and its proofs stay as they
+/// are. Each round prices the merge with a mock proof, which is exact here
+/// because the part carries only built-in proofs.
 ///
-/// `None` when `external` already balances its Dust. There is nothing to
-/// draw then, and an intent with no spends is one the ledger rejects.
+/// The shielded inputs come from the funding view of `seed` in the context of
+/// `tx_info`. The reservation of the part, and its fee intent, take the
+/// earliest TTL of the intents of `external`, kept between the chain time of
+/// the build (see [`chain_time`]) and [`longest_ttl`]. So what the part
+/// reserves expires when the merged transaction can no longer land. When
+/// `external` has no intent, they get [`longest_ttl`].
+///
+/// `None` when the part has nothing to add: no shielded deficit to cover, no
+/// pin, and no Dust to draw. An intent with no spends is one the ledger
+/// rejects.
+///
+/// # Errors
+///
+/// [`WalletError::Transfer`] for a deficit that `cover` does not take,
+/// [`WalletError::DuplicateInput`] when `cover` pins a coin twice,
+/// [`WalletError::InsufficientShielded`] when the coins of the wallet do not
+/// cover a deficit, and [`WalletError::InsufficientDust`] when its Dust does
+/// not cover the fee.
 pub fn balance_external(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
+    seed: &Seed,
     external: &FinalizedTx,
+    cover: &Cover,
 ) -> Result<Option<PreparedTransfer>, WalletError> {
     let now = tx_info.context.latest_block_context().tblock;
     let ttl = fee_ttl(external, &tx_info.context);
@@ -1127,13 +1194,28 @@ pub fn balance_external(
         .with_ledger_state(|ls| ls.network_id.clone());
     let segment = fee_segment(external)?;
 
+    let balance = external.balance(None).map_err(transfer_err("balance"))?;
+    let deficits = deficits_to_cover(&balance, cover)?;
+    let (pins, pay_fees) = match cover {
+        Cover::Fee => (Vec::new(), true),
+        Cover::Shortfalls { pins, pay_fees } => {
+            (pins.iter().map(|n| n.into_ledger()).collect(), *pay_fees)
+        }
+    };
+    let plan = plan_cover(&deficits, &pins, &free_coins(&tx_info.context, seed))?;
+    let offers = build_cover_offers(&mut tx_info, seed, &plan)?;
+
     let mut tracker = FeeBalanceTracker::default();
     for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
-        let batches = gather_dust_spends(&tx_info, tracker.request(), now)?;
+        // The first round draws nothing and prices `external` with the offers.
+        let batches = if pay_fees {
+            gather_dust_spends(&tx_info, tracker.request(), now)?
+        } else {
+            Vec::new()
+        };
         let spends = flat_spends(&batches);
-
-        // The first round draws nothing and prices `external` as it is.
-        let fee_tx: Option<UnprovenTx> = (!spends.is_empty()).then(|| {
+        let mut intents = HashMapStorage::new();
+        if !spends.is_empty() {
             let mut intent: midnight_helpers::UnprovenIntent<DefaultDB> =
                 Intent::empty(&mut tx_info.rng, ttl);
             intent.dust_actions = Some(Sp::new(DustActions {
@@ -1141,32 +1223,312 @@ pub fn balance_external(
                 registrations: Vec::new().into(),
                 ctime: now,
             }));
-            let intents = HashMapStorage::new().insert(segment, intent);
-            Transaction::from_intents(network_id.as_str(), intents)
-        });
-        let (fee, shortfall) = match &fee_tx {
-            Some(fee_tx) => {
-                let mock = fee_tx.mock_prove().map_err(transfer_err("mock_prove"))?;
-                let merged = external
-                    .merge(&mock)
-                    .map_err(transfer_err("merge fee intent"))?;
-                compute_missing_dust(&tx_info, &merged)?
-            }
-            None => compute_missing_dust(&tx_info, external)?,
-        };
-        if let Some(dust) = shortfall {
-            tracker.record_shortfall(fee, dust);
-            continue;
+            intents = intents.insert(segment, intent);
         }
-        let Some(fee_tx) = fee_tx else {
+        let part = (!offers.is_empty() || !intents.is_empty())
+            .then(|| offers.part(network_id.as_str(), intents));
+        if pay_fees {
+            let (fee, shortfall) = match &part {
+                Some(part) => {
+                    let mock = part.mock_prove().map_err(transfer_err("mock_prove"))?;
+                    let merged = external
+                        .merge(&mock)
+                        .map_err(transfer_err("merge the part"))?;
+                    compute_missing_dust(&tx_info, &merged)?
+                }
+                None => compute_missing_dust(&tx_info, external)?,
+            };
+            if let Some(dust) = shortfall {
+                tracker.record_shortfall(fee, dust);
+                continue;
+            }
+        }
+        let Some(part) = part else {
             return Ok(None);
         };
         confirm_dust_spends(&mut tx_info, &batches);
-        let mut prepared = PreparedTransfer::new(tx_info, fee_tx, batches);
+        let mut prepared = PreparedTransfer::new(tx_info, part, batches);
+        prepared.set_spent_shielded_inputs(plan.inputs.iter().map(|(n, _)| *n).collect());
+        prepared.expires_at = ttl;
         prepared.external = Some(external.clone());
         return Ok(Some(prepared));
     }
     Err(tracker.into_error())
+}
+
+/// The shielded deficits of a transaction whose balance is `balance` that
+/// `cover` takes, by token and segment.
+///
+/// A Dust deficit is the fee, which the fee loop covers.
+///
+/// # Errors
+///
+/// [`WalletError::Transfer`] for a deficit that `cover` does not take: any
+/// shielded deficit for [`Cover::Fee`], and any unshielded deficit. A part of
+/// its own cannot cover an unshielded deficit: the ledger counts a fallible one
+/// at the segment of its intent, and a merge refuses a second intent there.
+fn deficits_to_cover(
+    balance: &BTreeMap<(TokenType, u16), i128>,
+    cover: &Cover,
+) -> Result<BTreeMap<(ShieldedTokenType, u16), u128>, WalletError> {
+    let mut deficits = BTreeMap::new();
+    for (&(token, segment), &value) in balance {
+        if value >= 0 {
+            continue;
+        }
+        let lack = value.unsigned_abs();
+        let refused = |what: String, reason: &str| {
+            WalletError::Transfer(format!(
+                "the transaction lacks {lack} of {what} at segment {segment}, and {reason}"
+            ))
+        };
+        match (token, cover) {
+            (TokenType::Dust, _) => {}
+            (TokenType::Shielded(token), Cover::Shortfalls { .. }) => {
+                deficits.insert((token, segment), lack);
+            }
+            (TokenType::Shielded(token), Cover::Fee) => {
+                return Err(refused(
+                    format!("shielded token {}", token.into_sdk()),
+                    "a sponsor pays the Dust fee alone",
+                ));
+            }
+            (TokenType::Unshielded(token), _) => {
+                return Err(refused(
+                    format!("unshielded token {}", token.into_sdk()),
+                    "a part of its own cannot cover an unshielded deficit",
+                ));
+            }
+        }
+    }
+    Ok(deficits)
+}
+
+/// A coin in the funding view of a wallet: its nullifier, token and value.
+type FreeCoin = (Nullifier, ShieldedTokenType, u128);
+
+/// The coins in the funding view of `seed` in `context`.
+///
+/// # Panics
+///
+/// Panics when `context` holds no wallet for `seed`.
+fn free_coins(context: &BuildContext, seed: &Seed) -> Vec<FreeCoin> {
+    context.with_wallet_from_seed(seed.into_ledger(), |wallet| {
+        wallet
+            .shielded
+            .state
+            .coins
+            .iter()
+            .map(|(nullifier, coin)| (nullifier, coin.type_, coin.value))
+            .collect()
+    })
+}
+
+/// The coins that a cover spends, and the change that it returns.
+#[derive(Debug, PartialEq, Eq)]
+struct CoverPlan {
+    /// Each coin to spend, and the segment its input rides at. The pins come
+    /// first.
+    inputs: Vec<(Nullifier, u16)>,
+    /// The change at each token and segment.
+    change: Vec<((ShieldedTokenType, u16), u128)>,
+}
+
+/// Plan how a cover pays `deficits` from `coins`, the funding view of the
+/// wallet.
+///
+/// Each coin of `pins` is spent whole, at the segment of the largest deficit
+/// of its token that is left, or at the guaranteed segment when none is left.
+/// Then each deficit that the pins leave takes coins of its token in the order
+/// of [`CoinSelectionStrategy::LargestFirst`]. A call or a deploy names no coin
+/// order. The ledger balances each token at each segment, so what the coins at
+/// a token and segment hold beyond its deficit comes back as change at that
+/// segment.
+///
+/// # Errors
+///
+/// [`WalletError::DuplicateInput`] when `pins` names a coin twice,
+/// [`WalletError::Transfer`] when a pin is not in `coins`, and
+/// [`WalletError::InsufficientShielded`] when the coins of a token do not cover
+/// its deficits. That error gives the deficits of the token across segments,
+/// and what `coins` hold of it.
+fn plan_cover(
+    deficits: &BTreeMap<(ShieldedTokenType, u16), u128>,
+    pins: &[Nullifier],
+    coins: &[FreeCoin],
+) -> Result<CoverPlan, WalletError> {
+    refuse_repeated_nullifiers(pins)?;
+    let mut taken = Taken {
+        left: deficits.clone(),
+        totals: BTreeMap::new(),
+        inputs: Vec::new(),
+    };
+
+    for pin in pins {
+        let coin = *coins.iter().find(|(n, ..)| n == pin).ok_or_else(|| {
+            WalletError::Transfer(format!(
+                "shielded coin {pin:?} is not spendable by this wallet \
+                 (already spent, not yet synced, or not owned by it)"
+            ))
+        })?;
+        let segment = taken
+            .left
+            .iter()
+            .filter(|((token, _), left)| *token == coin.1 && **left > 0)
+            .max_by_key(|(_, left)| **left)
+            .map_or(Segment::Guaranteed.into(), |((_, segment), _)| *segment);
+        taken.take(coin, segment)?;
+    }
+
+    for &key @ (token, segment) in deficits.keys() {
+        let mut candidates: Vec<FreeCoin> = coins
+            .iter()
+            .filter(|(n, t, _)| *t == token && !taken.spends(n))
+            .copied()
+            .collect();
+        candidates.sort_by_key(|(.., value)| Reverse(*value));
+        for coin in candidates {
+            if taken.left[&key] == 0 {
+                break;
+            }
+            taken.take(coin, segment)?;
+        }
+        if taken.left[&key] > 0 {
+            return Err(WalletError::InsufficientShielded {
+                token_type: token.into_sdk(),
+                required: deficits
+                    .iter()
+                    .filter(|((t, _), _)| *t == token)
+                    .fold(0u128, |sum, (_, deficit)| sum.saturating_add(*deficit)),
+                available: coins
+                    .iter()
+                    .filter(|(_, t, _)| *t == token)
+                    .fold(0u128, |sum, (.., value)| sum.saturating_add(*value)),
+            });
+        }
+    }
+
+    let change = taken
+        .totals
+        .into_iter()
+        .filter_map(|(key, total)| {
+            let owed = total.saturating_sub(deficits.get(&key).copied().unwrap_or(0));
+            (owed > 0).then_some((key, owed))
+        })
+        .collect();
+    Ok(CoverPlan {
+        inputs: taken.inputs,
+        change,
+    })
+}
+
+/// The coins that [`plan_cover`] has taken, and the deficits they leave.
+struct Taken {
+    left: BTreeMap<(ShieldedTokenType, u16), u128>,
+    totals: BTreeMap<(ShieldedTokenType, u16), u128>,
+    inputs: Vec<(Nullifier, u16)>,
+}
+
+impl Taken {
+    /// Spend `coin` at `segment`.
+    fn take(
+        &mut self,
+        (nullifier, token, value): FreeCoin,
+        segment: u16,
+    ) -> Result<(), WalletError> {
+        let total = self.totals.entry((token, segment)).or_default();
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| WalletError::Transfer("shielded values overflow a u128 total".into()))?;
+        if let Some(left) = self.left.get_mut(&(token, segment)) {
+            *left = left.saturating_sub(value);
+        }
+        self.inputs.push((nullifier, segment));
+        Ok(())
+    }
+
+    fn spends(&self, nullifier: &Nullifier) -> bool {
+        self.inputs.iter().any(|(n, _)| n == nullifier)
+    }
+}
+
+/// The Zswap offers of a cover's part.
+///
+/// Built once, because each input hands over its spend once.
+struct CoverOffers {
+    guaranteed: Option<Offer<ProofPreimage, DefaultDB>>,
+    fallible: HashMapStorage<u16, Offer<ProofPreimage, DefaultDB>, DefaultDB>,
+}
+
+impl CoverOffers {
+    fn is_empty(&self) -> bool {
+        self.guaranteed.is_none() && self.fallible.is_empty()
+    }
+
+    /// The part that carries these offers and `intents`.
+    fn part(
+        &self,
+        network_id: &str,
+        intents: HashMapStorage<u16, midnight_helpers::UnprovenIntent<DefaultDB>, DefaultDB>,
+    ) -> UnprovenTx {
+        Transaction::new(
+            network_id,
+            intents,
+            self.guaranteed.clone(),
+            self.fallible.clone(),
+        )
+    }
+}
+
+/// Spend the coins of `plan` from the funding view of `seed`, and build the
+/// offers that carry them and the change.
+fn build_cover_offers(
+    tx_info: &mut StandardTransactionInfo<DefaultDB, BuildContext>,
+    seed: &Seed,
+    plan: &CoverPlan,
+) -> Result<CoverOffers, WalletError> {
+    let nullifiers: Vec<Nullifier> = plan.inputs.iter().map(|(n, _)| *n).collect();
+    let prepared = prepare_shielded_inputs(
+        &tx_info.context,
+        seed,
+        &nullifiers,
+        &mut tx_info.rng.split(),
+    )?;
+    let empty = || OfferInfo {
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        transients: Vec::new(),
+    };
+    let mut by_segment: BTreeMap<u16, OfferInfo<DefaultDB, BuildContext>> = BTreeMap::new();
+    for (input, (_, segment)) in prepared.into_iter().zip(&plan.inputs) {
+        let offer = by_segment.entry(*segment).or_insert_with(empty);
+        offer.inputs.push(Box::new(input));
+    }
+    for &((token_type, segment), value) in &plan.change {
+        let offer = by_segment.entry(segment).or_insert_with(empty);
+        offer.outputs.push(Box::new(OutputInfo {
+            destination: seed.into_ledger(),
+            token_type,
+            value,
+        }));
+    }
+
+    let guaranteed_segment: u16 = Segment::Guaranteed.into();
+    let mut offers = CoverOffers {
+        guaranteed: None,
+        fallible: HashMapStorage::new(),
+    };
+    for (segment, mut info) in by_segment {
+        let offer = info
+            .build(&mut tx_info.rng, tx_info.context.clone())
+            .map_err(transfer_err("build the cover offer"))?;
+        if segment == guaranteed_segment {
+            offers.guaranteed = Some(offer);
+        } else {
+            offers.fallible = offers.fallible.insert(segment, offer);
+        }
+    }
+    Ok(offers)
 }
 
 /// Upper bound on the rounds of a fee-balancing loop. Each round requests the
@@ -1820,5 +2182,141 @@ mod tests {
             "missing accumulated dust need: {msg}"
         );
         assert!(msg.contains("1009"), "missing last fee: {msg}");
+    }
+
+    fn token(byte: u8) -> ShieldedTokenType {
+        ShieldedTokenType(midnight_helpers::HashOutput([byte; 32]))
+    }
+
+    fn coin(byte: u8) -> Nullifier {
+        Nullifier(midnight_helpers::HashOutput([byte; 32]))
+    }
+
+    fn shortfalls() -> Cover {
+        Cover::Shortfalls {
+            pins: Vec::new(),
+            pay_fees: true,
+        }
+    }
+
+    /// A sponsor that took a swap side would pay it from its own coins.
+    #[test]
+    fn a_sponsor_pays_the_fee_alone() {
+        let fee_only = BTreeMap::from([
+            ((TokenType::Dust, 0), -500),
+            ((TokenType::Shielded(token(1)), 0), 10),
+        ]);
+        assert!(
+            deficits_to_cover(&fee_only, &Cover::Fee)
+                .unwrap()
+                .is_empty()
+        );
+
+        let swap_side = BTreeMap::from([((TokenType::Shielded(token(1)), 1), -10)]);
+        assert!(matches!(
+            deficits_to_cover(&swap_side, &Cover::Fee),
+            Err(WalletError::Transfer(_))
+        ));
+        assert_eq!(
+            deficits_to_cover(&swap_side, &shortfalls()).unwrap(),
+            BTreeMap::from([((token(1), 1), 10)])
+        );
+    }
+
+    /// The ledger balances each token at each segment, so a cover that sums
+    /// the deficits of a token leaves one of its segments unbalanced.
+    #[test]
+    fn the_cover_takes_each_deficit_at_its_segment() {
+        let balance = BTreeMap::from([
+            ((TokenType::Shielded(token(1)), 0), -5),
+            ((TokenType::Shielded(token(1)), 1), -7),
+            ((TokenType::Shielded(token(2)), 1), 3),
+            ((TokenType::Dust, 0), -100),
+        ]);
+        assert_eq!(
+            deficits_to_cover(&balance, &shortfalls()).unwrap(),
+            BTreeMap::from([((token(1), 0), 5), ((token(1), 1), 7)])
+        );
+    }
+
+    /// A part of its own cannot pay an unshielded deficit, so a cover that
+    /// skips one proves a transaction that the node refuses.
+    #[test]
+    fn no_cover_takes_an_unshielded_deficit() {
+        let unshielded =
+            midnight_helpers::UnshieldedTokenType(midnight_helpers::HashOutput([3; 32]));
+        let balance = BTreeMap::from([((TokenType::Unshielded(unshielded), 0), -1)]);
+        for cover in [Cover::Fee, shortfalls()] {
+            assert!(
+                matches!(
+                    deficits_to_cover(&balance, &cover),
+                    Err(WalletError::Transfer(_))
+                ),
+                "{cover:?}"
+            );
+        }
+    }
+
+    /// A pin in the guaranteed offer leaves a fallible receive unbalanced. A
+    /// pin with no deficit of its token still comes back whole as change.
+    #[test]
+    fn a_pin_rides_at_the_segment_of_its_deficit() {
+        let deficits = BTreeMap::from([((token(1), 1), 400)]);
+        let coins = [(coin(1), token(1), 1000), (coin(2), token(2), 30)];
+
+        assert_eq!(
+            plan_cover(&deficits, &[coin(1), coin(2)], &coins).unwrap(),
+            CoverPlan {
+                inputs: vec![(coin(1), 1), (coin(2), 0)],
+                change: vec![((token(1), 1), 600), ((token(2), 0), 30)],
+            }
+        );
+    }
+
+    /// A spend leaves its coin in the funding view, so a selection that does
+    /// not skip the pins spends the largest one twice.
+    #[test]
+    fn the_selection_covers_what_the_pins_leave_with_other_coins() {
+        let deficits = BTreeMap::from([((token(1), 0), 12)]);
+        let coins = [
+            (coin(1), token(1), 8),
+            (coin(2), token(1), 5),
+            (coin(3), token(1), 3),
+            (coin(4), token(2), 50),
+        ];
+
+        assert_eq!(
+            plan_cover(&deficits, &[coin(1)], &coins).unwrap(),
+            CoverPlan {
+                inputs: vec![(coin(1), 0), (coin(2), 0)],
+                change: vec![((token(1), 0), 1)],
+            }
+        );
+    }
+
+    /// A short cover would prove a transaction that the node refuses. The
+    /// error gives what the token needs across its segments and what the
+    /// wallet holds of it.
+    #[test]
+    fn a_short_cover_is_refused_with_the_need_of_the_token() {
+        let deficits = BTreeMap::from([((token(1), 0), 6), ((token(1), 1), 4)]);
+        let coins = [
+            (coin(1), token(1), 3),
+            (coin(2), token(1), 4),
+            (coin(3), token(2), 100),
+        ];
+
+        let err = plan_cover(&deficits, &[], &coins).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                WalletError::InsufficientShielded {
+                    required: 10,
+                    available: 7,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
     }
 }

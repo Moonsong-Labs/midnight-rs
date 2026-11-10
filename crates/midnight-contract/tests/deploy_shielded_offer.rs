@@ -1,7 +1,8 @@
 //! A deploy that carries a shielded offer applies on chain.
 //!
-//! The deploy proves with no fee, and the wallet then merges a fee intent of
-//! its own. Only the node can say that it accepts a transaction of that shape.
+//! The deploy proves with no fee, and the wallet then merges a part of its
+//! own that spends the offer's coin, returns the change and pays the fee. Only
+//! the node can say that it accepts a transaction of that shape.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics. The
@@ -98,7 +99,7 @@ async fn deploy_funded_with_shielded_offer() {
     );
 
     // The submit hands back only what the result names, so it must name the
-    // offer's coin and the fee Dust, which two build contexts reserved.
+    // offer's coin and the fee Dust.
     let spent = &result.transaction.spent;
     assert!(
         spent.shielded.iter().any(|coin| coin.input == nullifier),

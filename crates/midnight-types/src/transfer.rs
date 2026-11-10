@@ -68,11 +68,6 @@ pub struct SpentUtxoKey {
 /// its own entry, not one a later build made over the same input at a later
 /// chain time. Two reservations at one chain time share the stamp, which is
 /// why a reservation is released once.
-///
-/// One transaction can hold the inputs of two reservations with different
-/// stamps. A contract call or a deploy with a shielded offer reserves its
-/// pinned coins in its own build context, and the Dust for its fee in a fresh
-/// one. [`Self::merge`] joins the two, so one value hands both back.
 #[derive(Debug, Default, Clone)]
 pub struct SpentInputs {
     /// The Dust spends that fund the fee, by nullifier.
@@ -94,24 +89,6 @@ pub struct ReservedInput<T> {
 }
 
 impl SpentInputs {
-    /// The shielded coins a build pinned, for one that spends nothing else.
-    pub fn from_shielded(shielded: Vec<Nullifier>, reserved_at: Timestamp) -> Self {
-        Self {
-            shielded: shielded
-                .into_iter()
-                .map(|input| ReservedInput { input, reserved_at })
-                .collect(),
-            ..Self::default()
-        }
-    }
-
-    /// Add the inputs of `other`. Each input keeps its own stamp.
-    pub fn merge(&mut self, other: SpentInputs) {
-        self.dust.extend(other.dust);
-        self.unshielded.extend(other.unshielded);
-        self.shielded.extend(other.shielded);
-    }
-
     /// Whether this build drew nothing at all, so there is nothing to reserve
     /// and nothing to hand back.
     pub fn is_empty(&self) -> bool {

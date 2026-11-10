@@ -17,36 +17,31 @@ use crate::interpreter;
 use crate::runtime;
 use crate::state::StateAtBlock;
 
-/// Shielded (Zswap) coins to attach to a contract call, funding a circuit's
-/// shielded-token deficit (e.g. a `receiveShielded` on the caller's own coin)
-/// from the caller's wallet.
+/// Coins of the caller's wallet that a contract call spends first.
 ///
-/// The build pipeline auto-balances only Dust (fees), never shielded tokens, so
-/// a circuit that receives a coin needs the coin attached as an external Zswap
-/// input or the transaction fails to balance. This carries that input.
+/// A circuit that receives a shielded coin (e.g. `receiveShielded`) leaves the
+/// call short of that token. The wallet covers each such deficit: it spends
+/// these coins first, then selects coins of its own for what they leave, and
+/// returns the change. With no coins here, the wallet selects them all.
 ///
 /// All coins come from the provider's single funding wallet. Spending coins
-/// owned by other wallets (multi-party offers) is not supported yet: the call's
-/// build context only holds the funding wallet, so any other origin's coin
-/// selection would fail.
+/// owned by other wallets (multi-party offers) is not supported yet.
 ///
 /// Built by the generated `Circuits` builder's `with_shielded_inputs`, and
 /// accepted directly by [`Contract::call_with`](crate::Contract::call_with).
 /// Empty by default (the common case: a call with no shielded input).
 #[derive(Default)]
 pub struct ShieldedInputs {
-    /// Wallet coins to spend as pinned shielded inputs. Each is selected
-    /// exactly by its nullifier (never amount-based) and routed to the segment
-    /// of the circuit output it funds. See
+    /// Wallet coins to spend, each named exactly by its nullifier. See
     /// [`SpendableShieldedCoin`](midnight_types::SpendableShieldedCoin).
     ///
-    /// The coins must COVER the shielded value the circuit receives. Zswap
-    /// balances per (token, segment) delta rather than per coin identity, so
-    /// several coins may fund one larger `receiveShielded`, and whatever they
-    /// carry beyond what the circuit's outputs draw returns to this wallet as a
-    /// change output. Coins that fall short leave the call unbalanced, which
-    /// the fee-paying step refuses before submitting; a Dustless call carries
-    /// the shortfall to the node instead.
+    /// The call spends each coin whole, at the segment of the largest deficit
+    /// of its token that is left. When no deficit of its token is left, the
+    /// coin goes to the guaranteed segment. Zswap balances each token at each
+    /// segment rather than each coin, so several coins may fund one larger
+    /// `receiveShielded`. Whatever the spent coins carry beyond the deficit
+    /// returns to this wallet as a change output. A coin whose token has no
+    /// deficit comes back whole.
     pub coins: Vec<midnight_types::SpendableShieldedCoin>,
 }
 
@@ -89,8 +84,8 @@ pub(crate) fn run_call(
 /// Build the funded, proven transaction of a circuit run.
 ///
 /// `exec_result` is the run of `circuit` on `state`. The build resyncs the
-/// wallet and reserves the inputs that the transaction spends, and the result
-/// names them.
+/// wallet, which covers the call and reserves the inputs that it spends, and
+/// the result names them.
 #[expect(
     clippy::too_many_arguments,
     reason = "the inputs of the ledger's own `call_transaction`, one value each"

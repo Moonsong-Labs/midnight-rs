@@ -132,6 +132,11 @@ pub enum WalletError {
     /// When a pending build spends coins of this token, wait for its
     /// transaction to finalize, then build again. Otherwise the wallet must
     /// receive more of the token.
+    ///
+    /// A [`Cover`](crate::Cover) spends each coin at one segment, and it gives
+    /// the coins to the segments in turn. When a transaction lacks the token
+    /// at more than one segment, the cover can fail with `available` at or
+    /// above `required`.
     #[error("insufficient shielded token {token_type}: need {required}, {available} spendable")]
     InsufficientShielded {
         /// The token the transfer spends.
@@ -291,7 +296,7 @@ pub enum WalletError {
 ///
 /// [`WalletError::DuplicateInput`] naming the first nullifier that `nullifiers`
 /// repeats.
-pub fn refuse_repeated_nullifiers<N: Eq + Hash + Debug>(
+pub(crate) fn refuse_repeated_nullifiers<N: Eq + Hash + Debug>(
     nullifiers: &[N],
 ) -> Result<(), WalletError> {
     let mut named = HashSet::with_capacity(nullifiers.len());

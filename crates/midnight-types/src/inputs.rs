@@ -26,7 +26,7 @@ use crate::hd::Seed;
 /// `build` hands it over and ignores the rng and context it is passed: the
 /// spend has happened, and repeating it would produce a different nullifier for
 /// a coin already committed to this transaction.
-pub struct PreparedInput {
+pub(crate) struct PreparedInput {
     input: Option<Input<ProofPreimage, DefaultDB>>,
     token_type: ShieldedTokenType,
     value: u128,
@@ -84,13 +84,13 @@ impl midnight_helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
 /// # Panics
 ///
 /// Panics when `context` holds no wallet for `seed`.
-pub fn prepare_shielded_inputs(
+pub(crate) fn prepare_shielded_inputs(
     context: &Arc<BuildContext>,
     seed: &Seed,
     nullifiers: &[Nullifier],
     rng: &mut StdRng,
 ) -> Result<Vec<PreparedInput>, WalletError> {
-    crate::refuse_repeated_nullifiers(nullifiers)?;
+    crate::error::refuse_repeated_nullifiers(nullifiers)?;
     context.with_wallet_from_seed(seed.into_ledger(), |wallet| {
         let mut prepared = Vec::with_capacity(nullifiers.len());
         for nullifier in nullifiers {

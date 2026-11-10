@@ -7,8 +7,8 @@ use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use midnight_helpers::{
     BlockContext, DefaultDB, DustNullifier, DustWallet, Event, LedgerContext, LedgerParameters,
-    LedgerState, MAX_SUPPLY, SecretKeys, ShieldedWallet, Sp, Timestamp, UnshieldedWallet,
-    Wallet as ContextWallet, WalletState as ZswapLocalState,
+    SecretKeys, ShieldedWallet, Sp, Timestamp, UnshieldedWallet, Wallet as ContextWallet,
+    WalletState as ZswapLocalState,
 };
 use midnight_indexer_client::SubscriptionClient;
 use midnight_types::convert::{IntoLedger, IntoSdk};
@@ -854,22 +854,11 @@ impl Wallet {
     /// first, since the embedded block context drives proof root lookup and
     /// transaction TTL.
     pub fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
-        // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
-        let ledger_state = LedgerState::with_genesis_settings(
-            self.network.as_str(),
+        midnight_types::execution_context(
+            &self.network,
             self.parameters.clone(),
-            0,
-            MAX_SUPPLY,
-            0,
+            self.block_context.clone(),
         )
-        .map_err(|e| WalletError::Sync(format!("construct ledger state: {e:?}")))?;
-
-        Ok(Arc::new(LedgerContext {
-            ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
-            wallets: std::sync::Mutex::new(std::collections::HashMap::new()),
-            resolver: tokio::sync::Mutex::new(&*midnight_helpers::context::DEFAULT_RESOLVER),
-            latest_block_context: std::sync::Mutex::new(self.block_context.clone()),
-        }))
     }
 
     /// Put this wallet's spendable view into `ctx`: its unshielded UTXOs, its

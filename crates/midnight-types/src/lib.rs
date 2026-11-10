@@ -35,17 +35,16 @@ pub use balance::{
     WalletBalance,
 };
 pub use builder::{
-    BuildInputs, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external, chain_time,
-    fee_speck, longest_ttl, prepare_no_validate,
+    BuildInputs, Cover, DustSpendBatch, PreparedTransfer, TransferBuilder, balance_external,
+    chain_time, execution_context, fee_speck, longest_ttl, prepare_no_validate,
 };
 pub use coin::{
     CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustPublicKey, EncryptionPublicKey,
     NIGHT, Nonce, Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient,
     ShieldedTokenType, UnshieldedRecipient, UnshieldedTokenType,
 };
-pub use error::{WalletError, refuse_repeated_nullifiers};
+pub use error::WalletError;
 pub use hash::{BlockHash, ExtrinsicHash};
-pub use inputs::{PreparedInput, prepare_shielded_inputs};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::{InvalidNetworkName, Network, NetworkName};
 /// The chain's 32-byte hash, under the names [`BlockHash`] and [`ExtrinsicHash`].

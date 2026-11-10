@@ -14,15 +14,14 @@
 use std::sync::Arc;
 
 use midnight_helpers::{
-    BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo, StdRng,
+    BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo,
 };
 use midnight_provider::{
     CoinInfo, HashOutput, MidnightProvider, Nullifier, ProviderError, ShieldedRecipient,
-    ShieldedTokenType,
 };
 use midnight_types::{
-    PreparedInput, SpendableShieldedCoin, SpentInputs, Timestamp, TransferRequest, TransferResult,
-    WalletBalance, WalletError,
+    Cover, ReservedInput, SpendableShieldedCoin, SpentInputs, Timestamp, TransferRequest,
+    TransferResult, WalletBalance, WalletError,
 };
 use midnight_wallet::chain_pin::ChainView;
 use midnight_wallet_facade::{ReservedBuild, WalletBuilds, WalletFacade};
@@ -76,10 +75,6 @@ impl WalletBuilds for StubWallet {
         Err(WalletError::Sync("stub wallet has no chain state".into()))
     }
 
-    async fn add_funding(&self, _context: &BuildContext) -> Result<(), WalletError> {
-        Err(WalletError::Sync("stub wallet funds nothing".into()))
-    }
-
     async fn prepare_transfer(
         &self,
         _request: TransferRequest,
@@ -95,57 +90,14 @@ impl WalletBuilds for StubWallet {
         Err(WalletError::Transfer("stub wallet funds nothing".into()))
     }
 
-    async fn spend_shielded(
-        &self,
-        _context: &Arc<BuildContext>,
-        _nullifiers: Vec<Nullifier>,
-        _rng: &mut StdRng,
-    ) -> Result<(Vec<PreparedInput>, SpentInputs), WalletError> {
-        unimplemented!("this wallet holds no coins")
-    }
-
     async fn prepare_fees(
         &self,
         _tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         _external: &FinalizedTransaction<DefaultDB>,
+        _cover: Cover,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         Err(WalletError::Transfer("stub wallet funds nothing".into()))
     }
-}
-
-/// A wallet the SDK did not write may skip the duplicate check that
-/// `WalletBuilds::spend_shielded` asks for. A second spend of one coin then
-/// counts its value twice. The stub's `spend_shielded` panics, so a provider
-/// that leaves the check to the wallet fails here.
-#[tokio::test]
-async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
-    use midnight_helpers::SeedableRng;
-
-    let provider = MidnightProvider::new("ws://test").with_wallet(StubWallet::default());
-    let builds = provider.builds().await.expect("the stub resyncs");
-    let coin = SpendableShieldedCoin {
-        token_type: ShieldedTokenType(HashOutput([0; 32])),
-        value: 1,
-        nonce: [0; 32],
-        nullifier: Nullifier(HashOutput([7; 32])),
-    };
-    let context = Arc::new(BuildContext::new_from_wallet_seeds("undeployed", &[]));
-
-    let result = builds
-        .prepare_shielded_inputs(
-            &context,
-            &[coin.clone(), coin],
-            &mut StdRng::seed_from_u64(0),
-        )
-        .await;
-    assert!(
-        matches!(
-            result,
-            Err(ProviderError::Wallet(WalletError::DuplicateInput { .. }))
-        ),
-        "got {:?}",
-        result.err()
-    );
 }
 
 /// A prepare sends nothing to the node, so a reserved build whose prepare
@@ -160,7 +112,13 @@ async fn a_reserved_build_whose_connect_fails_gets_its_inputs_back() {
     let nullifier = Nullifier(HashOutput([7; 32]));
     let result = TransferResult {
         tx_bytes: vec![0; 8],
-        spent: SpentInputs::from_shielded(vec![nullifier], Timestamp::from_secs(100)),
+        spent: SpentInputs {
+            shielded: vec![ReservedInput {
+                input: nullifier,
+                reserved_at: Timestamp::from_secs(100),
+            }],
+            ..SpentInputs::default()
+        },
         fee_speck: 0,
     };
 

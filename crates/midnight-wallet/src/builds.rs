@@ -4,13 +4,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_helpers::{
-    BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo, StdRng,
+    BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo,
 };
 use midnight_types::convert::IntoLedger;
 use midnight_types::{
-    Nullifier, PreparedInput, PreparedTransfer, SpentInputs, TransferBuilder, TransferRequest,
-    WalletError, balance_external, chain_time, longest_ttl, prepare_no_validate,
-    prepare_shielded_inputs,
+    Cover, PreparedTransfer, TransferBuilder, TransferRequest, WalletError, balance_external,
+    prepare_no_validate,
 };
 use midnight_wallet_facade::{ReservedBuild, WalletBuilds};
 
@@ -39,16 +38,32 @@ fn fund_from(
     Ok(())
 }
 
+/// Refuse a pinned coin that a pending build of `wallet` holds.
+///
+/// The funding view leaves such a coin out, so a check after
+/// [`fund_from`] could not tell it from a coin that the wallet does not own.
+fn refuse_reserved(
+    wallet: &crate::state::Wallet,
+    pins: &[midnight_types::Nullifier],
+) -> Result<(), WalletError> {
+    for pin in pins.iter().map(|pin| pin.into_ledger()) {
+        if wallet
+            .reserved_shielded_nullifiers()
+            .any(|held| *held == pin)
+        {
+            return Err(WalletError::InputsReserved {
+                held: format!("shielded coin {pin:?}"),
+            });
+        }
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl WalletBuilds for Wallet {
     async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
         let wallet = self.state().read().await;
         wallet.state().execution_context()
-    }
-
-    async fn add_funding(&self, context: &BuildContext) -> Result<(), WalletError> {
-        let mut wallet = self.state().write().await;
-        wallet.state_mut().add_funding(context)
     }
 
     async fn prepare_transfer(
@@ -76,54 +91,19 @@ impl WalletBuilds for Wallet {
         Ok(reserve(wallet, prepared))
     }
 
-    async fn spend_shielded(
-        &self,
-        context: &Arc<BuildContext>,
-        nullifiers: Vec<Nullifier>,
-        rng: &mut StdRng,
-    ) -> Result<(Vec<PreparedInput>, SpentInputs), WalletError> {
-        // Nothing to spend, so nothing to hold the wallet for.
-        if nullifiers.is_empty() {
-            return Ok((Vec::new(), SpentInputs::default()));
-        }
-        let mut guard = self.state().write().await;
-        let wallet = guard.state_mut();
-        let ledger_nullifiers: Vec<_> = nullifiers.iter().map(|n| n.into_ledger()).collect();
-        // The funding view in `context` predates this hold, so a coin named
-        // here can have been reserved since.
-        if let Some(taken) = ledger_nullifiers
-            .iter()
-            .find(|n| wallet.reserved_shielded_nullifiers().any(|held| held == *n))
-        {
-            return Err(WalletError::InputsReserved {
-                held: format!("shielded coin {taken:?}"),
-            });
-        }
-
-        let prepared = prepare_shielded_inputs(context, wallet.seed(), &ledger_nullifiers, rng)?;
-        let reserved_at = chain_time(&context.latest_block_context());
-        wallet.reserve_pending(
-            Vec::new(),
-            Vec::new(),
-            ledger_nullifiers,
-            reserved_at,
-            longest_ttl(context),
-        );
-        Ok((
-            prepared,
-            SpentInputs::from_shielded(nullifiers, reserved_at),
-        ))
-    }
-
     async fn prepare_fees(
         &self,
         mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         external: &FinalizedTransaction<DefaultDB>,
+        cover: Cover,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         let mut guard = self.state().write().await;
         let wallet = guard.state_mut();
+        if let Cover::Shortfalls { pins, .. } = &cover {
+            refuse_reserved(wallet, pins)?;
+        }
         fund_from(wallet, &mut tx_info)?;
-        let Some(prepared) = balance_external(tx_info, external)? else {
+        let Some(prepared) = balance_external(tx_info, wallet.seed(), external, &cover)? else {
             return Ok(None);
         };
         Ok(Some(reserve(wallet, prepared)))

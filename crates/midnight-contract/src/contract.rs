@@ -624,26 +624,28 @@ impl<'a, P> DeployBuilder<'a, P> {
 
     /// Attach a shielded offer that the deploy transaction carries.
     ///
-    /// The deploy spends the offer's coins from the attached wallet and pays
-    /// each of its outputs. What the coins of a token hold beyond what the
-    /// outputs pay of it goes back to the wallet as one change output. The
-    /// inputs and outputs ride in the guaranteed Zswap offer of the deploy
-    /// transaction.
+    /// The deploy pays each output of the offer from the attached wallet. It
+    /// spends the offer's coins first, and when they hold less of a token
+    /// than the outputs pay, the wallet selects more of its coins of that
+    /// token. What the spent coins of a token hold beyond what the outputs pay
+    /// of it goes back to the wallet as one change output. The inputs and
+    /// outputs ride in the guaranteed Zswap offer of the deploy transaction.
     ///
     /// Get the coins from [`MidnightProvider::spendable_shielded_coins`]. The
-    /// deploy reserves them, so no other build of this wallet spends them.
-    /// The wallet gets them back when the build fails, and in the cases after
-    /// the build that [`Self::send`] names. Each output pays
-    /// the keys of a user, so the offer cannot fund a contract's shielded
+    /// deploy reserves the coins that it spends, so no other build of this
+    /// wallet spends them. The wallet gets them back when the build fails, and
+    /// in the cases after the build that [`Self::send`] names. Each output
+    /// pays the keys of a user, so the offer cannot fund a contract's shielded
     /// balance.
     ///
-    /// With an offer, the deploy proves with no fee, and the wallet then pays
-    /// the Dust fee in an intent of its own.
+    /// With an offer, the deploy proves with no fee. The wallet then spends
+    /// the coins, returns the change and pays the Dust fee in a part of its
+    /// own, under one reservation.
     ///
-    /// The deploy fails with [`ContractError::ShieldedOfferShortfall`] when
-    /// the outputs pay more of a token than the coins hold. When another
-    /// build holds one of the coins, or the offer names a coin twice, it fails
-    /// with the wallet error that [`ContractError::Provider`] describes.
+    /// When the wallet holds too little of a token that the outputs pay,
+    /// when another build holds one of the coins, or when the offer names a
+    /// coin twice, the deploy fails with the wallet error that
+    /// [`ContractError::Provider`] describes.
     pub fn with_shielded_offer(mut self, offer: crate::ShieldedOffer) -> Self {
         self.shielded_offer = Some(offer);
         self
@@ -702,8 +704,6 @@ where
     /// - [`ContractError::Interpreter`], before any proof, when the
     ///   constructor or a witness fails, or when the constructor reads
     ///   `kernel.self()`.
-    /// - [`ContractError::ShieldedOfferShortfall`], before any proof, when the
-    ///   shielded offer pays more of a token than its coins hold.
     /// - [`ContractError::Provider`] when a wallet query, the build or the
     ///   proof fails.
     /// - [`ContractError::PendingSnapshotFailed`] when the store cannot record
@@ -1580,9 +1580,10 @@ impl<P> Contract<P> {
         // calling wallet's own coin public key needs no entry. Pass `&[]` for
         // none.
         coin_encryption_keys: &[crate::ShieldedRecipient],
-        // Shielded (Zswap) coins/offer to attach, funding a circuit's
-        // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)
-        // from the caller's wallet. Pass `ShieldedInputs::default()` for none.
+        // Coins of the caller's wallet that the call spends first, for a
+        // circuit's shielded-token deficit (e.g. `receiveShielded`). The
+        // wallet selects coins for what they leave. Pass
+        // `ShieldedInputs::default()` for none.
         shielded: crate::call::ShieldedInputs,
     ) -> Result<CallOutcome<crate::runtime::Value>, ContractError>
     where

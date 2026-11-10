@@ -16,12 +16,13 @@ use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, Unshield
 use crate::{
     Builds, Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit,
 };
-use midnight_helpers::{DefaultDB, ProofProvider};
+use midnight_helpers::midnight_serialize::tagged_deserialize;
+use midnight_helpers::{DefaultDB, LedgerParameters, ProofProvider};
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
-    BlockHash, CoinInfo, Network, ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin,
-    SpentInputs, TransferRequest, TransferResult, UnshieldedRecipient, UnshieldedTokenType,
-    WalletBalance,
+    BlockHash, CoinInfo, Cover, Network, ShieldedRecipient, ShieldedTokenType,
+    SpendableShieldedCoin, SpentInputs, TransferRequest, TransferResult, UnshieldedRecipient,
+    UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::{WalletBuilds, WalletFacade};
 
@@ -680,7 +681,7 @@ impl MidnightProvider {
         let external = crate::builds::deserialize_transaction(tx_bytes)?;
         self.builds()
             .await?
-            .balance_decoded(tx_bytes, external)
+            .balance_decoded(tx_bytes, external, Cover::Fee)
             .await
     }
 
@@ -1050,6 +1051,18 @@ impl MidnightProvider {
             .map_err(|e| ProviderError::Rpc(format!("get_network_id: {e}")))
     }
 
+    /// The ledger parameters that the node's runtime holds at the current
+    /// finalized block, from its `MidnightRuntimeApi::get_ledger_parameters`
+    /// runtime API.
+    pub(crate) async fn ledger_parameters(&self) -> Result<LedgerParameters, ProviderError> {
+        let encoded = self
+            .call_runtime_api::<Result<Vec<u8>, subxt::dynamic::Value>>("get_ledger_parameters")
+            .await?
+            .map_err(|e| ProviderError::Rpc(format!("get_ledger_parameters: {e}")))?;
+        tagged_deserialize(&mut &encoded[..])
+            .map_err(|e| ProviderError::Rpc(format!("decoding get_ledger_parameters: {e}")))
+    }
+
     /// Best-effort health status of the node.
     ///
     /// After the connect, it queries `system_health` and `chain_getHeader` at
@@ -1190,7 +1203,7 @@ struct AttachedWallet {
 /// the build future (a `timeout`, a `select!`, an aborted task) before the
 /// release runs. `Drop` cannot await, so under a Tokio runtime it hands the
 /// release to the runtime. With no runtime, the inputs wait for their TTL.
-pub struct HeldInputs {
+pub(crate) struct HeldInputs {
     wallet: Option<Arc<dyn WalletFacade>>,
     spent: SpentInputs,
 }
@@ -1198,14 +1211,6 @@ pub struct HeldInputs {
 impl HeldInputs {
     pub(crate) fn of(spent: SpentInputs, wallet: Option<Arc<dyn WalletFacade>>) -> Self {
         Self { wallet, spent }
-    }
-
-    /// The inputs this guard holds. A build reads them before
-    /// [`Self::keep_on_ok`] when its result has to name them beside the
-    /// inputs of a later reservation (see
-    /// [`SpentInputs::merge`](midnight_types::SpentInputs::merge)).
-    pub fn spent(&self) -> &SpentInputs {
-        &self.spent
     }
 
     /// Run `work` and keep the inputs reserved only if it succeeds.
@@ -1222,16 +1227,15 @@ impl HeldInputs {
     ///
     /// # Cancellation
     ///
-    /// Under a Tokio runtime, dropping the returned future while `work` runs
-    /// releases the inputs in the background, as dropping `self` does. A drop
-    /// while the wallet persists the reservation also releases the inputs
-    /// that the result of `work` names. A release that has started runs to its
-    /// end, even when the returned future is dropped during it.
+    /// Under a Tokio runtime, dropping the returned future while `work` runs,
+    /// or while the wallet persists the reservation, releases the inputs in
+    /// the background, as dropping `self` does. A release that has started
+    /// runs to its end, even when the returned future is dropped during it.
     ///
     /// With no Tokio runtime, a drop releases nothing, and the release on
     /// `Err` runs inline. Inputs that a drop leaves reserved stay unusable
     /// until their TTL elapses.
-    pub fn keep_on_ok<E>(
+    pub(crate) fn keep_on_ok<E>(
         mut self,
         work: impl Future<Output = Result<TransferResult, E>>,
     ) -> impl Future<Output = Result<TransferResult, E>> {
@@ -1240,17 +1244,11 @@ impl HeldInputs {
         let work = Box::pin(work);
         async move {
             let result = work.await;
-            if let Ok(transaction) = &result
+            if result.is_ok()
                 && !self.spent.is_empty()
                 && let Some(wallet) = &self.wallet
             {
-                // Hold what the result names too: a guard inside `work` may
-                // have left its inputs to the result, and a drop during the
-                // persist drops it. A release drops each named entry once, so
-                // an input named twice is harmless.
-                let own = self.spent.clone();
-                self.spent.merge(transaction.spent.clone());
-                wallet.persist_reservation(&own).await;
+                wallet.persist_reservation(&self.spent).await;
             }
             // Disarm `Drop` on both paths: `Ok` keeps the reservation, and
             // `Err` releases it here.

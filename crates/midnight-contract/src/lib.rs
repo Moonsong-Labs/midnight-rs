@@ -1,6 +1,5 @@
 mod address;
 mod call;
-mod change;
 mod constructor;
 mod contract;
 pub mod deploy;

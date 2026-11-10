@@ -1,5 +1,5 @@
 //! A circuit call's transaction: the interpreter's result partitioned into
-//! transcripts, its coins in Zswap offers, proven, and funded.
+//! transcripts, its coins in Zswap offers, proven, and covered by the wallet.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -13,18 +13,16 @@ use midnight_helpers::coin_structure::transfer::Recipient;
 use midnight_helpers::{
     AlignedValue, BuildContext, BuildContractAction, BuildUtxoOutput, BuilderContext,
     ContractAddress, ContractCallPrototype, DefaultDB, EntryPointBuf, FromContext, IntentInfo,
-    KeyLocation, OfferInfo, OutputInfo, ProofPreimage, ShieldedWallet, SplittableRng,
-    StandardTransactionInfo, TokenInfo, Transcript, UnshieldedOfferInfo, UnshieldedWallet,
-    UtxoOutputInfo,
+    KeyLocation, OfferInfo, ProofPreimage, StandardTransactionInfo, Transcript,
+    UnshieldedOfferInfo, UnshieldedWallet, UtxoOutputInfo,
 };
 use midnight_provider::{Builds, ProviderError};
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::convert::{IntoLedger, IntoSdk};
-use midnight_types::{PreparedInput, TransferResult};
+use midnight_types::convert::IntoLedger;
+use midnight_types::{Cover, TransferResult};
 
 use crate::address::format_contract_address;
 use crate::call::ShieldedInputs;
-use crate::change::{change_due, total_by_key};
 use crate::error::ContractError;
 use crate::runtime;
 
@@ -89,12 +87,15 @@ pub(crate) fn partition(
 }
 
 /// Build the transaction for a circuit call the interpreter already ran
-/// against `state`, and prove it. When `pay_fees` is false the transaction is
-/// left fee-less, for another wallet to sponsor, and the result prices the
-/// fee-less transaction.
+/// against `state`, and prove it.
 ///
-/// The result names the inputs that the build reserved: the pinned coins of
-/// `shielded`, and the Dust of the fee.
+/// The call proves with no fee, against a context from node queries. The
+/// wallet then covers each shielded deficit of the call in a part of its own:
+/// the coins of `shielded` first, then coins that it selects, and the change.
+/// When `pay_fees` is true, the part also pays the Dust fee. Otherwise the
+/// transaction is left fee-less, for another wallet to sponsor, and the
+/// result prices the fee-less transaction. The result names what the part
+/// reserved.
 ///
 /// `block_time` is the time the interpreter ran the circuit at.
 /// `verifier_key` is the circuit's verifier key as `zk_config` serves it,
@@ -120,15 +121,14 @@ pub(crate) async fn call_transaction(
 ) -> Result<TransferResult, ContractError> {
     let helper_addr: ContractAddress = contract_address.into_ledger();
 
-    // 1. The build context, from the provider's synced wallet. Nothing here
-    //    needs the seed: the wallet performs the spends, and addressing a coin
-    //    takes public keys.
+    // 1. The execution context, from node queries. The wallet's keys seal
+    //    the coins that the circuit sends to `ownPublicKey()`.
     let midnight_types::ShieldedRecipient {
-        coin_public_key: change_cpk,
-        enc_public_key: change_epk,
+        coin_public_key: wallet_cpk,
+        enc_public_key: wallet_epk,
     } = builds.provider().shielded_recipient().await?;
-    let (change_cpk, change_epk) = (change_cpk.into_ledger(), change_epk.into_ledger());
-    let context = builds.execution_context().await?;
+    let wallet_keys = (wallet_cpk.into_ledger(), wallet_epk.into_ledger());
+    let context = builds.chain_context().await?;
 
     // 2. Build transcripts by partitioning the circuit's state ops, budgeted
     //    with the chain's own parameters: the node checks the gas each
@@ -160,21 +160,6 @@ pub(crate) async fn call_transaction(
                 .collect()
         })
         .unwrap_or_default();
-
-    // Value this call mints, per (token, segment). The ledger credits a mint
-    // against the offer's balance, so a circuit output covered by one draws
-    // nothing from the attached coins and must not be charged to them.
-    let mut mints = Vec::new();
-    for (transcript, is_fallible) in [(guaranteed.as_ref(), false), (fallible.as_ref(), true)] {
-        let Some(transcript) = transcript else {
-            continue;
-        };
-        for kv in transcript.effects.shielded_mints.iter() {
-            let token = helper_addr.custom_shielded_token_type(*kv.0);
-            mints.push(((token, is_fallible), u128::from(*kv.1)));
-        }
-    }
-    let minted_value = total_by_key(mints)?;
 
     let guaranteed_payouts = payouts_of(guaranteed.as_ref());
     let fallible_payouts = payouts_of(fallible.as_ref());
@@ -274,13 +259,7 @@ pub(crate) async fn call_transaction(
         actions: vec![Box::new(call_action)],
     };
 
-    // 6. Build funded transaction with Dust fees and real ZK proofs.
-    //
-    // Stages 1 to 5 run against a context that carries no wallet, so the
-    // circuit, its proving keys and the contract's own state never depend on
-    // who pays. The payer joins here.
-    builds.add_funding(&context).await?;
-    let build_context = context.clone();
+    // 6. Prove the call with no fee, then let the wallet cover it.
     let mut tx_info =
         StandardTransactionInfo::new_from_context(context, builds.proof_provider(), None);
     tx_info.add_intent(INTENT_SEGMENT, Box::new(intent_info));
@@ -309,24 +288,12 @@ pub(crate) async fn call_transaction(
     }
 
     let mut offers = SegmentOffers::new();
-    // Routing table for caller-provided shielded inputs: for each circuit
-    // output, its token type and the segment it landed in (`true` = fallible,
-    // at `INTENT_SEGMENT`). A caller coin funds the receive/output of the same
-    // token, so its input must ride in that output's segment to balance
-    // per-segment.
-    let mut output_segments: Vec<(ShieldedTokenType, bool)> = Vec::new();
-    // Value the circuit's own outputs draw per (token, segment), against which
-    // the attached coins are reconciled below. Transients are excluded: their
-    // output and input halves cancel, so they consume none of the attached
-    // value.
-    let mut drawn = Vec::new();
     for (commitment, output) in build_shielded_offer_outputs(
         &exec_result.zswap_outputs,
         coin_encryption_keys,
-        (change_cpk, change_epk),
+        wallet_keys,
     )? {
         let is_fallible = fallible_commitments.contains(&commitment);
-        output_segments.push((output.coin.type_, is_fallible));
 
         // A contract-owned output whose commitment matches a pending
         // `createZswapInput` is a coin created and spent in the same call: emit
@@ -353,11 +320,9 @@ pub(crate) async fn call_transaction(
                     },
                 }));
         } else {
-            drawn.push(((output.coin.type_, is_fallible), output.coin.value));
             offers.at(is_fallible).outputs.push(Box::new(output));
         }
     }
-    let circuit_output_value = total_by_key(drawn)?;
 
     // Any `createZswapInput` not paired with a same-call self-output spends a
     // coin already in the contract's Zswap state (a persistent contract-owned
@@ -372,45 +337,25 @@ pub(crate) async fn call_transaction(
         )));
     }
 
-    // The wallet spends each named coin into the context and reserves it under
-    // one hold, so no other build can pin the same coin, and it reports the
-    // coin's own token and value, which route the input and size the change.
-    // Runs after the funding view is in the context: reserving before it
-    // would hide these coins from it.
-    let (prepared, held) = builds
-        .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
-        .await?;
-    let circuit_offers = CircuitOffers {
-        offers,
-        output_segments,
-        circuit_output_value,
-        minted_value,
+    let SegmentOffers {
+        guaranteed,
+        fallible,
+    } = offers;
+    tx_info.set_guaranteed_offer(guaranteed);
+    if !fallible.outputs.is_empty() || !fallible.transients.is_empty() {
+        tx_info.fallible_offers.insert(INTENT_SEGMENT, fallible);
+    }
+    // A fee balanced in this transaction prices each round with a proof.
+    // `mock_prove` refuses a user circuit, and a real proof would prove the
+    // circuit again on every round. The wallet's part rides beside the call,
+    // which leaves the circuit proof as it is. A transaction with no user
+    // circuit can take `super::deploy::build_with_mock_fee_proofs` instead.
+    let unpaid = prove_without_fee(tx_info).await?;
+    let cover = Cover::Shortfalls {
+        pins: shielded.coins.iter().map(|coin| coin.nullifier).collect(),
+        pay_fees,
     };
-    let pinned = held.spent().clone();
-    let mut transaction = held
-        .keep_on_ok(attach_and_prove(
-            builds,
-            tx_info,
-            circuit_offers,
-            prepared,
-            (change_cpk, change_epk),
-            pay_fees,
-        ))
-        .await?;
-    transaction.spent.merge(pinned);
-    Ok(transaction)
-}
-
-/// The circuit's side of a call's Zswap offers, before the caller's coins join
-/// them.
-///
-/// `output_segments` routes those coins, and the two value maps size their
-/// change.
-struct CircuitOffers {
-    offers: SegmentOffers,
-    output_segments: Vec<(ShieldedTokenType, bool)>,
-    circuit_output_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
-    minted_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
+    Ok(builds.balance_transaction(&unpaid.tx_bytes, cover).await?)
 }
 
 /// A call's two Zswap offers: the guaranteed one, and the fallible one at
@@ -442,87 +387,11 @@ impl SegmentOffers {
     }
 }
 
-/// Attach the reserved `prepared` coins to the circuit's offers, then prove the
-/// call.
-///
-/// Any surplus goes back to the wallet as change. When `pay_fees`, the call
-/// also pays its own fee.
-async fn attach_and_prove(
-    builds: &Builds<'_>,
-    mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-    circuit_offers: CircuitOffers,
-    prepared: Vec<PreparedInput>,
-    (change_cpk, change_epk): (
-        midnight_helpers::CoinPublicKey,
-        midnight_helpers::EncryptionPublicKey,
-    ),
-    pay_fees: bool,
-) -> Result<TransferResult, ContractError> {
-    let CircuitOffers {
-        mut offers,
-        output_segments,
-        circuit_output_value,
-        minted_value,
-    } = circuit_offers;
-    let mut attached = Vec::new();
-    for input in prepared {
-        let to_fallible = shielded_input_to_fallible(input.token_type(), &output_segments)?;
-        attached.push(((input.token_type(), to_fallible), input.value()));
-        offers.at(to_fallible).inputs.push(Box::new(input));
-    }
-    let attached_value = total_by_key(attached)?;
-
-    // Return whatever the attached coins carry beyond what the circuit's outputs
-    // draw. Zswap asserts only `balance >= 0` per (token, segment), so a surplus
-    // is accepted and destroyed; a change output back to the caller's own wallet
-    // makes the delta exactly zero and lets a caller fund a receive of N from
-    // coins totalling more than N. The change rides in the segment of the inputs
-    // that produced it, since the ledger balances per (token, segment).
-    for ((token_type, is_fallible), change) in
-        change_due(&attached_value, &circuit_output_value, &minted_value)
-    {
-        offers.at(is_fallible).outputs.push(Box::new(OutputInfo {
-            destination: ShieldedWallet::<DefaultDB>::from_pub_keys(change_cpk, change_epk),
-            token_type,
-            value: change,
-        }));
-    }
-
-    let SegmentOffers {
-        guaranteed,
-        fallible,
-    } = offers;
-    tx_info.set_guaranteed_offer(guaranteed);
-    if !fallible.outputs.is_empty()
-        || !fallible.inputs.is_empty()
-        || !fallible.transients.is_empty()
-    {
-        tx_info.fallible_offers.insert(INTENT_SEGMENT, fallible);
-    }
-    // Build fee-less, even when this call pays for itself.
-    //
-    // A fee balanced in the same transaction prices each round with a proof.
-    // `mock_prove` refuses a user circuit, and a real proof would prove the
-    // circuit again on every round. Dust is attached below, after proving, in
-    // its own intent segment, which leaves the circuit proof untouched. A
-    // transaction with no user circuit can take
-    // `super::deploy::build_with_mock_fee_proofs` instead.
-    let unpaid = prove_without_fee(tx_info).await?;
-    if !pay_fees {
-        return Ok(unpaid);
-    }
-
-    // Fund the already-proven transaction the same way a sponsor funds someone
-    // else's: the fee intent rides its own segment, so nothing here re-proves
-    // the circuit.
-    Ok(builds.balance_transaction(&unpaid.tx_bytes).await?)
-}
-
 /// Build and prove `tx_info` with no fee, and serialize and price the result.
 ///
 /// `tx_info` must carry no funding seed. The build then draws no Dust, so it
 /// leaves nothing to reserve, and the result names no input.
-/// `Builds::balance_transaction` reserves the Dust that it draws for the fee.
+/// `Builds::balance_transaction` reserves what the wallet's cover spends.
 pub(super) async fn prove_without_fee(
     tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
 ) -> Result<TransferResult, ContractError> {
@@ -530,47 +399,6 @@ pub(super) async fn prove_without_fee(
         .await
         .map_err(ProviderError::Wallet)?;
     Ok(prepared.prove().await.map_err(ProviderError::Wallet)?)
-}
-
-/// Pick the segment a caller-provided shielded input should ride in: the same
-/// segment as the circuit output it funds, matched by token type. Zswap balances
-/// per `(token_type, segment)`, so an input that funds a `receiveShielded` in the
-/// fallible segment must itself be fallible, or the tx fails to balance.
-///
-/// `output_segments` pairs each circuit-created output's token type with whether
-/// it was partitioned into the fallible segment. Returns `Ok(true)` for fallible
-/// (`INTENT_SEGMENT`), `Ok(false)` for guaranteed; defaults to guaranteed
-/// when no circuit output matches the token (nothing to co-locate with).
-///
-/// Errors when the circuit creates outputs of this token in *both* segments:
-/// the input could fund either, so the segment is ambiguous and silently picking
-/// one would risk an opaque per-segment balance failure. Callers that hit this
-/// need a way to name the intended segment (not exposed yet).
-fn shielded_input_to_fallible(
-    token_type: ShieldedTokenType,
-    output_segments: &[(ShieldedTokenType, bool)],
-) -> Result<bool, ContractError> {
-    let mut in_guaranteed = false;
-    let mut in_fallible = false;
-    for (tt, is_fallible) in output_segments {
-        if *tt == token_type {
-            if *is_fallible {
-                in_fallible = true;
-            } else {
-                in_guaranteed = true;
-            }
-        }
-    }
-    match (in_guaranteed, in_fallible) {
-        (true, true) => Err(ContractError::Construction(format!(
-            "cannot route shielded input for token {}: the circuit creates outputs of this token \
-             in both the guaranteed and fallible segments, so the input's segment is ambiguous",
-            token_type.into_sdk()
-        ))),
-        (false, true) => Ok(true),
-        // Guaranteed match, or no match at all: ride in the guaranteed segment.
-        _ => Ok(false),
-    }
 }
 
 /// A circuit-created shielded coin (`createZswapOutput`) decoded into the
@@ -1034,42 +862,5 @@ mod tests {
         assert_eq!(decoded.nonce.0.0, nonce);
         assert_eq!(decoded.type_.0.0, color);
         assert_eq!(decoded.value, value);
-    }
-
-    fn tt(byte: u8) -> ShieldedTokenType {
-        ShieldedTokenType(HashOutput([byte; 32]))
-    }
-
-    /// A caller's shielded input rides in the same segment as the circuit output
-    /// it funds: a guaranteed receive → guaranteed input, a fallible receive →
-    /// fallible input. Zswap balances per `(token, segment)`, so a mismatch here
-    /// would leave the tx unbalanced.
-    #[test]
-    fn shielded_input_segment_matches_funded_output() {
-        // Guaranteed output of the coin's token → input stays guaranteed.
-        assert!(!shielded_input_to_fallible(tt(1), &[(tt(1), false)]).unwrap());
-        // Fallible output of the coin's token → input must be fallible too.
-        assert!(shielded_input_to_fallible(tt(1), &[(tt(1), true)]).unwrap());
-    }
-
-    /// With no circuit output of the coin's token to co-locate with, the input
-    /// defaults to the guaranteed segment.
-    #[test]
-    fn shielded_input_defaults_to_guaranteed_without_match() {
-        assert!(!shielded_input_to_fallible(tt(9), &[]).unwrap());
-        // A different token's fallible output must not pull this input fallible.
-        assert!(!shielded_input_to_fallible(tt(9), &[(tt(1), true)]).unwrap());
-    }
-
-    /// When the circuit creates outputs of the coin's token in *both* segments,
-    /// the input's segment is ambiguous and routing must error rather than
-    /// silently pick one and risk an opaque per-segment balance failure.
-    #[test]
-    fn shielded_input_ambiguous_segment_errors() {
-        let err = shielded_input_to_fallible(tt(1), &[(tt(1), false), (tt(1), true)]).unwrap_err();
-        assert!(
-            matches!(err, ContractError::Construction(ref m) if m.contains("ambiguous")),
-            "got {err:?}"
-        );
     }
 }
