@@ -432,8 +432,6 @@ The `PreparedTx` holds the reservation that the envelope carries. A failed prepa
 
 A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the hash is a node block hash. The state read that honours it is the node RPC `midnight_contractState`, for a whole `ContractState`. It takes only a block hash, so a caller holding a height resolves it to a hash first (`MidnightProvider::get_block_hashes_by_height`). A circuit call on a pinned handle also reads the block time (`Timestamp::Now`) at the pin, so its clock checks run at the time of that block.
 
-`MidnightProvider::get_contract_state` reads through `midnight_contractState` too, and takes the same optional hash.
-
 ## External dependencies
 
 | Crate | Source | Purpose |

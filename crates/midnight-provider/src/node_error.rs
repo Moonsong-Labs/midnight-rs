@@ -82,7 +82,7 @@ static CODES: &[(u8, &str)] = &[
 /// The name midnight-node gives `code`, or `None` when this build has never
 /// seen it. An unnamed code is ordinary: the caller still has the number and
 /// the node's own message.
-pub fn name_of(code: u8) -> Option<&'static str> {
+pub(crate) fn name_of(code: u8) -> Option<&'static str> {
     CODES
         .iter()
         .find(|(c, _)| *c == code)
@@ -100,7 +100,7 @@ pub fn name_of(code: u8) -> Option<&'static str> {
 /// A message that does not carry one yields `None`, which is not an error:
 /// plenty of refusals (a bad nonce, a stale mortality) never reach the
 /// ledger's own error mapping.
-pub fn code_in(message: &str) -> Option<u8> {
+pub(crate) fn code_in(message: &str) -> Option<u8> {
     let tail = message.rsplit_once("custom error")?.1;
     let digits: String = tail
         .trim_start_matches([':', ' '])
