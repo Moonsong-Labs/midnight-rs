@@ -19,7 +19,6 @@ pub mod zk_config;
 // Hidden from rustdoc because they're not part of the user-facing API.
 #[doc(hidden)]
 pub use compact_codegen;
-pub use midnight_provider::Provider;
 pub use midnight_types::{BlockHash, ExtrinsicHash, MidnightWallet};
 
 // Primary API: deploy / connect / call.

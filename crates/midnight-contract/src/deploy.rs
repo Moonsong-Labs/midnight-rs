@@ -99,7 +99,7 @@ const READ_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// length of the deadline, which the error reports. A node that holds no
 /// contract at `address` in that block gives [`ContractError::NotFound`] at
 /// once, and a state that does not decode gives [`ContractError::StateFetch`].
-pub(crate) async fn deployed_state<W: Send + Sync>(
+pub(crate) async fn deployed_state<W>(
     provider: &MidnightProvider<W>,
     address: &str,
     in_block: TransactionReceipt,
