@@ -3,16 +3,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use midnight_base_crypto::signatures::{Signature, VerifyingKey};
 use midnight_helpers::{
-    BuildContext, ContractOperationVersion, ContractOperationVersionedVerifierKey, DefaultDB,
-    EntryPointBuf, MaintenanceUpdate, SingleUpdate,
+    BuildContext, ContractMaintenanceVerifyingKey, ContractOperationVersion,
+    ContractOperationVersionedVerifierKey, DefaultDB, EntryPointBuf, LedgerState,
+    MaintenanceUpdate, SingleUpdate, Timestamp, UnprovenIntent, WellFormedStrictness,
 };
 use midnight_provider::MidnightProvider;
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::convert::IntoLedger;
 use midnight_types::{MidnightWallet, TransactionRequest, TxEnvelope};
 
+use super::call::INTENT_SEGMENT;
 use super::deploy::{assembled, with_single_action};
 
 use crate::error::ContractError;
@@ -89,15 +90,12 @@ fn single_remove(circuit: &str, version: ContractOperationVersion) -> SingleUpda
 /// `ReplaceAuthority` installing `committee`/`threshold`. The new authority's
 /// `counter` must be the current counter + 1 (a ledger well-formedness rule).
 fn single_replace_authority(
-    committee: Vec<VerifyingKey>,
+    committee: Vec<ContractMaintenanceVerifyingKey>,
     threshold: u32,
     current_counter: u32,
 ) -> SingleUpdate {
     SingleUpdate::ReplaceAuthority(midnight_helpers::ContractMaintenanceAuthority {
-        committee: committee
-            .into_iter()
-            .map(midnight_helpers::maintenance_verifying_key)
-            .collect(),
+        committee,
         threshold,
         // saturating to match the ledger's apply path (it caps at u32::MAX).
         counter: current_counter.saturating_add(1),
@@ -122,24 +120,35 @@ impl midnight_helpers::BuildContractAction<DefaultDB, BuildContext> for AttachMa
     }
 }
 
-/// Sign `update` with `signatures`, then balance, prove, and sign the
-/// maintenance transaction. A maintenance update is just another intent
-/// action with no ZK proof of its own, so it rides the same dust-balancing
-/// pipeline as a deploy.
+/// Run the ledger's own check of the signed `update` (ordering, membership,
+/// signatures, threshold, counter) against `state`, the contract's state, as a
+/// node runs it before it takes the update.
+pub(crate) fn check(
+    update: &MaintenanceUpdate<DefaultDB>,
+    state: &ContractState<InMemoryDB>,
+) -> Result<(), ContractError> {
+    // The maintenance check reads only the contract's authority, so a ledger
+    // that holds just this contract is enough.
+    let mut ledger = LedgerState::new("");
+    ledger.contract = ledger.contract.insert(update.address, state.clone());
+    UnprovenIntent::empty(&mut rand::thread_rng(), Timestamp::from_secs(0))
+        .add_maintenance_update(update.clone())
+        .well_formed(
+            INTENT_SEGMENT,
+            &ledger,
+            WellFormedStrictness::default(),
+            Timestamp::from_secs(0),
+        )
+        .map_err(|e| ContractError::Maintenance(format!("the ledger refuses the update: {e}")))
+}
+
+/// Balance, prove, and sign the transaction of the signed `update`. A
+/// maintenance update is just another intent action with no ZK proof of its
+/// own, so it rides the same dust-balancing pipeline as a deploy.
 pub(crate) async fn maintenance_funded<W: MidnightWallet>(
     provider: &MidnightProvider<W>,
     update: MaintenanceUpdate<DefaultDB>,
-    signatures: &[(u32, Signature)],
 ) -> Result<TxEnvelope, ContractError> {
-    let update = signatures
-        .iter()
-        .fold(update, |update, (index, signature)| {
-            update.add_signature(
-                *index,
-                midnight_helpers::transaction_signature(signature.clone()),
-            )
-        });
-
     let tx_info = with_single_action(
         provider.transaction_info().await?,
         AttachMaintenance { update },
@@ -151,24 +160,52 @@ pub(crate) async fn maintenance_funded<W: MidnightWallet>(
 
 #[cfg(test)]
 mod tests {
-    use midnight_base_crypto::signatures::SigningKey;
+    use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     use super::*;
+    use crate::{ContractMaintenanceSigningKey, ecdsa};
 
     #[test]
-    fn replace_authority_update_bumps_counter_and_sets_committee() {
-        let a = SigningKey::sample(rand::thread_rng()).verifying_key();
-        let b = SigningKey::sample(rand::thread_rng()).verifying_key();
-        let committee = vec![a, b];
-        match single_replace_authority(committee.clone(), 2, 5) {
+    fn check_runs_the_ledger_rules_against_the_contract_state() {
+        let key = ecdsa::SigningKey::sample(rand::thread_rng());
+        let member = ContractMaintenanceVerifyingKey::ECDSA(key.verifying_key());
+        let key = ContractMaintenanceSigningKey::ECDSA(key);
+        let outsider =
+            ContractMaintenanceSigningKey::ECDSA(ecdsa::SigningKey::sample(rand::thread_rng()));
+        let state = ContractState::new(
+            StateValue::Array(vec![].into()),
+            StorageHashMap::new(),
+            ContractMaintenanceAuthority {
+                committee: vec![member.clone()],
+                threshold: 1,
+                counter: 0,
+            },
+        );
+        let address = crate::address::parse_contract_address(&"aa".repeat(32)).unwrap();
+        let update = prepare_update(
+            &state,
+            address,
+            &[OpSpec::Replace {
+                committee: vec![member],
+                threshold: 1,
+            }],
+            0,
+        )
+        .unwrap();
+        let signed_by = |key: &ContractMaintenanceSigningKey| {
+            let signature = key.sign(&mut rand::thread_rng(), &update.data_to_sign());
+            update.clone().add_signature(0, signature)
+        };
+
+        assert!(check(&signed_by(&key), &state).is_ok());
+        assert!(check(&signed_by(&outsider), &state).is_err());
+    }
+
+    #[test]
+    fn replace_authority_update_bumps_counter() {
+        match single_replace_authority(Vec::new(), 1, 5) {
             SingleUpdate::ReplaceAuthority(auth) => {
                 assert_eq!(auth.counter, 6, "new authority counter must be current + 1");
-                assert_eq!(auth.threshold, 2);
-                let expected: Vec<_> = committee
-                    .into_iter()
-                    .map(midnight_helpers::maintenance_verifying_key)
-                    .collect();
-                assert_eq!(auth.committee, expected);
             }
             _ => panic!("expected ReplaceAuthority"),
         }

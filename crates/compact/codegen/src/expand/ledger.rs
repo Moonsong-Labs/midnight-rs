@@ -485,7 +485,7 @@ fn emit_deploy(
             /// [`midnight_contract::DeployBuilder::with_maintenance_authority`].
             pub fn with_maintenance_authority(
                 self,
-                committee: Vec<midnight_contract::VerifyingKey>,
+                committee: Vec<midnight_contract::ContractMaintenanceVerifyingKey>,
                 threshold: u32,
             ) -> Self {
                 Self { inner: self.inner.with_maintenance_authority(committee, threshold), ..self }

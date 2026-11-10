@@ -1441,6 +1441,7 @@ name = "example-contract-maintenance"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "k256",
  "midnight-core",
  "rand 0.8.6",
  "tokio",
@@ -2911,6 +2912,7 @@ dependencies = [
  "compact-interpreter",
  "compact-runtime",
  "hex",
+ "k256",
  "midnight-base-crypto",
  "midnight-coin-structure 3.0.0",
  "midnight-helpers",
