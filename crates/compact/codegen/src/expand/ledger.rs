@@ -535,8 +535,9 @@ fn emit_deploy(
             pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
             where
                 P: midnight_contract::AsMidnightProvider + Send,
+                <P as midnight_contract::AsMidnightProvider>::Wallet: midnight_contract::MidnightWallet,
             {
-                // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+                // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
                 Box::pin(async move {
                     if let ::core::option::Option::Some(error) = self.error {
                         return Err(error);
@@ -1152,6 +1153,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         P: midnight_contract::AsMidnightProvider
             + ::core::marker::Send
             + ::core::marker::Sync,
+        <P as midnight_contract::AsMidnightProvider>::Wallet: midnight_contract::MidnightWallet,
         Wp: midnight_contract::runtime::WitnessProvider
             + ::core::marker::Send
             + ::core::marker::Sync,
@@ -1249,7 +1251,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// See `midnight_contract::Contract::build_call_with`.
                 pub async fn build(
                     self,
-                ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
+                ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError>
+                where
+                    <P as midnight_contract::AsMidnightProvider>::Wallet: midnight_contract::MidnightWallet,
+                {
                     // Boxed for the same reason `without_dust` below is.
                     ::std::boxed::Box::pin(async move {
                         #open
@@ -1270,7 +1275,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 ) -> ::core::result::Result<
                     midnight_contract::PendingCall<#value_ty>,
                     midnight_contract::ContractError,
-                > {
+                >
+                where
+                    <P as midnight_contract::AsMidnightProvider>::Wallet: midnight_contract::MidnightWallet,
+                {
                     // Boxed for the same reason `without_dust` below is.
                     ::std::boxed::Box::pin(async move {
                         #open
@@ -1320,7 +1328,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 #send_bounds
             {
                 type Error = midnight_contract::ContractError;
-                // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+                // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
                 /// Build and prove the call with no Dust fee, for another wallet to
                 /// sponsor with `MidnightProvider::balance_transaction`.
                 ///
@@ -1404,7 +1412,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             /// Attach wallet coins that the next circuit call spends first, for
             /// a circuit that receives a shielded coin (e.g. `receiveShielded`).
             /// Enumerate the wallet's coins with
-            /// `MidnightProvider::spendable_shielded_coins`.
+            /// `Wallet::spendable_shielded_coins`.
             ///
             /// Without attached coins, the wallet selects coins for each
             /// shielded deficit of the call. Attach coins to name the ones it

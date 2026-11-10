@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use midnight_provider::{MidnightProvider, TxInBlock};
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::{ContractAddress, TransferResult};
+use midnight_types::{ContractAddress, MidnightWallet, TxEnvelope};
 
 use crate::ShieldedOffer;
 use crate::address::format_contract_address;
@@ -24,11 +24,12 @@ use crate::state::fetch_state;
 pub struct DeployResult {
     /// The contract's on-chain address.
     pub address: ContractAddress,
-    /// The proven deploy transaction, and the inputs that its build reserved:
-    /// the fee Dust, and the coins of a shielded offer. Submit it with
-    /// [`MidnightProvider::submit_reserved`], which hands the inputs back when
-    /// the node never gets the deploy or rejects it.
-    pub transaction: TransferResult,
+    /// The signed deploy transaction, which carries the reservation of the
+    /// inputs that the wallet spends: the fee Dust, and the coins of a
+    /// shielded offer. Submit it with [`MidnightProvider::submit_reserved`],
+    /// which hands the inputs back when the node never gets the deploy or
+    /// rejects it.
+    pub transaction: TxEnvelope,
 }
 
 impl DeployResult {
@@ -52,15 +53,14 @@ impl DeployResult {
 /// Returns [`ContractError::Provider`] when the wallet cannot spend a coin of
 /// the offer or holds too little of a token that the offer pays, when the fee
 /// balancing fails, or when proving fails.
-pub async fn deploy_funded(
+pub async fn deploy_funded<W: MidnightWallet>(
     initial_state: &ContractState<InMemoryDB>,
-    provider: &midnight_provider::MidnightProvider,
+    provider: &MidnightProvider<W>,
     shielded_offer: Option<ShieldedOffer>,
 ) -> Result<DeployResult, ContractError> {
-    let builds = provider.builds().await?;
-    // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+    // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
     Box::pin(crate::ledger::deploy::deploy_funded(
-        &builds,
+        provider,
         recharged(initial_state),
         shielded_offer.as_ref(),
     ))
@@ -99,8 +99,8 @@ const READ_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// length of the deadline, which the error reports. A node that holds no
 /// contract at `address` in that block gives [`ContractError::NotFound`] at
 /// once, and a state that does not decode gives [`ContractError::StateFetch`].
-pub(crate) async fn deployed_state(
-    provider: &MidnightProvider,
+pub(crate) async fn deployed_state<W: Send + Sync>(
+    provider: &MidnightProvider<W>,
     address: &str,
     in_block: TxInBlock,
     remaining: Duration,

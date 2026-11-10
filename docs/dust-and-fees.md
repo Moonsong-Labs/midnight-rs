@@ -79,8 +79,6 @@ Normal transactions pay fees by calling `set_funding_seeds()` on the
 which calls `DustWallet::speculative_spend()` to produce ZK proofs with valid
 Merkle paths from both trees.
 
-A build reports the fee it quotes as [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs). The rustdoc of that field names the check that the node applies at submit and the quote skips.
-
 #### What this requires
 
 The wallet must replay **all** `dustLedgerEvents` from genesis, sequentially.
@@ -230,12 +228,12 @@ Before a second fee-paying build, register every NIGHT UTXO, or wait until the w
 
 ## Dust Shortfalls
 
-A build whose funding wallets cannot pay its fee fails with [`WalletError::InsufficientDust`](../crates/midnight-types/src/error.rs). Its `required` field is the Dust that the build asks for, and `available` is the Dust that the funding wallets can give, both in SPECK. A build through `MidnightProvider` resyncs the wallet first, so a build after a wait reads the new state.
+A build whose funding wallets cannot pay its fee fails with [`WalletError::InsufficientDust`](../crates/midnight-types/src/error.rs). Its `required` field is the Dust that the build asks for, and `available` is the Dust that the funding wallets can give, both in SPECK. `MidnightWallet::fund_transaction` resyncs the wallet first, so a build after a wait reads the new state.
 
-Read the wallet's `DustBalance` (`provider.balance().await?.dust`) to find the next step:
+Read the wallet's `DustBalance` (`wallet.balance().await.dust`) to find the next step:
 
 - When `spendable_speck` is less than `balance_speck`, a pending build reserves Dust. Wait for its transaction to finalize. Then wait until `spendable_speck` equals `balance_speck`, with `BackgroundSync::wait_until` (see [Background sync](wallet.md#background-sync)). Then build again.
-  - A build that never reaches the chain keeps its Dust reserved until a release hands it back, or until its TTL ends. A transfer, a Dust registration and a maintenance update submit with `MidnightProvider::submit_reserved`, which releases when the node never gets the transaction or rejects it as `Invalid`. Submit a sponsored transaction from `balance_transaction` the same way. A contract call and a deploy prepare with `MidnightProvider::prepare_reserved`, so an error before the submit, or an `Invalid` at the wait, releases their Dust. The bytes of a contract call's `.build()` or `.without_dust()` do not name their Dust, so it waits for the TTL when they never land. A caller that holds a `TransferResult` it never submits can release `result.spent` with `MidnightProvider::release` (see [Pending reservations](wallet.md#pending-reservations)).
+  - A build that never reaches the chain keeps its Dust reserved until a release hands it back, or until its TTL ends. The reservation travels with the transaction: the `TxEnvelope` of a build, then the `PreparedTx`, then the `PendingTx`. A drop of the `TxEnvelope` or the `PreparedTx` releases it. A transfer, a Dust registration and a maintenance update submit with `MidnightProvider::submit_reserved`, which releases when the node never gets the transaction or rejects it as `Invalid`. Submit a sponsored transaction from `balance_transaction` the same way. A contract call and a deploy prepare with `MidnightProvider::prepare_reserved`, so an error before the submit, or an `Invalid` at the wait, releases their Dust. The bytes of a contract call's `.build()` or `.without_dust()`, and of `TxEnvelope::into_bytes`, keep their Dust reserved, so it waits for the TTL when they never land (see [Pending reservations](wallet.md#pending-reservations)).
 - When `unregistered_night_utxos` is above 0 and `night_generates_dust` is false, no tNIGHT generates Dust. Register one tNIGHT UTXO with `register_dust` (see [Dust Registration](#dust-registration)). A registration has no funding wallets, so its shortfall reads an `available` of 0. It pays only from the generationless Dust of the tNIGHT it spends, and that Dust grows with the age of the UTXO. So when the registration itself falls short, wait, then register again.
 - When the wallet holds no tNIGHT, no Dust accrues. The wallet must receive tNIGHT first.
 - Otherwise, Dust accrues with time, so build again later.

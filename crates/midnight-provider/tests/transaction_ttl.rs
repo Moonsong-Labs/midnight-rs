@@ -1,7 +1,7 @@
 //! A transaction built with a TTL shorter than the chain's `global_ttl` lands.
 //!
-//! The build counts the TTL from the chain time of the wallet's last sync,
-//! not from the Dust anchor that the wallet proves against. Each intent of the
+//! The fill counts the TTL from the time of the node's best block, not from
+//! the Dust anchor that the wallet proves against. Each intent of the
 //! transaction carries that TTL, and the chain refuses one that has passed at
 //! the block that applies it.
 //!
@@ -30,7 +30,7 @@ fn intent_ttls(bytes: &[u8]) -> Vec<u64> {
 }
 
 /// The time of the node's best block, in seconds.
-async fn chain_now(provider: &MidnightProvider) -> u64 {
+async fn chain_now<W>(provider: &MidnightProvider<W>) -> u64 {
     let best = provider.best_block_hash().await.expect("best block");
     provider
         .get_block_timestamp(best)
@@ -63,12 +63,9 @@ async fn a_transfer_with_a_short_ttl_lands() {
     let recipient = wallet.unshielded_recipient();
     let provider = provider.with_wallet(wallet);
     let global_ttl = provider
-        .builds()
+        .chain_context()
         .await
-        .expect("the provider builds")
-        .execution_context()
-        .await
-        .expect("the execution context")
+        .expect("the chain context")
         .with_ledger_state(|ls| ls.parameters.global_ttl)
         .as_seconds();
     assert!(
@@ -82,14 +79,15 @@ async fn a_transfer_with_a_short_ttl_lands() {
         .with_ttl(TTL)
         .build()
         .await
-        .expect("build a transfer with a short TTL");
+        .expect("build a transfer with a short TTL")
+        .into_bytes();
     assert_short(
-        &intent_ttls(&paid.tx_bytes),
+        &intent_ttls(&paid),
         chain_now(&provider).await,
         "the self-funded transfer",
     );
     provider
-        .submit_reserved(paid)
+        .submit(&paid)
         .await
         .expect("submit the self-funded transfer")
         .wait_finalized()

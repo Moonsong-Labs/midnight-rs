@@ -43,9 +43,9 @@ async fn main() -> anyhow::Result<()> {
     // The dev seed, funded at genesis on the local devnet.
     let seed = Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000001")?;
     let wallet = Wallet::from_seed(seed).sync(&provider, INDEXER_URL).await?;
-    let provider = provider.with_wallet(wallet);
+    let provider = provider.with_wallet(&wallet);
 
-    let balance = provider.balance().await?;
+    let balance = wallet.balance().await;
     for utxo in &balance.unshielded {
         println!("unshielded {utxo}");
     }
@@ -176,7 +176,7 @@ impl owned_counter::Witnesses for OwnerKey {
 }
 
 // The deploy records the private state, so the provider needs a store. Take
-// `address` from `wallet.unshielded_address()` before `with_wallet`.
+// `address` from `wallet.unshielded_address()`.
 let store = FsPrivateStateProvider::with_default_dir(&address).expect("a home directory");
 let provider = provider.with_private_state(Arc::new(store));
 
@@ -195,22 +195,22 @@ The deploy records the private state that the constructor leaves as the first sn
 
 ## Deploy with a shielded offer
 
-A deploy can carry a shielded offer. A `ShieldedOffer` holds coins from `spendable_shielded_coins` and the `ShieldedPayment`s to make from them. Take `network` with `wallet.network().clone()` before `with_wallet` takes the wallet:
+A deploy can carry a shielded offer. A `ShieldedOffer` holds coins from `Wallet::spendable_shielded_coins` and the `ShieldedPayment`s to make from them. `network` is `wallet.network()`:
 
 ```rust,ignore
 use midnight_core::Contract;
 use midnight_core::contract::{ShieldedOffer, ShieldedPayment, parse_shielded_recipient};
 
-let coin = provider
+let coin = wallet
     .spendable_shielded_coins()
-    .await?
+    .await
     .into_iter()
     .find(|coin| coin.token_type == token_type && coin.value >= 10)
     .ok_or_else(|| std::io::Error::other("no coin of the token holds 10"))?;
 let offer = ShieldedOffer {
     coins: vec![coin],
     outputs: vec![ShieldedPayment {
-        recipient: parse_shielded_recipient(address, &network)?,
+        recipient: parse_shielded_recipient(address, wallet.network())?,
         token_type,
         value: 10,
     }],
@@ -264,8 +264,8 @@ A wait fails with `ContractError::TransactionFailed` when the chain did not appl
 | Crate | Description |
 |---|---|
 | `midnight-core` | The crate to depend on. It re-exports the SDK as the modules `provider`, `wallet`, `contract` and `crypto` |
-| `midnight-provider` | `Provider` trait and `MidnightProvider`: node RPC and the attached wallet |
-| `midnight-wallet` | `Wallet` state machine: sync, balances, transfers, Dust, address derivation |
+| `midnight-provider` | `Provider` trait and `MidnightProvider`: node RPC, and the transactions that the attached `MidnightWallet` funds and signs |
+| `midnight-wallet` | `Wallet` state machine: sync, balances, funding and signing as a `MidnightWallet`, Dust, address derivation |
 | `midnight-indexer-client` | GraphQL client for the Midnight indexer API, which the wallet sync uses |
 | `midnight-crypto` | Re-exports `midnight-base-crypto`, `midnight-curves` and `midnight-transient-crypto` as modules |
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |

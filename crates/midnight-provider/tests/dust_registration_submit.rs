@@ -65,12 +65,12 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
 
     // Finalized on chain is not yet visible through the indexer, which the
     // fresh wallet syncs from. Poll rather than assume, as below.
-    let mut dust = fresh.balance().await.expect("balance").dust;
+    let mut dust = fresh.wallet().balance().await.dust;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while dust.unregistered_night_utxos < 3 && std::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        fresh.resync_wallet().await.expect("resync");
-        dust = fresh.balance().await.expect("balance").dust;
+        fresh.wallet().sync(&fresh).await.expect("resync");
+        dust = fresh.wallet().balance().await.dust;
     }
     assert_eq!(
         dust.unregistered_night_utxos, 3,
@@ -170,14 +170,14 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     // Finalized on chain is not yet visible through the indexer, and the
     // wallet only learns UTXO state by replaying what the indexer serves. Poll
     // rather than assume, so a slow indexer reads as slow and not as broken.
-    let mut after = fresh.balance().await.expect("balance").dust;
+    let mut after = fresh.wallet().balance().await.dust;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while !(after.night_generates_dust && after.spendable_utxos > 0)
         && std::time::Instant::now() < deadline
     {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        fresh.resync_wallet().await.expect("resync");
-        after = fresh.balance().await.expect("balance").dust;
+        fresh.wallet().sync(&fresh).await.expect("resync");
+        after = fresh.wallet().balance().await.dust;
     }
 
     assert!(

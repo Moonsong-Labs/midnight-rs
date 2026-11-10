@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Counter Example ===\n");
 
     // The wallet syncs itself (zswap + dust + unshielded) against the
-    // indexer, then goes to the provider as a `WalletFacade`.
+    // indexer. The provider then funds and signs through a borrow of it.
     println!("0. Syncing wallet state from indexer...");
     let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
     let wallet = Wallet::from_seed(Seed::from_hex(DEV_WALLET_SEED)?)
         .sync(&provider, &indexer_url)
         .await?;
-    let provider = provider.with_wallet(wallet);
+    let provider = provider.with_wallet(&wallet);
     println!("   synced.\n");
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.

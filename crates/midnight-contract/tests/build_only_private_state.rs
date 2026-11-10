@@ -19,6 +19,7 @@ use midnight_contract::ContractError;
 use midnight_provider::{
     DustlessBuilder, FsPrivateStateProvider, MidnightProvider, PrivateStateProvider,
 };
+use midnight_wallet::Wallet;
 
 /// The pause between two passes of the background sync.
 const SYNC_PAUSE: Duration = Duration::from_secs(1);
@@ -108,7 +109,7 @@ async fn a_build_only_call_that_changes_the_private_state_refuses_before_the_bui
 /// gave [`ContractError::UnrecordedPrivateState`], left no Dust of the wallet
 /// reserved, and wrote no snapshot to `store`.
 async fn assert_refused(
-    provider: &MidnightProvider,
+    provider: &MidnightProvider<Arc<Wallet>>,
     store: &dyn PrivateStateProvider,
     address: &str,
     builder: &str,
@@ -120,7 +121,7 @@ async fn assert_refused(
         }
         other => panic!("{builder}: expected UnrecordedPrivateState, got {other:?}"),
     }
-    let dust = provider.balance().await.expect("balance").dust;
+    let dust = provider.wallet().balance().await.dust;
     assert_eq!(
         dust.spendable_speck, dust.balance_speck,
         "{builder}: the refused call must reserve no Dust"

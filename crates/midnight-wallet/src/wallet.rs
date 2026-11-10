@@ -6,8 +6,7 @@ use midnight_indexer_client::SubscriptionClient;
 use midnight_types::chain_pin::ChainPin;
 use midnight_types::hd::Seed;
 use midnight_types::{
-    CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, SpentInputs, WalletBalance,
-    WalletError,
+    CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, WalletBalance, WalletError,
 };
 use tokio::sync::mpsc;
 use tracing::info;
@@ -134,18 +133,6 @@ impl WalletState {
         };
         let state = sync_on_chain(sync, &block, snapshot, progress).await?;
         Ok(Self { state })
-    }
-
-    /// Hand back the inputs a build reserved. See
-    /// [`Wallet::release`](crate::Wallet::release).
-    pub(crate) fn release(&mut self, spent: &SpentInputs) {
-        self.state.release(spent)
-    }
-
-    /// Keep the reservation of a proven build across a restart. See
-    /// [`WalletFacade::persist_reservation`](midnight_wallet_facade::WalletFacade::persist_reservation).
-    pub(crate) fn persist_reservation(&mut self, spent: &SpentInputs) {
-        self.state.persist_reservation(spent)
     }
 
     /// Where this wallet's snapshot lives, when it persists one.

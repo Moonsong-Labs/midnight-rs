@@ -5,7 +5,8 @@
 //! [`compact_bindgen`] module holds the value types that generated bindings
 //! take, such as [`Bytes`](compact_bindgen::Bytes). Its root holds the names
 //! of the common path: sync a [`Wallet`], attach it to a [`MidnightProvider`],
-//! then deploy and call a contract that [`contract!`] binds.
+//! then deploy and call a contract that [`contract!`] binds. The provider funds
+//! and signs through the [`MidnightWallet`] trait.
 //!
 #![cfg_attr(
     all(feature = "provider", feature = "wallet", feature = "contract"),
@@ -26,7 +27,7 @@
 //!     let wallet = Wallet::from_seed(Seed::from_mnemonic(phrase)?)
 //!         .sync(&provider, "http://localhost:8088")
 //!         .await?;
-//!     let provider = provider.with_wallet(wallet);
+//!     let provider = provider.with_wallet(&wallet);
 //!
 //!     let contract = counter::Contract::deploy(&provider)
 //!         .with_zk_config(counter::ZK_CONFIG_DIR)
@@ -88,8 +89,8 @@ pub use midnight_provider::{
 // the common path needs no `midnight_core::wallet::` prefix.
 #[cfg(feature = "wallet")]
 pub use midnight_wallet::{
-    InvalidNetworkName, Network, NetworkName, Seed, SyncProgress, Wallet, WalletBuilder,
-    WalletFacade,
+    InvalidNetworkName, MidnightWallet, Network, NetworkName, Seed, SyncProgress, Wallet,
+    WalletBuilder,
 };
 
 // Re-export contract types (gated behind "contract" feature).
@@ -147,9 +148,9 @@ mod tests {
 
     #[test]
     #[cfg(feature = "wallet")]
-    fn reexports_the_wallet_facade() {
-        // Guard only `WalletFacade`: the examples compile the other root wallet names.
-        let _ = std::any::type_name::<Box<dyn crate::WalletFacade>>();
+    fn reexports_the_wallet_trait() {
+        // Guard only `MidnightWallet`: the examples compile the other root wallet names.
+        let _ = std::any::type_name::<Box<dyn crate::MidnightWallet>>();
     }
 
     #[test]

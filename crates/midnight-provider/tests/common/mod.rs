@@ -50,7 +50,11 @@ pub(crate) async fn synced_wallet(
 }
 
 /// A provider for the devnet, with the wallet of `seed` synced and attached.
-pub(crate) async fn synced_provider(node: &str, indexer: &str, seed: &str) -> MidnightProvider {
+pub(crate) async fn synced_provider(
+    node: &str,
+    indexer: &str,
+    seed: &str,
+) -> MidnightProvider<Wallet> {
     let provider = MidnightProvider::new(node);
     let wallet = synced_wallet(&provider, indexer, seed).await;
     provider.with_wallet(wallet)

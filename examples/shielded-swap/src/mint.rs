@@ -9,7 +9,7 @@
 
 use midnight_core::contract::parse_contract_address;
 use midnight_core::provider::{HashOutput, ShieldedTokenType};
-use midnight_core::{MidnightProvider, Seed};
+use midnight_core::{MidnightProvider, MidnightWallet, Seed};
 
 mod contract {
     midnight_core::contract!(
@@ -24,8 +24,8 @@ mod contract {
 /// The mint circuit sends the new coin to the recipient's shielded key and
 /// attaches the discovery ciphertext, so the recipient finds it on resync with
 /// no out-of-band coordination.
-pub async fn mint_token_to(
-    minter: &MidnightProvider,
+pub async fn mint_token_to<W: MidnightWallet>(
+    minter: &MidnightProvider<W>,
     recipient: &Seed,
     amount: u64,
 ) -> anyhow::Result<ShieldedTokenType> {

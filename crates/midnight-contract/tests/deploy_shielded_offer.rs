@@ -19,9 +19,9 @@ use midnight_provider::MidnightProvider;
 
 /// The offer's coin and payment must reach the guaranteed Zswap offer of the
 /// proven transaction, with a change output when the coin holds more than the
-/// payment. A successful build keeps the coin reserved, so no later build of
-/// the wallet selects it, and its result names the coin and the fee Dust for
-/// the submit to hand back. The chain must then apply the deploy.
+/// payment. A successful build keeps the coin and the fee Dust reserved, so no
+/// later build of the wallet selects them. The chain must then apply the
+/// deploy.
 ///
 /// The offer pays 1 unit of shielded token id `[0; 32]` from one of the dev
 /// wallet's coins back to the wallet's own keys. It is unrelated to the
@@ -49,9 +49,9 @@ async fn deploy_funded_with_shielded_offer() {
     // ([0; 32]) from genesis.
     let token_type = ShieldedTokenType(midnight_types::HashOutput([0u8; 32]));
     let coin = provider
+        .wallet()
         .spendable_shielded_coins()
         .await
-        .unwrap()
         .into_iter()
         .find(|coin| coin.token_type == token_type)
         .expect("the dev wallet must hold a coin of the default shielded token");
@@ -71,9 +71,24 @@ async fn deploy_funded_with_shielded_offer() {
         .await
         .unwrap();
 
+    let address = result.address_hex();
+    let bytes = result.transaction.into_bytes();
+
+    // The result's reservation holds the offer's coin and the fee Dust, and
+    // its bytes keep that reservation.
+    let spendable = provider.wallet().spendable_shielded_coins().await;
+    assert!(
+        !spendable.iter().any(|c| c.nullifier == nullifier),
+        "a successful deploy keeps its offer's coins reserved"
+    );
+    let dust = provider.wallet().balance().await.dust;
+    assert!(
+        dust.spendable_speck < dust.balance_speck,
+        "a successful deploy keeps its fee Dust reserved"
+    );
+
     let tx: FinalizedTransaction<DefaultDB> =
-        tagged_deserialize(&mut &result.transaction.tx_bytes[..])
-            .expect("deserialize the proven deploy");
+        tagged_deserialize(&mut &bytes[..]).expect("deserialize the proven deploy");
     let Transaction::Standard(stx) = &tx else {
         panic!("a deploy must be a standard transaction");
     };
@@ -92,35 +107,16 @@ async fn deploy_funded_with_shielded_offer() {
         "the guaranteed offer must carry the payment, and the change when the coin holds more"
     );
 
-    let spendable = provider.spendable_shielded_coins().await.unwrap();
-    assert!(
-        !spendable.iter().any(|c| c.nullifier == nullifier),
-        "a successful deploy keeps its offer's coins reserved"
-    );
-
-    // The submit hands back only what the result names, so it must name the
-    // offer's coin and the fee Dust.
-    let spent = &result.transaction.spent;
-    assert!(
-        spent.shielded.iter().any(|coin| coin.input == nullifier),
-        "the deploy result must name the offer's coin: {spent:?}"
-    );
-    assert!(
-        !spent.dust.is_empty(),
-        "the deploy result must name the fee Dust: {spent:?}"
-    );
-
-    let address = result.address_hex();
-    let bytes = result.transaction.tx_bytes.len();
     let (in_block, _) = provider
-        .submit_reserved(result.transaction)
+        .submit(&bytes)
         .await
         .expect("submit the deploy")
         .wait_finalized()
         .await
         .expect("the chain must apply a deploy that carries a shielded offer");
     eprintln!(
-        "deploy_funded with shielded offer: addr={address} bytes={bytes} block={}",
+        "deploy_funded with shielded offer: addr={address} bytes={} block={}",
+        bytes.len(),
         hex::encode(in_block.block_hash),
     );
 }

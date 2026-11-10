@@ -20,6 +20,7 @@ use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
 use midnight_provider::UnshieldedTokenType;
+use midnight_wallet::Wallet;
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];
 const MINTED: u128 = 1_000;
@@ -118,13 +119,9 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
 }
 
 /// What the wallet holds of `colour` right now.
-async fn held(provider: &MidnightProvider, colour: UnshieldedTokenType) -> u128 {
-    provider.resync_wallet().await.expect("resync");
-    provider
-        .balance()
-        .await
-        .expect("balance")
-        .unshielded_value(colour)
+async fn held(provider: &MidnightProvider<Wallet>, colour: UnshieldedTokenType) -> u128 {
+    provider.wallet().sync(provider).await.expect("resync");
+    provider.wallet().balance().await.unshielded_value(colour)
 }
 
 /// [`held`], retried until it reaches `target` or two minutes elapse.
@@ -135,7 +132,7 @@ async fn held(provider: &MidnightProvider, colour: UnshieldedTokenType) -> u128 
 /// Returns whatever it last saw, so a caller's assertion reports the real
 /// figure rather than a timeout.
 async fn held_until(
-    provider: &MidnightProvider,
+    provider: &MidnightProvider<Wallet>,
     colour: UnshieldedTokenType,
     target: u128,
 ) -> u128 {

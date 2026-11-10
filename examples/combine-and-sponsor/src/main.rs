@@ -72,11 +72,11 @@ async fn main() -> anyhow::Result<()> {
 
     println!("0. Syncing both wallets...");
     let provider_a = MidnightProvider::new(&node_url);
-    let wallet = Wallet::from_seed(Seed::from_hex(SEED_A)?)
+    let wallet_a = Wallet::from_seed(Seed::from_hex(SEED_A)?)
         .sync(&provider_a, &indexer_url)
         .await?;
-    let recipient_a = wallet.shielded_recipient();
-    let provider_a = provider_a.with_wallet(wallet);
+    let recipient_a = wallet_a.shielded_recipient();
+    let provider_a = provider_a.with_wallet(&wallet_a);
     let provider_b = MidnightProvider::new(&node_url);
     let wallet = Wallet::from_seed(Seed::from_hex(SEED_B)?)
         .sync(&provider_b, &indexer_url)
@@ -103,9 +103,9 @@ async fn main() -> anyhow::Result<()> {
 
     // --- A seeds B with a shielded coin (B needs no Dust, only something to
     //     spend) ---
-    let coin = provider_a
+    let coin = wallet_a
         .balance()
-        .await?
+        .await
         .shielded
         .coins
         .first()
@@ -114,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
     println!("2. A sends B a shielded coin...");
     // B can hold this token from an earlier run, so B waits for its total to
     // grow, not for any coin of the token.
-    let b_before = provider_b.balance().await?.shielded_value(coin.token_type);
+    let b_before = wallet_b.balance().await.shielded_value(coin.token_type);
     provider_a
         .transfer_shielded(coin.token_type, SHIELDED_TO_B, recipient_b)
         .send()

@@ -91,10 +91,11 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let provider = provider.with_wallet(handle.await?);
+    let wallet = handle.await?;
     println!("\nSync complete.\n");
+    let provider = provider.with_wallet(&wallet);
 
-    let balance = provider.balance().await?;
+    let balance = wallet.balance().await;
     // Both balance entry types impl Display; NIGHT renders as "NIGHT: <val>"
     // on the unshielded side, everything else as "<hex8>…: <val>".
     println!("--- Balances ---");

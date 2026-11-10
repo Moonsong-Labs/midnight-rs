@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     // Pick a coin worth more than 1 unit, so the transfer has a change output:
     // the default coin selection spends the largest coin of the token. The
     // local dev preset funds the dev seed with several shielded test tokens.
-    let balance = provider.balance().await?;
+    let balance = wallet.balance().await;
     let Some(coin) = balance.shielded.coins.iter().find(|c| c.value > 1).cloned() else {
         bail!("wallet has no shielded coin worth more than 1 unit. Is this a fresh local devnet?");
     };
@@ -107,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
             .map_or_else(|| elapsed.into(), anyhow::Error::from)
     })
     .context("the wallet did not see the outputs")??;
-    let post = provider.balance().await?;
+    let post = wallet.balance().await;
     println!("\n--- Post-transfer shielded balance ---");
     for c in &post.shielded.coins {
         println!("  {c}");

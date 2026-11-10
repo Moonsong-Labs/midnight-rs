@@ -1,14 +1,13 @@
 //! A deploy or a call that the node never gets hands its inputs back to the
 //! wallet.
 //!
-//! The deploy builds against a synced wallet, and its submit dials a node that
-//! refuses the connection. The call builds against the devnet, and its
-//! private-state store refuses the `Pending` snapshot, so the call stops after
-//! its prepare and before its submit. Neither transaction left the process, so
-//! the wallet must get the fee Dust back at once. A deploy that submits with
-//! plain `submit`, or a call that prepares with plain `prepare`, keeps that
-//! Dust reserved until its TTL passes, and the next fee-paying build then
-//! fails with `InsufficientDust`.
+//! The deploy and the call build against the devnet, and their private-state
+//! store refuses the `Pending` snapshot, so each stops after its prepare and
+//! before its submit. Neither transaction left the process, so the drop of its
+//! prepared transaction must give the wallet the fee Dust back at once. A
+//! build that kept the reservation would keep that Dust reserved until its TTL
+//! passes, and the next fee-paying build would then fail with
+//! `InsufficientDust`.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics. The
@@ -17,10 +16,6 @@
 //! binary can race.
 
 mod common;
-
-mod counter {
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
-}
 
 mod secret_counter {
     compact_bindgen::contract!(
@@ -35,12 +30,9 @@ use async_trait::async_trait;
 use midnight_contract::ContractError;
 use midnight_provider::{
     EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions, ImportResult,
-    MidnightProvider, PrivateStateError, PrivateStateProvider, ProviderError, Snapshot,
+    MidnightProvider, PrivateStateError, PrivateStateProvider, Snapshot,
 };
 use midnight_wallet::Wallet;
-
-/// A node URL whose dial fails: nothing listens on port 1.
-const REFUSING_NODE_URL: &str = "ws://127.0.0.1:1";
 
 /// The pause between two passes of the background sync.
 const SYNC_PAUSE: Duration = Duration::from_secs(1);
@@ -178,33 +170,9 @@ async fn a_deploy_or_a_call_that_the_node_never_gets_hands_its_inputs_back() {
         return;
     };
 
-    // The sync reads the network and the chain pin from the devnet's node. The
-    // build reads no node: its resync finds no answer for the pin, keeps the
-    // state, and replays from the indexer. Only the submit needs the node.
     let devnet = MidnightProvider::new(&node_url);
     let wallet =
         Arc::new(common::synced_wallet(&devnet, &indexer_url, common::DEV_WALLET_SEED).await);
-    let refusing = MidnightProvider::new(REFUSING_NODE_URL).with_wallet(wallet.clone());
-
-    let Err(err) = counter::Contract::deploy(&refusing)
-        .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(counter::ZK_CONFIG_DIR)
-        .send()
-        .await
-    else {
-        panic!("a deploy whose node refuses the dial must fail");
-    };
-    assert!(
-        matches!(err, ContractError::Provider(ProviderError::Rpc(_))),
-        "the deploy must fail at the connect of its submit, after a build that reserved its fee: \
-         {err:?}"
-    );
-    assert_no_dust_reserved(
-        &wallet,
-        "the deploy kept its fee Dust reserved after a submit that never reached the node",
-    )
-    .await;
-
     let dir = tempfile::tempdir().expect("temp dir");
     let store: Arc<dyn PrivateStateProvider> =
         Arc::new(RefusesSnapshots(FsPrivateStateProvider::new(dir.path())));
@@ -213,6 +181,27 @@ async fn a_deploy_or_a_call_that_the_node_never_gets_hands_its_inputs_back() {
             .with_wallet(Arc::clone(&wallet))
             .with_private_state(store),
     );
+
+    // A private state to record makes the deploy record a snapshot, which the
+    // store refuses.
+    let refused = secret_counter::Contract::deploy(&*provider)
+        .with_initial_state(secret_counter::LedgerInitialState::default())
+        .with_witnesses(&NextSecret)
+        .with_initial_private_state(1)
+        .with_zk_config(secret_counter::ZK_CONFIG_DIR)
+        .send()
+        .await;
+    assert!(
+        matches!(refused, Err(ContractError::PendingSnapshotFailed { .. })),
+        "the deploy must stop at the snapshot, after a build that reserved its fee: {:?}",
+        refused.map(|deploy| deploy.address().to_owned())
+    );
+    assert_no_dust_reserved(
+        &wallet,
+        "the deploy kept its fee Dust reserved after it stopped before the submit",
+    )
+    .await;
+
     let (_, deployed) = secret_counter::Contract::deploy(&*provider)
         .with_initial_state(secret_counter::LedgerInitialState::default())
         .with_zk_config(secret_counter::ZK_CONFIG_DIR)

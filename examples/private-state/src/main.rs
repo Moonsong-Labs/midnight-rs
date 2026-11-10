@@ -93,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
     let store: Arc<dyn PrivateStateProvider> =
         Arc::new(FsPrivateStateProvider::for_wallet(&dir, &address));
     let provider = provider
-        .with_wallet(wallet)
+        .with_wallet(&wallet)
         .with_private_state(Arc::clone(&store));
     println!("   synced.\n");
 

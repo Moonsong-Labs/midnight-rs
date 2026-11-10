@@ -89,7 +89,7 @@ as opaque unless the deployment explicitly documents an ad-hoc mapping.
 ## How `WalletBalance` exposes assets
 
 ```rust
-let balance = provider.balance().await?;
+let balance = wallet.balance().await;
 
 // Fee token
 balance.dust.balance_speck;       // u128: all the Dust in SPECK, reserved or not

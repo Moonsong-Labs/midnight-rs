@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     let wallet = Wallet::from_seed(Seed::from_hex(DEV_WALLET_SEED)?)
         .sync(&provider, &indexer_url)
         .await?;
-    let provider = provider.with_wallet(wallet);
+    let provider = provider.with_wallet(&wallet);
     println!("   synced.\n");
 
     // Three committee members, each modeling a key held on a separate machine.
@@ -147,7 +147,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Print the contract's current committee size, threshold, and counter.
-async fn print_authority(contract: &counter::Contract<&MidnightProvider>) -> anyhow::Result<()> {
+async fn print_authority(
+    contract: &counter::Contract<&MidnightProvider<&Wallet>>,
+) -> anyhow::Result<()> {
     let a = contract.maintenance_authority().await?;
     println!(
         "   authority: {} member(s), threshold {}, counter {}",

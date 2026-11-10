@@ -1,7 +1,7 @@
 //! Provider lock hygiene and sync-task cancellation, against a local mock
 //! indexer (no devnet required):
 //!
-//! - `resync_wallet` must not hold the wallet lock across the replay I/O:
+//! - `Wallet::sync` must not hold the wallet lock across the replay I/O:
 //!   reads (`balance`) complete while a stalled resync replay is in flight.
 //! - `WalletBuilder::sync_with_progress` must not leak the spawned sync task:
 //!   dropping the progress receiver or the `SyncHandle` tears down the
@@ -220,7 +220,7 @@ async fn synced_wallet(url: &str) -> Wallet {
 }
 
 /// Fast mode: attach a synced wallet in milliseconds.
-async fn synced_provider(url: &str) -> MidnightProvider {
+async fn synced_provider(url: &str) -> MidnightProvider<Wallet> {
     provider().with_wallet(synced_wallet(url).await)
 }
 
@@ -263,10 +263,10 @@ async fn wait_until(what: &str, f: impl Fn() -> bool) {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// `resync_wallet` snapshots under a brief read lock, replays lock-free, and
-/// commits under a brief write lock — so a read (`balance`) completes while
-/// the replay is stalled mid-flight. Before the fix the wallet write lock was
-/// held across the whole replay and this read blocked until the resync ended.
+/// `Wallet::sync` snapshots under a brief read lock, replays lock-free, and
+/// commits under a brief write lock, so a read (`balance`) completes while
+/// the replay is stalled mid-flight. A sync that held the write lock across
+/// the whole replay would block this read until the sync ended.
 #[tokio::test]
 async fn balance_completes_while_resync_replay_is_in_flight() {
     let (url, state) = spawn_mock().await;
@@ -277,7 +277,8 @@ async fn balance_completes_while_resync_replay_is_in_flight() {
     state.stall.store(true, Ordering::SeqCst);
     let provider = Arc::new(provider);
     let resync_provider = Arc::clone(&provider);
-    let resync = tokio::spawn(async move { resync_provider.resync_wallet().await });
+    let resync =
+        tokio::spawn(async move { resync_provider.wallet().sync(&*resync_provider).await });
 
     // Wait until the replay phase is live: all three resync subscriptions
     // are connected and stalled.
@@ -287,10 +288,9 @@ async fn balance_completes_while_resync_replay_is_in_flight() {
     .await;
 
     // The replay is mid-flight; a read must complete promptly.
-    tokio::time::timeout(Duration::from_secs(2), provider.balance())
+    tokio::time::timeout(Duration::from_secs(2), provider.wallet().balance())
         .await
-        .expect("balance() must not block while a resync replay is in flight")
-        .expect("balance() must succeed");
+        .expect("balance() must not block while a resync replay is in flight");
 
     resync.abort();
 }
@@ -362,7 +362,7 @@ async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
 
     // The resume path settles on its own idle bound, around ten seconds.
     // Thirty leaves room on a loaded machine while still failing fast.
-    tokio::time::timeout(Duration::from_secs(30), provider.resync_wallet())
+    tokio::time::timeout(Duration::from_secs(30), provider.wallet().sync(&provider))
         .await
         .expect("the resync must reach a verdict inside the idle bound")
         .expect("a quiet unshielded stream means at-tip, not a failed resync");

@@ -75,6 +75,33 @@ pub(crate) fn proof_server_url() -> Option<String> {
     }
 }
 
+/// A wallet for the tests that stop before a funding, or that never poll the
+/// future that would fund.
+#[derive(Debug)]
+pub(crate) struct UnreachedWallet;
+
+#[async_trait::async_trait]
+impl midnight_provider::MidnightWallet for UnreachedWallet {
+    fn shielded_recipient(&self) -> midnight_provider::ShieldedRecipient {
+        unreachable!("the test stops before the wallet")
+    }
+
+    async fn fund_transaction(
+        &self,
+        _chain: &dyn midnight_types::chain_pin::ChainView,
+        _tx: midnight_types::FilledTx,
+    ) -> Result<midnight_types::FundedTx, midnight_provider::WalletError> {
+        unreachable!("the test stops before the wallet")
+    }
+
+    async fn sign_transaction(
+        &self,
+        _tx: midnight_types::ProvenTx,
+    ) -> Result<midnight_provider::TxEnvelope, midnight_provider::WalletError> {
+        unreachable!("the test stops before the wallet")
+    }
+}
+
 /// The wallet of `seed` on the undeployed network, synced from the indexer at
 /// `indexer_url` and pinned through `provider`.
 ///
@@ -105,18 +132,15 @@ pub(crate) async fn synced_wallet(
 /// When no such coin shows up after the last resync. The message names the
 /// coin as `what`.
 pub(crate) async fn resync_until_coin(
-    provider: &MidnightProvider,
+    provider: &MidnightProvider<Wallet>,
     token_type: ShieldedTokenType,
     value: u128,
     what: &str,
 ) -> SpendableShieldedCoin {
     let mut coins = Vec::new();
     for _ in 0..60 {
-        provider.resync_wallet().await.expect("resync");
-        coins = provider
-            .spendable_shielded_coins()
-            .await
-            .expect("spendable coins");
+        provider.wallet().sync(provider).await.expect("resync");
+        coins = provider.wallet().spendable_shielded_coins().await;
         if let Some(index) = coins
             .iter()
             .position(|c| c.token_type == token_type && c.value == value)

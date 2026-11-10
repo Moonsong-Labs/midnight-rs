@@ -19,6 +19,7 @@ use midnight_helpers::{
     UnprovenTransaction,
 };
 use midnight_provider::{MidnightProvider, NIGHT};
+use midnight_wallet::Wallet;
 
 /// Wraps the real prover and records whether it ran.
 #[derive(Default)]
@@ -43,8 +44,8 @@ impl ProofProvider<DefaultDB> for ProofRecorder {
 
 /// Counts the wallet's tNIGHT UTXOs, and how many of them still await a
 /// registration.
-async fn night_counts(provider: &MidnightProvider) -> (usize, usize) {
-    let balance = provider.balance().await.expect("wallet");
+async fn night_counts(provider: &MidnightProvider<Wallet>) -> (usize, usize) {
+    let balance = provider.wallet().balance().await;
     let total = balance
         .unshielded
         .iter()

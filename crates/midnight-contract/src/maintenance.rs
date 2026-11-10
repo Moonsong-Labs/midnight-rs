@@ -12,7 +12,7 @@ use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPointBuf};
 use midnight_provider::PendingTx;
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
-use midnight_types::TransferResult;
+use midnight_types::{MidnightWallet, TxEnvelope};
 
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
@@ -249,7 +249,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
     where
         P: AsMidnightProvider,
     {
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(self.prepare_inner()).await
     }
 
@@ -402,9 +402,10 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     pub async fn build(self) -> Result<Vec<u8>, ContractError>
     where
         P: AsMidnightProvider,
+        P::Wallet: MidnightWallet,
     {
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Ok(Box::pin(self.build_inner()).await?.tx_bytes)
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
+        Ok(Box::pin(self.build_inner()).await?.into_bytes())
     }
 
     /// Build, prove, and balance the transaction as [`Self::build`] does, then
@@ -418,9 +419,10 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     pub async fn send(self) -> Result<PendingTx, ContractError>
     where
         P: AsMidnightProvider,
+        P::Wallet: MidnightWallet,
     {
         let provider = self.contract.provider().as_midnight_provider();
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(async move {
             let transaction = self.build_inner().await?;
             Ok(provider.submit_reserved(transaction).await?)
@@ -428,16 +430,16 @@ impl<'a, P> PreparedMaintenance<'a, P> {
         .await
     }
 
-    async fn build_inner(self) -> Result<TransferResult, ContractError>
+    async fn build_inner(self) -> Result<TxEnvelope, ContractError>
     where
         P: AsMidnightProvider,
+        P::Wallet: MidnightWallet,
     {
         self.check_signatures()?;
         let provider = self.contract.provider().as_midnight_provider();
-        let builds = provider.builds().await?;
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(crate::ledger::maintenance::maintenance_funded(
-            &builds,
+            provider,
             self.update,
             &self.signatures,
         ))

@@ -6,11 +6,12 @@
 //! syncs itself. It locks its own state, so a `&Wallet` serves every call and
 //! a caller never holds a lock.
 //!
-//! `midnight_provider::MidnightProvider::with_wallet` attaches a wallet. The
-//! provider builds its transactions, and every build syncs the wallet first.
-//! To keep a handle on the attached wallet, attach an `Arc<Wallet>`.
-//! [`Wallet::sync_in_background`] syncs it in a background task. The wallet
-//! runs each replay against the indexer that it synced from.
+//! `midnight_provider::MidnightProvider::with_wallet` attaches a wallet, which
+//! the provider funds and signs through. [`Wallet`] implements
+//! [`MidnightWallet`], and so do `&Wallet` and `Arc<Wallet>`. Each funding
+//! syncs the wallet first. [`Wallet::sync_in_background`] syncs it in a
+//! background task. The wallet runs each replay against the indexer that it
+//! synced from.
 //!
 //! For callers that only need an address (no synced state), use
 //! [`Seed::unshielded_address`], [`Seed::shielded_address`] and
@@ -52,9 +53,9 @@
 //! let wallet = Wallet::from_seed(Seed::from_mnemonic(phrase)?)
 //!     .sync(&provider, "http://localhost:8088")
 //!     .await?;
-//! let provider = provider.with_wallet(wallet);
+//! let provider = provider.with_wallet(&wallet);
 //!
-//! let balance = provider.balance().await?;
+//! let balance = provider.wallet().balance().await;
 //! # Ok(())
 //! # }
 //! ```
@@ -80,16 +81,12 @@ pub use midnight_types::address::{
     parse_dust_address, parse_shielded_recipient, parse_unshielded_recipient,
 };
 pub use midnight_types::{
-    CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustPublicKey,
-    EncryptionPublicKey, HashOutput, InvalidNetworkName, NIGHT, Network, NetworkName, Nonce,
-    Nullifier, ReservedInput, ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient,
-    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SpentUtxoKey, TransferKind,
-    TransferRequest, TransferResult, UnshieldedRecipient, UnshieldedTokenType, UnshieldedUtxoInfo,
-    WalletBalance, WalletError, chain_pin,
+    CoinInfo, CoinPublicKey, DustBalance, DustPublicKey, EncryptionPublicKey, FilledTx, FundedTx,
+    HashOutput, InvalidNetworkName, MidnightWallet, NIGHT, Network, NetworkName, Nonce, Nullifier,
+    ProvenTx, ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
+    SpendableShieldedCoin, TxEnvelope, UnshieldedRecipient, UnshieldedTokenType,
+    UnshieldedUtxoInfo, WalletBalance, WalletError, chain_pin,
 };
-// The API this crate implements, so a caller can name `dyn WalletFacade` with
-// no dependency on midnight-wallet-facade.
-pub use midnight_wallet_facade::WalletFacade;
 
 pub use background::BackgroundSync;
 pub use local::Wallet;

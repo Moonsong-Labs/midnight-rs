@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use midnight_helpers::{DefaultDB, DustWallet, WalletState as ZswapLocalState};
-use midnight_types::TrackedUtxo;
+use midnight_types::build::TrackedUtxo;
 use tracing::info;
 
 use crate::WalletError;

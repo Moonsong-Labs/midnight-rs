@@ -20,7 +20,7 @@ pub mod zk_config;
 #[doc(hidden)]
 pub use compact_codegen;
 pub use midnight_provider::Provider;
-pub use midnight_types::{BlockHash, ExtrinsicHash};
+pub use midnight_types::{BlockHash, ExtrinsicHash, MidnightWallet};
 
 // Primary API: deploy / connect / call.
 pub use call::ShieldedInputs;
@@ -79,7 +79,8 @@ pub use midnight_types::{
     CoinPublicKey, EncryptionPublicKey, ShieldedRecipient, ShieldedTokenType,
 };
 pub use offer::{ShieldedOffer, ShieldedPayment};
-// The shielded coin a caller spends, from `MidnightProvider::spendable_shielded_coins`.
+// The shielded coin a caller spends, from `Wallet::spendable_shielded_coins` in
+// `midnight-wallet`.
 pub use midnight_types::SpendableShieldedCoin;
 
 // The `state` and `deploy` modules expose a small part of the code under

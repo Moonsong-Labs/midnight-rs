@@ -6,13 +6,14 @@
 
 use hex::FromHex;
 use midnight_indexer_client::{IndexerError, SubscriptionClient};
-use midnight_types::{HashOutput, TrackedUtxo, UnshieldedTokenType};
+use midnight_types::build::{SpentUtxoKey, TrackedUtxo};
+use midnight_types::{HashOutput, UnshieldedTokenType};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::generation::{Generation, require_ledger_9_parameters};
-use crate::{SpentUtxoKey, SyncProgress, WalletError};
+use crate::{SyncProgress, WalletError};
 
 // ---------------------------------------------------------------------------
 // Subscription event types — internal to the sync loop.

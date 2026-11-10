@@ -6,21 +6,26 @@ The SDK's wallet covers Midnight's three asset legs:
 - **Unshielded UTXOs**: public UTXO-model balances (NIGHT lives here)
 - **Dust**: fee-token, generated continuously from NIGHT holdings
 
-`Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet` and operate through the provider, which starts the resyncs, builds the transfers and makes the transaction contexts. The wallet can also sync itself in a background task (see [Background sync](#background-sync)).
+`Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet`, and the provider builds transactions with it. The wallet can also sync itself in a background task (see [Background sync](#background-sync)).
 
-`Wallet` locks its own state. The lock is a private field, so no caller holds a guard, and a `&Wallet` serves every call. `Wallet` is not `Clone`. To share it, put it in an `Arc`. `provider.with_wallet(wallet)` takes the wallet, and to keep a handle on the attached wallet, attach an `Arc<Wallet>`.
+`Wallet` locks its own state. The lock is a private field, so no caller holds a guard, and a `&Wallet` serves every call. `Wallet` is not `Clone`. To share it, put it in an `Arc`.
 
-The provider holds the wallet as `Arc<dyn WalletFacade>`. Another implementation goes in as itself when it implements `WalletFacade` and `midnight_wallet_facade::WalletBuilds`. Such an implementation must serialize its own `resync` and `watch_for_coins` against each other, because the provider holds no lock across them. Its `watch_for_coins` takes the chain view, as `resync` does. It registers the coins and then rescans.
+`MidnightProvider<W>` holds the wallet `W` that `with_wallet` gets, and calls it only through the `MidnightWallet` trait. `Wallet` implements the trait, and so do `&Wallet` and `Arc<Wallet>`. Attach a borrow to keep using the wallet beside the provider, or an `Arc<Wallet>` when a background sync shares it. `provider.wallet()` gives the attached wallet back.
 
 ```rust
-use std::sync::Arc;
-
-let wallet = Arc::new(wallet);
-let provider = provider.with_wallet(Arc::clone(&wallet));
+let provider = provider.with_wallet(&wallet);
 let balance = wallet.balance().await;
 ```
 
-The wallet serializes its own syncs and coin watches. So the handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.sync(&provider)`.
+The trait has three methods:
+
+- `shielded_recipient`: the keys that `ownPublicKey()` and the wallet's own shielded outputs use.
+- `fund_transaction`: resync, then add the wallet's inputs, change and Dust fee to a transaction that the provider filled, and reserve what they spend.
+- `sign_transaction`: add the signatures that the transaction still needs after its proof, then keep its reservation across a restart.
+
+A transaction goes through four stages: the provider fills a `FilledTx` from node queries, the wallet funds it into a `FundedTx`, the provider proves it into a `ProvenTx`, and the wallet signs it into a `TxEnvelope`. The reservation travels with the stages, so the trait has no release method (see [Pending reservations](#pending-reservations)). `FilledTx` and `FundedTx` are opaque, so a custom wallet funds through a `Wallet` that it wraps.
+
+The wallet serializes its own syncs and coin watches. So a handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.sync(&provider)`.
 
 ## Seeds
 
@@ -150,7 +155,7 @@ let wallet = Wallet::from_seed(Seed::from_mnemonic(phrase)?)
     .with_storage(storage_dir)        // optional; in-memory only without it
     .sync(&provider, indexer_url)
     .await?;
-let provider = provider.with_wallet(wallet);
+let provider = provider.with_wallet(&wallet);
 ```
 
 A `WalletBuilder` holds no connection and does no work until a sync step runs. `.sync(&provider, indexer_url)` replays three subscriptions of the indexer at `indexer_url` in the current task: the zswap and unshielded streams at the same time, then the Dust stream. It returns the `Wallet` once all three have caught up:
@@ -199,14 +204,14 @@ while let Some(progress) = rx.recv().await {
 }
 
 let wallet = handle.await?;
-let provider = provider.with_wallet(wallet);
+let provider = provider.with_wallet(&wallet);
 ```
 
 `.sync(&provider, indexer_url)` runs the sync in the current task. `.sync_with_progress(&provider, indexer_url)` does the network check and the pin work first, so it can refuse a sync as `.sync(&provider, indexer_url)` does. Then it spawns the sync in a background task, and gives you progress events and a `SyncHandle` that resolves to the synced `Wallet`.
 
 The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally. For a sync without progress events, use `.sync(&provider, indexer_url)`.
 
-To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. To keep the reads fresh, run a [background sync](#background-sync). For one fresh read, call `resync_wallet()` before it. A resync takes the wallet's read/write lock only briefly, at its start (to snapshot replay inputs) and at its end (to commit). So reads like `balance()` keep completing while one is in flight. The wallet serializes concurrent resyncs.
+To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `wallet.sync(&provider).await`. Every funding resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync. To keep the reads fresh, run a [background sync](#background-sync). For one fresh read, call `wallet.sync(&provider)` before it. A sync takes the wallet's read/write lock only briefly, at its start (to snapshot replay inputs) and at its end (to commit). So reads like `balance()` keep completing while one is in flight. The wallet serializes concurrent syncs.
 
 ### Background sync
 
@@ -230,10 +235,10 @@ A failed pass does not stop the sync. The task logs the error, and the next pass
 ```rust
 use std::time::Duration;
 
-// `balance()` returns the state of the last pass. Resync first, so that
+// `balance()` returns the state of the last pass. Sync first, so that
 // `before` is the state that the build of the transfer starts from.
-provider.resync_wallet().await?;
-let before = provider.balance().await?.shielded_value(token);
+wallet.sync(&*provider).await?;
+let before = wallet.balance().await.shielded_value(token);
 provider
     .transfer_shielded(token, amount, recipient)
     .send()
@@ -282,12 +287,12 @@ Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are gener
 
 The sync refuses a snapshot that holds ledger 8 state. When the `ledger_version` field of `metadata.json` is `V8`, or the file has no such field, the sync fails with `WalletError::Ledger8Snapshot`, which names the directory. Delete the directory and sync again from genesis.
 
-Persistence is not a one-shot at initial sync: every successful `resync_wallet` re-saves the moved cursors, refreshed parameters, and pending set, and each build rewrites `pending.json` with its reservation once its proof succeeds. `pending.json` is removed once no reservations remain.
+Persistence is not a one-shot at initial sync: every successful `Wallet::sync` re-saves the moved cursors, refreshed parameters, and pending set, and `sign_transaction` rewrites `pending.json` with the reservation of each transaction once its proof succeeds. `pending.json` is removed once no reservations remain.
 
 ## Balance
 
 ```rust
-let balance = provider.balance().await?;
+let balance = wallet.balance().await;
 
 balance.shielded.coins;                    // Vec<ShieldedCoinBalance { token_type, value, spendable }>
 balance.shielded.total_count;              // usize
@@ -325,21 +330,21 @@ tNIGHT that arrives after the first registration generates Dust with no further 
 ```rust
 use std::time::{Duration, Instant};
 
-// A balance read does not resync.
-provider.resync_wallet().await?;
-let mut left = provider.balance().await?.dust.unregistered_night_utxos;
+// A balance read does not sync.
+wallet.sync(&provider).await?;
+let mut left = wallet.balance().await.dust.unregistered_night_utxos;
 while left > 0 {
     provider.register_dust(None).send().await?.wait_finalized().await?;
     // The indexer serves the registration a moment after the node finalizes it.
     let deadline = Instant::now() + Duration::from_secs(60);
-    while provider.balance().await?.dust.unregistered_night_utxos == left {
+    while wallet.balance().await.dust.unregistered_night_utxos == left {
         if Instant::now() >= deadline {
             return Err("the indexer did not serve the Dust registration".into());
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
-        provider.resync_wallet().await?;
+        wallet.sync(&provider).await?;
     }
-    left = provider.balance().await?.dust.unregistered_night_utxos;
+    left = wallet.balance().await.dust.unregistered_night_utxos;
 }
 ```
 
@@ -349,7 +354,7 @@ See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation r
 
 ### Registration to another Dust address
 
-A registration can send the Dust to the Dust address of another wallet. For example, a cold wallet that holds the tNIGHT registers it to the Dust address of a hot wallet. The hot wallet then gets the Dust. The cold wallet builds its transactions with `.without_dust()`, and the hot wallet pays their fees with `balance_transaction` ([`examples/combine-and-sponsor`](../examples/combine-and-sponsor) shows that flow). Read the address with `parse_dust_address`, and give the key to `.to()`. `network` is the wallet's network: take it with `wallet.network().clone()` before `with_wallet` takes the wallet:
+A registration can send the Dust to the Dust address of another wallet. For example, a cold wallet that holds the tNIGHT registers it to the Dust address of a hot wallet. The hot wallet then gets the Dust. The cold wallet builds its transactions with `.without_dust()`, and the hot wallet pays their fees with `balance_transaction` ([`examples/combine-and-sponsor`](../examples/combine-and-sponsor) shows that flow). Read the address with `parse_dust_address`, and give the key to `.to()`. `network` is the wallet's network, `wallet.network()`:
 
 ```rust
 use midnight_core::wallet::parse_dust_address;
@@ -392,15 +397,15 @@ let pending = provider
     .await?;
 ```
 
-`recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network against `network`, the wallet's network (`wallet.network().clone()`, taken before `with_wallet` takes the wallet). A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
+`recipient` is typed: an `UnshieldedRecipient`, the user address that an `mn_addr_*` address carries, or a `ShieldedRecipient`, the two public keys that an `mn_shield-addr_*` address carries. `parse_unshielded_recipient` and `parse_shielded_recipient` read one from an address string and check its network against `network`, the wallet's network (`wallet.network()`). A parse refuses an address of another network with `WalletError::AddressNetworkMismatch`, and a string that is not such an address with `WalletError::InvalidAddress`. The parse runs before the transfer, so a bad address costs no resync. To pay a wallet of your own, use `wallet.unshielded_recipient()` and `wallet.shielded_recipient()`, or the same methods of its `Seed`. `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
 
-1. Resyncs, then takes a write lock on the wallet and builds the transaction context.
-2. Selects inputs from the wallet's local UTXO set.
-3. Balances Dust fees via a `speculative_spend` loop (mock proofs first, real proofs once balanced).
-4. Reserves the selected inputs so the next concurrent build can't re-pick the same coins. Once the transaction is proven, the reservation reaches `pending.json`.
-5. Submits the proven bytes to the node and returns a `PendingTx`.
+1. Fills the transaction context from node queries: the node's network and ledger parameters, and the time of its best block.
+2. Hands it to the wallet's `fund_transaction`, which resyncs, then takes a write lock on the wallet, selects inputs from its local UTXO set, balances the Dust fee with a `speculative_spend` loop over mock proofs, and reserves the selected inputs so the next concurrent build can't re-pick the same coins.
+3. Proves the transaction with the provider's prover, with the wallet free.
+4. Hands it to the wallet's `sign_transaction`. The reservation then reaches `pending.json`.
+5. Submits the signed bytes to the node and returns a `PendingTx`.
 
-Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the chain's latest block that the resync read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships). To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
+Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the node's best block that the fill read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships). To make a transaction expire sooner, call `.with_ttl(duration)` on the builder:
 
 ```rust
 use std::time::Duration;
@@ -414,19 +419,17 @@ let pending = provider
 
 `transfer_shielded`, `transfer_unshielded` and `register_dust` take it. The TTL counts in whole seconds. A TTL under one second or longer than `global_ttl` fails the build with `WalletError::TtlOutOfRange`, before it spends or proves anything. A Dustless shielded transfer (`.without_dust()`) is a Zswap offer with no intent, so it cannot carry a TTL, and its build fails with `WalletError::TtlWithoutIntent`. A shielded swap half has no `with_ttl` for the same reason.
 
-To inspect the proven transaction before you submit it (e.g. to size-check, or to show the user the fee before they confirm), call `.build()` on the builder in place of `.send()`:
+To build the transaction without a submit, call `.build()` on the builder in place of `.send()`. It returns the signed `TxEnvelope`, which carries the reservation of its inputs:
 
 ```rust
-let result = provider
+let envelope = provider
     .transfer_shielded(token_type, amount, recipient)
     .build()
     .await?;
-// result: TransferResult { tx_bytes, spent, fee_speck }
-println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / SPECKS_PER_DUST as f64);
-let pending = provider.submit_reserved(result).await?;
+let pending = provider.submit_reserved(envelope).await?;
 ```
 
-`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like `.send()`; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved. `submit_reserved` hands them back when the node never gets the transaction or rejects it (see [Pending reservations](#pending-reservations)).
+`.build()` reserves the spent inputs just like `.send()`. `submit_reserved` hands them back when the node never gets the transaction or rejects it, and a drop of the envelope hands them back at once. `TxEnvelope::into_bytes` gives the bytes for another party and keeps the inputs reserved until a sync sees the chain spend them or their TTL ends (see [Pending reservations](#pending-reservations)).
 
 ## Submission and waiting
 
@@ -452,34 +455,33 @@ When the fate is unknown, a transaction can still land until its TTL passes. Aft
 
 A shielded coin reaches its owner through the discovery ciphertext on its output. That channel fails when the party that built the transaction attached no ciphertext, or sealed it to a key the owner does not hold. The coin still exists, the owner's coin public key still owns it, and it stays spendable, as long as the owner can rebuild its `CoinInfo` (nonce, token type, value) from somewhere else. A contract that evolves one public nonce per mint is such a case: the owner reads the nonce from chain state.
 
-Hand the rebuilt coin to `watch_for_coin` and the wallet claims it from the chain's own output, decrypting nothing:
+Hand the rebuilt coin to `watch_for_coins` and the wallet claims it from the chain's own output, decrypting nothing:
 
 ```rust
 use midnight_core::provider::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
 
-provider
-    .watch_for_coin(CoinInfo {
-        nonce: Nonce(HashOutput(nonce)),                  // rebuilt from chain state
-        type_: ShieldedTokenType(HashOutput(token_type)),
-        value,
-    })
-    .await?;
+let coin = CoinInfo {
+    nonce: Nonce(HashOutput(nonce)),                  // rebuilt from chain state
+    type_: ShieldedTokenType(HashOutput(token_type)),
+    value,
+};
+wallet.watch_for_coins(vec![coin], &provider).await?;
 
 // A claimed coin is spendable like any other.
-let coins = provider.spendable_shielded_coins().await?;
+let coins = wallet.spendable_shielded_coins().await;
 ```
 
-Registration records the coin's commitment; a replay that meets the matching output claims the coin from that record. The order matters, and it is why `watch_for_coin` replays for you. A replay that meets an output it cannot claim collapses that Merkle leaf and moves on, and a resync resumes from its cursor rather than revisiting the event, so registering after the fact would change nothing on its own. `watch_for_coin` therefore replays the whole `zswapLedgerEvents` stream from its first event, with the registration in place. Dust state, unshielded state, and their cursors are untouched.
+Registration records the coin's commitment; a replay that meets the matching output claims the coin from that record. The order matters, and it is why `watch_for_coins` replays for you. A replay that meets an output it cannot claim collapses that Merkle leaf and moves on, and a resync resumes from its cursor rather than revisiting the event, so registering after the fact would change nothing on its own. `watch_for_coins` therefore replays the whole `zswapLedgerEvents` stream from its first event, with the registration in place. Dust state, unshielded state, and their cursors are untouched.
 
-Every coin the wallet already holds is re-registered before that replay, so a rescan never costs you a coin. This matters because the ledger consumes a registration the moment a replay claims it: a coin recovered by an earlier `watch_for_coin` has no ciphertext to be found by, and a replay that started without it would collapse its leaf again.
+Every coin the wallet already holds is re-registered before that replay, so a rescan never costs you a coin. This matters because the ledger consumes a registration the moment a replay claims it: a coin recovered by an earlier `watch_for_coins` has no ciphertext to be found by, and a replay that started without it would collapse its leaf again.
 
-That full replay costs more than a resync, so register every coin you know about in one `watch_for_coins([...])` call, and treat this as a recovery step rather than a routine one. Registrations are persisted with the rest of the wallet state, so one made for a coin that has not landed yet survives a restart, and every later resync carries it rather than dropping it.
+That full replay costs more than a resync, so register every coin you know about in one `watch_for_coins` call, and treat this as a recovery step rather than a routine one. Registrations are persisted with the rest of the wallet state, so one made for a coin that has not landed yet survives a restart, and every later resync carries it rather than dropping it.
 
-To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. If the coin does not appear there, it is not on chain yet, or its rebuilt `CoinInfo` is wrong. A wrong registration never matches an output, and every later replay carries it.
+To check the outcome, look for the coin in `wallet.spendable_shielded_coins()`. If the coin does not appear there, it is not on chain yet, or its rebuilt `CoinInfo` is wrong. A wrong registration never matches an output, and every later replay carries it.
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there. To retry, call `watch_for_coins` again with the same coins: the second registration changes nothing, and the replay runs again.
 
-A handle (`Arc<Wallet>`) has the same method: `wallet.watch_for_coins(coins, &provider)`. The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them.
+The replay runs against the indexer that the wallet synced from, and reads keep completing while it runs. The wallet runs the registration and the replay under one hold, so no resync runs between them.
 
 ## Pending reservations
 
@@ -490,16 +492,17 @@ In-flight spends that have been built but not yet confirmed on-chain are tracked
 
 Each reservation expires at the earliest TTL of the intents that its build made (see [Transfers](#transfers)). The wallet drops the reservation once the time of the chain's latest block passes that TTL, because the transaction can no longer land.
 
-A reservation reaches `pending.json`, next to the wallet state, once its build is proven. A process that stops during a proof (Ctrl-C, a kill or a panic) leaves no reservation for that build in `pending.json`, so the next process can spend its inputs. A proven build keeps its reservation across a restart, also when its bytes never reach a node, because the wallet cannot know whether they left the process. The provider tells the wallet that a build is proven with `WalletFacade::persist_reservation`. Every custom wallet implements it, and a wallet that keeps no state across a restart makes it a no-op.
+A reservation reaches `pending.json`, next to the wallet state, once its transaction is proven. A process that stops during a proof (Ctrl-C, a kill or a panic) leaves no reservation for that transaction in `pending.json`, so the next process can spend its inputs. A proven transaction keeps its reservation across a restart, also when its bytes never reach a node, because the wallet cannot know whether they left the process. `sign_transaction` writes it, because the provider calls it after the proof. A custom wallet that wraps `Wallet` ends its `sign_transaction` with the inner one, or the reservation never reaches disk.
 
-A release also drops a reservation, for a transaction that can never land. It matches each entry by its input and by the stamp of its reservation, so a late release cannot drop an entry that a later build made over the same input. These paths release:
+The reservation travels with the transaction, from the `FundedTx` to the `ProvenTx`, the `TxEnvelope`, the `PreparedTx` and the `PendingTx`. A release drops it, for a transaction that can never land. It matches each entry by its input and by the stamp of its reservation, so a late release cannot drop an entry that a later build made over the same input. These paths release:
 
-- `MidnightProvider::submit_reserved`, when its prepare fails (the connect included), and its `PendingTx` when a wait reads `Invalid`. The transfers, `register_dust` and a maintenance update submit this way. Submit the result of a `.build()` or of `balance_transaction` with it too.
-- `MidnightProvider::prepare_reserved`, when the prepare fails, and its `PreparedTx` when it drops before its submit or when you call `PreparedTx::release`. Its submit moves the reservation to the `PendingTx`, which releases when a wait reads `Invalid`. A contract call and a deploy prepare this way, so a call or a deploy that stops before its submit releases, for example on a failed `append_pending`.
-- A build whose proof fails, and a deploy whose shielded offer fails before its fee is paid.
-- `MidnightProvider::release(&spent)`, for a `TransferResult` that you build and never submit.
+- A drop of a `FundedTx`, `ProvenTx`, `TxEnvelope` or `PreparedTx`, so a build whose proof fails, or that stops before its submit, hands its inputs back at once, with no async runtime. A contract call and a deploy that stop before their submit release this way, for example on a failed `append_pending`.
+- `MidnightProvider::submit_reserved` and `prepare_reserved`, when the prepare fails (the connect included).
+- The `PendingTx`, when a wait reads `Invalid`. A submit moves the reservation to the `PendingTx` before the call starts.
 
-A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node can still hold the transaction. The bytes of a contract call's `.build()` or `.without_dust()` do not name their inputs, so their reservation ends only when a sync sees the chain spend them, or when their TTL ends. Other than that, you don't normally interact with this directly: the builds reserve, and the sync loop clears.
+A release changes the wallet's memory at once. `pending.json` follows at the next write of the wallet: the next `sign_transaction`, or a sync whose commit moves a cursor or the ledger parameters, clears a confirmed reservation, or follows a failed save. Until then the file keeps a proven entry that a release dropped, and a restart before that write holds the entry until a sync sees the chain spend its inputs or its TTL ends.
+
+A failed submit call (`SubmitRpc`) keeps the inputs reserved, because the node can still hold the transaction, and so does a dropped `PendingTx`. The bytes of `TxEnvelope::into_bytes`, and of a contract call's `.build()` or `.without_dust()`, keep their inputs reserved too, so their reservation ends only when a sync sees the chain spend them, or when their TTL ends. Other than that, you don't normally interact with this directly: the funding reserves, and the sync loop clears.
 
 ## Lifecycle summary
 
@@ -515,19 +518,19 @@ Wallet::from_seed(seed)
   │ subscribe zswap + unshielded + dust  (parallel)
   │ persist (metadata + binary state + pending)
   ↓
-provider.with_wallet(wallet)
+provider.with_wallet(&wallet)         or an Arc<Wallet>; provider.wallet() gives it back
   ↓
-  provider.balance()                     read-only
-  provider.resync_wallet()               incremental refresh + re-persist
+  wallet.balance()                       read-only
+  wallet.sync(&provider)                 incremental refresh + re-persist
   wallet.sync_in_background(provider, pause)   sync in a task until the handle drops (an Arc<Wallet>)
       sync.wait_until(done)              wait until done holds for the balance (at the call and after each pass)
-  provider.watch_for_coin(coin)          claim a coin with no usable ciphertext: register, then replay
+  wallet.watch_for_coins(coins, &provider)   claim coins with no usable ciphertext: register, then replay
   provider.register_dust(None)                      registers one tNIGHT UTXO, self-funded
       .to(dust_key)                                 the Dust goes to another wallet's Dust address
       .send().await                                 builds + submits → PendingTx
   provider.transfer_unshielded(...).send().await    builds + submits → PendingTx
   provider.transfer_shielded(...).send().await      builds + submits → PendingTx
-       │     .build().await → TransferResult (escape hatch, no submit)
+       │     .build().await → TxEnvelope (escape hatch, no submit)
        │
        └─ PendingTx
             │ .wait_best().await

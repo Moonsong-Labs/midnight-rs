@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use midnight_helpers::Timestamp;
 use midnight_types::convert::IntoSdk;
 use midnight_types::{
-    DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, SpentUtxoKey,
-    UnshieldedUtxoInfo, WalletBalance,
+    DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, UnshieldedUtxoInfo,
+    WalletBalance,
 };
 
 use super::state::Wallet;
@@ -55,20 +55,20 @@ impl Wallet {
     }
 
     fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
-        let reserved: Vec<&SpentUtxoKey> = self.reserved_unshielded_keys().collect();
+        let reserved = self.reserved_unshielded_keys();
         self.unshielded_utxos()
             .iter()
             .map(|utxo| UnshieldedUtxoInfo {
                 token_type: utxo.token_type,
                 value: utxo.value,
-                spendable: !reserved.contains(&&utxo.spent_key()),
+                spendable: !reserved.contains(&utxo.spent_key()),
             })
             .collect()
     }
 
     fn shielded_balance(&self) -> ShieldedBalance {
         let reserved: HashSet<midnight_helpers::Nullifier> =
-            self.reserved_shielded_nullifiers().copied().collect();
+            self.reserved_shielded_nullifiers().into_iter().collect();
         let coins: Vec<ShieldedCoinBalance> = self
             .zswap_state()
             .coins
@@ -89,7 +89,7 @@ impl Wallet {
         // (and the pinned-coin validation in the contract-call builder) don't
         // re-select a coin that is no longer available.
         let reserved: HashSet<midnight_helpers::Nullifier> =
-            self.reserved_shielded_nullifiers().copied().collect();
+            self.reserved_shielded_nullifiers().into_iter().collect();
         self.zswap_state()
             .coins
             .iter()

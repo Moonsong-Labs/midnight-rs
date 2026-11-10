@@ -1,131 +1,100 @@
-//! The provider serves a wallet it did not write.
+//! The provider serves a wallet it did not write, and hands back what a
+//! signed transaction reserved when its submit never reaches the node.
 //!
-//! It holds `Arc<dyn WalletFacade>`, so what it asks of the wallet goes to
-//! whatever implements that trait. This file implements one that is not a
-//! `Wallet` and attaches it.
-//!
-//! The file is mostly its own compilation. Narrowing `with_wallet` back to a
-//! concrete type, or adding a trait method only `Wallet` can satisfy (one
-//! handing out a `&Wallet`, or a lock guard), breaks this file and nothing
-//! else.
+//! The provider holds any `W: MidnightWallet` and calls it only through that
+//! trait. This file implements one that is not a `Wallet` and attaches it.
+//! Narrowing `with_wallet` back to a concrete type, or adding a trait method
+//! that only `Wallet` can satisfy, breaks this file and nothing else.
 //!
 //! No devnet: nothing here reaches the network.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use midnight_helpers::{
-    BuildContext, DefaultDB, FinalizedTransaction, ProofProvider, StandardTransactionInfo,
+    DefaultDB, HashMapStorage, Intent, SeedableRng, StdRng, Timestamp, Transaction, UnprovenIntent,
+    UnprovenTransaction,
 };
 use midnight_provider::{
-    CoinInfo, HashOutput, MidnightProvider, Nullifier, ProviderError, ShieldedRecipient,
+    HashOutput, MidnightProvider, MidnightWallet, Nullifier, ProviderError, ShieldedRecipient,
+    TxEnvelope, WalletError,
 };
-use midnight_types::{
-    Cover, ReservedInput, SpendableShieldedCoin, SpentInputs, Timestamp, TransferRequest,
-    TransferResult, WalletBalance, WalletError,
-};
-use midnight_wallet::chain_pin::ChainView;
-use midnight_wallet_facade::{ReservedBuild, WalletBuilds, WalletFacade};
+use midnight_types::build::{self, Funded, Reservation, ReservedInput, SpentInputs};
+use midnight_types::chain_pin::ChainView;
+use midnight_types::{FilledTx, FundedTx, ProvenTx};
 
-/// A wallet whose resync, coin watch and reservation persist do nothing, and
-/// that refuses everything that would need chain state to answer honestly.
-/// It records the shielded inputs that the provider hands back.
-#[derive(Default)]
-struct StubWallet {
-    released: std::sync::Mutex<Vec<Nullifier>>,
-}
+/// A wallet that holds no keys and no coins. This file never asks it to fund
+/// or sign.
+#[derive(Debug)]
+struct StubWallet;
 
 #[async_trait::async_trait]
-impl WalletFacade for StubWallet {
-    async fn shielded_recipient(&self) -> ShieldedRecipient {
+impl MidnightWallet for StubWallet {
+    fn shielded_recipient(&self) -> ShieldedRecipient {
         unimplemented!("this wallet holds no keys")
     }
 
-    async fn balance(&self) -> WalletBalance {
-        unimplemented!("this wallet holds no coins")
-    }
-
-    async fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
-        unimplemented!("this wallet holds no coins")
-    }
-
-    async fn release(&self, spent: &SpentInputs) {
-        let mut released = self.released.lock().unwrap();
-        released.extend(spent.shielded.iter().map(|reserved| reserved.input));
-    }
-
-    async fn persist_reservation(&self, _spent: &SpentInputs) {}
-
-    async fn resync(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
-        Ok(())
-    }
-
-    async fn watch_for_coins(
+    async fn fund_transaction(
         &self,
-        _coins: Vec<CoinInfo>,
         _chain: &dyn ChainView,
-    ) -> Result<(), WalletError> {
-        Ok(())
+        _tx: FilledTx,
+    ) -> Result<FundedTx, WalletError> {
+        Err(WalletError::Transfer("this wallet funds nothing".into()))
+    }
+
+    async fn sign_transaction(&self, _tx: ProvenTx) -> Result<TxEnvelope, WalletError> {
+        Err(WalletError::Transfer("this wallet signs nothing".into()))
     }
 }
 
-/// The stub's builds: it refuses every one.
-#[async_trait::async_trait]
-impl WalletBuilds for StubWallet {
-    async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
-        Err(WalletError::Sync("stub wallet has no chain state".into()))
-    }
+/// A signed transaction that reserved the shielded coin `nullifier`, and
+/// the record of what its reservation hands back.
+async fn signed_reserving(nullifier: Nullifier) -> (TxEnvelope, Arc<Mutex<Vec<Nullifier>>>) {
+    let released = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&released);
+    let spent = SpentInputs {
+        shielded: vec![ReservedInput {
+            input: nullifier,
+            reserved_at: Timestamp::from_secs(100),
+        }],
+        ..SpentInputs::default()
+    };
+    let reservation = Reservation::new(spent, move |spent| {
+        record
+            .lock()
+            .unwrap()
+            .extend(spent.shielded.iter().map(|reserved| reserved.input));
+    });
 
-    async fn prepare_transfer(
-        &self,
-        _request: TransferRequest,
-        _proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    ) -> Result<ReservedBuild, WalletError> {
-        Err(WalletError::Transfer("stub wallet builds nothing".into()))
-    }
+    let intent: UnprovenIntent<DefaultDB> =
+        Intent::empty(&mut StdRng::seed_from_u64(7), Timestamp::from_secs(1));
+    let tx: UnprovenTransaction<DefaultDB> =
+        Transaction::from_intents("undeployed", HashMapStorage::new().insert(1, intent));
+    let sealed = tx.mock_prove().expect("mock prove");
 
-    async fn prepare_funded(
-        &self,
-        _tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-    ) -> Result<ReservedBuild, WalletError> {
-        Err(WalletError::Transfer("stub wallet funds nothing".into()))
-    }
-
-    async fn prepare_fees(
-        &self,
-        _tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
-        _external: &FinalizedTransaction<DefaultDB>,
-        _cover: Cover,
-    ) -> Result<Option<ReservedBuild>, WalletError> {
-        Err(WalletError::Transfer("stub wallet funds nothing".into()))
-    }
+    let proven = build::prove(build::funded(
+        Funded::Unchanged(Box::new(sealed)),
+        reservation,
+    ))
+    .await
+    .expect("nothing to prove");
+    (build::envelope(proven).expect("serialize"), released)
 }
 
-/// A prepare sends nothing to the node, so a reserved build whose prepare
+/// A prepare sends nothing to the node, so a signed transaction whose prepare
 /// fails gets its inputs back, whatever the error. A failed connect is
 /// `ProviderError::Rpc`, so a release that follows the error variant keeps
 /// the inputs reserved until their TTL.
 #[tokio::test]
-async fn a_reserved_build_whose_connect_fails_gets_its_inputs_back() {
-    let wallet = Arc::new(StubWallet::default());
+async fn a_reserved_transaction_whose_connect_fails_gets_its_inputs_back() {
     // A URL that does not parse fails the connect at once, with no retry.
-    let provider = MidnightProvider::new("not a node url").with_wallet(wallet.clone());
+    let provider = MidnightProvider::new("not a node url").with_wallet(StubWallet);
     let nullifier = Nullifier(HashOutput([7; 32]));
-    let result = TransferResult {
-        tx_bytes: vec![0; 8],
-        spent: SpentInputs {
-            shielded: vec![ReservedInput {
-                input: nullifier,
-                reserved_at: Timestamp::from_secs(100),
-            }],
-            ..SpentInputs::default()
-        },
-        fee_speck: 0,
-    };
+    let (envelope, released) = signed_reserving(nullifier).await;
 
-    let Err(err) = provider.submit_reserved(result).await else {
+    let Err(err) = provider.submit_reserved(envelope).await else {
         panic!("a submit whose connect fails must fail");
     };
 
     assert!(matches!(err, ProviderError::Rpc(_)), "{err:?}");
-    assert_eq!(*wallet.released.lock().unwrap(), vec![nullifier]);
+    assert_eq!(*released.lock().unwrap(), vec![nullifier]);
 }

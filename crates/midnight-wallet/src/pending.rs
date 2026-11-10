@@ -2,9 +2,9 @@
 //!
 //! A [`PendingReservations`] entry records UTXOs picked by a locally-built
 //! transaction whose on-chain spends have not yet been observed via indexer
-//! events. Build paths consult these at
-//! [`crate::Wallet::build_context_inner`] time so they don't re-select the
-//! same inputs before the chain confirms (or expires) the previous tx.
+//! events. A funding consults these when it adds the wallet's view to a build
+//! context, so it does not re-select the same inputs before the chain
+//! confirms (or expires) the previous transaction.
 //!
 //! Entries are cleared three ways:
 //! - **Confirmation**: event replay (initial sync and every resync)
@@ -16,7 +16,8 @@
 //!   coins are deliberately absent: a confirmed spend drops the coin from
 //!   `zswap_state`, so its reservation is already inert.
 //! - **Release**: [`PendingReservations::release`], for a build known to be
-//!   dead.
+//!   dead. The drop of an unsent stage of a transaction releases its
+//!   reservation through [`PendingBook::release`].
 //! - **TTL eviction**: once the chain time passes an entry's `expires_at`,
 //!   the TTL of the transaction it was made for, that transaction can no
 //!   longer land, and the entry is dropped. This is the backstop for
@@ -29,18 +30,23 @@
 //! frees its inputs. Confirmed state files (`metadata.json`, `zswap-N.bin`,
 //! `dust_wallet-N.bin`) never carry pending entries.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hex::FromHex;
 use midnight_helpers::{DustNullifier, Nullifier, Timestamp};
-use midnight_types::{DustSpendBatch, HashOutput};
+use midnight_types::HashOutput;
+use midnight_types::build::{DustSpendBatch, Reservation, SpentInputs};
+use midnight_types::convert::IntoLedger;
+use tracing::error;
 
+use crate::WalletError;
 use crate::generation::Generation;
 use crate::storage::{
     StoredPending, StoredPendingDustBatch, StoredPendingShielded, StoredPendingUnshielded,
     tagged_from_hex, tagged_to_hex,
 };
-use crate::{ReservedInput, SpentUtxoKey, WalletError};
+use midnight_types::build::{ReservedInput, SpentUtxoKey};
 
 /// The Dust UTXOs that one `speculative_spend` call spent, named by their
 /// nullifiers.
@@ -297,6 +303,134 @@ impl PendingReservations {
 /// transaction is dead, so its inputs are free again.
 pub(crate) fn within_ttl(expires_at: Timestamp, now: Timestamp) -> bool {
     expires_at >= now
+}
+
+/// The reservations of one wallet, and where `pending.json` keeps those of
+/// proven builds.
+///
+/// It sits behind a lock of its own, apart from the wallet's synced state, so
+/// the drop of an unsent transaction hands its inputs back at once, with no
+/// async runtime. Take the wallet's state lock before this one, never after.
+/// Hold this one across no await, and drop no [`Reservation`] while it is
+/// held: the lock is not reentrant, and a dropped reservation takes it.
+pub(crate) struct PendingBook {
+    reservations: PendingReservations,
+    /// Where `pending.json` lives, when the wallet persists its state.
+    file: Option<PendingFile>,
+    /// Whether the last save to disk failed, so the disk is behind the memory.
+    save_failed: bool,
+}
+
+/// Where a wallet's `pending.json` lives.
+pub(crate) struct PendingFile {
+    pub(crate) dir: PathBuf,
+    pub(crate) network: String,
+    pub(crate) wallet_id: String,
+}
+
+impl PendingBook {
+    pub(crate) fn new(reservations: PendingReservations, file: Option<PendingFile>) -> Self {
+        Self {
+            reservations,
+            file,
+            save_failed: false,
+        }
+    }
+
+    pub(crate) fn reservations(&self) -> &PendingReservations {
+        &self.reservations
+    }
+
+    pub(crate) fn reservations_mut(&mut self) -> &mut PendingReservations {
+        &mut self.reservations
+    }
+
+    pub(crate) fn save_failed(&self) -> bool {
+        self.save_failed
+    }
+
+    pub(crate) fn set_save_failed(&mut self, failed: bool) {
+        self.save_failed = failed;
+    }
+
+    /// Hand back what `spent` names, because its transaction will never reach
+    /// the chain. See [`PendingReservations::release`].
+    ///
+    /// It changes the memory alone. `pending.json` follows at the next write
+    /// of the wallet: the next [`Self::mark_proven`], or a commit that saves.
+    /// Until then the file keeps a proven entry that this releases, and a
+    /// restart holds that entry until a sync sees the chain spend its inputs
+    /// or its TTL passes.
+    pub(crate) fn release(&mut self, spent: &SpentInputs) {
+        let (dust, shielded) = ledger_entries(spent);
+        self.reservations
+            .release(&dust, &spent.unshielded, &shielded);
+    }
+
+    /// Keep the reservation that `spent` names across a restart, because its
+    /// transaction is proven. See [`PendingReservations::mark_proven`].
+    ///
+    /// It then writes `pending.json`, when the wallet has a storage directory.
+    /// The write is best-effort, because the transaction exists already, and
+    /// an error cannot undo it. The in-memory set still protects the running
+    /// process. A failure marks the save as failed, so the next commit of the
+    /// wallet saves the whole state and reports the same disk fault.
+    /// Crash-safety is degraded until then, hence the error-level log.
+    pub(crate) fn mark_proven(&mut self, spent: &SpentInputs) {
+        let (dust, shielded) = ledger_entries(spent);
+        self.reservations
+            .mark_proven(&dust, &spent.unshielded, &shielded);
+        if let Some(file) = &self.file
+            && let Err(err) = self
+                .reservations
+                .save(&file.dir, &file.network, &file.wallet_id)
+        {
+            error!(error = %err, "failed to persist pending reservations; in-memory set is ahead of pending.json");
+            self.save_failed = true;
+        }
+    }
+}
+
+/// Lock `book`.
+///
+/// A panic under the lock leaves whole entries behind, and a drop must not
+/// panic, so a poisoned lock still hands out the book.
+pub(crate) fn lock(book: &Mutex<PendingBook>) -> MutexGuard<'_, PendingBook> {
+    book.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A reservation of `spent` in `book`, which a drop or a release hands back
+/// to `book`.
+///
+/// It holds the book weakly, so a stage that outlives its wallet keeps no
+/// book alive and hands nothing back.
+pub(crate) fn reservation(book: &Arc<Mutex<PendingBook>>, spent: SpentInputs) -> Reservation {
+    let book = Arc::downgrade(book);
+    Reservation::new(spent, move |spent| {
+        if let Some(book) = book.upgrade() {
+            lock(&book).release(spent);
+        }
+    })
+}
+
+/// The Dust and shielded entries of `spent`, as the book keys them.
+fn ledger_entries(
+    spent: &SpentInputs,
+) -> (
+    Vec<ReservedInput<DustNullifier>>,
+    Vec<ReservedInput<Nullifier>>,
+) {
+    (
+        spent.dust.iter().map(into_ledger_entry).collect(),
+        spent.shielded.iter().map(into_ledger_entry).collect(),
+    )
+}
+
+fn into_ledger_entry<T: IntoLedger + Copy>(entry: &ReservedInput<T>) -> ReservedInput<T::Ledger> {
+    ReservedInput {
+        input: entry.input.into_ledger(),
+        reserved_at: entry.reserved_at,
+    }
 }
 
 // ---------------------------------------------------------------------------

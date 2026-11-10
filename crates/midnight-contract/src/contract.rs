@@ -4,7 +4,8 @@ use std::time::Duration;
 use midnight_base_crypto::signatures::VerifyingKey;
 use midnight_provider::MidnightProvider;
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::{BlockHash, ExtrinsicHash, TransferResult};
+use midnight_types::build::MaybeWallet;
+use midnight_types::{BlockHash, ExtrinsicHash, MidnightWallet, TxEnvelope};
 
 use crate::address::IntoContractAddress;
 use crate::constructor::Constructor;
@@ -94,8 +95,9 @@ struct RanCall {
 
 /// A circuit call built and proven, before it is submitted.
 struct BuiltCall {
-    /// The proven transaction, and the wallet inputs that its build reserved.
-    transaction: TransferResult,
+    /// The signed transaction, and the reservation of the wallet inputs that
+    /// it spends.
+    transaction: TxEnvelope,
     /// The private state of the call.
     private_state: PrivateStateChange,
 }
@@ -217,7 +219,8 @@ async fn settle_call(
 /// changed, then submit the transaction.
 ///
 /// Returns the submitted transaction, and `store` when it holds the snapshot.
-/// A failed record hands the inputs of `prepared` back before it returns.
+/// A failed record drops `prepared`, which hands its inputs back, before it
+/// returns.
 async fn record_and_submit(
     address: &str,
     prepared: PreparedTx,
@@ -252,7 +255,7 @@ async fn record_and_submit(
                     )
                     .await;
                 if let Err(source) = appended {
-                    prepared.release().await;
+                    drop(prepared);
                     return Err(ContractError::PendingSnapshotFailed {
                         extrinsic_hash,
                         source,
@@ -434,34 +437,51 @@ impl<T: std::fmt::Debug> std::fmt::Debug for PendingCall<T> {
 // `MidnightProvider` values can drive the deploy/connect builders.
 // ---------------------------------------------------------------------------
 
-/// Types that can hand out a reference to a `MidnightProvider`.
+/// Types that can hand out a reference to a `MidnightProvider`, owned or
+/// borrowed.
 ///
-/// Implemented directly for `MidnightProvider`, and transitively for
+/// Implemented directly for `MidnightProvider<W>`, and transitively for
 /// `&T`, `Box<T>`, and `Arc<T>` where `T: AsMidnightProvider`.
+///
+/// A deploy, a call or a maintenance update needs
+/// `Self::Wallet: MidnightWallet`. A ledger read and a simulated call need
+/// none.
 pub trait AsMidnightProvider {
-    fn as_midnight_provider(&self) -> &MidnightProvider;
+    /// The wallet that the provider holds, or `()` when it holds none.
+    type Wallet: MaybeWallet;
+
+    /// The provider.
+    fn as_midnight_provider(&self) -> &MidnightProvider<Self::Wallet>;
 }
 
-impl AsMidnightProvider for MidnightProvider {
-    fn as_midnight_provider(&self) -> &MidnightProvider {
+impl<W: MaybeWallet> AsMidnightProvider for MidnightProvider<W> {
+    type Wallet = W;
+
+    fn as_midnight_provider(&self) -> &MidnightProvider<W> {
         self
     }
 }
 
 impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for &T {
-    fn as_midnight_provider(&self) -> &MidnightProvider {
+    type Wallet = T::Wallet;
+
+    fn as_midnight_provider(&self) -> &MidnightProvider<T::Wallet> {
         (**self).as_midnight_provider()
     }
 }
 
 impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Box<T> {
-    fn as_midnight_provider(&self) -> &MidnightProvider {
+    type Wallet = T::Wallet;
+
+    fn as_midnight_provider(&self) -> &MidnightProvider<T::Wallet> {
         (**self).as_midnight_provider()
     }
 }
 
 impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
-    fn as_midnight_provider(&self) -> &MidnightProvider {
+    type Wallet = T::Wallet;
+
+    fn as_midnight_provider(&self) -> &MidnightProvider<T::Wallet> {
         (**self).as_midnight_provider()
     }
 }
@@ -487,7 +507,7 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 /// #     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 /// # }
 /// # async fn deploy(
-/// #     provider: midnight_provider::MidnightProvider,
+/// #     provider: midnight_provider::MidnightProvider<midnight_wallet::Wallet>,
 /// # ) -> Result<(), midnight_contract::ContractError> {
 /// let contract = counter::Contract::deploy(&provider)
 ///     .with_zk_config(counter::ZK_CONFIG_DIR)
@@ -631,7 +651,8 @@ impl<'a, P> DeployBuilder<'a, P> {
     /// of it goes back to the wallet as one change output. The inputs and
     /// outputs ride in the guaranteed Zswap offer of the deploy transaction.
     ///
-    /// Get the coins from [`MidnightProvider::spendable_shielded_coins`]. The
+    /// Get the coins from `Wallet::spendable_shielded_coins` in
+    /// `midnight-wallet`. The
     /// deploy reserves the coins that it spends, so no other build of this
     /// wallet spends them. The wallet gets them back when the build fails, and
     /// in the cases after the build that [`Self::send`] names. Each output
@@ -676,6 +697,7 @@ impl<'a, P> DeployBuilder<'a, P> {
 impl<P> DeployBuilder<'_, P>
 where
     P: AsMidnightProvider + Send,
+    P::Wallet: MidnightWallet,
 {
     /// Build, prove, and submit the deploy transaction without waiting for inclusion.
     ///
@@ -710,7 +732,7 @@ where
     ///   the snapshot. The deploy submits nothing.
     /// - [`ContractError::SubmissionWait`] when the submit fails.
     pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(self.send_inner()).await
     }
 
@@ -723,7 +745,7 @@ where
             (Some(state), _) => (state, self.initial_private_state),
             (None, Some(constructor)) => {
                 constructor.check_args(&self.constructor_args)?;
-                let coin_public_key = provider.shielded_recipient().await?.coin_public_key;
+                let coin_public_key = provider.wallet().shielded_recipient().coin_public_key;
                 constructor.run(
                     &self.constructor_args,
                     &*self.witnesses,
@@ -973,7 +995,7 @@ where
 /// # mod counter {
 /// #     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 /// # }
-/// # fn connect(provider: midnight_provider::MidnightProvider, address: &str) {
+/// # fn connect(provider: midnight_provider::MidnightProvider<midnight_wallet::Wallet>, address: &str) {
 /// let contract = counter::Contract::at(&provider, address)
 ///     .with_zk_config(counter::ZK_CONFIG_DIR)
 ///     .build();
@@ -1151,7 +1173,7 @@ impl<P> Contract<P> {
     ///
     /// ```rust,no_run
     /// # async fn find_index(
-    /// #     contract: &midnight_contract::Contract<midnight_provider::MidnightProvider>,
+    /// #     contract: &midnight_contract::Contract<midnight_provider::MidnightProvider<midnight_wallet::Wallet>>,
     /// #     my_key: &midnight_contract::SigningKey,
     /// # ) -> Result<(), midnight_contract::ContractError> {
     /// use midnight_contract::ContractMaintenanceVerifyingKey;
@@ -1194,6 +1216,7 @@ impl<P> Contract<P> {
     ) -> Result<CallOutcome<crate::runtime::Value>, ContractError>
     where
         P: AsMidnightProvider,
+        P::Wallet: MidnightWallet,
     {
         self.call_with(
             circuit,
@@ -1248,7 +1271,7 @@ impl<P> Contract<P> {
     where
         P: AsMidnightProvider,
     {
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(self.simulate_with_inner(circuit, program, args, witnesses)).await
     }
 
@@ -1262,7 +1285,7 @@ impl<P> Contract<P> {
     where
         P: AsMidnightProvider,
     {
-        let provider: &MidnightProvider = self.provider.as_midnight_provider();
+        let provider = self.provider.as_midnight_provider();
         let address = crate::address::parse_contract_address(&self.address)?;
 
         let store = provider.private_state();
@@ -1271,11 +1294,7 @@ impl<P> Contract<P> {
         let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
 
         let (mut private_state, _) = self.witness_baseline(store.as_deref()).await?;
-        let coin_public_key = match provider.shielded_recipient().await {
-            Ok(recipient) => Some(recipient.coin_public_key),
-            Err(midnight_provider::ProviderError::NoWallet) => None,
-            Err(e) => return Err(e.into()),
-        };
+        let coin_public_key = provider.coin_public_key();
 
         let run = crate::call::run_call(
             circuit,
@@ -1360,8 +1379,9 @@ impl<P> Contract<P> {
     ) -> Result<Vec<u8>, ContractError>
     where
         P: AsMidnightProvider,
+        P::Wallet: MidnightWallet,
     {
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(self.build_call_with_inner(
             circuit,
             program,
@@ -1392,6 +1412,7 @@ impl<P> Contract<P> {
     ) -> Result<Vec<u8>, ContractError>
     where
         P: AsMidnightProvider,
+        P::Wallet: MidnightWallet,
     {
         let store = self.provider.as_midnight_provider().private_state();
         require_private_state_for_witnesses(self.declares_witnesses, store.is_some())?;
@@ -1423,7 +1444,7 @@ impl<P> Contract<P> {
             pay_fees,
         ))
         .await?;
-        Ok(built.transaction.tx_bytes)
+        Ok(built.transaction.into_bytes())
     }
 
     /// The head of the contract's private-state journal, which the witnesses
@@ -1464,8 +1485,9 @@ impl<P> Contract<P> {
     ) -> Result<RanCall, ContractError>
     where
         P: AsMidnightProvider,
+        P::Wallet: MidnightWallet,
     {
-        let provider: &MidnightProvider = self.provider.as_midnight_provider();
+        let provider = self.provider.as_midnight_provider();
         let address = crate::address::parse_contract_address(&self.address)?;
         let zk_config = self.zk_config.clone().ok_or_else(missing_zk_config)?;
         let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
@@ -1477,7 +1499,7 @@ impl<P> Contract<P> {
         .map_err(|e| ContractError::Construction(format!("verifier key {circuit_name}: {e}")))?;
         crate::state::check_verifier_key(&state.contract_state, circuit_name, &verifier_key)?;
         let (baseline, depends_on) = self.witness_baseline(store).await?;
-        let coin_public_key = provider.shielded_recipient().await?.coin_public_key;
+        let coin_public_key = provider.wallet().shielded_recipient().coin_public_key;
 
         let mut private_state = baseline.clone();
         let exec_result = crate::call::run_call(
@@ -1524,6 +1546,7 @@ impl<P> Contract<P> {
     ) -> Result<(BuiltCall, crate::runtime::Value), ContractError>
     where
         P: AsMidnightProvider,
+        P::Wallet: MidnightWallet,
     {
         let transaction = crate::call::call_transaction(
             circuit,
@@ -1588,6 +1611,7 @@ impl<P> Contract<P> {
     ) -> Result<CallOutcome<crate::runtime::Value>, ContractError>
     where
         P: AsMidnightProvider,
+        P::Wallet: MidnightWallet,
     {
         let pending = self
             .send_call_with(
@@ -1601,7 +1625,7 @@ impl<P> Contract<P> {
                 Ok,
             )
             .await?;
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(pending.finish(Some(DEFAULT_TX_FINALIZE_TIMEOUT))).await
     }
 
@@ -1673,13 +1697,14 @@ impl<P> Contract<P> {
     ) -> Result<PendingCall<T>, ContractError>
     where
         P: AsMidnightProvider,
+        P::Wallet: MidnightWallet,
     {
-        let provider: &MidnightProvider = self.provider.as_midnight_provider();
+        let provider = self.provider.as_midnight_provider();
         let store = provider.private_state();
         require_private_state_for_witnesses(self.declares_witnesses, store.is_some())?;
 
         // Each step is boxed; see the frame-size note on
-        // `MidnightProvider::resync_wallet`.
+        // `MidnightProvider::fund_prove_sign`.
         let mut ran = Box::pin(self.run_for_build(
             circuit,
             program,
@@ -1721,7 +1746,7 @@ impl<P> Contract<P> {
         let value = match decode(result) {
             Ok(value) => value,
             Err(err) => {
-                prepared.release().await;
+                drop(prepared);
                 return Err(err);
             }
         };
@@ -1760,6 +1785,8 @@ mod tests {
     }
 
     impl AsMidnightProvider for MockProvider {
+        type Wallet = ();
+
         fn as_midnight_provider(&self) -> &MidnightProvider {
             &self.inner
         }

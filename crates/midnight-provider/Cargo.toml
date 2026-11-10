@@ -11,7 +11,6 @@ description = "Provider trait and MidnightProvider for Midnight network interact
 # re-exports midnight-contract, which transitively depends on midnight-provider.
 midnight-typed-state = { workspace = true }
 midnight-types = { workspace = true }
-midnight-wallet-facade = { workspace = true }
 midnight-private-state = { workspace = true }
 midnight-helpers = { workspace = true }
 midnight-zkir-v3 = { workspace = true }

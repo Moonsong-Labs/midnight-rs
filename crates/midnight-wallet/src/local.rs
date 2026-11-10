@@ -1,21 +1,21 @@
-//! [`Wallet`]: a synced wallet that locks its own state. Its builds are in
+//! [`Wallet`]: a synced wallet that locks its own state. Its
+//! [`MidnightWallet`](crate::MidnightWallet) implementation is in
 //! `crate::builds`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use midnight_types::chain_pin::{ChainView, current_pin};
 use midnight_types::{
-    CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, SpentInputs, UnshieldedRecipient,
+    CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, UnshieldedRecipient,
     WalletBalance, WalletError,
 };
-use midnight_wallet_facade::WalletFacade;
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 use crate::SyncProgress;
 use crate::background::{self, BackgroundSync};
+use crate::pending::PendingBook;
 use crate::sync::{SyncPlan, require_same_chain};
 use crate::wallet::WalletState;
 
@@ -33,11 +33,17 @@ use crate::wallet::WalletState;
 ///
 /// The wallet serializes its syncs and coin watches against each other.
 /// [`Self::sync_in_background`] syncs it in a background task.
+///
+/// It implements [`MidnightWallet`](crate::MidnightWallet), so a
+/// `MidnightProvider` funds and signs through it.
 pub struct Wallet {
     state: RwLock<WalletState>,
     /// Held across each sync and coin watch. Take it before `state`. Reads
     /// and builds take `state` alone, so the order cannot invert.
     sync: Mutex<()>,
+    /// The reservations, which `state` shares. A drop of an unsent stage
+    /// releases into it with no async runtime.
+    pending: Arc<std::sync::Mutex<PendingBook>>,
     network: Network,
     unshielded_address: String,
     shielded_address: String,
@@ -55,6 +61,7 @@ impl Wallet {
         let state = WalletState::sync_inner(plan, progress).await?;
         let seed = state.seed();
         Ok(Self {
+            pending: Arc::clone(state.state().pending_book()),
             network: state.network().clone(),
             unshielded_address: state.unshielded_address(),
             shielded_address: seed.shielded_address(state.network()),
@@ -68,6 +75,10 @@ impl Wallet {
 
     pub(crate) fn state(&self) -> &RwLock<WalletState> {
         &self.state
+    }
+
+    pub(crate) fn pending(&self) -> &Arc<std::sync::Mutex<PendingBook>> {
+        &self.pending
     }
 
     /// The default storage directory: `~/.midnight/wallets/`. Pass it to
@@ -124,7 +135,7 @@ impl Wallet {
     /// leave out the Dust that a pending build reserves. Each coin and UTXO
     /// that a pending build reserves reads `spendable: false`.
     ///
-    /// A read does not sync. A build through the provider syncs first, and
+    /// A read does not sync. A funding syncs first, and
     /// [`Self::sync_in_background`] syncs on a timer. For one fresh read, call
     /// [`Self::sync`] before it.
     pub async fn balance(&self) -> WalletBalance {
@@ -149,7 +160,7 @@ impl Wallet {
     /// The replay runs against the indexer that the wallet synced from. It
     /// holds no lock that reads take, so reads keep completing while it is in
     /// flight. The wallet serializes it with its other sync methods, so a
-    /// build through the provider waits for a sync in flight.
+    /// funding waits for a sync in flight.
     ///
     /// `chain` answers the two queries of the chain pin. Pass the provider.
     /// The cursors say nothing about which chain produced them, so when the
@@ -179,8 +190,8 @@ impl Wallet {
     /// [`BackgroundSync::last_error`] holds it until a pass commits. The next
     /// pass runs after `pause`.
     ///
-    /// The wallet serializes each pass with its other sync methods. So a build
-    /// through the provider waits for a pass in flight.
+    /// The wallet serializes each pass with its other sync methods. So a
+    /// funding waits for a pass in flight.
     ///
     /// Pass the `Arc<MidnightProvider>` that the wallet is attached to as
     /// `chain`. The task holds it until the handle drops. Start one background
@@ -293,27 +304,6 @@ impl Wallet {
         self.state.write().await.commit_shielded_rescan(commit)
     }
 
-    /// Hand back the inputs a build reserved, because that build will never
-    /// reach the chain.
-    ///
-    /// Reserving on build stops a later build re-selecting the same inputs, so
-    /// a transaction that is rejected at submit, or built and then abandoned,
-    /// holds its coins until the TTL window elapses. Releasing returns them at
-    /// once. Pass what the build reported spending.
-    ///
-    /// Only call this for a transaction that cannot land. Releasing one that is
-    /// still in flight lets a later build re-select the same inputs, and the
-    /// loser is rejected on chain.
-    ///
-    /// The release drops an entry only when `spent` names its input with its
-    /// stamp ([`ReservedInput::reserved_at`](crate::ReservedInput::reserved_at)),
-    /// so a late release cannot take back an input that a later build has
-    /// reserved since. Persistence is best-effort, since the in-memory release
-    /// already frees the inputs for this process.
-    pub async fn release(&self, spent: &SpentInputs) {
-        self.state.write().await.release(spent);
-    }
-
     /// [`Self::sync`], for a caller that holds `self.sync`.
     async fn resync_held(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
         let (pin, snapshot) = {
@@ -353,40 +343,5 @@ impl Wallet {
 impl std::fmt::Debug for Wallet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Wallet").finish_non_exhaustive()
-    }
-}
-
-#[async_trait]
-impl WalletFacade for Wallet {
-    async fn shielded_recipient(&self) -> ShieldedRecipient {
-        self.shielded_recipient
-    }
-
-    async fn balance(&self) -> WalletBalance {
-        Wallet::balance(self).await
-    }
-
-    async fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
-        Wallet::spendable_shielded_coins(self).await
-    }
-
-    async fn release(&self, spent: &SpentInputs) {
-        Wallet::release(self, spent).await
-    }
-
-    async fn persist_reservation(&self, spent: &SpentInputs) {
-        self.state.write().await.persist_reservation(spent);
-    }
-
-    async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
-        self.sync(chain).await
-    }
-
-    async fn watch_for_coins(
-        &self,
-        coins: Vec<CoinInfo>,
-        chain: &dyn ChainView,
-    ) -> Result<(), WalletError> {
-        Wallet::watch_for_coins(self, coins, chain).await
     }
 }

@@ -51,8 +51,8 @@ pub(crate) struct StateAtBlock {
 ///
 /// One hash serves both reads, so the state and the time never come from
 /// two blocks.
-pub(crate) async fn state_at_block(
-    provider: &midnight_provider::MidnightProvider,
+pub(crate) async fn state_at_block<W: Send + Sync>(
+    provider: &midnight_provider::MidnightProvider<W>,
     address: &str,
     at_block: Option<BlockHash>,
 ) -> Result<StateAtBlock, ContractError> {
