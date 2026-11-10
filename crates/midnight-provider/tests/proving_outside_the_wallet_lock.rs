@@ -33,16 +33,13 @@ use midnight_helpers::{
     CostModel, DefaultDB, LocalProofServer, ProofProvider, ProvenTransaction, Resolver, StdRng,
     UnprovenTransaction,
 };
-use midnight_provider::{
-    MidnightProvider, NIGHT, Prover, ProviderError, ShieldedTokenType, TransactionRequest,
-    UnshieldedRecipient,
-};
-use midnight_types::build;
+use midnight_provider::{MidnightProvider, Prover, ProviderError, TransactionRequest};
+use midnight_types::{HashOutput, NIGHT, ShieldedTokenType, UnshieldedRecipient, build};
 use midnight_wallet::{FundedTx, MidnightWallet, Wallet, WalletError};
 use tokio::sync::Notify;
 
 fn night() -> ShieldedTokenType {
-    ShieldedTokenType(midnight_provider::HashOutput([0u8; 32]))
+    ShieldedTokenType(HashOutput([0u8; 32]))
 }
 
 /// Fund a tNIGHT self-transfer of 1 STAR that pays its fee in Dust, through

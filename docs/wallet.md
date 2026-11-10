@@ -293,6 +293,8 @@ Persistence is not a one-shot at initial sync: every successful `Wallet::sync` r
 ## Balance
 
 ```rust
+use midnight_core::NIGHT;
+
 let balance = wallet.balance().await;
 
 balance.shielded.coins;                    // Vec<ShieldedCoinBalance { token_type, value, spendable }>
@@ -311,7 +313,7 @@ A build reserves the inputs it spends: shielded coins, unshielded UTXOs and Dust
 
 A reserved coin or UTXO reads `spendable: false`. `spendable_shielded_value` and `spendable_unshielded_value` leave it out, and `shielded_value` and `unshielded_value` count it. In the same way, `spendable_utxos` and `spendable_speck` leave the reserved Dust out, and `balance_speck` counts it. So a wallet whose only Dust UTXO a pending build reserves reads a `spendable_speck` of 0 and a positive `balance_speck`.
 
-`token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_core::wallet::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT. See [`tokens.md`](tokens.md) for the two-ledger model.
+`token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_core::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT. See [`tokens.md`](tokens.md) for the two-ledger model.
 
 Every reading returns an owned value taken under a short read lock, so nothing a caller holds can block a resync running in another task.
 
@@ -386,8 +388,9 @@ The cold wallet gets no Dust of its own. Its registrations still pay their own f
 Two flavors, same shape. A `TransactionRequest` names the transfer, and `send_transaction` fills, funds, proves, signs and sends it in one step:
 
 ```rust
+use midnight_core::NIGHT;
 use midnight_core::provider::TransactionRequest;
-use midnight_core::wallet::{NIGHT, parse_unshielded_recipient};
+use midnight_core::wallet::parse_unshielded_recipient;
 
 let recipient = parse_unshielded_recipient(&recipient_address, &network)?;
 let pending = provider
@@ -462,7 +465,7 @@ let receipt = pending.get_receipt().await?;
 
 `get_receipt` returns `Ok` only when the chain applied the transaction. When the transaction landed but did not apply (`PartialSuccess` or `Failure`), it fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TransactionReceipt` with the verdict.
 
-When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch variants come from the submit: after `NotSubmitted` the tx never left the process, and after `SubmitRpc` the node can still hold it.
+When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The send itself fails with `SubmitRpc`, and after it the node can still hold the tx.
 
 When the fate is unknown, a transaction can still land until its TTL passes. After that, a rebuild from the same inputs is safe from a double spend, and the wallet frees the inputs at its next build. Fill with `.with_ttl(duration)` (see [Transfers](#transfers)) to make that wait shorter than `global_ttl`.
 
@@ -473,7 +476,8 @@ A shielded coin reaches its owner through the discovery ciphertext on its output
 Hand the rebuilt coin to `watch_for_coins` and the wallet claims it from the chain's own output, decrypting nothing:
 
 ```rust
-use midnight_core::provider::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
+use midnight_core::crypto::base::hash::HashOutput;
+use midnight_core::wallet::{CoinInfo, Nonce, ShieldedTokenType};
 
 let coin = CoinInfo {
     nonce: Nonce(HashOutput(nonce)),                  // rebuilt from chain state

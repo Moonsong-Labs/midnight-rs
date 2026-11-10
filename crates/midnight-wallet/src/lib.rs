@@ -83,7 +83,7 @@ pub use midnight_types::address::{
 };
 pub use midnight_types::{
     CoinInfo, CoinPublicKey, DustBalance, DustPublicKey, EncryptionPublicKey, FilledTx, FundedTx,
-    HashOutput, InvalidNetworkName, MidnightWallet, NIGHT, Network, NetworkName, Nonce, Nullifier,
+    HashOutput, InvalidNetworkName, MidnightWallet, Network, NetworkName, Nonce, Nullifier,
     ProvenTx, ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
     SignatureRequest, SpendableShieldedCoin, TxEnvelope, UnshieldedRecipient, UnshieldedTokenType,
     UnshieldedUtxoInfo, WalletBalance, WalletError, chain_pin,

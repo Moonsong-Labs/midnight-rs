@@ -31,7 +31,7 @@ It lives exclusively in `UtxoState` and is the only asset that the
 dust-generation mechanism recognizes for fee-availability accrual (see
 [`dust-and-fees.md`](dust-and-fees.md)).
 
-The SDK constant `midnight_wallet::NIGHT` is typed `UnshieldedTokenType` for
+The SDK constant `midnight_core::NIGHT` is typed `UnshieldedTokenType` for
 exactly this reason. **There is no shielded NIGHT.** A `ShieldedTokenType`
 with the same underlying bytes (`HashOutput([0u8; 32])`) is a different asset
 — conventionally the default test-token id on dev presets, with no semantic

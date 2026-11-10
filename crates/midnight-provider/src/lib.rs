@@ -2,7 +2,7 @@
 
 mod error;
 mod local_prover;
-pub mod node_error;
+mod node_error;
 mod pipeline;
 mod prover;
 mod provider;
@@ -16,18 +16,16 @@ pub use pipeline::merge_transactions;
 pub use prover::Prover;
 pub use provider::{MidnightProvider, NodeHeader};
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TransactionReceipt, Verdict};
-pub use types::{Health, TransactionHash};
+pub use types::TransactionHash;
 
-// Re-export the coin, token, key and hash vocabulary, the types that
-// `MidnightProvider`'s own signatures name, and the NIGHT and DUST units, so a
-// caller of the provider needs no separate dep for them. The implementation
-// types (`Wallet`, `WalletBuilder`) live in midnight-wallet; this crate never
-// names them.
+// Re-export the types that `MidnightProvider`'s own signatures name, so a
+// caller of the provider needs no separate dep for them. `CoinSelection` comes
+// with them: a `TransactionRequest` method takes it, and no other facade path
+// reaches it. The implementation types (`Wallet`, `WalletBuilder`) live in
+// midnight-wallet; this crate never names them.
 pub use midnight_types::{
-    BlockHash, CoinInfo, CoinPublicKey, CoinSelection, ContractAddress, DustPublicKey,
-    EncryptionPublicKey, ExtrinsicHash, HashOutput, MidnightWallet, NIGHT, Network, Nonce,
-    Nullifier, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType,
-    TransactionRequest, TxEnvelope, UnshieldedRecipient, UnshieldedTokenType, WalletError,
+    BlockHash, CoinSelection, ExtrinsicHash, MidnightWallet, TransactionRequest, TxEnvelope,
+    WalletError,
 };
 
 // Re-export the private-state types so callers configure
@@ -36,121 +34,3 @@ pub use midnight_private_state::{
     ConflictStrategy, EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions,
     ImportResult, PrivateStateError, PrivateStateProvider, Snapshot, SnapshotStatus,
 };
-
-// Re-export the state query model that `Provider` and the generated lazy
-// accessors share, so callers need no separate dep on midnight-typed-state.
-pub use midnight_typed_state::lazy::{
-    StateQuery, StateQueryProvider, StateQueryResult, StorageKey,
-};
-
-use std::sync::Arc;
-
-/// Read-only interface to the Midnight network.
-///
-/// The trait is intentionally narrow: only the methods invoked through a
-/// `<P: Provider>` bound live here, so a new backend has a small,
-/// well-defined surface to implement. Reachability checks
-/// (`MidnightProvider::health`, block / network metadata, etc.) are
-/// inherent methods on [`MidnightProvider`] — they aren't part of the
-/// generic abstraction. The generated lazy reads go through
-/// [`StateQueryProvider`] instead.
-///
-/// Automatically implemented for `&T`, `Arc<T>`, and `Box<T>` where `T: Provider`.
-#[async_trait::async_trait]
-pub trait Provider: Send + Sync {
-    /// Fetch the hex-encoded state of the contract at `address`, as of the
-    /// block `at`.
-    ///
-    /// When `at` is `None`, read at the node's best block. A reorg can replace
-    /// a best block, so pass a finalized block hash for state that cannot
-    /// change.
-    ///
-    /// Returns `None` when no contract exists at `address` in that block.
-    async fn get_contract_state(
-        &self,
-        address: &str,
-        at: Option<BlockHash>,
-    ) -> Result<Option<String>, ProviderError>;
-}
-
-// ---------------------------------------------------------------------------
-// Bridge: MidnightProvider → StateQueryProvider (from compact-bindgen)
-// ---------------------------------------------------------------------------
-
-impl<W: Send + Sync> StateQueryProvider for MidnightProvider<W> {
-    type Error = ProviderError;
-
-    async fn query_contract_state(
-        &self,
-        address: &str,
-        queries: Vec<StateQuery>,
-        at_block_hash: Option<BlockHash>,
-    ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        self.query_contract_state_at(address, queries, at_block_hash)
-            .await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Blanket impls for &T, Arc<T>, Box<T>
-// ---------------------------------------------------------------------------
-
-macro_rules! delegate_provider {
-    ($($wrapper:ty),+ $(,)?) => { $(
-        #[async_trait::async_trait]
-        impl<T: Provider + ?Sized> Provider for $wrapper {
-            async fn get_contract_state(
-                &self,
-                address: &str,
-                at: Option<BlockHash>,
-            ) -> Result<Option<String>, ProviderError> {
-                (**self).get_contract_state(address, at).await
-            }
-        }
-    )+ };
-}
-
-delegate_provider!(&T, Arc<T>, Box<T>);
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    struct DummyProvider;
-
-    #[async_trait::async_trait]
-    impl Provider for DummyProvider {
-        async fn get_contract_state(
-            &self,
-            address: &str,
-            at: Option<BlockHash>,
-        ) -> Result<Option<String>, ProviderError> {
-            Ok(Some(format!("{address}@{at:?}")))
-        }
-    }
-
-    #[tokio::test]
-    async fn blanket_impl_arc() {
-        let p = Arc::new(DummyProvider);
-        let at = Some(BlockHash::repeat_byte(0xab));
-        assert_eq!(
-            p.get_contract_state("a", at).await.unwrap(),
-            DummyProvider.get_contract_state("a", at).await.unwrap()
-        );
-    }
-
-    #[tokio::test]
-    async fn blanket_impl_box() {
-        let p: Box<dyn Provider> = Box::new(DummyProvider);
-        let at = Some(BlockHash::repeat_byte(0xab));
-        assert_eq!(
-            p.get_contract_state("a", at).await.unwrap(),
-            DummyProvider.get_contract_state("a", at).await.unwrap()
-        );
-    }
-}

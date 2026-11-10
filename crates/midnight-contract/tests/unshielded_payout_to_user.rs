@@ -19,7 +19,7 @@ use compact_bindgen::AlignedValue;
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
-use midnight_provider::UnshieldedTokenType;
+use midnight_types::UnshieldedTokenType;
 use midnight_wallet::Wallet;
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];

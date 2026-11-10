@@ -29,7 +29,7 @@ A snapshot whose tx is later discovered to have been **reorged out** or to have 
 
 ### Trait surface
 
-Lives in the `midnight-private-state` crate, re-exported from `midnight-provider`. Async (via `async_trait`, matching the existing `Provider` trait) so non-filesystem backends are possible.
+Lives in the `midnight-private-state` crate, re-exported from `midnight-provider`. Async (via `async_trait`) so non-filesystem backends are possible.
 
 ```rust
 #[async_trait]

@@ -12,9 +12,7 @@ use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::{
-    Health, PendingTx, Prover, Provider, ProviderError, StateQuery, StateQueryResult, submit,
-};
+use crate::{PendingTx, Prover, ProviderError, submit};
 use midnight_helpers::LedgerParameters;
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_private_state::PrivateStateProvider;
@@ -52,8 +50,8 @@ struct NodeConnection {
     client: OnlineClient<subxt::SubstrateConfig>,
 }
 
-/// A [`Provider`] backed by a node WebSocket connection for direct RPC
-/// communication. With a wallet, it also fills, funds, proves, signs and
+/// A Midnight node client, backed by a node WebSocket connection for direct
+/// RPC communication. With a wallet, it also fills, funds, proves, signs and
 /// sends transactions.
 ///
 /// `W` is the wallet that [`Self::with_wallet`] attached, or `()` with none.
@@ -71,11 +69,9 @@ struct NodeConnection {
 /// Each node read ends within a bound that includes its connect: 60 s for a
 /// contract state read, and 10 s for every other read. A read that the node
 /// does not answer in that time returns [`ProviderError::Rpc`].
-/// [`Self::health`] bounds its connect and each of its two queries to 10 s,
-/// and reports a missing answer in its fields. [`Self::prepare`] and
-/// [`Self::send_tx_envelope`] bound their connect and their metadata read to
-/// 10 s. The SDK sets no deadline on the submit call or on the wait for a
-/// sent transaction (see [`PendingTx`]).
+/// [`Self::prepare`] and [`Self::send_tx_envelope`] bound their connect and
+/// their metadata read to 10 s. The SDK sets no deadline on the submit call or
+/// on the wait for a sent transaction (see [`PendingTx`]).
 pub struct MidnightProvider<W = ()> {
     node_url: String,
     wallet: W,
@@ -259,10 +255,9 @@ impl<W> MidnightProvider<W> {
     /// [`ProviderError::Transaction`] when `tx` pays no fee: it came from a
     /// request made `without_fee` or from a swap half, and the node refuses
     /// it. Hand its bytes ([`TxEnvelope::into_bytes`]) to the party that pays
-    /// its fee. [`ProviderError::Rpc`] when the connect fails or gets no
-    /// answer within 10 s. [`ProviderError::Submission`] with
-    /// [`SubmitError::NotSubmitted`](crate::SubmitError::NotSubmitted) when
-    /// the client cannot make the extrinsic.
+    /// its fee. [`ProviderError::Rpc`] when the connect or the metadata read
+    /// fails or gets no answer within 10 s, and when the node's metadata has no
+    /// matching call.
     pub async fn prepare(&self, tx: TxEnvelope) -> Result<submit::PreparedTx, ProviderError> {
         let (bytes, reservation) = build::into_parts(tx).map_err(|_fee_less| fee_less_refusal())?;
         self.prepare_parts(bytes, reservation).await
@@ -392,17 +387,6 @@ impl<W: MaybeWallet> MidnightProvider<W> {
     }
 }
 
-#[async_trait]
-impl<W: Send + Sync> Provider for MidnightProvider<W> {
-    async fn get_contract_state(
-        &self,
-        address: &str,
-        at: Option<BlockHash>,
-    ) -> Result<Option<String>, ProviderError> {
-        self.get_state_from_node(address, at).await
-    }
-}
-
 pub(crate) fn fee_less_refusal() -> ProviderError {
     ProviderError::Transaction(
         "the transaction pays no fee, so the node refuses it; hand the bytes of its fill \
@@ -463,30 +447,11 @@ mod names_no_contract_tests {
 pub type NodeHeader = <subxt::SubstrateConfig as subxt::Config>::Header;
 
 impl<W> MidnightProvider<W> {
-    /// Get the current block number from the node (`chain_getHeader.number`).
-    pub async fn get_block_number(&self) -> Result<u64, ProviderError> {
-        query_within(QUERY_TIMEOUT, async {
-            let conn = self.get_or_connect().await?;
-
-            let header = legacy_rpc(&conn)
-                .chain_get_header(None)
-                .await
-                .map_err(rpc_error("chain_getHeader"))?;
-
-            debug!(header = ?header, "chain_getHeader response");
-
-            header
-                .map(|header| header.number)
-                .ok_or_else(|| ProviderError::Rpc("chain_getHeader returned no header".to_string()))
-        })
-        .await
-    }
-
     /// Get the hash of the node's best block (`chain_getBlockHash` with no
     /// height).
     ///
     /// A read given no block hash, such as
-    /// [`get_state_from_node`](Self::get_state_from_node) with `None`, reads
+    /// [`get_contract_state`](Self::get_contract_state) with `None`, reads
     /// at the best block at the moment of that read. Pass this hash to such
     /// reads to keep two of them at one block.
     pub async fn best_block_hash(&self) -> Result<BlockHash, ProviderError> {
@@ -509,6 +474,11 @@ impl<W> MidnightProvider<W> {
     /// Finalized blocks cannot reorg (GRANDPA), so heights at or below this
     /// are safe for observers that must never see a block twice. Part of the
     /// `archive_v1` spec, the replacement for the legacy `chain_*` RPCs.
+    ///
+    /// It needs an archive node. A node serves the `archive_v1` methods only
+    /// when its state pruning and its block pruning are both in an archive
+    /// mode. A node in another mode refuses the query as an unknown method,
+    /// and the query returns [`ProviderError::Rpc`].
     pub async fn get_finalized_block_height(&self) -> Result<u64, ProviderError> {
         query_within(QUERY_TIMEOUT, async {
             let conn = self.get_or_connect().await?;
@@ -528,7 +498,12 @@ impl<W> MidnightProvider<W> {
     /// unfinalized forks exist at it.
     ///
     /// A finalized height's hash pins historical reads such as
-    /// [`get_state_from_node`](Self::get_state_from_node).
+    /// [`get_contract_state`](Self::get_contract_state).
+    ///
+    /// It needs an archive node. A node serves the `archive_v1` methods only
+    /// when its state pruning and its block pruning are both in an archive
+    /// mode. A node in another mode refuses the query as an unknown method,
+    /// and the query returns [`ProviderError::Rpc`].
     pub async fn get_block_hashes_by_height(
         &self,
         height: u64,
@@ -548,8 +523,12 @@ impl<W> MidnightProvider<W> {
     }
 
     /// Get the header of the block with `hash` (`archive_v1_header`), or
-    /// `None` when the node does not know the hash. The SCALE-encoded
-    /// response decodes into the config-derived [`NodeHeader`].
+    /// `None` when the node does not know the hash.
+    ///
+    /// It needs an archive node. A node serves the `archive_v1` methods only
+    /// when its state pruning and its block pruning are both in an archive
+    /// mode. A node in another mode refuses the query as an unknown method,
+    /// and the query returns [`ProviderError::Rpc`].
     pub async fn get_block_header(
         &self,
         hash: BlockHash,
@@ -595,49 +574,12 @@ impl<W> MidnightProvider<W> {
         .await
     }
 
-    /// The node's chain-spec display name (substrate `system_chain`), e.g.
-    /// `"Midnight Devnet"`.
+    /// The network that the node's runtime reports at the current finalized
+    /// block, from its `MidnightRuntimeApi::get_network_id` runtime API.
     ///
-    /// This is a human-readable label, **not** the ledger network id. It is not
-    /// interchangeable with [`Network`], and a label such as the one above is
-    /// not even a valid network name. The address prefixes come from the
-    /// wallet's network (`Wallet::network`). The network the node runs comes
-    /// from [`MidnightProvider::ledger_network_id`].
-    pub async fn system_chain(&self) -> Result<String, ProviderError> {
-        query_within(QUERY_TIMEOUT, async {
-            let conn = self.get_or_connect().await?;
-
-            let chain = legacy_rpc(&conn)
-                .system_chain()
-                .await
-                .map_err(rpc_error("system_chain"))?;
-
-            debug!(chain = %chain, "system_chain response");
-
-            Ok(chain)
-        })
-        .await
-    }
-
-    /// The network that the node's runtime reports, at the current finalized
-    /// block.
-    ///
-    /// The node answers through its `MidnightRuntimeApi::get_network_id`
-    /// runtime API. This is the network the chain runs, so it can differ from
-    /// the network a wallet derives addresses for (`Wallet::network`). Before
-    /// its replay, a pinned wallet sync (the default) compares this network
-    /// with the one it syncs as, and fails with
-    /// [`WalletError::NetworkMismatch`](midnight_types::WalletError::NetworkMismatch)
-    /// when they differ. A sync with no network takes this one, and fails
-    /// when there is none. An error here does not fail a sync that names its
-    /// network.
-    ///
-    /// It needs no wallet and runs no resync. The id goes through the parse
-    /// of a [`Network`]. Errors when the node cannot be reached, when its
-    /// metadata describes no such API or another return type, or when the
-    /// parse refuses the id, as it does the empty id of a node with no
-    /// network id set.
-    pub async fn ledger_network_id(&self) -> Result<Network, ProviderError> {
+    /// A node with no network id set reports an empty id, which the parse of
+    /// a [`Network`] refuses.
+    pub(crate) async fn ledger_network_id(&self) -> Result<Network, ProviderError> {
         let id = self.call_runtime_api::<String>("get_network_id").await?;
         id.parse()
             .map_err(|e| ProviderError::Rpc(format!("get_network_id: {e}")))
@@ -655,78 +597,20 @@ impl<W> MidnightProvider<W> {
             .map_err(|e| ProviderError::Rpc(format!("decoding get_ledger_parameters: {e}")))
     }
 
-    /// Best-effort health status of the node.
-    ///
-    /// After the connect, it queries `system_health` and `chain_getHeader` at
-    /// the same time. Failures surface in the returned [`Health`] fields: a
-    /// field is `None` when its query fails or gets no answer within 10 s,
-    /// and `node_connected` is `false` when neither query answers.
-    pub async fn health(&self) -> Health {
-        let conn = match query_within(QUERY_TIMEOUT, self.get_or_connect()).await {
-            Ok(conn) => conn,
-            Err(err) => {
-                warn!(url = %self.node_url, error = %err, "Failed to connect to Midnight node");
-                return Health {
-                    node_connected: false,
-                    block_height: None,
-                    peers: None,
-                    is_syncing: None,
-                };
-            }
-        };
-
-        let (sys_health, header) = tokio::join!(
-            query_within(QUERY_TIMEOUT, async {
-                legacy_rpc(&conn)
-                    .system_health()
-                    .await
-                    .map_err(|e| ProviderError::Rpc(e.to_string()))
-            }),
-            query_within(QUERY_TIMEOUT, async {
-                legacy_rpc(&conn)
-                    .chain_get_header(None)
-                    .await
-                    .map_err(|e| ProviderError::Rpc(e.to_string()))
-            }),
-        );
-        let sys_health = sys_health
-            .inspect_err(|e| warn!(error = %e, "system_health RPC call failed"))
-            .ok();
-        let header = header
-            .inspect_err(|e| warn!(error = %e, "chain_getHeader RPC call failed"))
-            .ok();
-
-        debug!(health = ?sys_health, "system_health response");
-        debug!(header = ?header, "chain_getHeader response");
-
-        let peers = sys_health.as_ref().map(|health| health.peers as u64);
-        let is_syncing = sys_health.as_ref().map(|health| health.is_syncing);
-        let block_height = header
-            .as_ref()
-            .and_then(Option::as_ref)
-            .map(|header| header.number);
-
-        Health {
-            node_connected: sys_health.is_some() || header.is_some(),
-            block_height,
-            peers,
-            is_syncing,
-        }
-    }
-
     /// Fetch full contract state via the node RPC (`midnight_contractState`),
     /// at `at_block_hash`, or at the node's best block when it is `None`.
     ///
+    /// A reorg can replace a best block, so pass a finalized block hash for
+    /// state that cannot change.
+    ///
     /// Returns the hex-encoded serialized contract state, or `None` if no
-    /// contract exists at `address` in that block. This uses the standard
-    /// node RPC that is available on all devnet nodes (unlike
-    /// `midnight_queryContractState` which requires a custom node build).
+    /// contract exists at `address` in that block.
     ///
     /// # Errors
     ///
     /// [`ProviderError::Rpc`] when the node cannot be reached or refuses the
     /// read, for example for a block it does not know or no longer holds.
-    pub async fn get_state_from_node(
+    pub async fn get_contract_state(
         &self,
         address: &str,
         at_block_hash: Option<BlockHash>,
@@ -745,29 +629,6 @@ impl<W> MidnightProvider<W> {
                 Err(e) if names_no_contract(&e) => Ok(None),
                 Err(e) => Err(ProviderError::Rpc(e.to_string())),
             }
-        })
-        .await
-    }
-
-    /// Query contract state with an optional block hash pin.
-    ///
-    /// When `at_block_hash` is `None`, the node returns state at the latest
-    /// block. When set, the node returns state as of that specific block hash.
-    pub(crate) async fn query_contract_state_at(
-        &self,
-        address: &str,
-        queries: Vec<StateQuery>,
-        at_block_hash: Option<BlockHash>,
-    ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        query_within(STATE_QUERY_TIMEOUT, async {
-            let conn = self.get_or_connect().await?;
-            conn.rpc
-                .request(
-                    "midnight_queryContractState",
-                    rpc_params![address, queries, at_block_hash],
-                )
-                .await
-                .map_err(|e| ProviderError::Rpc(e.to_string()))
         })
         .await
     }
@@ -893,13 +754,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn health_returns_disconnected_on_bad_urls() {
-        let provider = MidnightProvider::new("ws://127.0.0.1:1");
-        let health = provider.health().await;
-        assert!(!health.node_connected);
-    }
-
     /// A mock node: a listener and the `ws://` URL that dials it.
     async fn bind_node() -> (tokio::net::TcpListener, String) {
         let (listener, url) = testutil::bind().await;
@@ -979,11 +833,10 @@ mod tests {
     }
 
     /// Every node read ends during a node outage (see `QUERY_TIMEOUT`). It
-    /// catches a read left outside its bound, a `health` that bounds only its
-    /// connect, and a `prepare` whose metadata read times out as `Rpc`. The
-    /// two contract state reads have a 60 s bound, so the test leaves them
-    /// out. It takes about ten seconds: paused time does not work with real
-    /// sockets.
+    /// catches a read left outside its bound, and a `prepare` whose metadata
+    /// read times out as `Rpc`. The two contract state reads have a 60 s
+    /// bound, so the test leaves them out. It takes about ten seconds: paused
+    /// time does not work with real sockets.
     #[tokio::test]
     async fn every_node_read_ends_during_a_node_outage() {
         use midnight_types::chain_pin::ChainView;
@@ -991,20 +844,8 @@ mod tests {
 
         let provider = provider_during_a_node_outage().await;
         let hash = BlockHash::repeat_byte(1);
-        let disconnected = Health {
-            node_connected: false,
-            block_height: None,
-            peers: None,
-            is_syncing: None,
-        };
 
         let outcomes = join_all([
-            ended(
-                "get_block_number",
-                provider.get_block_number(),
-                gave_no_answer,
-            )
-            .boxed_local(),
             ended(
                 "best_block_hash",
                 provider.best_block_hash(),
@@ -1035,29 +876,16 @@ mod tests {
                 gave_no_answer,
             )
             .boxed_local(),
-            ended("system_chain", provider.system_chain(), gave_no_answer).boxed_local(),
             ended(
                 "ledger_network_id",
                 provider.ledger_network_id(),
                 gave_no_answer,
             )
             .boxed_local(),
-            ended("health", provider.health(), |health| {
-                (health == disconnected)
-                    .then_some(())
-                    .ok_or_else(|| format!("{health:?}"))
-            })
-            .boxed_local(),
             ended(
                 "prepare",
                 provider.prepare_parts(vec![0; 8], unreserved()),
-                |read| match read {
-                    Err(ProviderError::Submission(crate::SubmitError::NotSubmitted { .. })) => {
-                        Ok(())
-                    }
-                    Err(other) => Err(format!("{other:?}")),
-                    Ok(_) => Err("Ok".to_owned()),
-                },
+                gave_no_answer,
             )
             .boxed_local(),
             ended(

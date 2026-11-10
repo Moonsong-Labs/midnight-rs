@@ -63,9 +63,8 @@ impl<W: MidnightWallet> MidnightProvider<W> {
     /// name.
     ///
     /// ```rust,no_run
-    /// # use midnight_provider::{
-    /// #     MidnightProvider, ShieldedRecipient, ShieldedTokenType, TransactionRequest,
-    /// # };
+    /// # use midnight_provider::{MidnightProvider, TransactionRequest};
+    /// # use midnight_types::{ShieldedRecipient, ShieldedTokenType};
     /// # async fn f(
     /// #     provider: MidnightProvider<midnight_wallet::Wallet>,
     /// #     token: ShieldedTokenType,
@@ -180,9 +179,8 @@ impl<W: MidnightWallet> MidnightProvider<W> {
 /// whose fee intent takes a segment that the merge leaves free.
 ///
 /// ```rust,no_run
-/// # use midnight_provider::{
-/// #     MidnightProvider, ShieldedTokenType, TransactionRequest, merge_transactions,
-/// # };
+/// # use midnight_provider::{MidnightProvider, TransactionRequest, merge_transactions};
+/// # use midnight_types::ShieldedTokenType;
 /// # async fn f(
 /// #     alice: MidnightProvider<midnight_wallet::Wallet>,
 /// #     bob: MidnightProvider<midnight_wallet::Wallet>,

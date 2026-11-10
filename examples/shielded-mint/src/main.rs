@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use midnight_core::contract::parse_contract_address;
-use midnight_core::provider::HashOutput;
+use midnight_core::crypto::base::hash::HashOutput;
 use midnight_core::wallet::ShieldedCoinBalance;
 use midnight_core::{MidnightProvider, Seed, Wallet};
 

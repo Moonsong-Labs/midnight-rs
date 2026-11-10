@@ -2,14 +2,6 @@
 //! passes, or formats, with no I/O of their own. The modules that produce them
 //! stay about their own job.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Health {
-    pub node_connected: bool,
-    pub block_height: Option<u64>,
-    pub peers: Option<u64>,
-    pub is_syncing: Option<bool>,
-}
-
 /// The Midnight ledger's identity for a transaction: SHA-256 over its tagged
 /// serialization.
 ///
@@ -34,18 +26,6 @@ impl TransactionHash {
 impl From<[u8; 32]> for TransactionHash {
     fn from(bytes: [u8; 32]) -> Self {
         Self(bytes)
-    }
-}
-
-impl From<TransactionHash> for [u8; 32] {
-    fn from(hash: TransactionHash) -> Self {
-        hash.0
-    }
-}
-
-impl AsRef<[u8]> for TransactionHash {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
     }
 }
 
