@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Provider trait and MidnightProvider for Midnight network interaction"
+description = "MidnightProvider for Midnight network interaction"
 
 [features]
 # `Prover::custom`, and `Prover` as a ledger `ProofProvider`, for tests in this
@@ -12,9 +12,6 @@ description = "Provider trait and MidnightProvider for Midnight network interact
 test-util = []
 
 [dependencies]
-# midnight-typed-state, not compact-bindgen, to avoid a cycle: compact-bindgen
-# re-exports midnight-contract, which transitively depends on midnight-provider.
-midnight-typed-state = { workspace = true }
 midnight-types = { workspace = true }
 midnight-private-state = { workspace = true }
 midnight-helpers = { workspace = true }

@@ -7,6 +7,7 @@
 mod common;
 
 use midnight_provider::MidnightProvider;
+use midnight_types::chain_pin::SyncSource;
 use midnight_wallet::Network;
 
 fn node_only_provider() -> Option<MidnightProvider> {
@@ -21,22 +22,14 @@ fn node_only_provider() -> Option<MidnightProvider> {
 // Node connectivity
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn node_chain_label() {
-    let Some(p) = node_only_provider() else {
-        return;
-    };
-    let chain = p.system_chain().await.unwrap();
-    assert!(!chain.is_empty());
-    eprintln!("chain label: {chain}");
-}
-
 /// The provider has no wallet, so only the node's runtime can answer.
 #[tokio::test]
 async fn the_node_runs_the_network_the_tests_sync_as() {
     let Some(p) = node_only_provider() else {
         return;
     };
-    let network = p.ledger_network_id().await.unwrap();
+    let network = SyncSource::network(&p)
+        .await
+        .expect("the node reports its network");
     assert_eq!(network, Network::Undeployed);
 }
