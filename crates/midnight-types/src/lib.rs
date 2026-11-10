@@ -27,6 +27,7 @@ mod hash;
 mod inputs;
 mod network;
 mod request;
+mod sign;
 mod stage;
 mod sync;
 mod transfer;
@@ -51,5 +52,6 @@ pub use network::{InvalidNetworkName, Network, NetworkName};
 /// `{:#x}` for a `0x` prefix, to get the whole digest.
 pub use primitive_types::H256;
 pub use request::{CoinSelection, TransactionRequest};
+pub use sign::SignatureRequest;
 pub use stage::{FilledTx, FundedTx, ProvenTx, TxEnvelope};
 pub use wallet::MidnightWallet;

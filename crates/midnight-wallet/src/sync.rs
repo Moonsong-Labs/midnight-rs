@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
+use crate::keys::RoleKeys;
 use crate::wallet::WalletState;
 use crate::{Seed, Wallet};
 
@@ -61,7 +62,8 @@ pub enum SyncProgress {
 }
 
 impl Wallet {
-    /// Start a wallet from its [`Seed`].
+    /// Start a wallet from its [`Seed`]. The sync of the builder derives the
+    /// keys of each role and drops the seed.
     ///
     /// Parse a seed written as hex or as a BIP-39 mnemonic with `str::parse`,
     /// or make one with [`Seed::from_hex`], [`Seed::from_mnemonic`] or
@@ -157,6 +159,8 @@ impl std::future::Future for SyncHandle {
 
 /// A wallet before its sync: its seed, and the options of the sync.
 ///
+/// It holds the seed until a sync step derives the keys of each role from it.
+/// The seed then drops, and the synced [`Wallet`] holds only the keys.
 /// [`Wallet::from_seed`] starts one. It holds no connection and does no work
 /// until a sync step runs:
 ///
@@ -195,7 +199,7 @@ pub struct WalletBuilder {
 /// borrow is what lets [`WalletBuilder::sync_with_progress`] spawn.
 pub(crate) struct SyncPlan {
     pub(crate) indexer_url: String,
-    pub(crate) seed: Seed,
+    pub(crate) keys: RoleKeys,
     pub(crate) address: String,
     pub(crate) network: Network,
     pub(crate) storage_dir: Option<PathBuf>,
@@ -234,10 +238,13 @@ impl WalletBuilder {
         self
     }
 
-    /// Sync the wallet in the current task: replay the indexer at
-    /// `indexer_url`, and check the chain through the node of `source`.
+    /// Sync the wallet in the current task: derive the keys of each role and
+    /// drop the seed, replay the indexer at `indexer_url`, and check the chain
+    /// through the node of `source`.
     ///
-    /// The sync starts from genesis, or from a stored snapshot. The wallet
+    /// The wallet keeps the keys for its whole life: the shielded and Dust
+    /// spends prove with their secret keys, and the unshielded key signs. The
+    /// sync starts from genesis, or from a stored snapshot. The wallet
     /// keeps `indexer_url` for its later resyncs. `MidnightProvider` is a
     /// source.
     ///
@@ -341,6 +348,9 @@ impl WalletBuilder {
             network,
             storage_dir,
         } = self;
+        // The seed zeroizes on its drop, before the queries below.
+        let keys = RoleKeys::derive(&seed);
+        drop(seed);
         let network = match network {
             Some(wallet) => {
                 if let Some(chain) = source.network().await
@@ -352,7 +362,7 @@ impl WalletBuilder {
             }
             None => source.network().await.ok_or(WalletError::NetworkUnknown)?,
         };
-        let address = seed.unshielded_address(network.clone());
+        let address = keys.unshielded_address(&network);
 
         // Take the pin this sync carries before the check and the replay; see
         // `require_same_chain`.
@@ -366,7 +376,7 @@ impl WalletBuilder {
 
         Ok(SyncPlan {
             indexer_url: indexer_url.to_string(),
-            seed,
+            keys,
             address,
             network,
             storage_dir,

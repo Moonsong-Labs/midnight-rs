@@ -40,8 +40,7 @@ pub(crate) fn dust_wallet_file(generation: u64) -> String {
 /// No file in the directory holds the seed either. A persisted record that
 /// needs to name a wallet names this id; most need no wallet identity at all,
 /// because the directory already scopes them, which is why `pending.json`
-/// stores none. The pending module's `pending_json_contains_no_seed_material`
-/// test holds that line. `dust_wallet-N.bin` does hold the Dust secret key: the
+/// stores none. `dust_wallet-N.bin` does hold the Dust secret key: the
 /// helpers' `DustWallet` serializes it, and a resumed wallet needs it to apply
 /// Dust events.
 pub(crate) fn wallet_storage_id(address: &str) -> String {

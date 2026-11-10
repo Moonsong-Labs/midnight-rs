@@ -6,7 +6,7 @@ The SDK's wallet covers Midnight's three asset legs:
 - **Unshielded UTXOs**: public UTXO-model balances (NIGHT lives here)
 - **Dust**: fee-token, generated continuously from NIGHT holdings
 
-`Wallet` holds the synced state of one seed. Callers start one with `Wallet::from_seed` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet`, and the provider builds transactions with it. The wallet can also sync itself in a background task (see [Background sync](#background-sync)).
+`Wallet` holds the keys and the synced state of one seed. Callers start one with `Wallet::from_seed` and sync it from a source such as the provider (see [Sync](#sync)). Then they attach it with `with_wallet`, and the provider builds transactions with it. The wallet can also sync itself in a background task (see [Background sync](#background-sync)).
 
 `Wallet` locks its own state. The lock is a private field, so no caller holds a guard, and a `&Wallet` serves every call. `Wallet` is not `Clone`. To share it, put it in an `Arc`.
 
@@ -20,10 +20,12 @@ let balance = wallet.balance().await;
 The trait has three methods:
 
 - `shielded_recipient`: the keys that `ownPublicKey()` and the wallet's own shielded outputs use.
-- `fund_transaction`: resync, then add the wallet's inputs, change and Dust fee to a transaction that the provider filled, and reserve what they spend.
+- `fund_transaction`: resync, then add the wallet's inputs, change and Dust fee to a transaction that the provider filled, and reserve what they spend. Each signature slot that it adds holds a placeholder.
 - `sign_transaction`: add the signatures that the transaction still needs after its proof, then keep its reservation across a restart.
 
 A transaction goes through four stages: the provider fills a `FilledTx` from node queries, the wallet funds it into a `FundedTx`, the provider proves it into a `ProvenTx`, and the wallet signs it into a `TxEnvelope`. The reservation travels with the stages, so the trait has no release method (see [Pending reservations](#pending-reservations)). `FilledTx` and `FundedTx` are opaque, so a custom wallet funds through a `Wallet` that it wraps.
+
+The `sign_transaction` of a custom wallet can sign elsewhere, such as in an HSM: `ProvenTx::signature_requests` gives one `SignatureRequest` for each intent segment and signer, and `ProvenTx::add_signature` puts a 64-byte signature over its `data` in every placeholder of that signer. It then ends with the inner `sign_transaction`, which signs nothing more and keeps the reservation. A request can name an intent that another party built, such as in a sponsored transaction. A signature authorizes every spend and Dust registration of its signer in that intent. So a custom wallet signs only the requests of the intents that it funded.
 
 The wallet serializes its own syncs and coin watches. So a handle can run them too, from any number of tasks or providers. A handle passes the provider as the chain view, for example `wallet.sync(&provider)`.
 
@@ -54,7 +56,7 @@ The hex form and the mnemonic form give the same on-chain identity. `Seed::from_
 
 ### The `Seed` type
 
-`Seed` is the SDK's wallet-seed type. Hold one when you need the seed for more than a sync. It derives addresses before a sync, derives HD keys, and makes a new seed. `Wallet::from_seed` takes the `Seed` by value, so to keep the `Seed` after the sync, pass a clone.
+`Seed` is the SDK's wallet-seed type. Hold one when you need the seed for more than a sync. It derives addresses before a sync, derives HD keys, and makes a new seed. `Wallet::from_seed` takes the `Seed` by value, so to keep the `Seed` after the sync, pass a clone. The sync derives the keys of each role and drops the seed, and the `Wallet` holds only the keys: the shielded and Dust spends prove with their secret keys, and the unshielded key signs.
 
 ```rust
 use midnight_core::Seed;
@@ -408,7 +410,7 @@ let pending = provider
 1. Fills the transaction context from node queries: the node's network and ledger parameters, and the time of its best block.
 2. Hands it to the wallet's `fund_transaction`, which resyncs, then takes a write lock on the wallet, selects inputs from its local UTXO set, balances the Dust fee with a `speculative_spend` loop over mock proofs, and reserves the selected inputs so the next concurrent build can't re-pick the same coins.
 3. Proves the transaction with the provider's prover, with the wallet free.
-4. Hands it to the wallet's `sign_transaction`. The reservation then reaches `pending.json`.
+4. Hands it to the wallet's `sign_transaction`, which replaces the placeholder signature of each unshielded input and Dust registration that the funding added. The reservation then reaches `pending.json`.
 5. Submits the signed bytes to the node and returns a `PendingTx`.
 
 Each intent of the transaction carries a TTL. The chain does not apply a transaction after the TTL of one of its intents. By default the TTL is the chain's `global_ttl` after the time of the node's best block that the fill read. That is the longest TTL that the chain accepts. `global_ttl` is a chain parameter (14 days on the networks that midnight-node ships). To make a transaction expire sooner, call `.with_ttl(duration)` on the request:
@@ -501,7 +503,7 @@ The replay runs against the indexer that the wallet synced from, and reads keep 
 In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`. They serve two purposes:
 
 - **Prevent double-spending across builds.** Input selection skips reserved coins.
-- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL passed, as a backstop for transactions that never confirm.
+- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `funding`) drops entries whose TTL passed, as a backstop for transactions that never confirm.
 
 Each reservation expires at the earliest TTL of the intents that its build made (see [Transfers](#transfers)). The wallet drops the reservation once the time of the chain's latest block passes that TTL, because the transaction can no longer land.
 

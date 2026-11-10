@@ -4,14 +4,13 @@ use std::sync::{Arc, Mutex};
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_helpers::mn_ledger::events::EventDetails;
 use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
-use midnight_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use midnight_helpers::{
-    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, LedgerContext, LedgerParameters,
-    SecretKeys, ShieldedWallet, Sp, Timestamp, UnshieldedWallet, Wallet as ContextWallet,
-    WalletState as ZswapLocalState,
+    BlockContext, DefaultDB, DustLocalState, DustNullifier, DustWallet, Event, LedgerContext,
+    LedgerParameters, SecretKeys, SignatureVerifyingKey, Sp, Timestamp,
+    WalletState as ZswapLocalState, ledger_8,
 };
 use midnight_indexer_client::SubscriptionClient;
-use midnight_types::build::{DustSpendBatch, SpentUtxoKey, TrackedUtxo, chain_time};
+use midnight_types::build::{Funding, SpentUtxoKey, TrackedUtxo, chain_time};
 use midnight_types::convert::{IntoLedger, IntoSdk};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -24,9 +23,9 @@ use crate::replay::{
 };
 use crate::storage::wallet_storage_id;
 use crate::wallet::ChainSync;
-use crate::{Network, Seed, SyncProgress, WalletError};
+use crate::{Network, SyncProgress, WalletError};
 
-/// A Midnight wallet: identity (seed, addresses) and synced ledger state.
+/// A Midnight wallet: identity (keys, addresses) and synced ledger state.
 ///
 /// Maintains three streams of state from the indexer:
 /// - `zswapLedgerEvents` → shielded coin tracking + Merkle tree
@@ -36,8 +35,12 @@ use crate::{Network, Seed, SyncProgress, WalletError};
 /// The state of the SDK's `Wallet`. Transaction building uses it directly (no
 /// full-chain replay).
 pub struct Wallet {
-    seed: Seed,
     secret_keys: SecretKeys,
+    /// The ledger 8 Zswap keys, which a rescan from the first event reads the
+    /// events before the hard fork with.
+    pre_fork_keys: ledger_8::SecretKeys,
+    /// The key that owns the unshielded UTXOs.
+    night_key: SignatureVerifyingKey,
     network: Network,
     unshielded_address: String,
 
@@ -68,7 +71,7 @@ pub struct Wallet {
     block_context: Option<BlockContext>,
 
     /// In-flight reservations: spends built locally but not yet observed
-    /// as confirmed on-chain. Applied at [`Wallet::add_funding`] time to
+    /// as confirmed on-chain. Applied at [`Wallet::funding`] time to
     /// prevent local double-builds, cleared when corresponding events arrive
     /// or when the TTL window elapses. Never written to the confirmed-state
     /// files; persisted separately via `pending.json`.
@@ -410,7 +413,8 @@ pub struct ResyncCommit {
 /// The wallet's half of [`crate::wallet::ShieldedRescanPlan`]: who the
 /// rescan is for, and the coins it claims on the way.
 pub struct ShieldedRescanPlan {
-    seed: Seed,
+    secret_keys: SecretKeys,
+    pre_fork_keys: ledger_8::SecretKeys,
     coins: Vec<crate::CoinInfo>,
 }
 
@@ -419,7 +423,14 @@ impl ShieldedRescanPlan {
     /// first event of the stream.
     pub async fn run(self, indexer_url: &str) -> Result<ShieldedRescanCommit, WalletError> {
         let sub_client = SubscriptionClient::new(indexer_url);
-        let replay = replay_zswap_from_genesis(&sub_client, &self.seed, &self.coins, None).await?;
+        let replay = replay_zswap_from_genesis(
+            &sub_client,
+            &self.secret_keys,
+            &self.pre_fork_keys,
+            &self.coins,
+            None,
+        )
+        .await?;
         Ok(ShieldedRescanCommit {
             zswap_state: replay.state,
             zswap_event_id: replay.last_id,
@@ -459,13 +470,6 @@ pub(crate) enum DustStart {
     },
     /// From an empty Dust state, at the first event: a sync with no snapshot.
     Fresh,
-}
-
-/// The shielded keys `seed` derives.
-pub(crate) fn zswap_keys(seed: &Seed) -> SecretKeys {
-    ShieldedWallet::<DefaultDB>::default(seed.into_ledger())
-        .secret_keys()
-        .clone()
 }
 
 impl Wallet {
@@ -508,7 +512,7 @@ impl Wallet {
     ) -> Result<Self, WalletError> {
         let ChainSync {
             indexer_url,
-            seed,
+            keys,
             address,
             network,
             storage_dir,
@@ -524,17 +528,17 @@ impl Wallet {
             dust,
         } = start;
         let wallet_id = wallet_storage_id(address);
-        let secret_keys = zswap_keys(seed);
 
         let parameters = decode_ledger_parameters(block)?;
         let block_timestamp = block_time(block)?;
 
         let (dust_wallet, start_dust_id) = match dust {
             DustStart::Resume { wallet, next_id } => (*wallet, next_id),
-            DustStart::Fresh => (
-                DustWallet::default(seed.into_ledger(), Some(&parameters)),
-                0,
-            ),
+            DustStart::Fresh => {
+                let mut wallet = keys.dust.clone();
+                wallet.dust_local_state = Some(Sp::new(DustLocalState::new(parameters.dust)));
+                (wallet, 0)
+            }
         };
 
         let sub_client = SubscriptionClient::new(indexer_url);
@@ -599,8 +603,9 @@ impl Wallet {
         });
 
         let state = Self {
-            seed: seed.clone(),
-            secret_keys,
+            secret_keys: keys.zswap.clone(),
+            pre_fork_keys: keys.zswap_pre_fork.clone(),
+            night_key: keys.unshielded.verifying_key(),
             network: network.clone(),
             unshielded_address: address.to_string(),
             zswap_state,
@@ -649,7 +654,7 @@ impl Wallet {
     /// - event replay (a sync or a resync) observes the corresponding
     ///   confirmed spends and clears them,
     /// - or the chain time passes `expires_at` (evicted at
-    ///   [`Wallet::add_funding`] time).
+    ///   [`Wallet::funding`] time).
     ///
     /// `shielded_spends` (Zswap coin nullifiers pinned by a contract call) are
     /// cleared by TTL only: once the spend confirms, resync drops the coin from
@@ -668,14 +673,14 @@ impl Wallet {
     /// the next process can select these inputs again.
     pub fn reserve_pending(
         &mut self,
-        dust_batches: Vec<DustSpendBatch>,
+        dust: Vec<DustNullifier>,
         unshielded_spends: Vec<SpentUtxoKey>,
         shielded_spends: Vec<midnight_helpers::Nullifier>,
         reserved_at: Timestamp,
         expires_at: Timestamp,
     ) {
         lock(&self.pending).reservations_mut().reserve(
-            dust_batches,
+            dust,
             unshielded_spends,
             shielded_spends,
             reserved_at,
@@ -697,7 +702,7 @@ impl Wallet {
     /// inputs.
     ///
     /// A reservation outside [`within_ttl`] at the chain time of
-    /// `block_context` does not, because [`Self::add_funding`] evicts it before
+    /// `block_context` does not, because [`Self::funding`] evicts it before
     /// a build selects. With no block context, every reservation holds, as no
     /// eviction runs.
     fn reservation_holds(&self, expires_at: Timestamp) -> bool {
@@ -806,43 +811,22 @@ impl Wallet {
         saved
     }
 
-    /// Put this wallet's spendable view into `ctx`: its unshielded UTXOs, its
-    /// shielded coins, and its dust, each less what a still-pending build
+    /// This wallet's spendable view for a build on `ctx`: its shielded coins,
+    /// its unshielded UTXOs and its Dust, each less what a still-pending build
     /// reserved.
     ///
-    /// A build draws on this only for the seeds named in
-    /// `StandardTransactionInfo::set_funding_seeds`, so a context that never
-    /// gets this call funds nothing.
+    /// It also moves the block time of `ctx`'s block context to this wallet's
+    /// Dust anchor, which a build reads as the Dust `ctime`, so the Dust spends
+    /// witness a root that the chain holds at that time. The time of the last
+    /// block stays as `ctx` has it, so a build still counts its TTL from the
+    /// chain time of `ctx`. A `ctx` with no block context takes this wallet's
+    /// whole.
     ///
-    /// Call this once per context, and errors on a second call for the same
-    /// wallet. It also moves the block time of `ctx`'s block context to this
-    /// wallet's Dust anchor, which a build reads as the Dust `ctime`, so the
-    /// Dust spends witness a root that the chain holds at that time. The time
-    /// of the last block stays as `ctx` has it, so a build still counts its
-    /// TTL from the chain time of `ctx`. A `ctx` with no block context takes
-    /// this wallet's whole.
-    ///
-    /// The only mutation is TTL eviction of expired `pending` entries against
-    /// the chain time of `block_context`: entries whose `expires_at` has
-    /// passed cannot produce a valid transaction, and would block the
-    /// underlying UTXOs forever otherwise.
-    pub fn add_funding(&mut self, ctx: &LedgerContext<DefaultDB>) -> Result<(), WalletError> {
-        // One funding view per context. Funding twice would merge a fresh UTXO
-        // set into the one already there: the second pass skips what a pending
-        // build reserved, but cannot withdraw what the first pass inserted, so
-        // a spent input stays selectable.
-        let seed = (&self.seed).into_ledger();
-        if ctx
-            .wallets
-            .lock()
-            .map_err(|_| WalletError::Sync("wallets lock poisoned".into()))?
-            .contains_key(&seed)
-        {
-            return Err(WalletError::Transfer(
-                "this wallet already funds the context; build a fresh one".into(),
-            ));
-        }
-
+    /// The only mutation of the wallet is TTL eviction of expired `pending`
+    /// entries against the chain time of `block_context`: entries whose
+    /// `expires_at` has passed cannot produce a valid transaction, and would
+    /// block the underlying UTXOs forever otherwise.
+    pub fn funding(&mut self, ctx: &LedgerContext<DefaultDB>) -> Result<Funding, WalletError> {
         // Evict any expired pending reservations against the latest known
         // chain time. Cheap (Vec::retain on a typically tiny list) and the
         // only place that doesn't require the caller to restart the process
@@ -871,80 +855,38 @@ impl Wallet {
             };
         }
 
-        // Populate UTXO state so the transaction builder can find our UTXOs.
-        let unshielded = UnshieldedWallet::default(seed.clone());
-        let owner = unshielded.user_address;
-        let utxo_ctime = self
-            .block_context
-            .as_ref()
-            .map(|bc| Timestamp::from_secs(bc.tblock.to_secs().saturating_sub(3600)))
-            .unwrap_or_else(|| Timestamp::from_secs(0));
+        let reserved_utxos = self.reserved_unshielded_keys();
+        let utxos = self
+            .unshielded_utxos
+            .iter()
+            .filter(|utxo| !reserved_utxos.contains(&utxo.spent_key()))
+            .cloned()
+            .collect();
 
-        // Filter out UTXOs reserved by recent (still-pending) builds so the
-        // selector doesn't re-pick them before the indexer confirms the
-        // spend.
-        let pending_unshielded = self.reserved_unshielded_keys();
-
-        {
-            let mut guard = ctx
-                .ledger_state
-                .lock()
-                .map_err(|_| WalletError::Sync("ledger state lock poisoned".into()))?;
-            let mut ledger_state = (**guard).clone();
-
-            let mut utxo_state = (*ledger_state.utxo).clone();
-            for tracked in &self.unshielded_utxos {
-                if pending_unshielded.contains(&tracked.spent_key()) {
-                    continue;
-                }
-                let utxo = tracked_to_ledger_utxo(tracked, owner);
-                utxo_state = utxo_state.insert(utxo, UtxoMeta { ctime: utxo_ctime });
-            }
-            ledger_state.utxo = Sp::new(utxo_state);
-            *guard = Sp::new(ledger_state);
+        // `remove` on an already-absent nullifier (the spend confirmed and
+        // resync dropped the coin) is a harmless no-op.
+        let mut shielded = self.zswap_state.clone();
+        for nullifier in self.reserved_shielded_nullifiers() {
+            shielded.coins = shielded.coins.remove(&nullifier);
         }
 
-        // The pending reservations go on clones only, so `self.dust_wallet`
-        // keeps only the events that the indexer confirmed.
-        {
-            let mut shielded = ShieldedWallet::<DefaultDB>::default(seed.clone());
-            shielded.state = self.zswap_state.clone();
+        // The reservations go on a clone only, so `self.dust_wallet` keeps
+        // only the events that the indexer confirmed.
+        let mut dust = self.dust_wallet.clone();
+        dust.dust_local_state = self.unreserved_dust().map(Sp::new);
 
-            // Drop coins a recent still-pending build already spent so the
-            // Zswap selector (`min_match_coin`) can't re-pick them before the
-            // indexer confirms the spend. `remove` on an already-absent
-            // nullifier (the spend confirmed and resync dropped the coin) is a
-            // harmless no-op.
-            for nullifier in self.reserved_shielded_nullifiers() {
-                shielded.state.coins = shielded.state.coins.remove(&nullifier);
-            }
-
-            let mut dust = self.dust_wallet.clone();
-            dust.dust_local_state = self.unreserved_dust().map(Sp::new);
-
-            let wallet = ContextWallet {
-                root_seed: Some(seed.clone()),
-                shielded,
-                unshielded: midnight_helpers::UnshieldedWallet::default(seed.clone()),
-                dust,
-            };
-
-            ctx.wallets
-                .lock()
-                .map_err(|_| WalletError::Sync("wallets lock poisoned".into()))?
-                .insert(seed, wallet);
-        }
-
-        Ok(())
+        Ok(Funding {
+            shielded_keys: self.secret_keys.clone(),
+            shielded,
+            night_key: self.night_key.clone(),
+            utxos,
+            dust,
+        })
     }
 
     // -------------------------------------------------------------------------
     // Accessors
     // -------------------------------------------------------------------------
-
-    pub fn seed(&self) -> &Seed {
-        &self.seed
-    }
 
     /// See [`crate::Wallet::shielded_recipient`].
     pub fn shielded_recipient(&self) -> crate::ShieldedRecipient {
@@ -1141,7 +1083,8 @@ impl Wallet {
     /// [`ShieldedRescanPlan`] for the intended plan → run → commit flow.
     pub fn shielded_rescan_plan(&self) -> ShieldedRescanPlan {
         ShieldedRescanPlan {
-            seed: self.seed.clone(),
+            secret_keys: self.secret_keys.clone(),
+            pre_fork_keys: self.pre_fork_keys.clone(),
             coins: self
                 .coins_to_register()
                 .into_iter()
@@ -1184,11 +1127,13 @@ pub(crate) struct ZswapReplay {
 /// goes on from the first ledger 9 event.
 pub(crate) async fn replay_zswap_from_genesis(
     sub_client: &SubscriptionClient,
-    seed: &Seed,
+    secret_keys: &SecretKeys,
+    pre_fork_keys: &ledger_8::SecretKeys,
     coins: &[crate::CoinInfo],
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<ZswapReplay, WalletError> {
-    let pre_fork = crate::pre_fork::replay(sub_client, seed, coins, progress.clone()).await?;
+    let pre_fork =
+        crate::pre_fork::replay(sub_client, pre_fork_keys, coins, progress.clone()).await?;
     let Some(fork_id) = pre_fork.fork_id else {
         return Ok(ZswapReplay {
             state: pre_fork.state,
@@ -1198,7 +1143,7 @@ pub(crate) async fn replay_zswap_from_genesis(
     info!(fork_id, "the shielded stream continues in ledger 9");
     replay_zswap_events(
         sub_client,
-        &zswap_keys(seed),
+        secret_keys,
         pre_fork.state,
         fork_id,
         false,
@@ -1341,19 +1286,6 @@ fn event_spend_nullifier(event: &Event<DefaultDB>) -> Option<DustNullifier> {
     }
 }
 
-fn tracked_to_ledger_utxo(
-    tracked: &TrackedUtxo,
-    owner: midnight_helpers::UserAddress,
-) -> LedgerUtxo {
-    LedgerUtxo {
-        value: tracked.value,
-        owner,
-        type_: tracked.token_type.into_ledger(),
-        intent_hash: midnight_helpers::IntentHash(tracked.intent_hash),
-        output_no: tracked.output_index,
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod test_support {
     use midnight_helpers::midnight_serialize::tagged_serialize;
@@ -1361,6 +1293,7 @@ pub(crate) mod test_support {
     use midnight_helpers::{HashOutput, Recipient, TransactionHash};
 
     use super::*;
+    use crate::Seed;
 
     /// An event with an all-zero source, for tests that read only its content.
     pub(super) fn zero_source_event(content: EventDetails<DefaultDB>) -> Event<DefaultDB> {
@@ -1383,9 +1316,9 @@ pub(crate) mod test_support {
         coin: &crate::CoinInfo,
         mt_index: u64,
     ) -> String {
-        let commitment = coin
-            .into_ledger()
-            .commitment(&Recipient::User(zswap_keys(seed).coin_public_key()));
+        let commitment = coin.into_ledger().commitment(&Recipient::User(
+            crate::keys::RoleKeys::derive(seed).zswap.coin_public_key(),
+        ));
         let event = zero_source_event(EventDetails::ZswapOutput {
             commitment,
             preimage_evidence: ZswapPreimageEvidence::None,
@@ -1410,7 +1343,7 @@ mod tests {
 
     use midnight_types::build::{ReservedInput, SpentInputs};
 
-    use super::super::pending::test_support::{dust_batch, ukey};
+    use super::super::pending::test_support::{dust, ukey};
     use super::test_support::{ciphertextless_output, zero_source_event};
     use super::*;
     use crate::wallet::test_support::{test_seed, unreachable_coin};
@@ -1469,17 +1402,18 @@ mod tests {
 
     /// Minimal offline wallet for unit tests: fresh state, no sync.
     fn test_wallet(storage_dir: Option<PathBuf>) -> Wallet {
-        let seed = test_seed();
-        let shielded = ShieldedWallet::<DefaultDB>::default((&seed).into_ledger());
-        let secret_keys = shielded.secret_keys().clone();
+        let keys = crate::keys::RoleKeys::derive(&test_seed());
+        let mut dust_wallet = keys.dust.clone();
+        dust_wallet.dust_local_state = Some(Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)));
         Wallet {
-            seed: seed.clone(),
-            secret_keys,
+            secret_keys: keys.zswap.clone(),
+            pre_fork_keys: keys.zswap_pre_fork.clone(),
+            night_key: keys.unshielded.verifying_key(),
             network: Network::Undeployed,
             unshielded_address: "mn_addr_undeployed1test".into(),
-            zswap_state: shielded.state.clone(),
+            zswap_state: ZswapLocalState::new(),
             zswap_event_id: 0,
-            dust_wallet: DustWallet::default((&seed).into_ledger(), Some(&INITIAL_PARAMETERS)),
+            dust_wallet,
             dust_event_id: 0,
             unshielded_utxos: Vec::new(),
             last_block_height: 0,
@@ -1558,20 +1492,8 @@ mod tests {
             chain_now,
         ));
         let between = anchor + midnight_helpers::Duration::from_secs(300);
-        wallet.reserve_pending(
-            vec![dust_batch(&[1])],
-            Vec::new(),
-            Vec::new(),
-            anchor,
-            between,
-        );
-        wallet.reserve_pending(
-            vec![dust_batch(&[2])],
-            Vec::new(),
-            Vec::new(),
-            anchor,
-            chain_now,
-        );
+        wallet.reserve_pending(dust(&[1]), Vec::new(), Vec::new(), anchor, between);
+        wallet.reserve_pending(dust(&[2]), Vec::new(), Vec::new(), anchor, chain_now);
 
         assert_eq!(
             wallet.reserved_dust_nullifiers(),
@@ -1649,8 +1571,8 @@ mod tests {
     }
 
     /// A shielded coin reserved by a pending build is hidden from both
-    /// `spendable_shielded_coins` and the Zswap coin set the build context hands
-    /// the selector, so a later in-process build cannot re-select it.
+    /// `spendable_shielded_coins` and the coin set of the funding view, so a
+    /// later in-process build cannot re-select it.
     #[test]
     fn reserved_shielded_coin_is_filtered_from_selection_and_context() {
         let mut wallet = test_wallet(None);
@@ -1669,18 +1591,12 @@ mod tests {
         );
         assert!(wallet.spendable_shielded_coins().is_empty());
 
-        // And it is gone from the coin set the funding view exposes (this is
-        // the `coins.remove(nullifier)` path in add_funding).
-        let ctx = chain_context();
-        wallet.add_funding(&ctx).expect("add funding");
-        let wallets = ctx.wallets.lock().expect("wallets lock");
-        let ctx_wallet = wallets
-            .get(&wallet.seed().into_ledger())
-            .expect("funding wallet in context");
+        // And it is gone from the coin set of the funding view.
+        let funding = wallet.funding(&chain_context()).expect("funding");
         assert_eq!(
-            ctx_wallet.shielded.state.coins.iter().count(),
+            funding.shielded.coins.iter().count(),
             0,
-            "reserved coin must be removed from the build context's Zswap state"
+            "reserved coin must be removed from the funding view's Zswap state"
         );
     }
 
@@ -1697,32 +1613,17 @@ mod tests {
         }
     }
 
+    /// A selection reads the funding view, so a UTXO that a pending build
+    /// reserved and that stays in the view is spent twice, and the node
+    /// refuses one of the two transactions.
     #[test]
-    fn add_funding_puts_the_wallet_and_its_utxos_in() {
+    fn the_funding_view_leaves_out_a_reserved_utxo() {
         let mut wallet = test_wallet(None);
-        wallet.unshielded_utxos = vec![tracked_night_utxo()];
-
-        let ctx = chain_context();
-        wallet.add_funding(&ctx).expect("add funding");
-
-        assert!(
-            ctx.wallets
-                .lock()
-                .expect("wallets lock")
-                .contains_key(&wallet.seed().into_ledger()),
-            "funding must insert this wallet"
-        );
-        assert_eq!(
-            ctx.with_ledger_state(|s| s.utxo.utxos.iter().count()),
-            1,
-            "funding must insert the wallet's unspent UTXOs"
-        );
-    }
-
-    #[test]
-    fn add_funding_skips_a_reserved_utxo() {
-        let mut wallet = test_wallet(None);
-        wallet.unshielded_utxos = vec![tracked_night_utxo()];
+        let free = TrackedUtxo {
+            output_index: 1,
+            ..tracked_night_utxo()
+        };
+        wallet.unshielded_utxos = vec![tracked_night_utxo(), free.clone()];
         wallet.reserve_pending(
             Vec::new(),
             vec![ukey(0xab, 0)],
@@ -1731,27 +1632,15 @@ mod tests {
             Timestamp::MAX,
         );
 
-        let ctx = chain_context();
-        wallet.add_funding(&ctx).expect("add funding");
+        let funding = wallet.funding(&chain_context()).expect("funding");
 
         assert_eq!(
-            ctx.with_ledger_state(|s| s.utxo.utxos.iter().count()),
-            0,
-            "a UTXO a pending build reserved must not reach the funding view"
-        );
-    }
-
-    #[test]
-    fn add_funding_refuses_a_context_it_already_funds() {
-        let mut wallet = test_wallet(None);
-        let ctx = chain_context();
-        wallet.add_funding(&ctx).expect("first funding");
-
-        // A second pass would merge into the first one's UTXO set, leaving an
-        // input a pending build reserved still selectable.
-        assert!(
-            wallet.add_funding(&ctx).is_err(),
-            "funding the same context twice must be refused"
+            funding
+                .utxos
+                .iter()
+                .map(TrackedUtxo::spent_key)
+                .collect::<Vec<_>>(),
+            [free.spent_key()]
         );
     }
 
@@ -1761,7 +1650,7 @@ mod tests {
     /// took the wallet's whole block context counts the TTL from the wallet's
     /// older view.
     #[test]
-    fn add_funding_takes_the_dust_anchor_and_keeps_the_chain_time() {
+    fn funding_takes_the_dust_anchor_and_keeps_the_chain_time() {
         let mut wallet = test_wallet(None);
         let anchor = Timestamp::from_secs(1_000);
         wallet.block_context = Some(midnight_helpers::make_block_context(
@@ -1781,7 +1670,7 @@ mod tests {
         )
         .expect("execution context");
 
-        wallet.add_funding(&ctx).expect("add funding");
+        wallet.funding(&ctx).expect("funding");
 
         let funded = ctx.latest_block_context();
         assert_eq!(funded.tblock, anchor);
@@ -2288,7 +2177,7 @@ mod tests {
             let (listener, url) = bind().await;
             let mut wallet = test_wallet(None);
             let coin = unreachable_coin(9, 42);
-            let raw = ciphertextless_output(&wallet.seed, &coin, 0);
+            let raw = ciphertextless_output(&test_seed(), &coin, 0);
 
             let server = tokio::spawn(async move {
                 // The same one-event stream for each of the two rescans. A
@@ -2360,8 +2249,8 @@ mod tests {
             let first = unreachable_coin(9, 42);
             let second = unreachable_coin(8, 77);
             let stream = [
-                ciphertextless_output(&wallet.seed, &first, 0),
-                ciphertextless_output(&wallet.seed, &second, 1),
+                ciphertextless_output(&test_seed(), &first, 0),
+                ciphertextless_output(&test_seed(), &second, 1),
             ];
 
             let server = tokio::spawn(async move {
@@ -2411,7 +2300,7 @@ mod tests {
             let (listener, url) = bind().await;
             let mut wallet = test_wallet(None);
             let coin = unreachable_coin(9, 42);
-            let raw = crate::pre_fork::test_support::ciphertextless_output(&wallet.seed, &coin, 0);
+            let raw = crate::pre_fork::test_support::ciphertextless_output(&test_seed(), &coin, 0);
             let server = tokio::spawn(async move {
                 let (mut ws, sub) = accept_subscriber(&listener).await;
                 assert_eq!(subscription_variable(&sub, "id"), 0);
@@ -2472,12 +2361,12 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let shielded = ShieldedWallet::<DefaultDB>::default((&test_seed()).into_ledger());
+            let keys = crate::keys::RoleKeys::derive(&test_seed());
             let started = std::time::Instant::now();
             let replay = replay_zswap_events(
                 &sub_client,
-                shielded.secret_keys(),
-                shielded.state.clone(),
+                &keys.zswap,
+                ZswapLocalState::new(),
                 8,
                 true,
                 None,

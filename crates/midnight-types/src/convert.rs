@@ -147,18 +147,6 @@ impl IntoLedger for &Seed {
     }
 }
 
-/// The SDK seed that holds the bytes of `seed`.
-///
-/// A crate-private function, not an `IntoSdk` impl: the `IntoLedger` impl for
-/// `&Seed` is the only public item that names the upstream seed.
-pub(crate) fn sdk_seed(seed: &midnight_helpers::WalletSeed) -> Seed {
-    Seed(match seed {
-        midnight_helpers::WalletSeed::Short(bytes) => SeedBytes::Short(*bytes),
-        midnight_helpers::WalletSeed::Medium(bytes) => SeedBytes::Medium(*bytes),
-        midnight_helpers::WalletSeed::Long(bytes) => SeedBytes::Long(*bytes),
-    })
-}
-
 /// The untagged encoding of a curve point: its 32-byte compressed form.
 fn encoding<T: Serializable>(value: &T) -> [u8; 32] {
     let mut bytes = Vec::with_capacity(32);
