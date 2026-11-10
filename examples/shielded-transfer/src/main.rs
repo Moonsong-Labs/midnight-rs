@@ -12,8 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use midnight_core::wallet::LocalWallet;
-use midnight_core::{MidnightProvider, Network, Wallet};
+use midnight_core::{MidnightProvider, Network, Seed, Wallet};
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded with shielded test tokens at genesis on the
@@ -54,16 +53,16 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Syncing wallet from indexer (zswap and unshielded, then dust)...");
     let provider = MidnightProvider::new(&node_url);
-    let wallet = Wallet::from_seed(DEV_SEED)?
-        .with_network(&network)
-        .sync(&provider, &indexer_url)
-        .await?;
-    let address = wallet.shielded_address();
+    let wallet = Arc::new(
+        Wallet::from_seed(Seed::from_hex(DEV_SEED)?)
+            .with_network(&network)
+            .sync(&provider, &indexer_url)
+            .await?,
+    );
     let recipient = wallet.shielded_recipient();
-    let wallet = Arc::new(LocalWallet::new(wallet));
     let provider = Arc::new(provider.with_wallet(Arc::clone(&wallet)));
     println!("Sync complete.");
-    println!("Shielded address:  {address}\n");
+    println!("Shielded address:  {}\n", wallet.shielded_address());
 
     // Pick a coin worth more than 1 unit, so the transfer has a change output:
     // the default coin selection spends the largest coin of the token. The

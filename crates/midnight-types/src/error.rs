@@ -257,8 +257,7 @@ pub enum WalletError {
     /// The node runs another network than the one the wallet syncs as.
     ///
     /// A sync that names its network with `WalletBuilder::with_network` in
-    /// `midnight-wallet` checks it before it reads the indexer, unless the
-    /// caller opts out with `WalletBuilder::unpinned`. To recover, name the
+    /// `midnight-wallet` checks it before it reads the indexer. To recover, name the
     /// network that the node runs. Or leave the network out, so that the sync
     /// takes the node's network. Or use a node of the named network.
     #[error("this wallet syncs as network {wallet}, but the node runs {chain}")]

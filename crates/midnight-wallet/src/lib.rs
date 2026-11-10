@@ -1,23 +1,16 @@
 //! Wallet state and address derivation for the Midnight SDK.
 //!
-//! [`Wallet`] owns the seed, the secret keys, the synced ledger state
+//! [`Wallet`] holds the seed, the secret keys, the synced ledger state
 //! (shielded coins, dust UTXOs, unshielded UTXOs), the ledger parameters,
-//! and the latest block context. It exposes accessors for balances,
-//! addresses and cursors. Its resyncs and rescans run through
-//! [`LocalWallet`].
+//! and the latest block context. It reads its balance and addresses, and it
+//! syncs itself. It locks its own state, so a `&Wallet` serves every call and
+//! a caller never holds a lock.
 //!
-//! The API a consumer programs against is the `WalletFacade` trait in
-//! `midnight-wallet-facade`, which this crate depends on and implements:
-//! [`LocalWallet`] is that role over a `Wallet` this process owns. Readings
-//! return owned values and a mutation is one call, so a consumer never holds
-//! a lock.
-//!
-//! Once a wallet is attached, `midnight_provider::MidnightProvider` starts
-//! its resyncs and rescans and builds its transactions. Every build resyncs
-//! the wallet first. When asked, the wallet also resyncs itself in a
-//! background task ([`LocalWallet::sync_in_background`]). The wallet runs
-//! each replay against the indexer that it synced from. The provider holds
-//! the wallet as an `Arc<dyn WalletFacade>`.
+//! `midnight_provider::MidnightProvider::with_wallet` attaches a wallet. The
+//! provider builds its transactions, and every build syncs the wallet first.
+//! To keep a handle on the attached wallet, attach an `Arc<Wallet>`.
+//! [`Wallet::sync_in_background`] syncs it in a background task. The wallet
+//! runs each replay against the indexer that it synced from.
 //!
 //! For callers that only need an address (no synced state), use
 //! [`Seed::unshielded_address`], [`Seed::shielded_address`] and
@@ -50,13 +43,13 @@
 //!
 //! ```rust,no_run
 //! use midnight_provider::MidnightProvider;
-//! use midnight_wallet::Wallet;
+//! use midnight_wallet::{Seed, Wallet};
 //!
 //! # async fn example(phrase: &str) -> Result<(), Box<dyn std::error::Error>> {
 //! // The wallet syncs on its own (zswap + dust + unshielded subscriptions)
 //! // and is then attached to the provider.
 //! let provider = MidnightProvider::new("ws://localhost:9944");
-//! let wallet = Wallet::from_mnemonic(phrase)?
+//! let wallet = Wallet::from_seed(Seed::from_mnemonic(phrase)?)
 //!     .sync(&provider, "http://localhost:8088")
 //!     .await?;
 //! let provider = provider.with_wallet(wallet);
@@ -87,19 +80,18 @@ pub use midnight_types::address::{
     parse_dust_address, parse_shielded_recipient, parse_unshielded_recipient,
 };
 pub use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustParameters,
-    DustPublicKey, EncryptionPublicKey, HashOutput, InvalidNetworkName, NIGHT, Network,
-    NetworkName, Nonce, Nullifier, ReservedInput, ShieldedBalance, ShieldedCoinBalance,
-    ShieldedRecipient, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SpentUtxoKey,
-    SyncCursors, TrackedUtxo, TransferKind, TransferRequest, TransferResult, UnshieldedRecipient,
-    UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance, WalletError, chain_pin,
+    CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustPublicKey,
+    EncryptionPublicKey, HashOutput, InvalidNetworkName, NIGHT, Network, NetworkName, Nonce,
+    Nullifier, ReservedInput, ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient,
+    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SpentUtxoKey, TransferKind,
+    TransferRequest, TransferResult, UnshieldedRecipient, UnshieldedTokenType, UnshieldedUtxoInfo,
+    WalletBalance, WalletError, chain_pin,
 };
-// The API this crate implements, so attaching a wallet needs no dependency on
-// midnight-wallet-facade either.
+// The API this crate implements, so a caller can name `dyn WalletFacade` with
+// no dependency on midnight-wallet-facade.
 pub use midnight_wallet_facade::WalletFacade;
 
 pub use background::BackgroundSync;
-pub use local::LocalWallet;
+pub use local::Wallet;
 pub use midnight_types::hd::{self, AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use sync::{SyncHandle, SyncProgress, WalletBuilder};
-pub use wallet::Wallet;

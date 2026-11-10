@@ -19,7 +19,7 @@ use midnight_contract::runtime::WitnessProvider;
 use midnight_contract::{ShieldedTokenType, SpendableShieldedCoin};
 use midnight_provider::MidnightProvider;
 use midnight_transient_crypto::fab::ValueReprAlignedValue;
-use midnight_wallet::{Network, Wallet};
+use midnight_wallet::{Network, Seed, Wallet};
 
 /// The seed of the wallet that the dev devnet funds at genesis.
 pub(crate) const DEV_WALLET_SEED: &str =
@@ -86,8 +86,7 @@ pub(crate) async fn synced_wallet(
     indexer_url: &str,
     seed: &str,
 ) -> Wallet {
-    Wallet::from_seed(seed)
-        .unwrap()
+    Wallet::from_seed(seed.parse::<Seed>().unwrap())
         .with_network(Network::Undeployed)
         .sync(provider, indexer_url)
         .await

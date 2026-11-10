@@ -19,7 +19,7 @@
 //! local devnet (`devnet/docker-compose.yml`); see README.md.
 
 use midnight_core::contract::{Signature, SigningKey};
-use midnight_core::{MidnightProvider, Wallet};
+use midnight_core::{MidnightProvider, Seed, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
     let provider = MidnightProvider::new(&node_url);
-    let wallet = Wallet::from_seed(DEV_WALLET_SEED)?
+    let wallet = Wallet::from_seed(Seed::from_hex(DEV_WALLET_SEED)?)
         .sync(&provider, &indexer_url)
         .await?;
     let provider = provider.with_wallet(wallet);

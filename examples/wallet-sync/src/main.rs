@@ -7,7 +7,7 @@ use std::env;
 use anyhow::Context;
 use midnight_core::provider::SPECKS_PER_DUST;
 use midnight_core::wallet::NIGHT;
-use midnight_core::{MidnightProvider, Network, Seed, SyncProgress, Wallet, WalletBuilder};
+use midnight_core::{MidnightProvider, Network, Seed, SyncProgress, Wallet};
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded at genesis on the local devnet. Do NOT use in
@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Syncing wallet state from indexer (zswap and unshielded, then dust)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
     let provider = MidnightProvider::new(&node_url);
-    let mut builder = WalletBuilder::new(&seed).with_network(&network);
+    let mut builder = Wallet::from_seed(seed.clone()).with_network(&network);
     if let Some(dir) = storage_dir.as_ref() {
         builder = builder.with_storage(dir);
     }

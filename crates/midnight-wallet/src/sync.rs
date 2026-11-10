@@ -1,4 +1,4 @@
-//! Build a synced [`Wallet`] from its seed or mnemonic, as a standalone step.
+//! Build a synced [`Wallet`] from its seed, as a standalone step.
 
 use std::path::{Path, PathBuf};
 
@@ -10,7 +10,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-use crate::{Seed, SeedError, Wallet};
+use crate::wallet::WalletState;
+use crate::{Seed, Wallet};
 
 /// Progress updates emitted during wallet sync.
 #[derive(Debug, Clone)]
@@ -60,69 +61,29 @@ pub enum SyncProgress {
 }
 
 impl Wallet {
-    /// Start a wallet from its seed, written as hex.
+    /// Start a wallet from its [`Seed`].
     ///
-    /// The hex decodes to 16, 32 or 64 bytes. The dev seed that the local
-    /// devnet funds at genesis has this form.
+    /// Parse a seed written as hex or as a BIP-39 mnemonic with `str::parse`,
+    /// or make one with [`Seed::from_hex`], [`Seed::from_mnemonic`] or
+    /// [`Seed::from_mnemonic_with_passphrase`]. The dev seed that the local
+    /// devnet funds at genesis is hex:
     ///
     /// ```rust,no_run
     /// # use midnight_provider::MidnightProvider;
-    /// # use midnight_wallet::Wallet;
+    /// # use midnight_wallet::{Seed, Wallet};
     /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// # async fn example(provider: MidnightProvider) -> Result<(), Box<dyn std::error::Error>> {
-    /// let wallet = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?
-    ///     .sync(&provider, INDEXER_URL)
-    ///     .await?;
+    /// let seed: Seed = "0000000000000000000000000000000000000000000000000000000000000001".parse()?;
+    /// let wallet = Wallet::from_seed(seed).sync(&provider, INDEXER_URL).await?;
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// # Errors
-    ///
-    /// [`SeedError::InvalidHex`] when `seed` is not hex, and
-    /// [`SeedError::InvalidLength`] when it decodes to another length.
-    pub fn from_seed(seed: &str) -> Result<WalletBuilder, SeedError> {
-        Seed::from_hex(seed).map(WalletBuilder::new)
-    }
-
-    /// Start a wallet from a BIP-39 mnemonic phrase, with an empty
-    /// passphrase.
-    ///
-    /// The phrase has 12, 15, 18, 21 or 24 English words. The wallet uses the
-    /// 64-byte seed of the standard BIP-39 derivation.
-    ///
-    /// ```rust,no_run
-    /// # use midnight_provider::MidnightProvider;
-    /// # use midnight_wallet::Wallet;
-    /// # const INDEXER_URL: &str = "http://localhost:8088";
-    /// # async fn example(provider: MidnightProvider, phrase: &str) -> Result<(), Box<dyn std::error::Error>> {
-    /// let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider, INDEXER_URL).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// [`SeedError::InvalidMnemonic`] when the phrase is not a valid BIP-39
-    /// mnemonic.
-    pub fn from_mnemonic(phrase: &str) -> Result<WalletBuilder, SeedError> {
-        Seed::from_mnemonic(phrase).map(WalletBuilder::new)
-    }
-
-    /// Start a wallet from a BIP-39 mnemonic phrase and its passphrase (the
-    /// "25th word").
-    ///
-    /// Each passphrase gives a different wallet for the same phrase.
-    ///
-    /// # Errors
-    ///
-    /// [`SeedError::InvalidMnemonic`] when the phrase is not a valid BIP-39
-    /// mnemonic.
-    pub fn from_mnemonic_with_passphrase(
-        phrase: &str,
-        passphrase: &str,
-    ) -> Result<WalletBuilder, SeedError> {
-        Seed::from_mnemonic_with_passphrase(phrase, passphrase).map(WalletBuilder::new)
+    pub fn from_seed(seed: Seed) -> WalletBuilder {
+        WalletBuilder {
+            seed,
+            network: None,
+            storage_dir: None,
+        }
     }
 }
 
@@ -146,8 +107,8 @@ impl Wallet {
 /// # use midnight_provider::MidnightProvider;
 /// # use midnight_wallet::Wallet;
 /// # const INDEXER_URL: &str = "http://localhost:8088";
-/// # async fn example(provider: Arc<MidnightProvider>) -> Result<(), Box<dyn std::error::Error>> {
-/// let builder = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?;
+/// # async fn example(provider: Arc<MidnightProvider>, seed: midnight_wallet::Seed) -> Result<(), Box<dyn std::error::Error>> {
+/// let builder = Wallet::from_seed(seed);
 /// let source = Arc::clone(&provider);
 /// let task = tokio::spawn(async move { builder.sync(&*source, INDEXER_URL).await });
 /// let wallet = task.await??;
@@ -196,9 +157,8 @@ impl std::future::Future for SyncHandle {
 
 /// A wallet before its sync: its seed, and the options of the sync.
 ///
-/// [`Wallet::from_seed`], [`Wallet::from_mnemonic`],
-/// [`Wallet::from_mnemonic_with_passphrase`] and [`Self::new`] start one. It
-/// holds no connection and does no work until a sync step runs:
+/// [`Wallet::from_seed`] starts one. It holds no connection and does no work
+/// until a sync step runs:
 ///
 /// - [`sync`](Self::sync) syncs in the current task and returns the synced
 ///   [`Wallet`].
@@ -214,25 +174,21 @@ impl std::future::Future for SyncHandle {
 /// # use midnight_wallet::Wallet;
 /// # const NODE_URL: &str = "ws://localhost:9944";
 /// # const INDEXER_URL: &str = "http://localhost:8088";
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// # async fn example(seed: midnight_wallet::Seed) -> Result<(), Box<dyn std::error::Error>> {
 /// let provider = MidnightProvider::new(NODE_URL);
-/// let wallet = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?
-///     .sync(&provider, INDEXER_URL)
-///     .await?;
+/// let wallet = Wallet::from_seed(seed).sync(&provider, INDEXER_URL).await?;
 /// let provider = provider.with_wallet(wallet);
 /// # Ok(())
 /// # }
 /// ```
 ///
-/// Every sync pins the wallet to the chain by default, as [`Self::sync`]
-/// describes.
+/// Every sync pins the wallet to the chain, as [`Self::sync`] describes.
 #[derive(Debug)]
 #[must_use = "a wallet builder does nothing until it syncs"]
 pub struct WalletBuilder {
     seed: Seed,
     network: Option<Network>,
     storage_dir: Option<PathBuf>,
-    pin: bool,
 }
 
 /// The owned inputs a sync runs on, once the chain work is done. Holding no
@@ -245,33 +201,19 @@ pub(crate) struct SyncPlan {
     pub(crate) storage_dir: Option<PathBuf>,
     /// The finalized block the node reports now, persisted so a later
     /// resume can ask whether it is still on this chain. `None` when the
-    /// sync is unpinned or the node could not answer.
+    /// node could not answer.
     pub(crate) chain_pin: Option<ChainPin>,
 }
 
 impl WalletBuilder {
-    /// Start a wallet from a [`Seed`].
-    ///
-    /// A `&Seed` also works, and leaves the `Seed` to the caller. For a seed
-    /// written as hex or a mnemonic phrase, use [`Wallet::from_seed`] or
-    /// [`Wallet::from_mnemonic`].
-    pub fn new(seed: impl Into<Seed>) -> Self {
-        Self {
-            seed: seed.into(),
-            network: None,
-            storage_dir: None,
-            pin: true,
-        }
-    }
-
     /// Sync as `network`, and refuse a node that runs another network.
     ///
     /// Without this call, the wallet takes the network that the node
     /// reports. Name the network to guard against a node URL of the wrong
-    /// network. A pinned sync (the default) then fails with
-    /// [`WalletError::NetworkMismatch`] before it reads the indexer. A node
-    /// that cannot answer, reports no network, or reports an id that is not
-    /// a valid name for a [`Network`] does not fail the sync.
+    /// network. The sync then fails with [`WalletError::NetworkMismatch`]
+    /// before it reads the indexer. A node that cannot answer, reports no
+    /// network, or reports an id that is not a valid name for a [`Network`]
+    /// does not fail the sync.
     ///
     /// For a name from configuration, parse it first with
     /// `name.parse::<Network>()?`.
@@ -289,18 +231,6 @@ impl WalletBuilder {
     /// for the on-disk layout.
     pub fn with_storage(mut self, dir: impl Into<PathBuf>) -> Self {
         self.storage_dir = Some(dir.into());
-        self
-    }
-
-    /// Skip the network check and the pin at sync time.
-    ///
-    /// The sync then sends the node only one query: the network it runs,
-    /// and only when [`with_network`](Self::with_network) names none. The
-    /// sync still keeps a stored snapshot's pin, and every later resync
-    /// checks that pin. A wallet synced unpinned with no stored pin stays
-    /// unpinned for its life. [`Self::sync`] describes the chain-reset guard.
-    pub fn unpinned(mut self) -> Self {
-        self.pin = false;
         self
     }
 
@@ -329,8 +259,7 @@ impl WalletBuilder {
     /// pruned archive must not condemn a healthy wallet. The synced wallet
     /// also carries a fresh pin, which every resync checks again. Thus the
     /// guard holds for the wallet's whole life, and it works for an
-    /// in-memory wallet too. [`Self::unpinned`] skips the network check and
-    /// the pin at sync time.
+    /// in-memory wallet too.
     ///
     /// # Errors
     ///
@@ -344,7 +273,7 @@ impl WalletBuilder {
         source: &dyn SyncSource,
         indexer_url: &str,
     ) -> Result<Wallet, WalletError> {
-        Wallet::sync_inner(self.prepare(source, indexer_url).await?, None).await
+        Wallet::synced(self.prepare(source, indexer_url).await?, None).await
     }
 
     /// Run the sync in a background task and stream progress events.
@@ -383,7 +312,7 @@ impl WalletBuilder {
             // A clone of the progress sender watches for receiver drop; the
             // original is consumed by the sync itself.
             let receiver_gone = tx.clone();
-            let sync = Wallet::sync_inner(plan, Some(tx));
+            let sync = Wallet::synced(plan, Some(tx));
             tokio::select! {
                 // Biased with the cancellation arm first: when the receiver
                 // drop and a sync-side "receiver dropped" error become ready
@@ -411,10 +340,9 @@ impl WalletBuilder {
             seed,
             network,
             storage_dir,
-            pin,
         } = self;
         let network = match network {
-            Some(wallet) if pin => {
+            Some(wallet) => {
                 if let Some(chain) = source.network().await
                     && chain != wallet
                 {
@@ -422,23 +350,18 @@ impl WalletBuilder {
                 }
                 wallet
             }
-            Some(wallet) => wallet,
             None => source.network().await.ok_or(WalletError::NetworkUnknown)?,
         };
         let address = seed.unshielded_address(network.clone());
 
-        let mut chain_pin = None;
-        if pin {
-            // Take the pin this sync carries before the check and the replay;
-            // see `require_same_chain`.
-            let candidate = current_pin(source).await;
-            if let Some(dir) = storage_dir.as_deref()
-                && let Some(stored) = Wallet::stored_chain_pin(dir, network.clone(), &address)?
-            {
-                let snapshot = Wallet::snapshot_path(dir, network.clone(), &address);
-                require_same_chain(source, &stored, Some(&snapshot)).await?;
-            }
-            chain_pin = candidate;
+        // Take the pin this sync carries before the check and the replay; see
+        // `require_same_chain`.
+        let chain_pin = current_pin(source).await;
+        if let Some(dir) = storage_dir.as_deref()
+            && let Some(stored) = WalletState::stored_chain_pin(dir, network.clone(), &address)?
+        {
+            let snapshot = WalletState::snapshot_path(dir, network.clone(), &address);
+            require_same_chain(source, &stored, Some(&snapshot)).await?;
         }
 
         Ok(SyncPlan {
@@ -583,7 +506,7 @@ mod tests {
             ..Node::default()
         };
 
-        let result = WalletBuilder::new(seed())
+        let result = Wallet::from_seed(seed())
             .with_network(Network::Undeployed)
             .with_storage(base.path())
             .prepare(&node, INDEXER_URL)
@@ -608,7 +531,7 @@ mod tests {
             ..Node::default()
         };
 
-        let result = WalletBuilder::new(seed())
+        let result = Wallet::from_seed(seed())
             .with_network(Network::Undeployed)
             .with_storage(base.path())
             .prepare(&node, INDEXER_URL)
@@ -623,33 +546,6 @@ mod tests {
             .unwrap()
             .and_then(|m| m.chain_pin);
         assert_eq!(refused, Some(stored_pin()), "{path} holds no such snapshot");
-    }
-
-    /// The stored pin is from a replaced chain, and the node runs another
-    /// network than the one the wallet names, so a sync that still checks
-    /// either one refuses.
-    #[tokio::test]
-    async fn an_unpinned_sync_with_a_network_asks_the_node_nothing() {
-        let base = tempfile::TempDir::new().unwrap();
-        store_pinned_snapshot(base.path());
-        let node = Node {
-            same_chain: false,
-            network: Some(Network::Preprod),
-            ..Node::default()
-        };
-
-        let result = WalletBuilder::new(seed())
-            .with_network(Network::Undeployed)
-            .with_storage(base.path())
-            .unpinned()
-            .prepare(&node, INDEXER_URL)
-            .await;
-        let plan = match result {
-            Ok(plan) => plan,
-            Err(err) => panic!("an unpinned sync with a network refuses nothing, got {err:?}"),
-        };
-        assert_eq!(node.queries.load(Ordering::SeqCst), 0);
-        assert_eq!(plan.chain_pin, None);
     }
 
     /// `prepare` runs before the replay, so a refusal here costs no indexer
@@ -669,7 +565,7 @@ mod tests {
                 network: reported.clone(),
                 ..Node::default()
             };
-            let result = WalletBuilder::new(seed())
+            let result = Wallet::from_seed(seed())
                 .with_network(Network::Undeployed)
                 .prepare(&node, INDEXER_URL)
                 .await;
@@ -692,41 +588,30 @@ mod tests {
         }
     }
 
-    /// A wallet with no network takes the node's, pinned or not, and its
-    /// address follows that network. Unpinned, the sync asks the node only
-    /// that query and takes no pin. A node that reports none leaves no
-    /// network to take.
+    /// A wallet with no network takes the node's, and its address follows
+    /// that network. A node that reports none leaves no network to take.
     #[tokio::test]
     async fn a_wallet_with_no_network_takes_the_nodes() {
-        for pin in [true, false] {
-            let builder = || {
-                let builder = WalletBuilder::new(seed());
-                if pin { builder } else { builder.unpinned() }
-            };
-            let node = Node {
-                network: Some(Network::Preprod),
-                ..Node::default()
-            };
-            let plan = match builder().prepare(&node, INDEXER_URL).await {
-                Ok(plan) => plan,
-                Err(err) => panic!("pin {pin}: the node names a network, got {err:?}"),
-            };
-            assert_eq!(plan.network, Network::Preprod, "pin {pin}");
-            assert_eq!(
-                plan.address,
-                seed().unshielded_address(Network::Preprod),
-                "pin {pin}"
-            );
-            assert_eq!(plan.chain_pin.is_some(), pin, "pin {pin}");
-            let queries = if pin { 3 } else { 1 };
-            assert_eq!(node.queries.load(Ordering::SeqCst), queries, "pin {pin}");
+        let node = Node {
+            network: Some(Network::Preprod),
+            ..Node::default()
+        };
+        let plan = match Wallet::from_seed(seed()).prepare(&node, INDEXER_URL).await {
+            Ok(plan) => plan,
+            Err(err) => panic!("the node names a network, got {err:?}"),
+        };
+        assert_eq!(plan.network, Network::Preprod);
+        assert_eq!(plan.address, seed().unshielded_address(Network::Preprod));
+        assert!(plan.chain_pin.is_some());
 
-            let silent = Node::default();
-            match builder().prepare(&silent, INDEXER_URL).await {
-                Err(WalletError::NetworkUnknown) => {}
-                Err(err) => panic!("pin {pin}: expected NetworkUnknown, got {err:?}"),
-                Ok(plan) => panic!("pin {pin}: the sync took {} from nowhere", plan.network),
-            }
+        let silent = Node::default();
+        match Wallet::from_seed(seed())
+            .prepare(&silent, INDEXER_URL)
+            .await
+        {
+            Err(WalletError::NetworkUnknown) => {}
+            Err(err) => panic!("expected NetworkUnknown, got {err:?}"),
+            Ok(plan) => panic!("the sync took {} from nowhere", plan.network),
         }
     }
 

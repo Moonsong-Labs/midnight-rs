@@ -23,7 +23,7 @@ use midnight_types::{
     SpentInputs, TransferRequest, TransferResult, UnshieldedRecipient, UnshieldedTokenType,
     WalletBalance,
 };
-use midnight_wallet_facade::{IntoWalletFacade, WalletBuilds, WalletFacade};
+use midnight_wallet_facade::{WalletBuilds, WalletFacade};
 
 /// The bound of a node query, its connect included.
 ///
@@ -110,12 +110,14 @@ impl MidnightProvider {
     /// `midnight-wallet`:
     /// ```rust,no_run
     /// # use midnight_provider::MidnightProvider;
-    /// # use midnight_wallet::Wallet;
+    /// # use midnight_wallet::{Seed, Wallet};
     /// # async fn f(phrase: &str) -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
     /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// let provider = MidnightProvider::new(NODE_URL);
-    /// let wallet = Wallet::from_mnemonic(phrase)?.sync(&provider, INDEXER_URL).await?;
+    /// let wallet = Wallet::from_seed(Seed::from_mnemonic(phrase)?)
+    ///     .sync(&provider, INDEXER_URL)
+    ///     .await?;
     /// let provider = provider.with_wallet(wallet);
     /// # Ok(())
     /// # }
@@ -223,37 +225,36 @@ impl MidnightProvider {
 
     /// Attach a wallet, and build transaction contexts from it.
     ///
-    /// A synced `Wallet` from `midnight-wallet` goes in behind a `LocalWallet`.
-    /// Anything else that implements [`WalletFacade`] and
-    /// [`WalletBuilds`] goes in as itself. To keep a handle on the
-    /// attached wallet, attach an `Arc<LocalWallet>`, or an `Arc` of your own
-    /// wallet:
+    /// The provider reaches the wallet through [`WalletFacade`] and
+    /// [`WalletBuilds`]. A synced `Wallet` from `midnight-wallet` implements
+    /// both, and so does an `Arc` of a wallet that does. To keep a handle on
+    /// the attached wallet, attach an `Arc<Wallet>`:
     ///
     /// ```rust,no_run
     /// use std::sync::Arc;
     /// use midnight_provider::MidnightProvider;
-    /// use midnight_wallet::{LocalWallet, Wallet, WalletFacade};
+    /// use midnight_wallet::{Seed, Wallet};
     ///
     /// # const INDEXER_URL: &str = "http://localhost:8088";
-    /// # async fn example(provider: MidnightProvider, phrase: &str) -> Result<(), Box<dyn std::error::Error>> {
-    /// let wallet = Arc::new(LocalWallet::new(Wallet::from_mnemonic(phrase)?.sync(&provider, INDEXER_URL).await?));
+    /// # async fn example(provider: MidnightProvider, seed: Seed) -> Result<(), Box<dyn std::error::Error>> {
+    /// let wallet = Arc::new(Wallet::from_seed(seed).sync(&provider, INDEXER_URL).await?);
     /// let provider = provider.with_wallet(Arc::clone(&wallet));
     /// let balance = wallet.balance().await;
     /// # Ok(())
     /// # }
     /// ```
     ///
-    /// The wallet serializes its own resyncs and coin watches, so the handle
+    /// The wallet serializes its own syncs and coin watches, so the handle
     /// can run them too.
     ///
     /// Every read of the wallet, such as [`Self::balance`], returns the state
     /// of the last sync or resync and does not resync. [`Self::builds`], and
     /// so every build, resyncs first. To keep the reads fresh, start
-    /// `LocalWallet::sync_in_background` on the handle, with this provider in
-    /// an `Arc` as its chain. For one fresh read, call [`Self::resync_wallet`]
+    /// `Wallet::sync_in_background` on the handle, with this provider in an
+    /// `Arc` as its chain. For one fresh read, call [`Self::resync_wallet`]
     /// before it.
-    pub fn with_wallet(mut self, wallet: impl IntoWalletFacade) -> Self {
-        let wallet = Arc::new(wallet.into_facade());
+    pub fn with_wallet(mut self, wallet: impl WalletBuilds + 'static) -> Self {
+        let wallet = Arc::new(wallet);
         self.wallet = Some(AttachedWallet {
             facade: wallet.clone(),
             builds: wallet,

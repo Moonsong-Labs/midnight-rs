@@ -24,8 +24,8 @@ pub use types::{Health, TransactionHash};
 
 // Re-export the types that `MidnightProvider`'s own signatures name, and the
 // NIGHT and DUST units, so a caller of the provider needs no separate dep for
-// them. The implementation types (`Wallet`, `LocalWallet`, `WalletBuilder`)
-// live in midnight-wallet; this crate never names them.
+// them. The implementation types (`Wallet`, `WalletBuilder`) live in
+// midnight-wallet; this crate never names them.
 pub use midnight_types::{
     BlockHash, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress, DustPublicKey,
     EncryptionPublicKey, ExtrinsicHash, HashOutput, NIGHT, Network, Nonce, Nullifier,

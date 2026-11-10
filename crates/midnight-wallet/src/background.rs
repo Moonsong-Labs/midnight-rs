@@ -1,20 +1,18 @@
-//! [`BackgroundSync`]: the handle of the task that resyncs a [`LocalWallet`]
-//! until the handle drops.
+//! [`BackgroundSync`]: the handle of the task that syncs a [`Wallet`] until
+//! the handle drops.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use midnight_types::chain_pin::ChainView;
 use midnight_types::{WalletBalance, WalletError};
-use midnight_wallet_facade::WalletFacade;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::LocalWallet;
+use crate::Wallet;
 
-/// The background sync of a [`LocalWallet`], from
-/// [`LocalWallet::sync_in_background`].
+/// The background sync of a [`Wallet`], from [`Wallet::sync_in_background`].
 ///
 /// Dropping it stops the sync at the task's next await. A pass in flight
 /// leaves the wallet at the state before the pass or at its whole commit.
@@ -22,7 +20,7 @@ use crate::LocalWallet;
 pub struct BackgroundSync {
     task: JoinHandle<()>,
     status: watch::Receiver<Option<Arc<WalletError>>>,
-    wallet: Arc<LocalWallet>,
+    wallet: Arc<Wallet>,
 }
 
 impl BackgroundSync {
@@ -116,9 +114,9 @@ impl Drop for BackgroundSync {
     }
 }
 
-/// Start the task of [`LocalWallet::sync_in_background`].
+/// Start the task of [`Wallet::sync_in_background`].
 pub(crate) fn spawn(
-    wallet: Arc<LocalWallet>,
+    wallet: Arc<Wallet>,
     chain: Arc<dyn ChainView>,
     pause: Duration,
 ) -> BackgroundSync {
@@ -136,7 +134,7 @@ pub(crate) fn spawn(
 }
 
 async fn resync_until_aborted(
-    wallet: Arc<LocalWallet>,
+    wallet: Arc<Wallet>,
     chain: Arc<dyn ChainView>,
     pause: Duration,
     status: watch::Sender<Option<Arc<WalletError>>>,
@@ -146,7 +144,7 @@ async fn resync_until_aborted(
     let mut warned: Option<String> = None;
     loop {
         tokio::time::sleep(pause).await;
-        match wallet.resync(&*chain).await {
+        match wallet.sync(&*chain).await {
             Ok(()) => {
                 if warned.take().is_some() {
                     info!("background resync committed after a failed pass");

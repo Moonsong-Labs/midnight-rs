@@ -8,11 +8,11 @@ pub enum ProviderError {
 
     /// An operation requiring a synced wallet was invoked on a provider
     /// without one. Sync a wallet
-    /// (`Wallet::from_seed(..)?.sync(&provider, indexer_url)` in
+    /// (`Wallet::from_seed(seed).sync(&provider, indexer_url)` in
     /// `midnight-wallet`) and attach it with
     /// `MidnightProvider::with_wallet`.
     #[error(
-        "provider has no wallet; sync one (`Wallet::from_seed(..)?.sync(&provider, indexer_url)`) \
+        "provider has no wallet; sync one (`Wallet::from_seed(seed).sync(&provider, indexer_url)`) \
          and attach it with .with_wallet(wallet)"
     )]
     NoWallet,

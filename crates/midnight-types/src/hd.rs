@@ -290,14 +290,6 @@ impl Seed {
     }
 }
 
-/// Clones the seed, so an API that takes `impl Into<Seed>` also takes a
-/// `&Seed` and leaves the original with the caller.
-impl From<&Seed> for Seed {
-    fn from(seed: &Seed) -> Self {
-        seed.clone()
-    }
-}
-
 impl FromStr for Seed {
     type Err = SeedError;
 
