@@ -580,9 +580,9 @@ mod queue_grows {
     use conformance::corpus::golden;
 
     /// The value that step 0 pushes.
-    pub(crate) const FIRST_PUSH: u64 = 11;
+    const FIRST_PUSH: u64 = 11;
     /// The value that step 1 pushes.
-    pub(crate) const SECOND_PUSH: u64 = 22;
+    const SECOND_PUSH: u64 = 22;
 
     /// The contract state at the JSON `pointer` of the case's golden.
     fn golden_state(pointer: &str) -> StateValue<InMemoryDB> {
@@ -597,7 +597,7 @@ mod queue_grows {
     }
 
     /// The contract state that `step` of the case leaves.
-    pub(crate) fn state_after(step: usize) -> StateValue<InMemoryDB> {
+    fn state_after(step: usize) -> StateValue<InMemoryDB> {
         golden_state(&format!("/steps/{step}/state/data"))
     }
 
