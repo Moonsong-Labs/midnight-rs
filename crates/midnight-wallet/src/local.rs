@@ -14,6 +14,7 @@ use midnight_types::{
     WalletBalance, WalletError,
 };
 use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::SyncProgress;
 use crate::background::{self, BackgroundSync};
@@ -182,8 +183,9 @@ impl Wallet {
     ///
     /// # Errors
     ///
-    /// [`WalletError::ChainMismatch`] as above, and the error of a replay that
-    /// fails. A failed sync commits nothing.
+    /// [`WalletError::ChainMismatch`] as above, the error of a replay that
+    /// fails, and [`WalletError::SyncTaskJoin`] when the runtime shuts down
+    /// during the replay. A failed sync commits nothing.
     pub async fn sync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
         let _sync = self.sync.lock().await;
         self.resync_held(chain).await
@@ -339,7 +341,16 @@ impl Wallet {
         // under a write one, so the replay in between runs with the wallet
         // free.
         let plan = self.state.read().await.resync_plan();
-        let commit = plan.run().await?;
+        // A task of its own, so the runtime polls the replay from the top of
+        // a stack: a sync inside a fill overflows a 2 MiB debug-build thread.
+        let replay = AbortOnDropHandle::new(tokio::spawn(plan.run()));
+        let commit = match replay.await {
+            Ok(commit) => commit?,
+            Err(error) => match error.try_into_panic() {
+                Ok(panic) => std::panic::resume_unwind(panic),
+                Err(error) => return Err(WalletError::SyncTaskJoin(error.to_string())),
+            },
+        };
         self.state.write().await.commit_resync(commit)?;
 
         // Move the pin forward with the commit, so a wallet that runs for a
