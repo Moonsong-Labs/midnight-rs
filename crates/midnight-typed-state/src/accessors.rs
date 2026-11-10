@@ -134,11 +134,11 @@ where
 }
 
 /// The slot of a `List` node that holds its first element.
-pub(crate) const LIST_HEAD: usize = 0;
+const LIST_HEAD: usize = 0;
 /// The slot of a `List` node that holds the node of the remaining elements.
-pub(crate) const LIST_TAIL: usize = 1;
+const LIST_TAIL: usize = 1;
 /// The slot of a `List` node that holds the element count.
-pub(crate) const LIST_LENGTH: usize = 2;
+const LIST_LENGTH: usize = 2;
 
 /// Typed accessor for a Midnight contract list field.
 ///
