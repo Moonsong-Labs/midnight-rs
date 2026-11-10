@@ -752,8 +752,7 @@ mod constructor_shapes {
 
     use crate::{coin_vault, plain_constructor};
 
-    /// The generated deploy builds for each constructor shape, with no
-    /// `Provider` bound.
+    /// The generated deploy builds for each constructor shape.
     #[expect(
         dead_code,
         reason = "the build checks the generated types, and a deploy needs a devnet"

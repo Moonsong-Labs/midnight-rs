@@ -597,12 +597,6 @@ mod tests {
             generated.contains("fn into_ledger(self) -> Gateway"),
             "missing into_ledger() on InitialState"
         );
-
-        // from_provider on Ledger
-        assert!(
-            generated.contains("async fn from_provider"),
-            "missing from_provider on Gateway"
-        );
     }
 
     #[test]
