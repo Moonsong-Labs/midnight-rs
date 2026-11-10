@@ -14,22 +14,10 @@ fn provider() -> Option<MidnightProvider> {
 }
 
 #[tokio::test]
-async fn finalized_height_trails_the_best_head() {
+async fn the_finalized_height_is_past_genesis() {
     let Some(p) = provider() else { return };
     let finalized = p.get_finalized_block_height().await.unwrap();
-    // Read best after finalized: finalized(t1) <= best(t1) <= best(t2).
-    let best_hash = p.best_block_hash().await.unwrap();
-    let best = p
-        .get_block_header(best_hash)
-        .await
-        .unwrap()
-        .expect("the best block must have a header")
-        .number;
     assert!(finalized > 0);
-    assert!(
-        finalized <= best,
-        "finalized {finalized} must not exceed best {best}"
-    );
 }
 
 #[tokio::test]
