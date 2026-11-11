@@ -14,7 +14,8 @@ use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
 use midnight_onchain_runtime::ops::{Key, Op, VersionedLogItem};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{
-    AlignedValue, ContractState, InMemoryDB, MerkleTree, StateValue, StorageArray, StorageHashMap,
+    AlignedValue, AlignedValueChecked, ContractState, InMemoryDB, MerkleTree, StateValue,
+    StorageArray, StorageHashMap,
 };
 
 use compact_codegen::ir::{self, Type};
@@ -1898,7 +1899,14 @@ fn build_op(
         }
         N::Push => Op::Push {
             storage: flag(i, "storage"),
-            value: push_value(ctx, operand(i, "value")?)?,
+            value: push_value(ctx, operand(i, "value")?)?
+                .try_into_checked()
+                .map_err(|()| {
+                    InterpreterError::TypeError(format!(
+                        "{}: value is not in the canonical form that the ledger accepts",
+                        i.op
+                    ))
+                })?,
         },
         N::Addi => Op::Addi {
             immediate: resolve_immediate(ctx, &i.op, operand(i, "immediate")?)?,
@@ -2020,7 +2028,15 @@ fn path_key(ctx: &mut ExecContext, entry: &ir::Operand) -> Result<Key, Interpret
     match entry {
         ir::Operand::Stack => Ok(Key::Stack),
         ir::Operand::Align { .. } | ir::Operand::Expr(_) => {
-            operand_aligned(ctx, entry).map(Key::Value)
+            let value = operand_aligned(ctx, entry)?;
+            AlignedValueChecked::try_from(value)
+                .map(Key::Value)
+                .map_err(|()| {
+                    InterpreterError::TypeError(
+                        "idx path key is not in the canonical form that the ledger accepts"
+                            .to_string(),
+                    )
+                })
         }
         other => Err(InterpreterError::Unsupported(format!(
             "path element {other:?}"
@@ -2895,7 +2911,7 @@ mod tests {
         // Uint<0..65535> is a 2-byte atom, not the type-less 8-byte default.
         assert_eq!(
             path_key(&mut ctx, &ir::Operand::Expr(Box::new(var("k")))).expect("encode key"),
-            Key::Value(AlignedValue::from(7u16))
+            Key::Value(AlignedValueChecked::try_from(AlignedValue::from(7u16)).unwrap())
         );
     }
 
@@ -2926,7 +2942,7 @@ mod tests {
         };
         assert_eq!(
             path_key(&mut ctx, &key).expect("a tuple path key"),
-            Key::Value(inserted)
+            Key::Value(AlignedValueChecked::try_from(inserted).unwrap())
         );
     }
 
