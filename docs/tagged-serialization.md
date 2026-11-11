@@ -82,6 +82,6 @@ Binary format:
 
 ## How the node RPC returns state
 
-The `midnight_queryContractState` response uses `tagged_serialize` for individual field values. The `midnight_contractState` response is a hex-encoded `tagged_serialize`'d full `ContractState`.
+The `midnight_contractState` response is a hex-encoded `tagged_serialize`'d full `ContractState`.
 
 `state::fetch_state()` decodes the `midnight_contractState` hex string.

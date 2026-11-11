@@ -61,7 +61,6 @@ impl<'a> EmitCtxt<'a> {
             &ir_constants,
             self.info,
         );
-        let lazy_wrapper = ledger::emit_lazy_ledger_wrapper(&self.info.ledger, self.contract_name);
         let pure_circuits = circuits::emit_pure_circuits(&self.info.circuits, self.contract_name);
         let simulator = ledger::emit_simulator(self.info, self.contract_name);
 
@@ -89,7 +88,7 @@ impl<'a> EmitCtxt<'a> {
                 ListAccessor, MapAccessor, MerkleTree, MerkleTreeAccessor, SetAccessor,
                 StateError, StateValue, StorageArray, StorageHashMap, TransientFr, Uint,
                 ValueSlice, Vector,
-                cell_as, get_field_path, hex, lazy, serde, serde_json, tagged_deserialize,
+                cell_as, get_field_path, hex, serde, serde_json, tagged_deserialize,
             };
         };
 
@@ -104,12 +103,6 @@ impl<'a> EmitCtxt<'a> {
 
             #pure_circuits
             #simulator
-
-            mod __lazy_query {
-                use super::*;
-                #lazy_wrapper
-            }
-            pub use __lazy_query::*;
         }
     }
 }
@@ -390,25 +383,6 @@ mod tests {
 
         // cell_as used in accessor bodies
         assert!(generated.contains("cell_as::<"));
-
-        // Lazy query wrapper — map fields get key-lookup accessors
-        assert!(
-            generated.contains("pub struct GatewayQuery"),
-            "missing lazy GatewayQuery struct"
-        );
-        assert!(
-            generated.contains("async fn threshold("),
-            "missing async threshold accessor in GatewayQuery"
-        );
-        // Map accessor takes a key argument
-        assert!(
-            generated.contains("async fn egress_jobs("),
-            "missing async egress_jobs accessor in GatewayQuery"
-        );
-        assert!(
-            generated.contains("value_to_query_key"),
-            "missing value_to_query_key call for map key lookup"
-        );
     }
 
     /// `ContractAddress` has the same shape as the standard library's coin key,
@@ -450,24 +424,6 @@ mod tests {
         assert!(generated.contains("pub struct Counter"));
         assert!(generated.contains("fn new("));
         assert!(generated.contains("from_hex"));
-
-        // Lazy query wrapper (behind cfg(feature = "provider"))
-        assert!(
-            generated.contains("pub struct CounterQuery"),
-            "missing lazy CounterQuery struct"
-        );
-        assert!(
-            generated.contains("async fn round("),
-            "missing async round accessor in CounterQuery"
-        );
-        assert!(
-            generated.contains("query_contract_state"),
-            "missing query_contract_state call in lazy accessor"
-        );
-        assert!(
-            generated.contains("decode_state_value"),
-            "missing decode_state_value call in lazy accessor"
-        );
     }
 
     #[test]
@@ -504,26 +460,6 @@ mod tests {
         assert!(generated.contains("MerkleTreeAccessor"));
         assert!(generated.contains("fn committed_votes("));
         assert!(generated.contains("fn eligible_voters("));
-
-        // Lazy query wrapper
-        assert!(
-            generated.contains("pub struct ElectionQuery"),
-            "missing lazy ElectionQuery struct"
-        );
-        // Cell/counter fields should have lazy accessors
-        assert!(
-            generated.contains("async fn authority("),
-            "missing async authority accessor in ElectionQuery"
-        );
-        assert!(
-            generated.contains("async fn tally_yes("),
-            "missing async tally_yes accessor in ElectionQuery"
-        );
-        // Set fields should have lazy membership accessors
-        assert!(
-            generated.contains("async fn committed("),
-            "missing async committed set accessor in ElectionQuery"
-        );
     }
 
     #[test]
@@ -580,20 +516,6 @@ mod tests {
 
         // Wrapper struct
         assert!(generated.contains("pub struct ManyFields"));
-
-        // Lazy query wrapper with B-tree path fields
-        assert!(
-            generated.contains("pub struct ManyFieldsQuery"),
-            "missing lazy ManyFieldsQuery struct"
-        );
-        // All 16 fields are cells, so all should have lazy accessors
-        for i in 1..=16 {
-            let field_name = format!("async fn f{i:02}(");
-            assert!(
-                generated.contains(&field_name),
-                "missing async lazy accessor for f{i:02}"
-            );
-        }
     }
 
     #[test]
@@ -706,11 +628,5 @@ mod tests {
         assert!(generated.contains("fn new("));
         // No FIELD_ constants for empty ledger
         assert!(!generated.contains("FIELD_"));
-
-        // Lazy query wrapper still generated (but with no accessors)
-        assert!(
-            generated.contains("pub struct EmptyQuery"),
-            "missing lazy EmptyQuery struct"
-        );
     }
 }
