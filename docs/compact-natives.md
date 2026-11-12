@@ -4,17 +4,14 @@ Reference for everyone touching the Compact interpreter (`crates/compact/interpr
 
 ## Authoritative source
 
-The complete, canonical list lives in the Compact compiler, not in `midnight-ledger`. It is two `declare-native-entry` tables of the compiler fork, at the commit that `COMPACT_REV` in the `Makefile` names:
-
-- [`compiler/midnight-natives.ss`](https://github.com/RomarQ/compact/blob/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/compiler/midnight-natives.ss) declares the natives of every compile.
-- [`compiler/zkir-v3-natives.ss`](https://github.com/RomarQ/compact/blob/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/compiler/zkir-v3-natives.ss) declares the other natives of every compile, and the native types of the secp256k1, secp256r1 and Curve25519 curves.
+The complete, canonical list lives in the Compact compiler, not in `midnight-ledger`. It is the `declare-native-entry` table [`compiler/midnight-natives.ss`](https://github.com/RomarQ/compact/blob/536ef6dd63f15f9103ea70aa4c5ed19432c80c0c/compiler/midnight-natives.ss) of the compiler fork, at the commit that `COMPACT_REV` in the `Makefile` names. The table declares the natives of every compile, and the native types of the Jubjub, secp256k1, secp256r1 and Curve25519 curves.
 
 Each entry has one of two kinds:
 
 - `declare-native-entry circuit NAME "__compactRuntime.SYMBOL" (args...) RetType`: a pure function (hashing, EC math).
 - `declare-native-entry witness NAME "__compactRuntime.SYMBOL" (args...) RetType`: an effectful primitive that reads or mutates the circuit's Zswap/coin context.
 
-`NAME` is the source name, and it is not unique: the ZKIR v3 table declares `ecAdd`, `ecMul` and `ecMulGenerator` again for each foreign curve, and `neg` and `inv` for each foreign field. `SYMBOL` is unique. The analyzed IR keeps each entry as a native declaration with its symbol (`entry`), and the interpreter dispatches a call on that symbol (`Program::runtime_name`).
+`NAME` is the source name, and it is not unique: the table declares `ecAdd`, `ecMul` and `ecMulGenerator` again for each foreign curve, and `neg` and `inv` for each foreign field. `SYMBOL` is unique. The analyzed IR keeps each entry as a native declaration with its symbol (`entry`), and the interpreter dispatches a call on that symbol (`Program::runtime_name`).
 
 `midnight-ledger`, `onchain-runtime`, and `onchain-vm` have no enum of these names. They operate one level below Compact, at the VM op (`Op`) and effects layer; by the time anything reaches the ledger the compiler has already lowered these calls into VM op sequences plus, for the witness natives, a `call-witness` marker carrying the bare string name. That is why the interpreter dispatches on a string (see `eval_witness_call` and `try_builtin_typed`), and why there is no upstream enum to import.
 
@@ -25,11 +22,11 @@ A name that shows up in a circuit's lowered IR reaches one of four places. Only 
 1. **Native circuits (pure builtins).** The `declare-native-entry circuit` primitives. In our interpreter these are `try_builtin_typed(symbol, args, arg_types)` arms.
 2. **Native witnesses.** The `declare-native-entry witness` primitives (`ownPublicKey`, `createZswapInput`, `createZswapOutput`). These are effectful: they read the caller's key or capture a coin to add to the transaction. In our interpreter they are modelled by the `WitnessNative` enum and matched exhaustively in `eval_witness_call`, because routing them to the witness provider or `try_builtin_typed` would error.
 3. **Kernel ledger methods.** `kernel.self()`, `kernel.mintShielded(...)`, `kernel.claimZswapCoinSpend(...)`, `kernel.claimZswapCoinReceive(...)`, and friends are methods on the runtime-managed `Kernel` ledger type. They are not natives; the compiler lowers them to `ledger-query` op sequences, which the interpreter runs through `exec_ledger_query` (the same path as any other ledger read/write). `kernel.self()` is the one context read that needs the real contract address injected.
-4. **High-level standard-library circuits.** `mintShieldedToken`, `sendShielded`, `receiveShielded`, `sendImmediateShielded`, `sendUnshielded`, `receiveUnshielded`, etc. (in [`compiler/standard-library.compact`](https://github.com/RomarQ/compact/blob/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/compiler/standard-library.compact) of the fork) are ordinary Compact circuits. They are compiled inline and decompose into the primitives above. They need no interpreter support of their own; they work as soon as the natives and kernel methods they call do. For example `mintShieldedToken` lowers to `tokenType` (persistentCommit) plus `kernel.self()`, `kernel.mintShielded`, `createZswapOutput`, `coinCommitment` (persistentHash), `kernel.claimZswapCoinSpend`, and the mint-to-self `kernel.claimZswapCoinReceive` branch.
+4. **High-level standard-library circuits.** `mintShieldedToken`, `sendShielded`, `receiveShielded`, `sendImmediateShielded`, `sendUnshielded`, `receiveUnshielded`, etc. (in [`compiler/standard-library.compact`](https://github.com/RomarQ/compact/blob/536ef6dd63f15f9103ea70aa4c5ed19432c80c0c/compiler/standard-library.compact) of the fork) are ordinary Compact circuits. They are compiled inline and decompose into the primitives above. They need no interpreter support of their own; they work as soon as the natives and kernel methods they call do. For example `mintShieldedToken` lowers to `tokenType` (persistentCommit) plus `kernel.self()`, `kernel.mintShielded`, `createZswapOutput`, `coinCommitment` (persistentHash), `kernel.claimZswapCoinSpend`, and the mint-to-self `kernel.claimZswapCoinReceive` branch.
 
 ## How the reference TypeScript runtime handles these
 
-The reference path never dispatches on native names and has no native table of its own. For each native, the compiler emits TypeScript that calls the JS symbol named in the second field of the `declare-native-entry` (`__compactRuntime.SYMBOL`). `__compactRuntime` is the runtime package (the source is [`runtime/src/`](https://github.com/RomarQ/compact/tree/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/runtime/src) of the fork), which implements every primitive: the pure ones in `built-ins.ts`, the Zswap witnesses in `zswap.ts`. A consumer loads the compiler-generated contract JS and runs it; the runtime supplies the implementations by direct function call.
+The reference path never dispatches on native names and has no native table of its own. For each native, the compiler emits TypeScript that calls the JS symbol named in the second field of the `declare-native-entry` (`__compactRuntime.SYMBOL`). `__compactRuntime` is the runtime package (the source is [`runtime/src/`](https://github.com/RomarQ/compact/tree/536ef6dd63f15f9103ea70aa4c5ed19432c80c0c/runtime/src) of the fork), which implements every primitive: the pure ones in `built-ins.ts`, the Zswap witnesses in `zswap.ts`. A consumer loads the compiler-generated contract JS and runs it; the runtime supplies the implementations by direct function call.
 
 So that path gets "all of them, never missing one" for free: the compiler is the single source that both defines the natives and wires each call straight to its runtime implementation. The runtime's `createZswapOutput`, for instance, does exactly what our interpreter's special-case does (capture `(coin, recipient)`, insert the coin commitment, append to the local Zswap outputs); `ownPublicKey` just returns the caller's coin public key from the circuit context.
 
@@ -69,11 +66,7 @@ The source name and the symbol of each native in this table are the same. Every 
 | `createZswapInput` | Void | implemented | captured into `ExecutionResult.zswap_inputs`; the call/deploy path builds a contract-owned `Input`, or a `Transient` when it pairs with a same-call self-output (as `receiveShielded` + `sendImmediateShielded` do). See `WitnessNative::CreateZswapInput` |
 | `createZswapOutput` | Void | implemented | captured into `ExecutionResult.zswap_outputs`; see `WitnessNative::CreateZswapOutput` |
 
-The interpreter implements every native of `midnight-natives.ss`.
-
-### ZKIR v3 natives (`zkir-v3-natives.ss`)
-
-Every compile declares these natives. The compiler writes only ZKIR v3, so every contract gets `verifier-key[v7]` keys, which only ledger 9 accepts.
+### Foreign-curve and SHA-512 natives
 
 | Native | Symbols | Returns | Status |
 | --- | --- | --- | --- |
@@ -84,7 +77,7 @@ Every compile declares these natives. The compiler writes only ZKIR v3, so every
 | `curve25519PointX`, `curve25519PointY` | the same | Curve25519Base | implemented |
 | `ecAdd`, `ecMul`, `ecMulGenerator` | `{secp256k1,secp256r1,curve25519}{Add,Mul,MulGenerator}` | the curve's point | implemented |
 
-The interpreter implements every native of `zkir-v3-natives.ss`.
+The interpreter implements every native of `midnight-natives.ss`.
 
 The foreign-curve natives compute with the `k256`, `p256` and `curve25519` modules of `midnight-curves`, as ZKIR v3 does. The interpreter holds a foreign field element or point as an `AlignedValue` in the encoding that the compiler gives it. The value types in `compact_runtime` own that encoding: `Secp256k1Base`, `Secp256r1Point`, `Curve25519Scalar` and the others, one for each native type. The `+`, `-` and `*` of a foreign field are not natives: the IR types the operation with the field, and the interpreter computes it in that field. They match the `secp256k1BaseAdd` family of the TypeScript runtime.
 
@@ -94,6 +87,6 @@ A conditional gives `inv` and the coordinate natives of secp256k1 and secp256r1 
 
 ## Keeping this in sync
 
-`midnight-natives.ss` and `zkir-v3-natives.ss` are the source of truth and change only when the Compact compiler is bumped. After a compiler bump, diff both files: any new `declare-native-entry` is a new primitive a contract can emit, and therefore a new row here and a potential interpreter gap.
+`midnight-natives.ss` is the source of truth and changes only when the Compact compiler is bumped. After a compiler bump, diff the file: any new `declare-native-entry` is a new primitive a contract can emit, and therefore a new row here and a potential interpreter gap.
 
-This is guarded by the test `every_compact_native_is_handled_or_known_unimplemented` (in `crates/compact/interpreter/src/lib.rs`). It reads the runtime symbols from `COMPACT_NATIVES`, a list in that test. It asserts that each symbol is either implemented (`try_builtin_typed` arm or `WitnessNative`) or in an explicit `KNOWN_UNIMPLEMENTED` allowlist, so a native can never be silently dropped. `make check-natives` compares that list with both tables at `COMPACT_REV`, and the compile job of the CI workflow runs it. So a compiler bump that adds or removes a native fails there until the list is updated. The unit test then names each new native that has no implementation. Update this doc in the same change.
+This is guarded by the test `every_compact_native_is_handled_or_known_unimplemented` (in `crates/compact/interpreter/src/lib.rs`). It reads the runtime symbols from `COMPACT_NATIVES`, a list in that test. It asserts that each symbol is either implemented (`try_builtin_typed` arm or `WitnessNative`) or in an explicit `KNOWN_UNIMPLEMENTED` allowlist, so a native can never be silently dropped. `make check-natives` compares that list with the table at `COMPACT_REV`, and the compile job of the CI workflow runs it. So a compiler bump that adds or removes a native fails there until the list is updated. The unit test then names each new native that has no implementation. Update this doc in the same change.
