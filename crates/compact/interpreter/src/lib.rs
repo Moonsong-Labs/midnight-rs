@@ -2608,8 +2608,8 @@ mod tests {
     /// See `docs/compact-natives.md`.
     #[test]
     fn every_compact_native_is_handled_or_known_unimplemented() {
-        // The runtime symbols of the compiler's native tables at COMPACT_REV,
-        // which `make check-natives` compares with the tables. A call
+        // The runtime symbols of the compiler's native table at COMPACT_REV,
+        // which `make check-natives` compares with the table. A call
         // dispatches on this symbol.
         const COMPACT_NATIVES: &[&str] = &[
             "constructJubjubPoint",

@@ -449,7 +449,7 @@ A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the
 | `subxt` | crates.io | Substrate RPC (including `midnight_contractState`), extrinsic submission, watch streams, reconnecting client |
 | `tokio-tungstenite` | crates.io | Indexer WebSocket subscriptions |
 
-The ledger crates come from crates.io at the versions that the helpers' midnight-node release names, so each one has a single instance, and a crate that depends on midnight-rs needs no `[patch.crates-io]` table. Bump the ledger pins and the helpers' tag together, as the root `Cargo.toml` says.
+The ledger crates come from crates.io at the versions that the helpers' midnight-node release names, so each one has a single instance, and a crate that depends on midnight-rs needs no `[patch.crates-io]` table. Bump the ledger pins and the helpers' tag together, as the root `Cargo.toml` says. `midnight-zkir` 3.x is the exception: it follows the compactc at `COMPACT_REV`.
 
 ## Documentation index
 

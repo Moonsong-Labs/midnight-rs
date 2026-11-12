@@ -108,7 +108,10 @@ midnight-coin-structure = { version = "=3.0.1" }
 midnight-curves = { version = "=0.3.1" }
 # Pinned with midnight-curves: its `CircuitField` impls are on those types.
 midnight-circuits = { version = "=7.3.0" }
-midnight-zkir-v3 = { package = "midnight-zkir", version = "=3.2.0" }
+# Not a version that the helpers' release names: the zkir of the compactc at
+# COMPACT_REV in the Makefile, because a proving key fixes the circuit layout
+# of the zkir that made it.
+midnight-zkir-v3 = { package = "midnight-zkir", version = "=3.2.1" }
 midnight-serialize = { version = "=1.2.1" }
 midnight-base-crypto = { version = "=1.1.1" }
 midnight-storage = { version = "=3.0.0" }

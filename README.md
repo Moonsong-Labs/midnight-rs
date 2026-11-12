@@ -115,7 +115,7 @@ Run these commands from the root of your crate. They compile the counter contrac
 
 ```bash
 curl -O https://raw.githubusercontent.com/Moonsong-Labs/midnight-rs/main/devnet/contracts/counter/counter.compact
-docker run --rm -v "$PWD:/src" -w /src ghcr.io/romarq/compactc:c7a8d2a21593d98d003a54bf5937375ba9aa8d66 \
+docker run --rm -v "$PWD:/src" -w /src ghcr.io/romarq/compactc:536ef6dd63f15f9103ea70aa4c5ed19432c80c0c \
   "compactc --analyzed-ir counter.compact compiled/counter"
 ```
 

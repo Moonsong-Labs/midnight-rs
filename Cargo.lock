@@ -788,7 +788,7 @@ dependencies = [
  "midnight-onchain-runtime 4.0.1",
  "midnight-transient-crypto 3.0.1",
  "midnight-typed-state",
- "midnight-zkir 3.2.0",
+ "midnight-zkir 3.2.1",
  "num-bigint",
  "sha2 0.10.9",
  "sha3 0.11.0",
@@ -3281,7 +3281,7 @@ dependencies = [
  "midnight-transient-crypto 2.2.0",
  "midnight-transient-crypto 3.0.1",
  "midnight-zkir 2.2.0",
- "midnight-zkir 3.2.0",
+ "midnight-zkir 3.2.1",
  "midnight-zswap 9.0.1",
  "rand 0.8.6",
  "rayon",
@@ -3541,7 +3541,7 @@ dependencies = [
  "midnight-provider",
  "midnight-types",
  "midnight-wallet",
- "midnight-zkir 3.2.0",
+ "midnight-zkir 3.2.1",
  "reqwest 0.12.28",
  "serde_json",
  "sha2 0.10.9",
@@ -3857,9 +3857,9 @@ dependencies = [
 
 [[package]]
 name = "midnight-zkir"
-version = "3.2.0"
+version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af98c3ac618f44a609df4963db4be69bed74123a3111b5475e22a81cec4ad857"
+checksum = "4aaeb48ea50efc4ee1dfdeed72ab6f38a64a6bb76b05d95851306a8f4cfd5202"
 dependencies = [
  "anyhow",
  "const-hex",

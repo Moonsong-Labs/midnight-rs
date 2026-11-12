@@ -12,10 +12,10 @@ The sources come from the compiler fork [`RomarQ/compact`](https://github.com/Ro
 
 | Fixture    | Source origin |
 |------------|---------------|
-| `bboard`   | [`test-center/test-contracts/bboard.compact`](https://github.com/RomarQ/compact/blob/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/test-center/test-contracts/bboard.compact) |
-| `counter`  | [`examples/counter.compact`](https://github.com/RomarQ/compact/blob/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/examples/counter.compact) |
-| `election` | [`examples/election.compact`](https://github.com/RomarQ/compact/blob/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/examples/election.compact) |
-| `tiny`     | [`examples/tiny.compact`](https://github.com/RomarQ/compact/blob/c7a8d2a21593d98d003a54bf5937375ba9aa8d66/examples/tiny.compact) |
+| `bboard`   | [`test-center/test-contracts/bboard.compact`](https://github.com/RomarQ/compact/blob/536ef6dd63f15f9103ea70aa4c5ed19432c80c0c/test-center/test-contracts/bboard.compact) |
+| `counter`  | [`examples/counter.compact`](https://github.com/RomarQ/compact/blob/536ef6dd63f15f9103ea70aa4c5ed19432c80c0c/examples/counter.compact) |
+| `election` | [`examples/election.compact`](https://github.com/RomarQ/compact/blob/536ef6dd63f15f9103ea70aa4c5ed19432c80c0c/examples/election.compact) |
+| `tiny`     | [`examples/tiny.compact`](https://github.com/RomarQ/compact/blob/536ef6dd63f15f9103ea70aa4c5ed19432c80c0c/examples/tiny.compact) |
 
 Only the sources are committed.
 

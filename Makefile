@@ -26,7 +26,9 @@ CARGO ?= cargo
 #    crates/compact/bindgen-macro/tests/ui/fixtures/unknown-type.sexp.
 # 5. Replace the old commit in README.md, docs/compact-natives.md and
 #    crates/midnight-contract/tests/fixtures/README.md.
-COMPACT_REV    := c7a8d2a21593d98d003a54bf5937375ba9aa8d66
+# 6. Pin midnight-zkir-v3 in Cargo.toml to the version of the zkir-v3 input
+#    in the fork's flake.nix.
+COMPACT_REV    := 536ef6dd63f15f9103ea70aa4c5ed19432c80c0c
 COMPACTC_IMAGE := ghcr.io/romarq/compactc:$(COMPACT_REV)
 # The cache of public parameters that key generation reads and fills, in the
 # fall-back order of the SDK prover, so the two share one cache. Set
@@ -455,20 +457,19 @@ goldens: fixtures
 	echo "OK: conformance goldens written"
 
 # Check that COMPACT_NATIVES, in the native check of the interpreter's unit
-# tests, holds the runtime symbols of the compiler's native tables at
+# tests, holds the runtime symbols of the compiler's native table at
 # COMPACT_REV (needs curl). The symbol, not the source name, identifies a
-# native: the ZKIR v3 table declares `ecAdd` again for each foreign curve.
+# native: the table declares `ecAdd` again for each foreign curve.
 check-natives:
 	@set -e; \
-	base='https://raw.githubusercontent.com/RomarQ/compact/$(COMPACT_REV)/compiler'; \
 	tmp="$$(mktemp -d)"; \
-	curl -fsSL "$$base/midnight-natives.ss" "$$base/zkir-v3-natives.ss" \
+	curl -fsSL 'https://raw.githubusercontent.com/RomarQ/compact/$(COMPACT_REV)/compiler/midnight-natives.ss' \
 		| grep -o '"__compactRuntime\.[A-Za-z0-9_]*"' \
 		| sed 's/^"__compactRuntime\.//; s/"$$//' | LC_ALL=C sort -u > "$$tmp/compiler"; \
 	sed -n '/const COMPACT_NATIVES/,/];/p' $(NATIVES_TEST) \
 		| grep -o '"[A-Za-z0-9_]*"' | tr -d '"' | LC_ALL=C sort -u > "$$tmp/test"; \
 	if [ ! -s "$$tmp/compiler" ] || [ ! -s "$$tmp/test" ]; then \
-		echo "no native symbols read from the compiler tables or from $(NATIVES_TEST)"; exit 1; \
+		echo "no native symbols read from the compiler table or from $(NATIVES_TEST)"; exit 1; \
 	fi; \
 	if ! cmp -s "$$tmp/compiler" "$$tmp/test"; then \
 		echo "COMPACT_NATIVES in $(NATIVES_TEST) does not match the compiler at COMPACT_REV."; \
