@@ -12,7 +12,7 @@ use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::{Health, PendingTx, Prover, Provider, ProviderError, submit};
+use crate::{Health, PendingTx, Prover, ProviderError, submit};
 use midnight_helpers::LedgerParameters;
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_private_state::PrivateStateProvider;
@@ -50,8 +50,8 @@ struct NodeConnection {
     client: OnlineClient<subxt::SubstrateConfig>,
 }
 
-/// A [`Provider`] backed by a node WebSocket connection for direct RPC
-/// communication. With a wallet, it also fills, funds, proves, signs and
+/// A Midnight node client, backed by a node WebSocket connection for direct
+/// RPC communication. With a wallet, it also fills, funds, proves, signs and
 /// sends transactions.
 ///
 /// `W` is the wallet that [`Self::with_wallet`] attached, or `()` with none.
@@ -390,17 +390,6 @@ impl<W: MaybeWallet> MidnightProvider<W> {
     }
 }
 
-#[async_trait]
-impl<W: Send + Sync> Provider for MidnightProvider<W> {
-    async fn get_contract_state(
-        &self,
-        address: &str,
-        at: Option<BlockHash>,
-    ) -> Result<Option<String>, ProviderError> {
-        self.get_state_from_node(address, at).await
-    }
-}
-
 pub(crate) fn fee_less_refusal() -> ProviderError {
     ProviderError::Transaction(
         "the transaction pays no fee, so the node refuses it; hand the bytes of its fill \
@@ -484,7 +473,7 @@ impl<W> MidnightProvider<W> {
     /// height).
     ///
     /// A read given no block hash, such as
-    /// [`get_state_from_node`](Self::get_state_from_node) with `None`, reads
+    /// [`get_contract_state`](Self::get_contract_state) with `None`, reads
     /// at the best block at the moment of that read. Pass this hash to such
     /// reads to keep two of them at one block.
     pub async fn best_block_hash(&self) -> Result<BlockHash, ProviderError> {
@@ -526,7 +515,7 @@ impl<W> MidnightProvider<W> {
     /// unfinalized forks exist at it.
     ///
     /// A finalized height's hash pins historical reads such as
-    /// [`get_state_from_node`](Self::get_state_from_node).
+    /// [`get_contract_state`](Self::get_contract_state).
     pub async fn get_block_hashes_by_height(
         &self,
         height: u64,
@@ -715,6 +704,9 @@ impl<W> MidnightProvider<W> {
     /// Fetch full contract state via the node RPC (`midnight_contractState`),
     /// at `at_block_hash`, or at the node's best block when it is `None`.
     ///
+    /// A reorg can replace a best block, so pass a finalized block hash for
+    /// state that cannot change.
+    ///
     /// Returns the hex-encoded serialized contract state, or `None` if no
     /// contract exists at `address` in that block.
     ///
@@ -722,7 +714,7 @@ impl<W> MidnightProvider<W> {
     ///
     /// [`ProviderError::Rpc`] when the node cannot be reached or refuses the
     /// read, for example for a block it does not know or no longer holds.
-    pub async fn get_state_from_node(
+    pub async fn get_contract_state(
         &self,
         address: &str,
         at_block_hash: Option<BlockHash>,

@@ -84,15 +84,6 @@ pub(crate) fn emit_ledger_wrapper(
                 Ok(Self::new(tagged_deserialize(bytes.as_slice())?))
             }
 
-            /// Fetch the contract state at the node's best block from a provider and wrap it.
-            pub async fn from_provider<P: midnight_contract::Provider>(
-                provider: &P,
-                address: &str,
-            ) -> Result<Self, midnight_contract::ContractError> {
-                let state = midnight_contract::state::fetch_state(provider, address, None).await?;
-                Ok(Self::new(state))
-            }
-
             #state_accessor
 
             #(#accessors)*

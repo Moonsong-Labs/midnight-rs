@@ -260,7 +260,7 @@ A wait fails with `ContractError::TransactionFailed` when the chain did not appl
 | Crate | Description |
 |---|---|
 | `midnight-core` | The crate to depend on. It re-exports the SDK as the modules `provider`, `wallet`, `contract` and `crypto` |
-| `midnight-provider` | `Provider` trait and `MidnightProvider`: node RPC, and the transactions that the attached `MidnightWallet` funds and signs |
+| `midnight-provider` | `MidnightProvider`: node RPC, and the transactions that the attached `MidnightWallet` funds and signs |
 | `midnight-wallet` | `Wallet` state machine: sync, balances, funding and signing as a `MidnightWallet`, Dust, address derivation |
 | `midnight-indexer-client` | GraphQL client for the Midnight indexer API, which the wallet sync uses |
 | `midnight-crypto` | Re-exports `midnight-base-crypto`, `midnight-curves` and `midnight-transient-crypto` as modules |

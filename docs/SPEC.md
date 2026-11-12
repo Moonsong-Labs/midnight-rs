@@ -27,7 +27,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     └── interpreter / runtime  re-exports of compact-interpreter and compact-runtime
   │
   ├── midnight-provider          network entrypoint; wallet reached only through MidnightWallet
-  │     ├── MidnightProvider<W>  Provider impl; prepare, send_tx_envelope, the node reads
+  │     ├── MidnightProvider<W>  prepare, send_tx_envelope, the node reads
   │     ├── pipeline.rs          send_transaction, fill: fill from node queries, then fund, prove
   │     │                        and sign; merge_transactions
   │     ├── prover.rs            Prover: local, remote, or custom (test-util)
@@ -100,7 +100,6 @@ midnight-core                    meta-crate; re-exports the public API
 | Type | Crate | Role |
 |---|---|---|
 | `MidnightProvider<W>` | provider | Network entry. Holds node URL, the attached wallet `W` (or `()` with none), the proof backends and the optional private-state store. It calls the wallet only through `MidnightWallet`. |
-| `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | One synced wallet, not `Clone`. It locks its own state, so a `&Wallet` serves every call and an `Arc<Wallet>` shares it. It runs the indexer replays of a sync and a rescan. It implements `MidnightWallet`. |
 | `MidnightWallet` | types | The trait that a provider funds and signs through: `shielded_recipient`, `fund_transaction`, `sign_transaction`. Implemented for `&T` and `Arc<T>`. Both `midnight-wallet` and `midnight-provider` depend on `midnight-types`, and neither depends on the other. |
 | `FilledTx` / `FundedTx` / `ProvenTx` / `TxEnvelope` | types | The stages of a transaction: filled by the provider, funded by the wallet, proven by the provider, signed by the wallet. Each from `FundedTx` on carries the reservation of what the wallet spends, and a drop of an unsent one hands it back. |
@@ -190,11 +189,10 @@ A contract deployed before the fork keeps its `verifier-key[v6]` keys, and ledge
 
 ### Query state
 
-One node RPC, `midnight_contractState`, serves the whole state. `MidnightProvider` exposes it as `get_state_from_node`, and its `Provider::get_contract_state` forwards to it:
+One node RPC, `midnight_contractState`, serves the whole state. `MidnightProvider` exposes it as `get_contract_state`:
 
 ```
-Provider.get_contract_state(address, at)              → hex string   // at = None: the best block
-MidnightProvider.get_state_from_node(address, at)     → hex string
+MidnightProvider.get_contract_state(address, at)      → hex string   // at = None: the best block
   → hex decode → tagged_deserialize → ContractState<InMemoryDB>
 ```
 
@@ -435,8 +433,6 @@ The `PreparedTx` holds the reservation that the envelope carries. A failed prepa
 ## Block pinning
 
 A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the hash is a node block hash. The state read that honours it is the node RPC `midnight_contractState`, for a whole `ContractState`. It takes only a block hash, so a caller holding a height resolves it to a hash first (`MidnightProvider::get_block_hashes_by_height`). A circuit call on a pinned handle also reads the block time (`Timestamp::Now`) at the pin, so its clock checks run at the time of that block.
-
-`Provider::get_contract_state` reads through `midnight_contractState` too, and takes the same optional hash. The generated `Ledger::from_provider(provider, address)` constructor passes none, so it reads at the best block.
 
 ## External dependencies
 

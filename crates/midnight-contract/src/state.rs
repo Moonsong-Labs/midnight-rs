@@ -1,7 +1,7 @@
 //! Reading and preparing on-chain contract state.
 //!
 //! Bindgen-generated code reads a contract's state with [`fetch_state`],
-//! through any [`Provider`](midnight_provider::Provider).
+//! through a [`MidnightProvider`].
 //!
 //! The other helpers in this module are `pub(crate)` plumbing for the deploy,
 //! call and maintenance paths.
@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use midnight_base_crypto::time::Timestamp;
 use midnight_onchain_runtime::state::EntryPointBuf;
+use midnight_provider::MidnightProvider;
 use midnight_typed_state::{ContractState, InMemoryDB, tagged_deserialize};
 use midnight_types::BlockHash;
 
@@ -20,8 +21,8 @@ use crate::error::{ContractError, KeyMismatch};
 /// The read is at `at_block_hash` when given, else at the node's best block.
 /// Returns [`ContractError::NotFound`] when no contract exists at `address`,
 /// and [`ContractError::StateFetch`] when the state does not decode.
-pub async fn fetch_state<P: midnight_provider::Provider>(
-    provider: &P,
+pub async fn fetch_state<W>(
+    provider: &MidnightProvider<W>,
     address: &str,
     at_block_hash: Option<BlockHash>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
@@ -51,8 +52,8 @@ pub(crate) struct StateAtBlock {
 ///
 /// One hash serves both reads, so the state and the time never come from
 /// two blocks.
-pub(crate) async fn state_at_block<W: Send + Sync>(
-    provider: &midnight_provider::MidnightProvider<W>,
+pub(crate) async fn state_at_block<W>(
+    provider: &MidnightProvider<W>,
     address: &str,
     at_block: Option<BlockHash>,
 ) -> Result<StateAtBlock, ContractError> {

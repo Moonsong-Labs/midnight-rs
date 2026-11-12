@@ -6,7 +6,7 @@
 mod common;
 
 use midnight_indexer_client::{BlockOffset, IndexerClient};
-use midnight_provider::{BlockHash, MidnightProvider, Provider};
+use midnight_provider::{BlockHash, MidnightProvider};
 
 fn provider() -> Option<MidnightProvider> {
     let (node, _indexer) = common::devnet_urls()?;
@@ -87,7 +87,7 @@ async fn an_address_with_no_contract_reads_as_none() {
     let best = p.best_block_hash().await.unwrap();
     assert_eq!(p.get_contract_state(&address, None).await.unwrap(), None);
     assert_eq!(
-        p.get_state_from_node(&address, Some(best)).await.unwrap(),
+        p.get_contract_state(&address, Some(best)).await.unwrap(),
         None
     );
 }
