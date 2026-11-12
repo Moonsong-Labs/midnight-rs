@@ -6,7 +6,8 @@ ignore = [
     # uses a smoldot release that requires it.
     "RUSTSEC-2026-0344",
     # crypto-bigint 0.5.5 comes from elliptic-curve 0.13, which
-    # midnight-curves, the ledger fork and bip32 0.5 require. The fix is in
+    # midnight-curves and k256 0.13 (bip32 0.5, the maintenance committee
+    # signers) require. The fix is in
     # crypto-bigint 0.7.6, which only elliptic-curve 0.14 uses. Remove this
     # entry when no crate depends on elliptic-curve 0.13.
     "RUSTSEC-2026-0387",
