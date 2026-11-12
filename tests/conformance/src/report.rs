@@ -7,7 +7,7 @@
 
 use midnight_contract::runtime::{ExecutionResult, VersionedLogItem};
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
-use midnight_typed_state::{ContractState, InMemoryDB, StateValue};
+use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 use serde_json::{Value as Json, json};
 
 use crate::state_json::{aligned_value_to_json, state_value_to_json};
@@ -43,7 +43,7 @@ pub fn op_to_json(op: &midnight_onchain_runtime::ops::Op<ResultModeVerify, InMem
         Op::Addi { immediate } => json!({ "addi": { "immediate": immediate } }),
         Op::Subi { immediate } => json!({ "subi": { "immediate": immediate } }),
         Op::Push { storage, value } => json!({
-            "push": { "storage": storage, "value": state_value_to_json(value) },
+            "push": { "storage": storage, "value": state_value_to_json(&StateValue::from(value.clone())) },
         }),
         Op::Branch { skip } => json!({ "branch": { "skip": skip } }),
         Op::Jmp { skip } => json!({ "jmp": { "skip": skip } }),
@@ -66,7 +66,7 @@ pub fn op_to_json(op: &midnight_onchain_runtime::ops::Op<ResultModeVerify, InMem
                     .iter()
                     .map(|key| match &*key {
                         Key::Value(av) => {
-                            json!({ "tag": "value", "value": aligned_value_to_json(av) })
+                            json!({ "tag": "value", "value": aligned_value_to_json(&AlignedValue::from(av.clone())) })
                         }
                         Key::Stack => json!({ "tag": "stack" }),
                     })

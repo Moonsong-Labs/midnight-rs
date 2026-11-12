@@ -90,51 +90,36 @@ k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 bip39 = { version = "2.2.2", features = ["rand"] }
 zeroize = { version = "1", features = ["derive"] }
 
-# midnight-ledger ecosystem.
-#
-# Every ledger crate comes from the RomarQ/midnight-ledger fork by revision.
-# Upstream's ledger 9 crates name each other by crates.io version, where they
-# are not published, so a git consumer needed a `[patch.crates-io]` table. The
-# fork's branches name them by `path` or by revision, so it needs none:
-# - rq/midnight-rs-ledger-9: the `ledger-9.1.0.0-rc.5` set, with zkir-v3 taken
-#   from midnight-zkir 3.1.0-rc.1 (the IR that the pinned compactc emits), plus
-#   the crates it shares with ledger 8 (base-crypto, serialize, storage,
-#   storage-core, transient-crypto 2.2, zkir).
-# - rq/midnight-rs-ledger-8: ledger 8.1.2, taking the shared crates from the
-#   ledger 9 revision. No entry here names it: only the helpers below link it.
-# Ledger 8 and ledger 9 share the crates listed under "Shared": a single
-# instance serves both, so `AlignedValue`, `HashOutput`, `Sp` and the tagged
-# codec are one Rust type across them. Cargo unifies a git crate only across
-# identical URLs and revisions, so every entry spells both the same way.
+# midnight-ledger ecosystem: the ledger 9 crates, from crates.io.
 #
 # Pinning policy: every ledger crate below is pinned with `=` because they
-# ship as one ABI-coupled release set (serialization formats and proof
-# artifacts must match across the group). Bump them together, deliberately,
-# in this order: the ledger 9 branch, the ledger 8 branch (it names the ledger
-# 9 revision), the midnight-node branch (it names both), then the revisions
-# here. Transitive midnight-* crates outside the fork (proofs, zk-stdlib, ...)
-# still float on upstream caret requirements and are held only by Cargo.lock.
+# ship as one release set (serialization formats and proof artifacts must
+# match across the group). Bump them together with the helpers below, to the
+# versions that the helpers' midnight-node release names, so that each crate
+# has one instance. Transitive midnight-* crates (proofs, zk-stdlib, ...)
+# float on upstream caret requirements and are held only by Cargo.lock.
 #
 # The Compact side (interpreter, runtime, typed state, generated bindings)
 # binds to ledger 9's on-chain runtime.
-midnight-onchain-runtime = { version = "=4.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "425ef0c2f48fcbd188ee8324550b388e13160795" }
-midnight-onchain-state = { version = "=4.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "425ef0c2f48fcbd188ee8324550b388e13160795" }
-midnight-transient-crypto = { version = "=3.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "425ef0c2f48fcbd188ee8324550b388e13160795" }
-midnight-coin-structure = { version = "=3.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "425ef0c2f48fcbd188ee8324550b388e13160795" }
+midnight-onchain-runtime = { version = "=4.0.1" }
+midnight-onchain-state = { version = "=4.0.1" }
+midnight-transient-crypto = { version = "=3.0.1" }
+midnight-coin-structure = { version = "=3.0.1" }
 midnight-curves = { version = "=0.3.1" }
 # Pinned with midnight-curves: its `CircuitField` impls are on those types.
-midnight-circuits = { version = "=7.2.4" }
-midnight-zkir-v3 = { version = "=3.1.0-rc.1", git = "https://github.com/RomarQ/midnight-ledger", rev = "425ef0c2f48fcbd188ee8324550b388e13160795" }
-# Shared
-midnight-serialize = { version = "=1.2.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "425ef0c2f48fcbd188ee8324550b388e13160795" }
-midnight-base-crypto = { version = "=1.1.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "425ef0c2f48fcbd188ee8324550b388e13160795" }
-midnight-storage = { version = "=2.0.4", git = "https://github.com/RomarQ/midnight-ledger", rev = "425ef0c2f48fcbd188ee8324550b388e13160795" }
+midnight-circuits = { version = "=7.3.0" }
+# Not a version that the helpers' release names: the zkir of the compactc at
+# COMPACT_REV in the Makefile, because a proving key fixes the circuit layout
+# of the zkir that made it.
+midnight-zkir-v3 = { package = "midnight-zkir", version = "=3.2.1" }
+midnight-serialize = { version = "=1.2.1" }
+midnight-base-crypto = { version = "=1.1.1" }
+midnight-storage = { version = "=3.0.0" }
 
 # The ledger helpers of midnight-node: `midnight-ledger-unsafe-helpers` carries
 # the ledger 9 type surface and the transaction and wallet builders. The
 # wallet also uses its ledger 8 types, to read the events that a chain made
-# before its hard fork to ledger 9. It comes from the RomarQ/midnight-node
-# fork's rq/midnight-rs-toolkit-2.1.0-rc.3 branch, which is
-# `toolkit-2.1.0-rc.3` with its ledger crates taken from the revisions above.
-midnight-ledger-unsafe-helpers = { git = "https://github.com/RomarQ/midnight-node", rev = "ef1330ebbc9f7b7f7f3f3210a91bef2422b0d74f" }
+# before its hard fork to ledger 9. The release tag's workspace takes every
+# ledger crate from crates.io, so a git consumer needs no patch table.
+midnight-ledger-unsafe-helpers = { git = "https://github.com/midnightntwrk/midnight-node", tag = "node-2.1.101" }
 
