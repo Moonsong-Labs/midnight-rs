@@ -21,7 +21,7 @@ jobs:
   # The devnet contracts, the test and conformance fixtures, and the goldens
   # that the TS runtime derives from the corpus. None of them is committed.
   # The job also checks the interpreter's list of natives against the
-  # compiler's native tables.
+  # compiler's native table.
   compact:
     name: Compile the Compact sources
     runs-on: ubuntu-latest
