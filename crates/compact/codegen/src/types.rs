@@ -12,7 +12,7 @@ use std::fmt;
 /// When `COMPACT_REV` moves to a new `major.minor`, change this value too.
 /// Until then, [`crate::artifact::load_str`] and `contract!` refuse the
 /// regenerated devnet contracts.
-pub const SUPPORTED_COMPILER_FAMILY: &str = "0.35";
+pub const SUPPORTED_COMPILER_FAMILY: &str = "0.36";
 
 /// A `compiler-version` that [`check_compiler_version`] refuses.
 ///

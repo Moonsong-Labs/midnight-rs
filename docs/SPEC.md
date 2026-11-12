@@ -437,14 +437,14 @@ A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the
 
 | Crate | Source | Purpose |
 |---|---|---|
-| `midnight-ledger-v9` (+ its companion crates, and the `midnight-transient-crypto` 2.2 it also uses) | `RomarQ/midnight-ledger`, branch `rq/midnight-rs-ledger-9` | Ledger 9: transaction types, VM, proving, and the on-chain runtime the Compact side reads |
-| `midnight-ledger` 8.1.2 (+ its `midnight-zswap`, `midnight-onchain-*`) | `RomarQ/midnight-ledger`, branch `rq/midnight-rs-ledger-8` | Ledger 8 types, which the wallet's reader of the shielded events before the fork uses, and which the helpers link |
-| `midnight-serialize`, `midnight-base-crypto`, `midnight-storage` | one instance, from the ledger 9 branch | The tagged codec, `HashOutput`, `AlignedValue`, `Sp` |
-| `midnight-ledger-unsafe-helpers` (+ the `midnight-node-ledger-helpers` it builds on) | `RomarQ/midnight-node`, branch `rq/midnight-rs-toolkit-2.1.0-rc.3` | A `ledger_9` module: the type surface, and the transaction and wallet builders. A `ledger_8` module for the wallet's reader |
+| `midnight-ledger-v9` (+ its companion crates, and the `midnight-transient-crypto` 2.2 it also uses) | crates.io | Ledger 9: transaction types, VM, proving, and the on-chain runtime the Compact side reads |
+| `midnight-ledger` (ledger 8, + its `midnight-zswap`, `midnight-onchain-*` and its own `midnight-storage` 2.x) | crates.io, through the helpers | Ledger 8 types, which the wallet's reader of the shielded events before the fork uses |
+| `midnight-serialize`, `midnight-base-crypto`, `midnight-storage` | crates.io, one instance each | The tagged codec, `HashOutput`, `AlignedValue`, `Sp` |
+| `midnight-ledger-unsafe-helpers` (+ the `midnight-node-ledger-helpers` it builds on) | `midnightntwrk/midnight-node`, a release tag | A `ledger_9` module: the type surface, and the transaction and wallet builders. A `ledger_8` module for the wallet's reader |
 | `subxt` | crates.io | Substrate RPC (including `midnight_contractState`), extrinsic submission, watch streams, reconnecting client |
 | `tokio-tungstenite` | crates.io | Indexer WebSocket subscriptions |
 
-Ledger 9 ships only as git tags, and upstream's ledger crates and helpers name each other by crates.io version, which a git consumer can only redirect with a `[patch.crates-io]` table. The forks name every ledger crate by `path` or by revision, so a crate that depends on midnight-rs needs no table. The root `Cargo.toml` pins each fork by revision. The helpers must build against the same ledger 9 set, so the branches move together, in the order that the root `Cargo.toml` gives.
+The ledger crates come from crates.io at the versions that the helpers' midnight-node release names, so each one has a single instance, and a crate that depends on midnight-rs needs no `[patch.crates-io]` table. Bump the ledger pins and the helpers' tag together, as the root `Cargo.toml` says. `midnight-zkir` 3.x is the exception: it follows the compactc at `COMPACT_REV`.
 
 ## Documentation index
 
