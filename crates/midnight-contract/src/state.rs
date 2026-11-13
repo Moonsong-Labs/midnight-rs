@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use midnight_base_crypto::time::Timestamp;
 use midnight_onchain_runtime::state::EntryPointBuf;
-use midnight_provider::MidnightProvider;
+use midnight_provider::{MidnightProvider, NodeApi};
 use midnight_typed_state::{ContractState, InMemoryDB, tagged_deserialize};
 use midnight_types::BlockHash;
 
@@ -21,7 +21,7 @@ use crate::error::{ContractError, KeyMismatch};
 /// The read is at `at_block_hash` when given, else at the node's best block.
 /// Returns [`ContractError::NotFound`] when no contract exists at `address`,
 /// and [`ContractError::StateFetch`] when the state does not decode.
-pub async fn fetch_state<W>(
+pub async fn fetch_state<W: Send + Sync>(
     provider: &MidnightProvider<W>,
     address: &str,
     at_block_hash: Option<BlockHash>,
@@ -52,7 +52,7 @@ pub(crate) struct StateAtBlock {
 ///
 /// One hash serves both reads, so the state and the time never come from
 /// two blocks.
-pub(crate) async fn state_at_block<W>(
+pub(crate) async fn state_at_block<W: Send + Sync>(
     provider: &MidnightProvider<W>,
     address: &str,
     at_block: Option<BlockHash>,

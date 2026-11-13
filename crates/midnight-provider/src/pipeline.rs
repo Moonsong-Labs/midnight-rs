@@ -13,9 +13,9 @@ use midnight_types::build;
 use midnight_types::{FilledTx, MidnightWallet, TransactionRequest, TxEnvelope};
 
 use crate::provider::fee_less_refusal;
-use crate::{MidnightProvider, PendingTx, ProviderError};
+use crate::{MidnightProvider, NodeApi, PendingTx, ProviderError};
 
-impl<W> MidnightProvider<W> {
+impl<W: Send + Sync> MidnightProvider<W> {
     /// The half of a [`BuildContext`] that a transaction executes against,
     /// from node queries: the node's network and ledger parameters, the
     /// resolver, and the time of the node's best block.

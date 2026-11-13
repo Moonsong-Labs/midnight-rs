@@ -6,7 +6,7 @@
 mod common;
 
 use midnight_indexer_client::{BlockOffset, IndexerClient};
-use midnight_provider::{BlockHash, MidnightProvider};
+use midnight_provider::{BlockHash, MidnightProvider, NodeApi};
 
 fn provider() -> Option<MidnightProvider> {
     let (node, _indexer) = common::devnet_urls()?;

@@ -12,7 +12,7 @@ use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::{PendingTx, Prover, ProviderError, submit};
+use crate::{NodeApi, NodeHeader, PendingTx, Prover, ProviderError, submit};
 use midnight_helpers::LedgerParameters;
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_private_state::PrivateStateProvider;
@@ -66,16 +66,10 @@ struct NodeConnection {
 /// such as transaction submission, through the `OnlineClient` built on the
 /// same transport.
 ///
-/// Each node read ends within a bound that includes its connect: 60 s for a
-/// contract state read, and 10 s for every other read. A read that the node
-/// does not answer in that time returns [`ProviderError::Rpc`].
-/// [`Self::prepare`] and [`Self::send_tx_envelope`] bound their connect and
-/// their metadata read to 10 s. The SDK sets no deadline on the submit call or
-/// on the wait for a sent transaction (see [`PendingTx`]).
-///
-/// An archive node is a node whose state pruning and block pruning are both in
-/// an archive mode. Only an archive node serves the `archive_v1` methods, and
-/// another node refuses them as unknown methods.
+/// It reads the node through [`NodeApi`], within the bounds that the trait
+/// states. [`Self::prepare`] and [`Self::send_tx_envelope`] bound their
+/// connect and their metadata read to 10 s. The SDK sets no deadline on the
+/// submit call or on the wait for a sent transaction (see [`PendingTx`]).
 pub struct MidnightProvider<W = ()> {
     node_url: String,
     wallet: W,
@@ -446,19 +440,9 @@ mod names_no_contract_tests {
     }
 }
 
-/// The node's block-header type under the chain's Substrate config; `number`
-/// is the block height.
-pub type NodeHeader = <subxt::SubstrateConfig as subxt::Config>::Header;
-
-impl<W> MidnightProvider<W> {
-    /// Get the hash of the node's best block (`chain_getBlockHash` with no
-    /// height).
-    ///
-    /// A read given no block hash, such as
-    /// [`get_contract_state`](Self::get_contract_state) with `None`, reads
-    /// at the best block at the moment of that read. Pass this hash to such
-    /// reads to keep two of them at one block.
-    pub async fn best_block_hash(&self) -> Result<BlockHash, ProviderError> {
+#[async_trait]
+impl<W: Send + Sync> NodeApi for MidnightProvider<W> {
+    async fn best_block_hash(&self) -> Result<BlockHash, ProviderError> {
         query_within(QUERY_TIMEOUT, async {
             let conn = self.get_or_connect().await?;
 
@@ -473,15 +457,7 @@ impl<W> MidnightProvider<W> {
         .await
     }
 
-    /// Get the latest finalized block height (`archive_v1_finalizedHeight`).
-    ///
-    /// Finalized blocks cannot reorg (GRANDPA), so heights at or below this
-    /// are safe for observers that must never see a block twice. Part of the
-    /// `archive_v1` spec, the replacement for the legacy `chain_*` RPCs.
-    ///
-    /// It needs an archive node (see [`MidnightProvider`]). On another node, it
-    /// returns [`ProviderError::Rpc`].
-    pub async fn get_finalized_block_height(&self) -> Result<u64, ProviderError> {
+    async fn get_finalized_block_height(&self) -> Result<u64, ProviderError> {
         query_within(QUERY_TIMEOUT, async {
             let conn = self.get_or_connect().await?;
 
@@ -494,17 +470,7 @@ impl<W> MidnightProvider<W> {
         .await
     }
 
-    /// Get the hashes of the blocks at `height` (`archive_v1_hashByHeight`):
-    /// exactly one for a height at or below the finalized height, empty when
-    /// the chain has not reached `height`, and possibly several while
-    /// unfinalized forks exist at it.
-    ///
-    /// A finalized height's hash pins historical reads such as
-    /// [`get_contract_state`](Self::get_contract_state).
-    ///
-    /// It needs an archive node (see [`MidnightProvider`]). On another node, it
-    /// returns [`ProviderError::Rpc`].
-    pub async fn get_block_hashes_by_height(
+    async fn get_block_hashes_by_height(
         &self,
         height: u64,
     ) -> Result<Vec<BlockHash>, ProviderError> {
@@ -522,15 +488,7 @@ impl<W> MidnightProvider<W> {
         .await
     }
 
-    /// Get the header of the block with `hash` (`archive_v1_header`), or
-    /// `None` when the node does not know the hash.
-    ///
-    /// It needs an archive node (see [`MidnightProvider`]). On another node, it
-    /// returns [`ProviderError::Rpc`].
-    pub async fn get_block_header(
-        &self,
-        hash: BlockHash,
-    ) -> Result<Option<NodeHeader>, ProviderError> {
+    async fn get_block_header(&self, hash: BlockHash) -> Result<Option<NodeHeader>, ProviderError> {
         query_within(QUERY_TIMEOUT, async {
             let conn = self.get_or_connect().await?;
 
@@ -542,13 +500,7 @@ impl<W> MidnightProvider<W> {
         .await
     }
 
-    /// Get the timestamp of the block with `hash`, as time since the Unix
-    /// epoch.
-    ///
-    /// Reads `Timestamp::Now` in that block's state. Genesis sets no
-    /// timestamp, so it reads as zero. Errors when the node does not know
-    /// `hash`, or no longer holds the state at it.
-    pub async fn get_block_timestamp(&self, hash: BlockHash) -> Result<Duration, ProviderError> {
+    async fn get_block_timestamp(&self, hash: BlockHash) -> Result<Duration, ProviderError> {
         query_within(QUERY_TIMEOUT, async {
             let conn = self.get_or_connect().await?;
 
@@ -572,6 +524,31 @@ impl<W> MidnightProvider<W> {
         .await
     }
 
+    async fn get_contract_state(
+        &self,
+        address: &str,
+        at_block_hash: Option<BlockHash>,
+    ) -> Result<Option<String>, ProviderError> {
+        query_within(STATE_QUERY_TIMEOUT, async {
+            let conn = self.get_or_connect().await?;
+            match conn
+                .rpc
+                .request::<String>(
+                    "midnight_contractState",
+                    rpc_params![address, at_block_hash],
+                )
+                .await
+            {
+                Ok(hex_state) => Ok((!hex_state.is_empty()).then_some(hex_state)),
+                Err(e) if names_no_contract(&e) => Ok(None),
+                Err(e) => Err(ProviderError::Rpc(e.to_string())),
+            }
+        })
+        .await
+    }
+}
+
+impl<W> MidnightProvider<W> {
     /// The network that the node's runtime reports at the current finalized
     /// block, from its `MidnightRuntimeApi::get_network_id` runtime API.
     ///
@@ -593,42 +570,6 @@ impl<W> MidnightProvider<W> {
             .map_err(|e| ProviderError::Rpc(format!("get_ledger_parameters: {e}")))?;
         tagged_deserialize(&mut &encoded[..])
             .map_err(|e| ProviderError::Rpc(format!("decoding get_ledger_parameters: {e}")))
-    }
-
-    /// Fetch full contract state via the node RPC (`midnight_contractState`),
-    /// at `at_block_hash`, or at the node's best block when it is `None`.
-    ///
-    /// A reorg can replace a best block, so pass a finalized block hash for
-    /// state that cannot change.
-    ///
-    /// Returns the hex-encoded serialized contract state, or `None` if no
-    /// contract exists at `address` in that block.
-    ///
-    /// # Errors
-    ///
-    /// [`ProviderError::Rpc`] when the node cannot be reached or refuses the
-    /// read, for example for a block it does not know or no longer holds.
-    pub async fn get_contract_state(
-        &self,
-        address: &str,
-        at_block_hash: Option<BlockHash>,
-    ) -> Result<Option<String>, ProviderError> {
-        query_within(STATE_QUERY_TIMEOUT, async {
-            let conn = self.get_or_connect().await?;
-            match conn
-                .rpc
-                .request::<String>(
-                    "midnight_contractState",
-                    rpc_params![address, at_block_hash],
-                )
-                .await
-            {
-                Ok(hex_state) => Ok((!hex_state.is_empty()).then_some(hex_state)),
-                Err(e) if names_no_contract(&e) => Ok(None),
-                Err(e) => Err(ProviderError::Rpc(e.to_string())),
-            }
-        })
-        .await
     }
 }
 
