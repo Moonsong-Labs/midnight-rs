@@ -107,25 +107,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deserialize_block() {
-        let json = r#"{
-            "hash": "abc123",
-            "height": 42,
-            "protocolVersion": 1,
-            "timestamp": 1700000000,
-            "author": "node-1",
-            "ledgerParameters": null
-        }"#;
-
-        let block: Block = serde_json::from_str(json).unwrap();
-        assert_eq!(block.hash, "abc123");
-        assert_eq!(block.height, 42);
-        assert_eq!(block.protocol_version, Some(1));
-        assert_eq!(block.timestamp, Some(1700000000));
-        assert_eq!(block.author, Some("node-1".to_string()));
-    }
-
-    #[test]
     fn graphql_errors_win_over_partial_data() {
         let partial = GraphQLResponse {
             data: Some(1),

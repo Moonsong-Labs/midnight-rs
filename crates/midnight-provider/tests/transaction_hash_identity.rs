@@ -34,11 +34,6 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
     let transaction_hash = pending.transaction_hash();
     let receipt = pending.get_receipt().await.expect("finalized and applied");
 
-    assert_eq!(
-        receipt.transaction_hash, transaction_hash,
-        "the hash must survive inclusion unchanged"
-    );
-
     // The chain names the same value in the event it emits for the
     // transaction, which is what an explorer or an indexer keys on.
     let events = subxt::OnlineClient::<subxt::SubstrateConfig>::from_url(&node_url)

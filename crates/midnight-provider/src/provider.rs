@@ -172,15 +172,8 @@ impl<W> MidnightProvider<W> {
     /// Prove every transaction of this provider with `prover`: each
     /// [`TransactionRequest`](midnight_types::TransactionRequest), and the
     /// deploys, calls and maintenance updates of a `Contract` on it. The
-    /// default is [`Prover::local`].
-    ///
-    /// ```rust,no_run
-    /// # const NODE_URL: &str = "ws://localhost:9944";
-    /// use midnight_provider::{MidnightProvider, Prover};
-    ///
-    /// let provider =
-    ///     MidnightProvider::new(NODE_URL).with_prover(Prover::remote("http://localhost:6300"));
-    /// ```
+    /// default is [`Prover::local`]. To prove on a proof server, pass
+    /// [`Prover::remote`].
     pub fn with_prover(mut self, prover: Prover) -> Self {
         self.prover = prover;
         self

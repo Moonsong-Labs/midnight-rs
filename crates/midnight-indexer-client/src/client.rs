@@ -109,32 +109,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn url_construction_bare_host() {
-        let client = IndexerClient::new("http://localhost:8088").unwrap();
-        assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
-    }
-
-    #[test]
-    fn url_construction_with_trailing_slash() {
-        let client = IndexerClient::new("http://localhost:8088/").unwrap();
-        assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
-    }
-
-    #[test]
-    fn url_construction_full_path() {
-        let client = IndexerClient::new("http://localhost:8088/api/v3/graphql").unwrap();
-        assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
-    }
-
-    #[test]
     fn graphql_url_drops_ws_only_after_graphql() {
-        assert_eq!(
-            graphql_url("http://localhost:8088/graphql/ws"),
-            "http://localhost:8088/graphql"
-        );
-        assert_eq!(
-            graphql_url("http://localhost:8088/foo/ws"),
-            "http://localhost:8088/foo/ws/api/v3/graphql"
-        );
+        for (base, expected) in [
+            (
+                "http://localhost:8088",
+                "http://localhost:8088/api/v3/graphql",
+            ),
+            (
+                "http://localhost:8088/",
+                "http://localhost:8088/api/v3/graphql",
+            ),
+            (
+                "http://localhost:8088/api/v3/graphql",
+                "http://localhost:8088/api/v3/graphql",
+            ),
+            (
+                "http://localhost:8088/graphql/ws",
+                "http://localhost:8088/graphql",
+            ),
+            (
+                "http://localhost:8088/foo/ws",
+                "http://localhost:8088/foo/ws/api/v3/graphql",
+            ),
+        ] {
+            assert_eq!(graphql_url(base), expected, "{base}");
+        }
     }
 }

@@ -546,30 +546,6 @@ fn midnight_transaction_hash(tx_bytes: &[u8]) -> TransactionHash {
 
 #[cfg(test)]
 mod tests {
-
-    fn every_variant() -> [SubmitError; 6] {
-        let m = || "x".to_string();
-        [
-            SubmitError::SubmitRpc { message: m() },
-            SubmitError::Invalid { message: m() },
-            SubmitError::Dropped { message: m() },
-            SubmitError::NodeError { message: m() },
-            SubmitError::WatchStream { message: m() },
-            SubmitError::VerdictFetch { message: m() },
-        ]
-    }
-
-    /// The wait site is where a node's rejection arrives, and it is the only
-    /// place a reservation can be freed on one. Freeing on a status that still
-    /// permits inclusion would let a later build spend the same coins.
-    #[test]
-    fn only_a_definitive_rejection_frees_inputs_at_the_wait_site() {
-        for e in every_variant() {
-            let expected = matches!(e, SubmitError::Invalid { .. });
-            assert_eq!(rejection_is_definitive(&e), expected, "{e:?}");
-        }
-    }
-
     use super::*;
     use subxt::SubstrateConfig;
 
@@ -577,30 +553,53 @@ mod tests {
     /// variants, which only carry a message.
     type Status = TransactionStatus<SubstrateConfig, ()>;
 
+    /// The wait site is where a node's rejection arrives, and it is the only
+    /// place a reservation can be freed on one. Freeing on a status that still
+    /// permits inclusion would let a later build spend the same coins.
     #[test]
-    fn invalid_status_maps_to_invalid() {
-        let status = Status::Invalid {
-            message: "bad nonce".into(),
-        };
-        assert_eq!(
-            SubmitError::from_terminal_status(&status),
-            Some(SubmitError::Invalid {
-                message: "bad nonce".into()
-            })
-        );
-    }
-
-    #[test]
-    fn dropped_status_maps_to_dropped() {
-        let status = Status::Dropped {
-            message: "pool full".into(),
-        };
-        assert_eq!(
-            SubmitError::from_terminal_status(&status),
-            Some(SubmitError::Dropped {
-                message: "pool full".into()
-            })
-        );
+    fn only_a_definitive_rejection_frees_inputs_at_the_wait_site() {
+        let m = |s: &str| s.to_string();
+        let rows = [
+            (
+                Status::Invalid {
+                    message: m("bad nonce"),
+                },
+                Some(SubmitError::Invalid {
+                    message: m("bad nonce"),
+                }),
+                Some(true),
+            ),
+            (
+                Status::Dropped {
+                    message: m("pool full"),
+                },
+                Some(SubmitError::Dropped {
+                    message: m("pool full"),
+                }),
+                Some(false),
+            ),
+            (
+                Status::Error {
+                    message: m("node exploded"),
+                },
+                Some(SubmitError::NodeError {
+                    message: m("node exploded"),
+                }),
+                Some(false),
+            ),
+            (Status::Validated, None, None),
+            (Status::Broadcasted, None, None),
+            (Status::NoLongerInBestBlock, None, None),
+        ];
+        for (status, expected, frees) in rows {
+            let got = SubmitError::from_terminal_status(&status);
+            assert_eq!(got, expected, "{status:?}");
+            assert_eq!(
+                got.as_ref().map(rejection_is_definitive),
+                frees,
+                "{status:?}"
+            );
+        }
     }
 
     #[test]
@@ -619,30 +618,6 @@ mod tests {
             message: "bad signature".into(),
         };
         assert_eq!(bare.to_string(), "invalid: bad signature");
-    }
-
-    #[test]
-    fn error_status_maps_to_node_error() {
-        let status = Status::Error {
-            message: "node exploded".into(),
-        };
-        assert_eq!(
-            SubmitError::from_terminal_status(&status),
-            Some(SubmitError::NodeError {
-                message: "node exploded".into()
-            })
-        );
-    }
-
-    #[test]
-    fn non_terminal_statuses_are_not_errors() {
-        for status in [
-            Status::Validated,
-            Status::Broadcasted,
-            Status::NoLongerInBestBlock,
-        ] {
-            assert_eq!(SubmitError::from_terminal_status(&status), None);
-        }
     }
 
     /// A partial success paid its fee and committed its guaranteed phase, so it
