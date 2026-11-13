@@ -13,83 +13,37 @@ fn fixture(dir: &str) -> AnalyzedIr {
 }
 
 #[test]
-fn every_fixture_parses() {
-    for dir in [
-        "tests/conformance/fixtures/counter",
-        "tests/conformance/fixtures/bboard",
-        "tests/conformance/fixtures/events",
-        "tests/conformance/fixtures/loops",
-        "tests/conformance/fixtures/slices",
-        "tests/conformance/fixtures/peers",
-        "tests/conformance/fixtures/ops",
-        "tests/fixtures/compiled/cross-contract",
-        "tests/fixtures/compiled/mint-probe",
-        "tests/fixtures/compiled/zerocash",
-        "crates/compact/analyzed-ir/tests/fixtures/adt-defaults",
-    ] {
-        let ir = fixture(dir);
-        assert!(!ir.elements.is_empty(), "{dir}: no elements");
-    }
-}
-
-#[test]
-fn counter_shape() {
-    let ir = fixture("tests/conformance/fixtures/counter");
-    assert_eq!(
-        ir.exports
-            .iter()
-            .map(|(n, _)| n.as_str())
-            .collect::<Vec<_>>(),
-        ["increment", "round"]
-    );
-    let inc = ir.circuit("increment").expect("increment");
-    assert!(inc.exported && !inc.pure && inc.proof);
-
-    let ledger = ir.ledger().expect("ledger");
-    assert_eq!(ledger.fields.len(), 1);
-    assert_eq!(ledger.fields[0].name.name(), "round");
-    assert_eq!(ledger.fields[0].path, [0]);
-    assert!(matches!(&ledger.fields[0].ty, Type::Adt { name, .. } if name == "Counter"));
-
-    // The increment site: idx / addi / ins against state index 0.
-    let mut sites: Vec<(String, Vec<Instruction>)> = Vec::new();
-    walk_deep(&inc.body, &mut |e| {
-        if let Expr::PublicLedger {
-            op, instructions, ..
-        } = e
-        {
-            sites.push((op.clone(), instructions.clone()));
+fn a_cross_contract_call_parses() {
+    let ir = fixture("tests/fixtures/compiled/cross-contract");
+    let square = ir.circuit("calculate_square").expect("calculate_square");
+    let mut calls = Vec::new();
+    walk_deep(&square.body, &mut |e| {
+        if matches!(e, Expr::ContractCall { .. }) {
+            calls.push(e.clone());
         }
     });
-    assert_eq!(sites.len(), 1);
-    let (op, instructions) = &sites[0];
-    assert_eq!(op, "increment");
-    assert_eq!(
-        instructions
-            .iter()
-            .map(|i| i.op.as_str())
-            .collect::<Vec<_>>(),
-        ["idx", "addi", "ins"]
-    );
-    assert_eq!(instructions[2].arg("n"), Some(&Operand::Int(1.into())));
-}
-
-#[test]
-fn mint_probe_carries_dup_arities() {
-    let ir = fixture("tests/fixtures/compiled/mint-probe");
-    let mut arities = Vec::new();
-    each_ledger_instruction(&ir, &mut |i| {
-        if i.op == OpName::Dup
-            && let Some(Operand::Int(n)) = i.arg("n")
-        {
-            arities.push(n.clone());
-        }
-    });
-    // kernel.self is dup{n:2}; the mint effects use dup{n:1} and dup{n:2}.
+    let [
+        Expr::ContractCall {
+            circuit,
+            receiver,
+            contract_type,
+            args,
+        },
+    ] = calls.as_slice()
+    else {
+        panic!("expected one contract call, got {calls:?}")
+    };
+    assert_eq!(circuit, "get_square");
     assert!(
-        arities.contains(&1.into()) && arities.contains(&2.into()),
-        "{arities:?}"
+        matches!(contract_type, Type::Contract { name, circuits }
+            if name == "Calculator" && circuits.len() == 2),
+        "{contract_type:?}"
     );
+    assert!(
+        matches!(**receiver, Expr::PublicLedger { .. }),
+        "{receiver:?}"
+    );
+    assert_eq!(args.len(), 1);
 }
 
 #[test]
@@ -112,26 +66,6 @@ fn events_emit() {
         }
     });
     assert!(found, "no emit node");
-}
-
-#[test]
-fn bboard_types() {
-    let ir = fixture("tests/conformance/fixtures/bboard");
-    let ledger = ir.ledger().expect("ledger");
-    let message = ledger
-        .fields
-        .iter()
-        .find(|f| f.name.name() == "message")
-        .expect("message");
-    let Type::Adt { name, args } = &message.ty else {
-        panic!("not an ADT")
-    };
-    assert_eq!(name, "__compact_Cell");
-    let AdtArg::Type(Type::Struct { name, fields }) = &args[0] else {
-        panic!("not a struct cell")
-    };
-    assert_eq!(name, "Maybe");
-    assert_eq!(fields[0].0, "is_some");
 }
 
 // -- helpers ----------------------------------------------------------

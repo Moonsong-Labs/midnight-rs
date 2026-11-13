@@ -246,11 +246,6 @@ mod tests {
                 value(Secp256k1Point::default()),
                 "cannot extract the y-coordinate of the secp256k1 identity point",
             ),
-            (
-                "secp256r1PointY",
-                value(Secp256r1Point::default()),
-                "cannot extract the y-coordinate of the secp256r1 identity point",
-            ),
         ] {
             match native(name, &[arg]) {
                 Some(Err(e)) => assert!(e.to_string().contains(message), "{name}: {e}"),

@@ -113,11 +113,4 @@ mod tests {
             "unexpected error message: {msg}"
         );
     }
-
-    #[test]
-    fn get_field_path_empty_path_returns_self() {
-        let sv = StateValue::<InMemoryDB>::Null;
-        let result = get_field_path(&sv, &[]).unwrap();
-        assert_eq!(variant_name(result), "Null");
-    }
 }

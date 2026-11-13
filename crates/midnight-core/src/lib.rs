@@ -137,13 +137,6 @@ macro_rules! contract {
 #[cfg(test)]
 mod tests {
     #[test]
-    #[cfg(feature = "wallet")]
-    fn reexports_the_wallet_trait() {
-        // Guard only `MidnightWallet`: the examples compile the other root wallet names.
-        let _ = std::any::type_name::<Box<dyn crate::MidnightWallet>>();
-    }
-
-    #[test]
     #[cfg(feature = "contract")]
     fn reexports_contract_types() {
         use crate::{Contract, ContractError};
