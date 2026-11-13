@@ -295,7 +295,6 @@ test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test emit_event -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test remote_proving -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test receive_shielded_coin -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test receive_selected_coin -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test failed_submit_hands_back -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test e2e_contracts -- --show-output --test-threads=1

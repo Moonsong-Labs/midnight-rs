@@ -169,8 +169,11 @@ async fn a_fee_less_call_with_witnesses_needs_a_store_before_any_node_query() {
         "expected the store error, got {err:?}"
     );
 
+    // A URL with no scheme fails the connect at once, where the closed port
+    // waits out the query bound.
+    let unconnectable = MidnightProvider::new("no-scheme").with_wallet(common::UnreachedWallet);
     let undeclared = Contract::at(
-        &provider,
+        &unconnectable,
         midnight_contract::ContractAddress(HashOutput([7; 32])),
     )
     .with_zk_config("compiled")
