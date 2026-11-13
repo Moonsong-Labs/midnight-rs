@@ -132,7 +132,7 @@ mod tests {
                 "http://localhost:8088/foo/ws/api/v3/graphql",
             ),
         ] {
-            assert_eq!(graphql_url(base), expected, "{base}");
+            assert_eq!(IndexerClient::new(base).unwrap().url(), expected, "{base}");
         }
     }
 }
