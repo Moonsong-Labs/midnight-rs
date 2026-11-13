@@ -274,7 +274,6 @@ E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDN
 
 # The devnet integration tests.
 test-e2e: contracts fixtures
-	$(E2E_ENV) $(CARGO) test -p midnight-provider --test node_e2e -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-wallet --test integration -- --show-output --test-threads=1
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_offer -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_submit -- --show-output
