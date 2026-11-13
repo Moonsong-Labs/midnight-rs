@@ -614,9 +614,10 @@ mod tests {
             Timestamp::MAX,
         );
 
-        // Confirm one unshielded key and the dust spend: the matched
-        // unshielded reservation and the dust batch go, the other
-        // unshielded reservation stays.
+        // Confirm one reserved unshielded key, a key of another intent at the
+        // other reserved index, and the dust spend: the matched unshielded
+        // reservation and the dust batch go, the other unshielded
+        // reservation stays.
         p.clear_confirmed(&[ukey(0xab, 0), ukey(0xff, 1)], &[nullifier(7)]);
         assert_eq!(p.dust_batches().count(), 0);
         let remaining: Vec<_> = p
