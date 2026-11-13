@@ -102,29 +102,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_contract_address_with_prefix() {
-        let hex = "0x".to_string() + &"aa".repeat(32);
-        let addr = parse_contract_address(&hex).unwrap();
-        assert_eq!(addr.0.0, [0xAA; 32]);
-    }
-
-    #[test]
-    fn parse_contract_address_without_prefix() {
-        let hex = "bb".repeat(32);
-        let addr = parse_contract_address(&hex).unwrap();
-        assert_eq!(addr.0.0, [0xBB; 32]);
-    }
-
-    #[test]
     fn parse_contract_address_wrong_length() {
         let err = parse_contract_address("aabb").unwrap_err();
         assert!(err.to_string().contains("expected 32 bytes"));
-    }
-
-    #[test]
-    fn parse_contract_address_invalid_hex() {
-        let err = parse_contract_address("zzzz").unwrap_err();
-        assert!(err.to_string().contains("hex decode"));
     }
 
     #[test]

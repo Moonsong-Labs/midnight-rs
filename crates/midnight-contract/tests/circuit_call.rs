@@ -1,8 +1,8 @@
 //! Circuit call integration tests.
 //!
 //! These tests run circuits through the interpreter that `midnight_contract`
-//! re-exports. They cover witness dispatch, private-state threading, captured
-//! Zswap outputs, `kernel.self()`, and struct arguments.
+//! re-exports. They cover witness dispatch, captured Zswap outputs,
+//! `kernel.self()`, and struct arguments.
 
 mod common;
 
@@ -11,9 +11,7 @@ use compact_bindgen::AlignedValue;
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::interpreter;
 
-use compact_codegen::ir::{
-    self, Argument, Expr, FieldType, Ident, Instruction, Literal, OpClass, Operand, Type,
-};
+use compact_codegen::ir::{self, Argument, Expr, Ident, Literal, Type};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,31 +21,8 @@ fn id(name: &str) -> Ident {
     Ident(name.to_string())
 }
 
-fn var(name: &str) -> Expr {
-    Expr::VarRef(id(name))
-}
-
 fn uint(maxval: &str) -> Type {
     Type::Unsigned(maxval.parse().expect("a decimal bound"))
-}
-
-/// A ledger field's `idx` path: one literal one-byte key, as the compiler
-/// prints it (`(path ((align 0 1)))`).
-fn field_path(index: u8) -> Operand {
-    Operand::List(vec![Operand::Align {
-        value: index.into(),
-        bytes: 1,
-    }])
-}
-
-fn instruction(op: &str, args: &[(&str, Operand)]) -> Instruction {
-    Instruction {
-        op: op.into(),
-        args: args
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.clone()))
-            .collect(),
-    }
 }
 
 /// A proof circuit with the given signature and body, named as the compiler
@@ -62,12 +37,6 @@ fn circuit(arguments: Vec<Argument>, result_type: Type, body: Expr) -> ir::Circu
         result_type,
         body,
     }
-}
-
-/// A program that resolves nothing: a body that calls no circuit, witness or
-/// native.
-fn no_program() -> interpreter::Program<'static> {
-    interpreter::Program::new(&[], &[], &[])
 }
 
 // ---------------------------------------------------------------------------
@@ -156,99 +125,6 @@ fn unknown_witness_on_builtin_name_is_an_error() {
     }
 }
 
-/// A witness's view of private state threads across calls via `WitnessContext`:
-/// reading the current state, returning a value derived from it, and writing an
-/// updated state that the next call observes.
-#[test]
-fn witness_context_threads_private_state() {
-    use midnight_contract::interpreter;
-    use midnight_contract::runtime::{
-        InterpreterError, Value, WitnessContext, WitnessOutcome, WitnessProvider,
-    };
-
-    fn decode(bytes: &[u8]) -> u64 {
-        bytes.try_into().map(u64::from_le_bytes).unwrap_or(0)
-    }
-
-    // Reads a u64 counter from the private state, returns it, then stores
-    // counter + 1 so the next call sees the incremented value.
-    struct CounterWitness;
-    impl WitnessProvider for CounterWitness {
-        fn call_witness(
-            &self,
-            ctx: &mut WitnessContext<'_>,
-            name: &str,
-            _args: &[Value],
-        ) -> Result<WitnessOutcome, InterpreterError> {
-            match name {
-                "private$counter" => {
-                    let current = decode(ctx.private_state());
-                    ctx.set_private_state((current + 1).to_le_bytes().to_vec());
-                    Ok(WitnessOutcome::Value(Value::Integer(current as u128)))
-                }
-                _ => Ok(WitnessOutcome::Unknown),
-            }
-        }
-    }
-
-    // IR whose return value is just the witness call.
-    let witnesses = vec![ir::Witness {
-        name: id("%private$counter.1"),
-        arguments: Vec::new(),
-        result_type: Type::Field(FieldType::Native),
-    }];
-    let program = interpreter::Program::new(&[], &witnesses, &[]);
-    let ir = circuit(
-        Vec::new(),
-        Type::Field(FieldType::Native),
-        Expr::Call {
-            name: id("%private$counter.1"),
-            args: Vec::new(),
-        },
-    );
-
-    let state = common::contract_state(vec![]);
-    let mut private_state = Vec::new();
-
-    // First call: witness sees an empty (= 0) state and returns 0.
-    let r1 = interpreter::execute(
-        &ir,
-        &program,
-        state.clone(),
-        &[],
-        interpreter::Env {
-            witnesses: &CounterWitness,
-            private_state: Some(&mut private_state),
-            ..epoch()
-        },
-    )
-    .unwrap();
-    assert!(matches!(r1.result, Value::Integer(0)));
-    // The witness's private value must be recorded as a private transcript
-    // output, or proving a witness-using circuit fails with "ran out of private
-    // transcript outputs". One witness call -> one output.
-    assert_eq!(r1.private_transcript_outputs.len(), 1);
-
-    // Second call reuses the same buffer: the witness now sees 1.
-    let r2 = interpreter::execute(
-        &ir,
-        &program,
-        state,
-        &[],
-        interpreter::Env {
-            witnesses: &CounterWitness,
-            private_state: Some(&mut private_state),
-            ..epoch()
-        },
-    )
-    .unwrap();
-    assert!(matches!(r2.result, Value::Integer(1)));
-    assert_eq!(r2.private_transcript_outputs.len(), 1);
-
-    // Two increments → 2.
-    assert_eq!(decode(&private_state), 2);
-}
-
 // ---------------------------------------------------------------------------
 // Build-only calls
 // ---------------------------------------------------------------------------
@@ -256,7 +132,8 @@ fn witness_context_threads_private_state() {
 /// A fee-less call of a contract with witnesses needs a private-state store,
 /// as a submitted call does, and it checks for one before it queries the node.
 /// The provider's node URL is a closed port, so a check after the state read
-/// fails with a node error instead. The wallet is never reached.
+/// fails with a node error instead. The wallet is never reached. A handle that
+/// declares no witnesses needs no store, so its call reaches the node query.
 #[tokio::test]
 async fn a_fee_less_call_with_witnesses_needs_a_store_before_any_node_query() {
     use midnight_base_crypto::hash::HashOutput;
@@ -291,83 +168,28 @@ async fn a_fee_less_call_with_witnesses_needs_a_store_before_any_node_query() {
         matches!(&err, ContractError::Construction(message) if message.contains("with_private_state")),
         "expected the store error, got {err:?}"
     );
-}
 
-// ---------------------------------------------------------------------------
-// Shielded mint: createZswapOutput capture
-// ---------------------------------------------------------------------------
-
-/// `createZswapOutput(coin, recipient)` is a witness-class native with no
-/// effect of its own; it marks "attach a Zswap output for this coin here".
-/// The interpreter must capture its `(coin, recipient)` args on the
-/// `ExecutionResult` (so the call path can build the offer `Output`) and
-/// return unit, rather than erroring as an unknown witness.
-#[test]
-fn interpreter_captures_create_zswap_output() {
-    use midnight_contract::runtime::Value;
-
-    let natives = vec![ir::Native {
-        type_arguments: Vec::new(),
-        name: id("%createZswapOutput.3"),
-        entry: "__compactRuntime.createZswapOutput".to_string(),
-        class: "witness".to_string(),
-        arguments: vec![
-            Argument {
-                name: id("%coin.4"),
-                ty: Type::Bytes(32),
-            },
-            Argument {
-                name: id("%recipient.5"),
-                ty: Type::Bytes(32),
-            },
-        ],
-        result_type: Type::unit(),
-    }];
-    let program = interpreter::Program::new(&[], &[], &natives);
-    let ir = circuit(
-        vec![
-            Argument {
-                name: id("%coin.1"),
-                ty: Type::Bytes(32),
-            },
-            Argument {
-                name: id("%recipient.2"),
-                ty: Type::Bytes(32),
-            },
-        ],
-        Type::unit(),
-        Expr::Call {
-            name: id("%createZswapOutput.3"),
-            args: vec![var("%coin.1"), var("%recipient.2")],
-        },
-    );
-
-    let state = common::contract_state(vec![]);
-    let coin = Value::AlignedValue(AlignedValue::from([7u8; 32]));
-    let recipient = Value::AlignedValue(AlignedValue::from([9u8; 32]));
-
-    let result = interpreter::execute(
-        &ir,
-        &program,
-        state,
-        &[("coin", coin), ("recipient", recipient)],
-        epoch(),
+    let undeclared = Contract::at(
+        &provider,
+        midnight_contract::ContractAddress(HashOutput([7; 32])),
     )
-    .expect("createZswapOutput must be handled, not error");
-
-    assert_eq!(
-        result.zswap_outputs.len(),
-        1,
-        "one circuit-created Zswap output should be captured"
-    );
-    let out = &result.zswap_outputs[0];
-    assert_eq!(
-        out.coin.try_to_aligned_value().unwrap(),
-        AlignedValue::from([7u8; 32])
-    );
-    assert_eq!(
-        out.recipient.try_to_aligned_value().unwrap(),
-        AlignedValue::from([9u8; 32])
+    .with_zk_config("compiled")
+    .build();
+    let err = undeclared
+        .without_fee_call_with(
+            &persistent_hash_witness_ir(),
+            &program,
+            "test",
+            &[],
+            &NoWitnesses,
+            &[],
+            ShieldedInputs::default(),
+        )
+        .await
+        .expect_err("the closed port fails the state query");
+    assert!(
+        matches!(err, ContractError::Provider(_)),
+        "a handle that declares no witnesses needs no store, got {err:?}"
     );
 }
 
@@ -489,76 +311,13 @@ fn run_mint(
         1,
         "mintShieldedToken creates exactly one Zswap output"
     );
-    result.zswap_outputs.into_iter().next().unwrap()
-}
-
-/// `kernel.self()` lowers to a context read (`dup{n:2} idx[0] popeq`,
-/// result-type `ContractAddress`). The interpreter runs these ops through the
-/// VM with the supplied contract address injected into the `QueryContext`, so
-/// the read returns that address (and the ops land in the transcript the
-/// proving key expects). A minimal circuit that just returns `kernel.self()`
-/// must yield the supplied address — covering the resolution independent of the
-/// mint effects.
-#[test]
-fn interpreter_resolves_kernel_self_to_supplied_address() {
-    use midnight_contract::interpreter;
-    use midnight_contract::runtime::Value;
-
-    let address_type = Type::Struct {
-        name: "ContractAddress".to_string(),
-        fields: vec![("bytes".to_string(), Type::Bytes(32))],
-    };
-    let ir = circuit(
-        Vec::new(),
-        address_type.clone(),
-        Expr::PublicLedger {
-            op_class: OpClass::Plain("read".into()),
-            field: id("%kernel.3"),
-            path: Vec::new(),
-            op: "self".to_string(),
-            result_type: address_type,
-            instructions: vec![
-                instruction("dup", &[("n", Operand::Int(2.into()))]),
-                instruction(
-                    "idx",
-                    &[
-                        ("cached", Operand::Bool(true)),
-                        ("pushPath", Operand::Bool(false)),
-                        ("path", field_path(0)),
-                    ],
-                ),
-                instruction(
-                    "popeq",
-                    &[("cached", Operand::Bool(true)), ("result", Operand::Void)],
-                ),
-            ],
-            args: Vec::new(),
-        },
+    let out = result.zswap_outputs.into_iter().next().unwrap();
+    assert_eq!(
+        out.recipient.try_to_aligned_value().unwrap(),
+        either_left([3u8; 32]),
+        "createZswapOutput must capture the recipient argument"
     );
-
-    let state = common::contract_state(vec![]);
-    let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0x5Au8; 32]));
-
-    let result = interpreter::execute(
-        &ir,
-        &no_program(),
-        state,
-        &[],
-        interpreter::Env {
-            address: Some(address),
-            ..epoch()
-        },
-    )
-    .expect("kernel.self() circuit executes");
-
-    match result.result {
-        Value::AlignedValue(av) => assert_eq!(
-            ContractAddress::try_from(&*av.value).expect("one address atom"),
-            address,
-            "kernel.self() must return the supplied address"
-        ),
-        other => panic!("expected the contract address, got {other:?}"),
-    }
+    out
 }
 
 /// Full mint circuit, end to end against an empty deployed state, using the

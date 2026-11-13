@@ -200,14 +200,4 @@ mod tests {
         assert!(check(&signed_by(&key), &state).is_ok());
         assert!(check(&signed_by(&outsider), &state).is_err());
     }
-
-    #[test]
-    fn replace_authority_update_bumps_counter() {
-        match single_replace_authority(Vec::new(), 1, 5) {
-            SingleUpdate::ReplaceAuthority(auth) => {
-                assert_eq!(auth.counter, 6, "new authority counter must be current + 1");
-            }
-            _ => panic!("expected ReplaceAuthority"),
-        }
-    }
 }

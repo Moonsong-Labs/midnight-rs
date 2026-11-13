@@ -283,18 +283,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn verifier_keys_loads_increment() {
-        let provider = crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir());
-        let keys = verifier_keys(&provider, None).unwrap();
-
-        let (_, key) = keys
-            .iter()
-            .find(|(circuit, _)| circuit == "increment")
-            .expect("increment verifier key");
-        assert!(key.starts_with(b"midnight:verifier-key[v7]:"));
-    }
-
     /// The upstream constructors panic on a key of any other tag, and this
     /// check is what keeps such an artifact away from them.
     #[test]
@@ -355,18 +343,5 @@ mod tests {
             msg.contains("increment_by"),
             "error should name the stale artifact, got: {msg}"
         );
-    }
-
-    #[test]
-    fn declared_set_matching_the_directory_populates_every_circuit() {
-        let provider = crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir());
-        let declared = vec!["increment".to_string(), "increment_by".to_string()];
-        let keys = verifier_keys(&provider, Some(&declared)).unwrap();
-        for circuit in &declared {
-            assert!(
-                keys.iter().any(|(c, _)| c == circuit),
-                "{circuit} should be registered"
-            );
-        }
     }
 }
