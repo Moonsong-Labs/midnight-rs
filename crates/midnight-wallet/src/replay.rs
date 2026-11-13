@@ -934,6 +934,14 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn reconnect_delay_doubles_from_base() {
+        assert_eq!(reconnect_delay(1).as_millis(), 250);
+        assert_eq!(reconnect_delay(2).as_millis(), 500);
+        assert_eq!(reconnect_delay(3).as_millis(), 1000);
+        assert_eq!(reconnect_delay(4).as_millis(), 2000);
+    }
+
     /// Every UTXO field is parsed before the event touches the tracked set.
     /// A field that falls back to a default, or an index cast with `as`,
     /// applies a UTXO that the balance and the builds then read wrong.
