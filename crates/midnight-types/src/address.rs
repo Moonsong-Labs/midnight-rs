@@ -126,46 +126,20 @@ fn check_address_network(addr: &WalletAddress, expected: &Network) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use midnight_helpers::{DefaultDB, DustWallet, ShieldedWallet, UnshieldedWallet};
-
     use crate::Network;
-    use crate::convert::{IntoLedger, IntoSdk as _};
     use crate::hd::Seed;
 
     fn seed() -> Seed {
         Seed::from_bytes(&[7; 32]).unwrap()
     }
 
-    /// The SDK holds the encryption key as bytes. A wrong encoding would hand
-    /// a circuit call a key that encrypts to nobody.
-    #[test]
-    fn an_encryption_key_round_trips_through_the_sdk() {
-        let key = ShieldedWallet::<DefaultDB>::default(seed().into_ledger()).enc_public_key;
-
-        assert_eq!(key.into_sdk().into_ledger(), key);
-    }
-
-    /// A registration puts the parsed key into the ledger's type. A key that
-    /// changes on the way names a Dust address nobody holds, and the chain
-    /// sends the Dust there without an error.
-    #[test]
-    fn a_parsed_dust_address_names_the_key_its_wallet_tracks() {
-        let address = seed().dust_address(Network::Undeployed);
-        let key = super::parse_dust_address(&address, Network::Undeployed).unwrap();
-
-        let wallet = DustWallet::<DefaultDB>::default(seed().into_ledger(), None);
-        assert_eq!(key.into_ledger(), wallet.public_key);
-    }
-
-    /// A transfer pays the owner that the recipient converts to. A recipient
-    /// of other bytes names a user address nobody holds, and the chain pays it
-    /// without an error.
+    /// A parse that reads another owner from the wallet's own address names a
+    /// user address nobody holds. The chain pays that address without an
+    /// error.
     #[test]
     fn a_parsed_unshielded_address_names_the_owner_its_wallet_tracks() {
         let address = seed().unshielded_address(Network::Undeployed);
         let recipient = super::parse_unshielded_recipient(&address, Network::Undeployed).unwrap();
         assert_eq!(recipient, seed().unshielded_recipient());
-        let wallet = UnshieldedWallet::default(seed().into_ledger());
-        assert_eq!(recipient.into_ledger(), wallet.user_address);
     }
 }

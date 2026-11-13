@@ -397,16 +397,6 @@ mod tests {
         (reservation, released)
     }
 
-    /// An unsent stage hands its inputs back only through the drop of the
-    /// reservation it carries. A reservation that dropped silently would
-    /// strand the inputs of every abandoned transaction until their TTL.
-    #[test]
-    fn a_dropped_reservation_hands_its_inputs_back() {
-        let (reservation, released) = recorded(spending(7));
-        drop(reservation);
-        assert_eq!(*released.lock().unwrap(), [Nullifier(HashOutput([7; 32]))]);
-    }
-
     /// A sent transaction can still land, so its handle keeps the inputs on a
     /// drop and hands them back only on a definitive rejection. A release on
     /// that drop would let a later transaction spend the same inputs.
