@@ -2,7 +2,7 @@
 
 mod error;
 mod local_prover;
-pub mod node_error;
+mod node_error;
 mod pipeline;
 mod prover;
 mod provider;

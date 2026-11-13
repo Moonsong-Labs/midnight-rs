@@ -29,18 +29,6 @@ impl From<[u8; 32]> for TransactionHash {
     }
 }
 
-impl From<TransactionHash> for [u8; 32] {
-    fn from(hash: TransactionHash) -> Self {
-        hash.0
-    }
-}
-
-impl AsRef<[u8]> for TransactionHash {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
 impl std::fmt::Display for TransactionHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for byte in &self.0 {

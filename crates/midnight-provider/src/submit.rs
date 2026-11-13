@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use subxt::tx::{TransactionInBlock, TransactionStatus};
 
 use crate::ProviderError;
+use crate::node_error::{code_in, name_of};
 use crate::provider::QUERY_TIMEOUT;
 
 type AtBlock = subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>;
@@ -43,13 +44,6 @@ pub(crate) fn rejection_is_definitive(err: &SubmitError) -> bool {
 /// [`VerdictFetch`]: SubmitError::VerdictFetch
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SubmitError {
-    /// The submission pipeline failed before the transaction was handed to
-    /// the node: fetching metadata, or encoding the unsigned extrinsic. A
-    /// failed connect is [`ProviderError::Rpc`]. The transaction never left this process, so resubmitting
-    /// the same bytes is always safe.
-    #[error("not submitted: {message}")]
-    NotSubmitted { message: String },
-
     /// The `submit_and_watch` call failed, and the node can still hold the
     /// transaction.
     ///
@@ -73,14 +67,14 @@ pub enum SubmitError {
     /// the transaction will not be included. It is safe to rebuild and
     /// resubmit with fresh inputs.
     ///
-    /// `code` is the node's `InvalidTransaction::Custom` byte when the
-    /// message carries one. Match on it rather than on the message text; see
-    /// [`crate::node_error`] for what a code is called.
-    #[error("invalid: {}{message}", match code.and_then(crate::node_error::name_of) {
+    /// When the node's message carries an `InvalidTransaction::Custom` code
+    /// that this build knows, the `Display` writes the name of the code before
+    /// the message.
+    #[error("invalid: {}{message}", match code_in(message).and_then(name_of) {
         Some(name) => format!("{name}: "),
         None => String::new(),
     })]
-    Invalid { message: String, code: Option<u8> },
+    Invalid { message: String },
 
     /// The node dropped the transaction from its pool. **Not** a definitive
     /// rejection: the transaction may already have been gossiped to peers
@@ -124,7 +118,6 @@ impl SubmitError {
         match status {
             TransactionStatus::Invalid { message } => Some(Self::Invalid {
                 message: message.clone(),
-                code: crate::node_error::code_in(message),
             }),
             TransactionStatus::Dropped { message } => Some(Self::Dropped {
                 message: message.clone(),
@@ -170,7 +163,10 @@ impl SubmitError {
 /// dispatch errored entirely. See [`Verdict`].
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionReceipt {
+    /// The block that includes the transaction.
     pub block_hash: BlockHash,
+    /// The hash of the extrinsic that carries the transaction. See
+    /// [`PendingTx::extrinsic_hash`].
     pub extrinsic_hash: ExtrinsicHash,
     /// The Midnight transaction the extrinsic carried, the ledger's own
     /// identity for it. The chain names this hash in its `TxApplied` /
@@ -534,17 +530,15 @@ pub(crate) async fn prepare_bytes(
 
     let tx_client = tokio::time::timeout(QUERY_TIMEOUT, client.tx())
         .await
-        .map_err(|_| SubmitError::NotSubmitted {
-            message: format!("tx client: the node gave no answer within {QUERY_TIMEOUT:?}"),
+        .map_err(|_| {
+            ProviderError::Rpc(format!(
+                "tx client: the node gave no answer within {QUERY_TIMEOUT:?}"
+            ))
         })?
-        .map_err(|e| SubmitError::NotSubmitted {
-            message: format!("tx client: {e}"),
-        })?;
+        .map_err(|e| ProviderError::Rpc(format!("tx client: {e}")))?;
     let tx = tx_client
         .create_unsigned(&call)
-        .map_err(|e| SubmitError::NotSubmitted {
-            message: format!("create unsigned: {e}"),
-        })?;
+        .map_err(|e| ProviderError::Rpc(format!("create unsigned: {e}")))?;
     Ok(PreparedTx {
         tx,
         transaction_hash,
@@ -564,15 +558,11 @@ fn midnight_transaction_hash(tx_bytes: &[u8]) -> TransactionHash {
 #[cfg(test)]
 mod tests {
 
-    fn every_variant() -> [SubmitError; 7] {
+    fn every_variant() -> [SubmitError; 6] {
         let m = || "x".to_string();
         [
-            SubmitError::NotSubmitted { message: m() },
             SubmitError::SubmitRpc { message: m() },
-            SubmitError::Invalid {
-                message: m(),
-                code: None,
-            },
+            SubmitError::Invalid { message: m() },
             SubmitError::Dropped { message: m() },
             SubmitError::NodeError { message: m() },
             SubmitError::WatchStream { message: m() },
@@ -600,21 +590,15 @@ mod tests {
 
     #[test]
     fn invalid_status_maps_to_invalid() {
-        for (message, code) in [
-            ("bad nonce", None),
-            ("Invalid transaction with custom error: 231", Some(231)),
-        ] {
-            let status = Status::Invalid {
-                message: message.into(),
-            };
-            assert_eq!(
-                SubmitError::from_terminal_status(&status),
-                Some(SubmitError::Invalid {
-                    message: message.into(),
-                    code
-                })
-            );
-        }
+        let status = Status::Invalid {
+            message: "bad nonce".into(),
+        };
+        assert_eq!(
+            SubmitError::from_terminal_status(&status),
+            Some(SubmitError::Invalid {
+                message: "bad nonce".into()
+            })
+        );
     }
 
     #[test]
@@ -634,7 +618,6 @@ mod tests {
     fn a_rejection_names_the_code_it_carries() {
         let named = SubmitError::Invalid {
             message: "Invalid transaction with custom error: 231".into(),
-            code: Some(231),
         };
         assert_eq!(
             named.to_string(),
@@ -645,7 +628,6 @@ mod tests {
         // A refusal that never reached the ledger's mapping reads as before.
         let bare = SubmitError::Invalid {
             message: "bad signature".into(),
-            code: None,
         };
         assert_eq!(bare.to_string(), "invalid: bad signature");
     }

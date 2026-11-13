@@ -1,8 +1,15 @@
 use crate::submit::{NotApplied, SubmitError};
 use midnight_types::WalletError;
 
+/// The failure of a provider method: a node query, the wallet, the send or its
+/// wait, or an off-chain transaction step.
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
+    /// A node query or the connect failed, or the node gave no answer in time.
+    ///
+    /// [`MidnightProvider::prepare`](crate::MidnightProvider::prepare) also
+    /// returns it when the node's metadata has no matching call. On a send,
+    /// it means that the transaction never left this process.
     #[error("RPC error: {0}")]
     Rpc(String),
 
@@ -17,8 +24,9 @@ pub enum ProviderError {
     /// The submission of a transaction, or the wait for it, failed.
     ///
     /// Match the inner [`SubmitError`], whose variant docs give the retry rule
-    /// for each failure.
-    #[error("submission: {0}")]
+    /// for each failure, and whose `Display` and `source()` this variant
+    /// forwards.
+    #[error(transparent)]
     Submission(#[from] SubmitError),
 
     /// The transaction landed in a block, but the chain did not apply it.
