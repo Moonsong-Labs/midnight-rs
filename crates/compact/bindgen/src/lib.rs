@@ -20,6 +20,10 @@
 //! let threshold: u8 = ledger.threshold()?;
 //! # Ok(())
 //! # }
+//! # fn read_rpc(hex_state: &str) -> Result<(), StateError> {
+//! let ledger = Gateway::from_hex(hex_state)?;
+//! # Ok(())
+//! # }
 //! # fn main() {}
 //! ```
 //!

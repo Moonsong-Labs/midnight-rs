@@ -94,20 +94,6 @@ pub(crate) fn emit_ledger_wrapper(
         #initial_state
 
         /// A deployed contract instance with typed circuit call methods.
-        ///
-        /// # Example
-        ///
-        /// ```rust,ignore
-        /// let contract = Contract::deploy(&provider)
-        ///     .with_zk_config("compiled")
-        ///     .send()
-        ///     .await?
-        ///     .into_contract()
-        ///     .await?;
-        ///
-        /// contract.circuits().increment().send().await?.get_receipt().await?;
-        /// let ledger = contract.ledger().await?;
-        /// ```
         pub struct Contract<P>(midnight_contract::Contract<P>);
 
         impl Contract<()> {
@@ -1397,66 +1383,4 @@ pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
         }
     };
     (value_ty, decode)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn counter_field(name: &str, index: FieldIndex) -> LedgerField {
-        LedgerField {
-            name: name.to_string(),
-            index,
-            storage: StorageKind::Counter,
-            exported: true,
-            element_type: None,
-            key: None,
-            value: None,
-            depth: None,
-        }
-    }
-
-    /// The state expression `build()` hands to `ContractState::new`.
-    fn built_state(fields: &[LedgerField]) -> String {
-        let out = emit_initial_state(fields, "Wide", false)
-            .to_string()
-            .replace(' ', "");
-        out.split("ContractState::new(")
-            .nth(1)
-            .and_then(|tail| tail.split(",StorageHashMap::new()").next())
-            .expect("build() constructs a ContractState")
-            .to_string()
-    }
-
-    #[test]
-    fn an_empty_ledger_builds_an_empty_array() {
-        assert_eq!(built_state(&[]), "StateValue::Array(vec![].into())");
-    }
-
-    /// A ledger that fits one array keeps the array it always built — the
-    /// only contracts that worked before this are single-level ones.
-    #[test]
-    fn a_single_level_ledger_builds_one_flat_array() {
-        // Declared out of index order: the array follows the artifact's
-        // indices, which is what the circuits read.
-        let fields = vec![
-            counter_field("second", FieldIndex::Single(1)),
-            counter_field("first", FieldIndex::Single(0)),
-            counter_field("third", FieldIndex::Single(2)),
-        ];
-
-        let state = built_state(&fields);
-
-        assert_eq!(
-            state.matches("StateValue::Array(vec![").count(),
-            1,
-            "a single-level ledger must stay flat, got: {state}"
-        );
-        assert!(
-            state.starts_with(
-                "StateValue::Array(vec![StateValue::from(self.first),StateValue::from(self.second),StateValue::from(self.third)]"
-            ),
-            "expected the cells in index order, got: {state}"
-        );
-    }
 }

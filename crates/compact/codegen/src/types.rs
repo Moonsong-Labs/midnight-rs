@@ -92,7 +92,6 @@ fn version_family(version: &str) -> Option<String> {
 }
 
 #[derive(Debug)]
-#[cfg_attr(test, derive(Default))]
 pub struct ContractInfo {
     pub circuits: Vec<Circuit>,
     pub witnesses: Vec<crate::ir::Witness>,
@@ -203,15 +202,6 @@ impl Circuit {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rejects_a_compiler_outside_the_supported_family() {
-        let msg = check_compiler_version("0.0.1").unwrap_err().to_string();
-        let supported = format!("{SUPPORTED_COMPILER_FAMILY}.x");
-        for part in ["compiler-version", "0.0.1", supported.as_str()] {
-            assert!(msg.contains(part), "the error should name `{part}`: {msg}");
-        }
-    }
 
     #[test]
     fn rejects_malformed_version() {

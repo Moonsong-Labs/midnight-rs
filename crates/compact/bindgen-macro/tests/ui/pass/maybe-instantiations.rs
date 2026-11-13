@@ -46,7 +46,7 @@ impl Witnesses for Voter {
         Ok(())
     }
 
-    fn private_vote(&self, _: &mut u64) -> Result<PermissibleVotes, WitnessError> {
+    fn private_vote(&self, _: &mut u64) -> Result<PrivateVoteReturn, WitnessError> {
         Ok(PermissibleVotes::Yes)
     }
 
