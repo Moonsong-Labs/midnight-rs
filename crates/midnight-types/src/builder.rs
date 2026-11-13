@@ -1973,7 +1973,7 @@ mod tests {
     // The converging path of the fee-balancing loop (tracker is consulted
     // for the request, success returns without touching it) is exercised
     // end-to-end by the devnet tests in crates/midnight-wallet/tests/integration.rs
-    // (`shielded_transfer_conserves_value` and others), which run the loop to
+    // (`shielded_transfer_spans_multiple_coins` and others), which run the loop to
     // convergence.
 
     #[test]
