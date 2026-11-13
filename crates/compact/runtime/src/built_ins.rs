@@ -278,9 +278,7 @@ mod tests {
         )
     }
 
-    /// `struct Point { x: Uint<32>, flag: Boolean, label: Bytes<32> }`. The
-    /// field widths are chosen so a wrong order or a wrong width shows up in
-    /// the alignment alone.
+    /// `struct Point { x: Uint<32>, flag: Boolean, label: Bytes<32> }`.
     fn point_ty() -> Type {
         Type::Struct {
             name: "Point".to_string(),

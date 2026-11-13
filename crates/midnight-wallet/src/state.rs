@@ -1867,7 +1867,7 @@ mod tests {
     }
 
     #[test]
-    fn resync_commit_persists_when_reservation_cleared() {
+    fn resync_commit_clears_only_the_observed_reservation_and_persists() {
         let (dir, mut wallet) = saved_wallet();
         let key = ukey(0xab, 0);
         wallet.reserve_pending(
@@ -1898,7 +1898,7 @@ mod tests {
         assert_eq!(
             remaining,
             vec![ukey(0xbb, 1)],
-            "late reservation must survive"
+            "a reservation the replay did not observe must survive"
         );
         assert_eq!(stored_generations(dir.path()), vec![2]);
         assert!(
@@ -1992,10 +1992,10 @@ mod tests {
     fn decode_ledger_parameters_rejects_corrupt_values_at_decode() {
         use midnight_helpers::base_crypto::cost_model::FixedPoint;
 
-        // A structurally valid blob with a zeroed field must be rejected by
-        // `decode_ledger_parameters` itself, so both the initial-sync and the
-        // resync paths refuse it before any fee math runs. A valid blob
-        // decodes to the parameters it encodes.
+        // `decode_ledger_parameters` itself refuses a structurally valid blob
+        // with a zeroed field. So the initial sync and the resync both refuse
+        // it before any fee math runs. A valid blob decodes to the parameters
+        // it encodes.
         let cases = [
             (None, INITIAL_PARAMETERS),
             (

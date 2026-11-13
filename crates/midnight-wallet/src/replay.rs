@@ -1194,6 +1194,7 @@ mod tests {
                 assert_eq!(subscription_variable(&sub, "transactionId"), 0);
                 send_next(&mut ws, &sub, unshielded_progress(5)).await;
                 send_next(&mut ws, &sub, tx_event(2, 200)).await;
+                // A forward gap and a repeated id are in order on one connection.
                 send_next(&mut ws, &sub, tx_event(4, 300)).await;
                 send_next(&mut ws, &sub, tx_event(4, 300)).await;
                 // Hostile / corrupt stream: id 1 after id 4 on the same

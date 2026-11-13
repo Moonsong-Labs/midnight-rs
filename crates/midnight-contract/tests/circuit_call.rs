@@ -189,7 +189,7 @@ async fn a_fee_less_call_with_witnesses_needs_a_store_before_any_node_query() {
             ShieldedInputs::default(),
         )
         .await
-        .expect_err("the closed port fails the state query");
+        .expect_err("a URL with no scheme fails the connect");
     assert!(
         matches!(err, ContractError::Provider(_)),
         "a handle that declares no witnesses needs no store, got {err:?}"

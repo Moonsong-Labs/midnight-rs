@@ -149,10 +149,7 @@ mod synthetic_tests {
                 StateValue::from(AlignedValue::from([0u8; 32])),
                 // 1: state (cell, Enum PublicState as u8)
                 StateValue::from(AlignedValue::from(state_variant)),
-                // 2: topic (cell, Struct Maybe) -- skip testing, use a placeholder
-                //    We need a valid AlignedValue for Maybe{is_some: bool, value: Opaque("string")}
-                //    Opaque("string") maps to Vec<u8> which has Compress alignment.
-                //    Build: concat(bool=false, empty_compress)
+                // 2: topic (cell, Maybe): a placeholder that no test reads
                 StateValue::from(AlignedValue::from(false)),
                 // 3: tally_yes (counter)
                 StateValue::from(0u64),

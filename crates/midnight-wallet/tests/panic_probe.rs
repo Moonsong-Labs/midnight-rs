@@ -24,7 +24,7 @@ fn short_shielded_address_is_an_error_not_a_panic() {
 }
 
 #[test]
-fn cross_network_shielded_address_is_rejected() {
+fn cross_network_address_is_rejected() {
     let rows = [
         (
             "shielded",

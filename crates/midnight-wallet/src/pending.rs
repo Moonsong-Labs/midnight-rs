@@ -614,10 +614,10 @@ mod tests {
             Timestamp::MAX,
         );
 
-        // Confirm one reserved unshielded key, a key of another intent at the
-        // other reserved index, and the dust spend: the matched unshielded
-        // reservation and the dust batch go, the other unshielded
-        // reservation stays.
+        // Confirm one reserved unshielded key, the dust spend, and a key of
+        // another intent at the other reserved index. The matched unshielded
+        // reservation and the dust batch go. The other unshielded reservation
+        // stays.
         p.clear_confirmed(&[ukey(0xab, 0), ukey(0xff, 1)], &[nullifier(7)]);
         assert_eq!(p.dust_batches().count(), 0);
         let remaining: Vec<_> = p
@@ -655,7 +655,7 @@ mod tests {
     /// restart, and a load that forgets the mark loses it at the next one.
     /// Only a restart shows each.
     #[test]
-    fn only_a_proven_reservation_survives_a_restart() {
+    fn only_a_proven_reservation_survives_a_restart_with_its_expiry() {
         let mut p = PendingReservations::default();
         // Build A, then build B in the same block. Only A finishes its proof.
         p.reserve(

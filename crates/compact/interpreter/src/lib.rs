@@ -2913,7 +2913,7 @@ mod tests {
     }
 
     #[test]
-    fn bytes_to_field_boundary_at_the_modulus() {
+    fn bytes_to_field_reads_little_endian_up_to_the_modulus() {
         use midnight_transient_crypto::curve::Fr;
         // p - 1 (the largest field element) must be accepted; exactly p
         // (the modulus itself) must be rejected — the range check is

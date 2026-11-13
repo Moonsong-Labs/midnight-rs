@@ -322,6 +322,7 @@ pub(crate) fn save_snapshot(
 
     // Read the current metadata (if any) so we can bump the generation and
     // clean up the previous binary files only after the new metadata commit.
+    // Read past the ledger 8 refusal: a save replaces a ledger 8 snapshot too.
     let previous_generation = read_json::<StoredMetadata>(&dir.join(METADATA_FILE))
         .ok()
         .flatten()

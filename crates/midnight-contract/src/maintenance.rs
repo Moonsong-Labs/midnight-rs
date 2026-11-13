@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_committee_enforces_non_empty_and_threshold_bounds() {
+    fn validate_committee_enforces_size_threshold_and_distinct_members() {
         let a = schnorr_member();
         let b = ecdsa_member();
         let committee = vec![a, b];
