@@ -27,7 +27,8 @@ midnight-core                    meta-crate; re-exports the public API
   │     └── interpreter / runtime  re-exports of compact-interpreter and compact-runtime
   │
   ├── midnight-provider          network entrypoint; wallet reached only through MidnightWallet
-  │     ├── MidnightProvider<W>  prepare, send_tx_envelope, the node reads
+  │     ├── MidnightProvider<W>  prepare, send_tx_envelope
+  │     ├── node_api.rs          NodeApi: the node reads, which MidnightProvider implements
   │     ├── pipeline.rs          send_transaction, fill: fill from node queries, then fund, prove
   │     │                        and sign; merge_transactions
   │     ├── prover.rs            Prover: local, remote, or custom (test-util)
@@ -101,6 +102,7 @@ midnight-core                    meta-crate; re-exports the public API
 |---|---|---|
 | `MidnightProvider<W>` | provider | Network entry. Holds node URL, the attached wallet `W` (or `()` with none), the proof backends and the optional private-state store. It calls the wallet only through `MidnightWallet`. |
 | `Wallet` | wallet | One synced wallet, not `Clone`. It locks its own state, so a `&Wallet` serves every call and an `Arc<Wallet>` shares it. It runs the indexer replays of a sync and a rescan. It implements `MidnightWallet`. |
+| `NodeApi` | provider | The node reads: the best block hash, the finalized height, the hashes at a height, a block header, a block's time and contract state. `MidnightProvider` implements it. |
 | `MidnightWallet` | types | The trait that a provider funds and signs through: `shielded_recipient`, `fund_transaction`, `sign_transaction`. Implemented for `&T` and `Arc<T>`. Both `midnight-wallet` and `midnight-provider` depend on `midnight-types`, and neither depends on the other. |
 | `FilledTx` / `FundedTx` / `ProvenTx` / `TxEnvelope` | types | The stages of a transaction: filled by the provider, funded by the wallet, proven by the provider, signed by the wallet. Each from `FundedTx` on carries the reservation of what the wallet spends, and a drop of an unsent one hands it back. |
 | `BackgroundSync` | wallet | The handle of the task that `Wallet::sync_in_background` starts. The task syncs the wallet after each pause. Dropping the handle stops the sync. `last_error()` names the error of the last pass. `wait_until(done)` waits until `done` holds for the balance. It checks at the call and after each pass. |
@@ -188,10 +190,10 @@ A contract deployed before the fork keeps its `verifier-key[v6]` keys, and ledge
 
 ### Query state
 
-One node RPC, `midnight_contractState`, serves the whole state. `MidnightProvider` exposes it as `get_contract_state`:
+One node RPC, `midnight_contractState`, serves the whole state. `NodeApi` exposes it as `get_contract_state`:
 
 ```
-MidnightProvider.get_contract_state(address, at)      → hex string   // at = None: the best block
+NodeApi::get_contract_state(address, at)              → hex string   // at = None: the best block
   → hex decode → tagged_deserialize → ContractState<InMemoryDB>
 ```
 
@@ -408,7 +410,7 @@ MidnightWallet::sign_transaction(proven)          // a signature for each placeh
 
 ## Transaction submission
 
-One auto-reconnecting websocket carries everything the node serves: raw Substrate and `midnight_*` RPCs through subxt's `RpcClient`, and the calls that need runtime metadata (submission, and storage reads such as `MidnightProvider::get_block_timestamp`) through the `OnlineClient` built on the same transport. The connection is opened on first use and cached for the provider's lifetime.
+One auto-reconnecting websocket carries everything the node serves: raw Substrate and `midnight_*` RPCs through subxt's `RpcClient`, and the calls that need runtime metadata (submission, and storage reads such as `NodeApi::get_block_timestamp`) through the `OnlineClient` built on the same transport. The connection is opened on first use and cached for the provider's lifetime.
 
 `MidnightProvider::send_tx_envelope` wraps the bytes of a `TxEnvelope` as an unsigned `Midnight::send_mn_transaction` extrinsic, calls `submit_and_watch`, and hands back:
 
@@ -430,7 +432,7 @@ The `PreparedTx` holds the reservation that the envelope carries. A failed prepa
 
 ## Block pinning
 
-A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the hash is a node block hash. The state read that honours it is the node RPC `midnight_contractState`, for a whole `ContractState`. It takes only a block hash, so a caller holding a height resolves it to a hash first (`MidnightProvider::get_block_hashes_by_height`). A circuit call on a pinned handle also reads the block time (`Timestamp::Now`) at the pin, so its clock checks run at the time of that block.
+A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the hash is a node block hash. The state read that honours it is the node RPC `midnight_contractState`, for a whole `ContractState`. It takes only a block hash, so a caller holding a height resolves it to a hash first (`NodeApi::get_block_hashes_by_height`). A circuit call on a pinned handle also reads the block time (`Timestamp::Now`) at the pin, so its clock checks run at the time of that block.
 
 ## External dependencies
 

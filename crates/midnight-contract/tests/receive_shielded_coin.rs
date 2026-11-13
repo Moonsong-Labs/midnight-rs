@@ -30,7 +30,7 @@ mod shielded_mint {
 
 use compact_bindgen::Bytes;
 use midnight_contract::ExtrinsicHash;
-use midnight_provider::MidnightProvider;
+use midnight_provider::{MidnightProvider, NodeApi};
 
 #[tokio::test]
 async fn a_call_spends_the_callers_coin_and_returns_the_change() {

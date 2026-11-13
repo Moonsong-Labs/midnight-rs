@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_helpers::{DefaultDB, FinalizedTransaction};
-use midnight_provider::{MidnightProvider, TransactionRequest};
+use midnight_provider::{MidnightProvider, NodeApi, TransactionRequest};
 use midnight_types::NIGHT;
 
 /// Long enough for a build, its proof and its inclusion, and well short of
@@ -31,7 +31,7 @@ fn intent_ttls(bytes: &[u8]) -> Vec<u64> {
 }
 
 /// The time of the node's best block, in seconds.
-async fn chain_now<W>(provider: &MidnightProvider<W>) -> u64 {
+async fn chain_now(provider: &impl NodeApi) -> u64 {
     let best = provider.best_block_hash().await.expect("best block");
     provider
         .get_block_timestamp(best)
