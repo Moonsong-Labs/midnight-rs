@@ -109,7 +109,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn graphql_url_drops_ws_only_after_graphql() {
+    fn the_client_queries_the_graphql_path_of_its_url() {
         for (base, expected) in [
             (
                 "http://localhost:8088",

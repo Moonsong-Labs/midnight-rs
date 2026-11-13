@@ -1574,7 +1574,7 @@ mod tests {
     /// reserved and that stays in the view is spent twice, and the node
     /// refuses one of the two transactions.
     #[test]
-    fn the_funding_view_leaves_out_a_reserved_utxo() {
+    fn the_funding_view_leaves_out_the_reserved_inputs() {
         let mut wallet = test_wallet(None);
         let free = TrackedUtxo {
             output_index: 1,

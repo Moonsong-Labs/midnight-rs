@@ -2720,7 +2720,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_uint_encode_roundtrips_above_u64() {
+    fn typed_uint_encode_keeps_the_bits_above_u64() {
         let big = (1u128 << 64) + 12345;
         let ty = Type::Unsigned(BigUint::from(u128::MAX));
         let av = encode_typed(&Value::Integer(big), &ty).expect("encode");
@@ -2747,7 +2747,7 @@ mod tests {
     }
 
     #[test]
-    fn a_typed_integer_ledger_key_takes_the_declared_width() {
+    fn a_typed_ledger_key_takes_the_declared_width() {
         let program = Program::new(&[], &[], &[]);
         let mut ps = Vec::new();
         let mut ctx = test_ctx(

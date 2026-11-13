@@ -1698,7 +1698,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn import_rejects_uppercase_hex() {
+    async fn import_rejects_a_hash_that_is_not_lowercase_hex() {
         for hash in [
             "not-hex".to_string(),
             // 64 chars, valid hex content, but uppercase: would not be
