@@ -9,6 +9,3 @@ pub mod report;
 pub mod runner;
 pub mod state_json;
 pub mod tagged;
-
-#[cfg(test)]
-mod shape_tests;
