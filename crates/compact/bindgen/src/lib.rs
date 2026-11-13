@@ -18,6 +18,7 @@
 //! # fn read(state: ContractState<InMemoryDB>) -> Result<(), StateError> {
 //! let ledger = Gateway::new(state);
 //! let threshold: u8 = ledger.threshold()?;
+//! let threshold_index: usize = FIELD_THRESHOLD;
 //! # Ok(())
 //! # }
 //! # fn read_rpc(hex_state: &str) -> Result<(), StateError> {
