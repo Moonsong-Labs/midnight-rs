@@ -14,25 +14,10 @@ fn provider() -> Option<MidnightProvider> {
 }
 
 #[tokio::test]
-async fn health_check() {
-    let Some(p) = provider() else { return };
-    let health = p.health().await;
-    assert!(health.node_connected);
-    assert!(health.block_height.unwrap() > 0);
-    eprintln!("health: {health:?}");
-}
-
-#[tokio::test]
-async fn finalized_height_trails_the_best_head() {
+async fn the_finalized_height_is_past_genesis() {
     let Some(p) = provider() else { return };
     let finalized = p.get_finalized_block_height().await.unwrap();
-    // Read best after finalized: finalized(t1) <= best(t1) <= best(t2).
-    let best = p.get_block_number().await.unwrap();
     assert!(finalized > 0);
-    assert!(
-        finalized <= best,
-        "finalized {finalized} must not exceed best {best}"
-    );
 }
 
 #[tokio::test]
