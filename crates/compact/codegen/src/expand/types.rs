@@ -164,7 +164,7 @@ pub(crate) fn opaque_tokens(ts_type: &str) -> TokenStream {
 /// Generate a `TokenStream` that evaluates to an `AlignedValue` built from
 /// an expression of the given [`Type`]. Used by the per-struct
 /// `impl From<T> for AlignedValue` codegen and by the per-circuit method
-/// codegen when threading typed arguments into `Contract::call_with`.
+/// codegen when threading typed arguments into the `Contract` call methods.
 ///
 /// Field/element order MUST match `alignment_expr`, because
 /// `Aligned::alignment()` for a compound type is `Alignment::concat` of the

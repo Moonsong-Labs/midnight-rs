@@ -6,9 +6,8 @@ use midnight_provider::{
 use midnight_types::ExtrinsicHash;
 
 /// Reconciliation guidance appended to the Display of
-/// [`ContractError::SubmissionWait`] and [`ContractError::FinalizeTimeout`]
-/// when a pending private-state snapshot was recorded for the in-flight
-/// transaction (`snapshot_written == true`).
+/// [`ContractError::SubmissionWait`] when a pending private-state snapshot was
+/// recorded for the in-flight transaction (`snapshot_written == true`).
 const PENDING_SNAPSHOT_HINT: &str = " The pending snapshot was left on disk; reconcile by calling \
      `PrivateStateProvider::confirm` (if the chain accepted it) \
      or `mark_failed` (if not).";
@@ -145,53 +144,17 @@ pub enum ContractError {
         snapshot_written: bool,
     },
 
-    /// The SDK submitted a circuit-call transaction, but it did not finalize in time.
-    ///
-    /// The transaction can be in the mempool, or in a block that is not final
-    /// yet. The timeout does not retract it, so it can still land.
-    ///
-    /// Do not build or submit again from the same inputs before you know its
-    /// fate. Find the fate with the check that [`SubmissionWait`] describes.
-    /// Then, if `snapshot_written` is true, call `confirm` (the transaction
-    /// applied) or `mark_failed` (it did not) with `extrinsic_hash`. Until you
-    /// reconcile the snapshot, the next call on this contract builds on it. A
-    /// `mark_failed` of it then also drops the snapshots of the later calls.
-    ///
-    /// [`SubmissionWait`]: ContractError::SubmissionWait
-    #[error(
-        "transaction {transaction_hash} (extrinsic {extrinsic_hash:x}) did not \
-         finalize within {timeout:?}. It can be in the mempool, or in a block \
-         that is not final yet. The timeout does not retract it, so it can \
-         still land.{}",
-        if *snapshot_written { PENDING_SNAPSHOT_HINT } else { "" }
-    )]
-    FinalizeTimeout {
-        /// The Midnight transaction hash. See
-        /// [`PendingTx::transaction_hash`](midnight_provider::PendingTx::transaction_hash).
-        transaction_hash: TransactionHash,
-        /// The extrinsic hash of the in-flight transaction. The pending
-        /// private-state snapshot uses it as its key.
-        extrinsic_hash: ExtrinsicHash,
-        /// The deadline the finalization wait was bounded by.
-        timeout: Duration,
-        /// Whether a pending private-state snapshot was recorded for this
-        /// transaction. When `true`, the Display appends reconciliation
-        /// guidance for the on-disk snapshot.
-        snapshot_written: bool,
-    },
-
     /// The transaction landed in a block, but the chain did not apply it.
     /// The variant of the wrapped [`NotApplied`] tells the two cases apart:
     /// [`NotApplied::PartialSuccess`] (the guaranteed phase committed, at least
     /// one fallible segment failed) and [`NotApplied::Failure`] (the dispatch
     /// errored entirely, so no phase ran). Each variant holds the
-    /// [`TransactionReceipt`]. Unlike [`SubmissionWait`] and
-    /// [`FinalizeTimeout`], the chain gave a verdict. `Contract::call_with` and
-    /// `PendingCall::get_receipt` drop the orphan `Pending` snapshot, when the
-    /// call recorded one, with `mark_failed` before they return this error.
+    /// [`TransactionReceipt`]. Unlike [`SubmissionWait`], the chain gave a
+    /// verdict. `PendingCall::get_receipt` drops the orphan `Pending` snapshot,
+    /// when the call recorded one, with `mark_failed` before it returns this
+    /// error.
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
-    /// [`FinalizeTimeout`]: ContractError::FinalizeTimeout
     #[error(transparent)]
     TransactionFailed(#[from] NotApplied),
 
@@ -264,11 +227,10 @@ pub enum ContractError {
     /// A fee-less call ran witnesses that change the contract's private
     /// state, and a fee-less call has no way to record the new state.
     ///
-    /// The generated `.without_fee()`, and
-    /// [`Contract::without_fee_call_with`](crate::Contract::without_fee_call_with),
-    /// give this error after the local run of the circuit. The call reserves
-    /// no input, makes no proof, and writes no private-state snapshot. Submit
-    /// the call with `.send()`, which records the new state.
+    /// The generated `.without_fee()` gives this error after the local run of
+    /// the circuit. The call reserves no input, makes no proof, and writes no
+    /// private-state snapshot. Submit the call with `.send()`, which records
+    /// the new state.
     #[error(
         "the witnesses of this call change the private state of contract {address}, and a \
          fee-less call does not record it: submit the call with `.send()`"
@@ -362,15 +324,6 @@ mod tests {
                     source: SubmitError::Dropped {
                         message: "pool full".into(),
                     },
-                    snapshot_written: false,
-                },
-                transaction_hash.to_string(),
-            ),
-            (
-                ContractError::FinalizeTimeout {
-                    transaction_hash,
-                    extrinsic_hash,
-                    timeout: Duration::from_secs(60),
                     snapshot_written: false,
                 },
                 transaction_hash.to_string(),

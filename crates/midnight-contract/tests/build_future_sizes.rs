@@ -106,18 +106,6 @@ fn the_base_contract_call_methods_return_small_futures() {
         .expect("the counter artifact declares a circuit");
 
     assert_small(
-        "Contract::call_with",
-        contract.call_with(
-            circuit,
-            &program,
-            "increment",
-            &[],
-            &NoWitnesses,
-            &[],
-            ShieldedInputs::default(),
-        ),
-    );
-    assert_small(
         "Contract::send_call_with",
         contract.send_call_with(
             circuit,
@@ -141,10 +129,6 @@ fn the_base_contract_call_methods_return_small_futures() {
             &[],
             ShieldedInputs::default(),
         ),
-    );
-    assert_small(
-        "Contract::call",
-        contract.call(circuit, &program, "increment"),
     );
     assert_small(
         "Contract::simulate_with",

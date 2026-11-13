@@ -69,7 +69,7 @@ pending.get_receipt().await             → TransactionReceipt
 
 The "balance" step runs inside the wallet's funding because it iterates between balancing and mock-proving until the Dust fee is right. The real proof follows in the provider, with the wallet free. For **your own** transaction there is no standalone `proveTx` you call separately.
 
-What you *can* do is stop before submission and get the signed transaction back: `fill` returns the `TxEnvelope` without a send, and `TxEnvelope::into_bytes` gives its proven bytes. A contract call's `contract.circuits().<circuit>().without_fee().await` (equivalently `Contract::without_fee_call_with`) returns the call with no fee, for a sponsor. That is the hook the multi-party flows in the next section build on.
+What you *can* do is stop before submission and get the signed transaction back: `fill` returns the `TxEnvelope` without a send, and `TxEnvelope::into_bytes` gives its proven bytes. A contract call's `contract.circuits().<circuit>().without_fee().await` returns the call with no fee, for a sponsor. That is the hook the multi-party flows in the next section build on.
 
 The one-shot paths (`provider.send_transaction(request).await` and `Contract::deploy(...).send().await`) collapse the fill, the proof and the submit into one call. The wait is a call on the pending handle that they return.
 
@@ -151,7 +151,7 @@ A Midnight transaction has **two phases** that execute in order. midnight-js's g
 Practical consequences for SDK callers:
 
 - `pending.get_receipt().await` returning successfully means the extrinsic carrying the transaction is in a finalized block, and the chain applied the transaction there. A transaction that landed but did not apply fails the wait with `ProviderError::NotApplied`.
-- A contract call can land on-chain and still do nothing useful. `Contract::call_with` reports that as `ContractError::TransactionFailed`, and on the `send_transaction` path `get_receipt` reports it as `ProviderError::NotApplied`. An `Ok` from either means the call applied.
+- A contract call can land on-chain and still do nothing useful. A contract call's `get_receipt` reports that as `ContractError::TransactionFailed`, and on the `send_transaction` path `get_receipt` reports it as `ProviderError::NotApplied`. An `Ok` from either means the call applied.
 - For multi-step intents (e.g. shielded offer + contract call), one segment can succeed while another fails. The chain records this as `PartialSuccess`.
 
 `get_receipt` returns [`TransactionReceipt`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash and the Midnight transaction hash. The chain's verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. Only a transaction that the chain applied (`TxApplied`) reaches the caller as `Ok`. For a partial success and a failure, the wait fails with `ProviderError::NotApplied`, so `?` stops on a transaction that did not apply:
@@ -185,7 +185,7 @@ When `get_receipt` fails with no verdict, the error is `ProviderError::Submissio
 
 A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes the payloads.
 
-midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::get_receipt` or `Contract::call_with`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
+midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::get_receipt`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
 
 The differences:
 

@@ -223,6 +223,7 @@ impl<W> MidnightProvider<W> {
     /// The attached [`PrivateStateProvider`], or `None` if none was set via
     /// [`Self::with_private_state`]. Cheap to clone (`Arc`) and safe to share
     /// across tasks.
+    #[doc(hidden)]
     pub fn private_state(&self) -> Option<Arc<dyn PrivateStateProvider>> {
         self.private_state.clone()
     }

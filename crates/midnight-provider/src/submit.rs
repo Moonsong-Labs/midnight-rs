@@ -206,7 +206,7 @@ pub enum NotApplied {
     ///
     /// The on-chain event doesn't carry a per-segment breakdown, but the
     /// SDK's tx shapes hold one fallible segment each
-    /// (`Contract::call_with` -> one contract call;
+    /// (a circuit call -> one contract call;
     /// `DeployBuilder` -> one deploy; maintenance -> one update), so within
     /// those flows `PartialSuccess` unambiguously means "my segment didn't
     /// apply". For a transaction that merges several fallible segments, the
