@@ -19,7 +19,7 @@ mod call_context {
 
 use compact_bindgen::Bytes;
 
-use midnight_provider::MidnightProvider;
+use midnight_provider::{MidnightProvider, NodeApi};
 
 const DOMAIN_SEP: [u8; 32] = [0x5c; 32];
 const MINTED: u64 = 1_000;

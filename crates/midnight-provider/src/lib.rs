@@ -2,6 +2,7 @@
 
 mod error;
 mod local_prover;
+mod node_api;
 mod node_error;
 mod pipeline;
 mod prover;
@@ -12,9 +13,10 @@ mod submit;
 mod types;
 
 pub use error::ProviderError;
+pub use node_api::{NodeApi, NodeHeader};
 pub use pipeline::merge_transactions;
 pub use prover::Prover;
-pub use provider::{MidnightProvider, NodeHeader};
+pub use provider::MidnightProvider;
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TransactionReceipt};
 pub use types::TransactionHash;
 

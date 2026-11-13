@@ -25,7 +25,7 @@ ContractProviders = {
 | midnight-js abstraction       | midnight-rs equivalent                                                                              |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
 | `MidnightProvider.submitTx`   | `MidnightProvider::send_tx_envelope`, or `send_transaction` for a `TransactionRequest`              |
-| `PublicDataProvider`          | `MidnightProvider`'s `get_*` reads, `get_contract_state` among them |
+| `PublicDataProvider`          | The `NodeApi` trait, which `MidnightProvider` implements: `get_contract_state` and the block reads |
 | `WalletProvider`              | The `MidnightWallet` trait, which `Wallet` implements (`fund_transaction` funds, `sign_transaction` signs), plus `merge_transactions` / `TransactionRequest::sponsor` (see "Combining and balancing transactions") |
 | `ProofProvider`               | `Prover`, set with `with_prover`: `Prover::local()` by default, or `Prover::remote(url)` |
 | `ZkConfigProvider`            | The `ZkConfigProvider` trait, set with `with_zk_config`, where a path gives the default `FsZkConfigProvider` |
