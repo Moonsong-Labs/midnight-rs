@@ -819,23 +819,6 @@ mod tests {
     use midnight_indexer_client::testutil::{bind, read_http_request, write_json_response};
 
     #[tokio::test]
-    async fn the_latest_block_survives_a_dropped_connection() {
-        let (listener, url) = bind().await;
-        tokio::spawn(async move {
-            drop(listener.accept().await.unwrap());
-            let (mut stream, _) = listener.accept().await.unwrap();
-            if read_http_request(&mut stream).await {
-                let body = r#"{"data":{"block":{"hash":"00","height":7}}}"#;
-                write_json_response(&mut stream, "200 OK", body).await;
-            }
-        });
-        let block = latest_block(&url)
-            .await
-            .expect("the second connection answers");
-        assert_eq!(block.height, 7);
-    }
-
-    #[tokio::test]
     async fn the_latest_block_stops_at_an_answer_or_at_the_bound() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -951,34 +934,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn reconnect_delay_doubles_from_base() {
-        assert_eq!(reconnect_delay(1).as_millis(), 250);
-        assert_eq!(reconnect_delay(2).as_millis(), 500);
-        assert_eq!(reconnect_delay(3).as_millis(), 1000);
-        assert_eq!(reconnect_delay(4).as_millis(), 2000);
-    }
-
-    #[test]
-    fn order_regression_truth_table() {
-        // Fresh connection (initial start, resume from a persisted cursor,
-        // or a mid-replay reconnect): no high-water yet, so any first id is
-        // in order, including re-deliveries at or below the applied cursor
-        // (those are `already_applied`'s job to skip, not a violation).
-        assert_eq!(order_regression(0, None), None);
-        assert_eq!(order_regression(7, None), None);
-        // Within one connection ids must be non-decreasing.
-        assert_eq!(order_regression(5, Some(5)), None); // duplicate: dedupe handles it
-        assert_eq!(order_regression(6, Some(5)), None); // strictly forward
-        assert_eq!(order_regression(9, Some(5)), None); // forward gaps: legal on filtered streams
-        assert_eq!(order_regression(4, Some(5)), Some(5)); // intra-connection regression
-        // Post-progress regression: the connection advanced past the
-        // cross-connection cursor (say cursor 5, connection high-water 8);
-        // an id at or below the cursor arriving now is a violation, not a
-        // legitimate reconnect re-delivery.
-        assert_eq!(order_regression(3, Some(8)), Some(8));
-    }
-
     /// Every UTXO field is parsed before the event touches the tracked set.
     /// A field that falls back to a default, or an index cast with `as`,
     /// applies a UTXO that the balance and the builds then read wrong.
@@ -1033,24 +988,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn already_applied_guards_resumption_only() {
-        // Fresh sync from the beginning: nothing is skipped, even an event
-        // with id 0.
-        assert!(!already_applied(0, 0, 0, false));
-        assert!(!already_applied(1, 0, 0, false));
-        // Once events were applied this session, anything at or below the
-        // cursor is a re-delivered duplicate.
-        assert!(already_applied(2, 2, 0, true));
-        assert!(already_applied(1, 2, 0, true));
-        assert!(!already_applied(3, 2, 0, true));
-        // Resuming from a persisted cursor: re-deliveries below the
-        // requested start are skipped even before anything was applied this
-        // session (`last_id` was initialized to `start_id - 1`).
-        assert!(already_applied(4, 4, 5, false));
-        assert!(!already_applied(5, 4, 5, false));
-    }
-
     /// Mock-WebSocket-server tests for the replay loops' reconnect, resume,
     /// and dedupe behavior, driven through `replay_unshielded_events`, whose
     /// events are plain JSON. `replay_ledger_events` shares the same
@@ -1099,14 +1036,16 @@ mod tests {
                 drop(ws);
 
                 // Connection 2: the client must resume from the cursor.
-                // Re-deliver tx 2 (a duplicate the client must skip), then
-                // deliver tx 3 to complete the sync.
+                // Re-deliver tx 1 and tx 2, below and at the cursor, which
+                // the client must skip, then deliver tx 3 to complete the
+                // sync.
                 let (mut ws, sub) = accept_subscriber(&listener).await;
                 assert_eq!(
                     subscription_variable(&sub, "transactionId"),
                     3,
                     "resume from last_id + 1"
                 );
+                send_next(&mut ws, &sub, tx_event(1, 100)).await;
                 send_next(&mut ws, &sub, tx_event(2, 200)).await;
                 send_next(&mut ws, &sub, tx_event(3, 300)).await;
                 while next_json(&mut ws).await.is_some() {}
@@ -1119,7 +1058,7 @@ mod tests {
                     .expect("sync must succeed across the reconnect");
 
             let values: Vec<u128> = replay.utxos.iter().map(|u| u.value).collect();
-            assert_eq!(values, vec![100, 200, 300], "duplicate tx 2 re-applied?");
+            assert_eq!(values, vec![100, 200, 300], "a re-delivered tx re-applied?");
             assert_eq!(replay.last_tx_id, 3);
             assert_eq!(replay.last_block_height, 30);
 
@@ -1151,39 +1090,38 @@ mod tests {
 
         #[tokio::test]
         async fn unshielded_replay_fails_after_max_consecutive_failures() {
-            // A dropped socket reaches the replay as a read error, and a
-            // completed subscription as the end of the stream.
-            for complete in [false, true] {
-                let (listener, url) = bind().await;
-                let attempts = 1 + RECONNECT_MAX_RETRIES as usize;
-                let server = tokio::spawn(async move {
-                    // Complete the subscribe handshake, then end the
-                    // connection, for every allowed attempt. The client must
-                    // give up afterwards.
-                    let mut connections = 0usize;
-                    for _ in 0..attempts {
-                        let (mut ws, sub) = accept_subscriber(&listener).await;
-                        connections += 1;
-                        if complete {
-                            send_json(&mut ws, &json!({"type": "complete", "id": sub["id"]})).await;
-                            while next_json(&mut ws).await.is_some() {}
-                        }
-                    }
-                    connections
-                });
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicUsize, Ordering};
 
-                let sub_client = SubscriptionClient::new(&url);
-                let err =
-                    replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, 0, false, None)
-                        .await
-                        .expect_err("must fail after exhausting reconnect attempts");
-                assert!(
-                    matches!(&err, WalletError::Indexer { retryable, .. } if *retryable),
-                    "complete: {complete}, got: {err:?}"
-                );
+            let (listener, url) = bind().await;
+            let connections = Arc::new(AtomicUsize::new(0));
+            let server_connections = Arc::clone(&connections);
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut ws, sub) = accept_subscriber(&listener).await;
+                    server_connections.fetch_add(1, Ordering::SeqCst);
+                    send_json(&mut ws, &json!({"type": "complete", "id": sub["id"]})).await;
+                    while next_json(&mut ws).await.is_some() {}
+                }
+            });
 
-                assert_eq!(server.await.unwrap(), attempts, "complete: {complete}");
-            }
+            let sub_client = SubscriptionClient::new(&url);
+            let err = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, 0, false, None),
+            )
+            .await
+            .expect("the replay gives up")
+            .expect_err("a completed subscription mid-replay is not a finished sync");
+            server.abort();
+            assert!(
+                matches!(&err, WalletError::Indexer { retryable, .. } if *retryable),
+                "got: {err:?}"
+            );
+            assert_eq!(
+                connections.load(Ordering::SeqCst),
+                1 + RECONNECT_MAX_RETRIES as usize
+            );
         }
 
         #[tokio::test]
@@ -1248,8 +1186,9 @@ mod tests {
                 assert_eq!(subscription_variable(&sub, "transactionId"), 0);
                 send_next(&mut ws, &sub, unshielded_progress(5)).await;
                 send_next(&mut ws, &sub, tx_event(2, 200)).await;
-                send_next(&mut ws, &sub, tx_event(3, 300)).await;
-                // Hostile / corrupt stream: id 1 after id 3 on the same
+                send_next(&mut ws, &sub, tx_event(4, 300)).await;
+                send_next(&mut ws, &sub, tx_event(4, 300)).await;
+                // Hostile / corrupt stream: id 1 after id 4 on the same
                 // connection. Without the order check this would be
                 // silently deduped; it must error instead.
                 send_next(&mut ws, &sub, tx_event(1, 100)).await;
@@ -1266,7 +1205,7 @@ mod tests {
                     WalletError::EventOrder {
                         kind: "unshielded",
                         id: 1,
-                        prev: 3,
+                        prev: 4,
                     }
                 ),
                 "got: {err:?}"

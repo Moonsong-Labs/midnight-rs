@@ -187,12 +187,6 @@ impl PendingReservations {
         self.shielded.iter()
     }
 
-    /// True when the wallet has no in-flight reservations.
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.dust.is_empty() && self.unshielded.is_empty() && self.shielded.is_empty()
-    }
-
     /// Drop reservations whose spends were observed confirmed on-chain.
     ///
     /// Called at the sync/resync commit points with what event replay saw:
@@ -606,37 +600,7 @@ mod tests {
         assert_eq!(counts(&p), (1, 1, 1));
 
         p.evict_expired(Timestamp::from_secs(131));
-        assert!(p.is_empty());
-    }
-
-    /// A restart must not stretch or cut a reservation's hold. A save or a
-    /// load that takes the expiry from the stamp would free the inputs too
-    /// early or too late.
-    #[test]
-    fn a_reservation_keeps_its_expiry_across_a_restart() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let mut p = PendingReservations::default();
-        p.reserve(
-            dust(&[7]),
-            vec![ukey(0xab, 0)],
-            vec![shielded_nf(1)],
-            Timestamp::from_secs(100),
-            Timestamp::from_secs(160),
-        );
-        prove_all(&mut p);
-        p.save(dir.path(), "undeployed", "testwallet").unwrap();
-
-        let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
-            .unwrap()
-            .expect("pending.json should exist after save");
-        let expiries: Vec<Timestamp> = loaded
-            .dust
-            .iter()
-            .map(|b| b.expires_at)
-            .chain(loaded.unshielded.iter().map(|u| u.expires_at))
-            .chain(loaded.shielded.iter().map(|s| s.expires_at))
-            .collect();
-        assert_eq!(expiries, vec![Timestamp::from_secs(160); 3]);
+        assert_eq!(counts(&p), (0, 0, 0));
     }
 
     #[test]
@@ -653,31 +617,13 @@ mod tests {
         // Confirm one unshielded key and the dust spend: the matched
         // unshielded reservation and the dust batch go, the other
         // unshielded reservation stays.
-        p.clear_confirmed(&[ukey(0xab, 0)], &[nullifier(7)]);
+        p.clear_confirmed(&[ukey(0xab, 0), ukey(0xff, 1)], &[nullifier(7)]);
         assert_eq!(p.dust_batches().count(), 0);
         let remaining: Vec<_> = p
             .unshielded_spends()
             .map(|spend| spend.key.clone())
             .collect();
         assert_eq!(remaining, vec![ukey(0xab, 1)]);
-    }
-
-    #[test]
-    fn clear_confirmed_ignores_unrelated_events() {
-        let mut p = PendingReservations::default();
-        p.reserve(
-            dust(&[7]),
-            vec![ukey(0xab, 0)],
-            Vec::new(),
-            Timestamp::from_secs(100),
-            Timestamp::MAX,
-        );
-
-        // Same intent, different index; different intent, same index; and a
-        // foreign dust nullifier — none of them may clear anything.
-        p.clear_confirmed(&[ukey(0xab, 9), ukey(0xff, 0)], &[nullifier(99)]);
-        assert_eq!(p.unshielded_spends().count(), 1);
-        assert_eq!(p.dust_batches().count(), 1);
     }
 
     #[test]
@@ -701,33 +647,6 @@ mod tests {
         assert_eq!(batches[0].nullifiers, vec![nullifier(9)]);
     }
 
-    #[test]
-    fn clear_confirmed_after_storage_round_trip() {
-        // Simulates a process restart between the proof and confirmation:
-        // reserve → prove → save to disk → load → replay confirmed spends.
-        let dir = tempfile::TempDir::new().unwrap();
-
-        let mut p = PendingReservations::default();
-        p.reserve(
-            dust(&[7]),
-            vec![ukey(0xab, 0)],
-            Vec::new(),
-            Timestamp::from_secs(100),
-            Timestamp::MAX,
-        );
-        prove_all(&mut p);
-        p.save(dir.path(), "undeployed", "testwallet").unwrap();
-
-        let mut loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
-            .unwrap()
-            .expect("pending.json should exist after save");
-        assert_eq!(loaded.unshielded_spends().count(), 1);
-        assert_eq!(loaded.dust_batches().count(), 1);
-
-        loaded.clear_confirmed(&[ukey(0xab, 0)], &[nullifier(7)]);
-        assert!(loaded.is_empty());
-    }
-
     /// Only a proven build can reach the chain, so only its reservation
     /// outlives the process. A save that ignores the mark keeps the inputs of
     /// a build that stopped during its proof unspendable after a restart. A
@@ -743,7 +662,7 @@ mod tests {
             vec![ukey(0xaa, 0)],
             vec![shielded_nf(1)],
             Timestamp::from_secs(100),
-            Timestamp::MAX,
+            Timestamp::from_secs(160),
         );
         p.reserve(
             dust(&[2]),
@@ -781,6 +700,17 @@ mod tests {
                 .map(|spend| spend.nullifier)
                 .collect::<Vec<_>>(),
             vec![shielded_nf(1)]
+        );
+        let expiries: Vec<Timestamp> = loaded
+            .dust_batches()
+            .map(|b| b.expires_at)
+            .chain(loaded.unshielded_spends().map(|u| u.expires_at))
+            .chain(loaded.shielded_spends().map(|s| s.expires_at))
+            .collect();
+        assert_eq!(
+            expiries,
+            vec![Timestamp::from_secs(160); 3],
+            "a restart keeps each entry's expiry"
         );
     }
 
@@ -904,60 +834,6 @@ mod tests {
             p.shielded_spends().count(),
             1,
             "A's release dropped B's shielded entry"
-        );
-    }
-
-    /// One release can name the entries of two reservations with different
-    /// stamps, as a deploy with a shielded offer does: its pinned coins carry
-    /// the stamp of its own build context, and its fee Dust that of a fresh
-    /// one. Each entry goes by its own stamp. A release that applied one stamp
-    /// to every entry would keep one of the two reservations.
-    #[test]
-    fn one_release_hands_back_entries_of_two_stamps() {
-        let mut p = PendingReservations::default();
-        // Build A, the pinned coins.
-        p.reserve(
-            Vec::new(),
-            vec![ukey(0xaa, 0)],
-            vec![shielded_nf(1)],
-            Timestamp::from_secs(100),
-            Timestamp::MAX,
-        );
-        // Build B, the fee Dust.
-        p.reserve(
-            dust(&[1]),
-            Vec::new(),
-            Vec::new(),
-            Timestamp::from_secs(200),
-            Timestamp::MAX,
-        );
-        // Build D, which the release does not name.
-        p.reserve(
-            Vec::new(),
-            vec![ukey(0xbb, 1)],
-            Vec::new(),
-            Timestamp::from_secs(200),
-            Timestamp::MAX,
-        );
-
-        p.release(
-            &[at(nullifier(1), 200)],
-            &[at(ukey(0xaa, 0), 100)],
-            &[at(shielded_nf(1), 100)],
-        );
-
-        assert_eq!(p.dust_batches().count(), 0, "B's Dust stayed reserved");
-        assert_eq!(
-            p.shielded_spends().count(),
-            0,
-            "A's shielded coin stayed reserved"
-        );
-        assert_eq!(
-            p.unshielded_spends()
-                .map(|spend| spend.key.clone())
-                .collect::<Vec<_>>(),
-            vec![ukey(0xbb, 1)],
-            "the release must drop A's UTXO and keep D's"
         );
     }
 

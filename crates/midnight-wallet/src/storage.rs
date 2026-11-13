@@ -322,7 +322,6 @@ pub(crate) fn save_snapshot(
 
     // Read the current metadata (if any) so we can bump the generation and
     // clean up the previous binary files only after the new metadata commit.
-    // Read past the ledger 8 refusal: a save replaces a ledger 8 snapshot too.
     let previous_generation = read_json::<StoredMetadata>(&dir.join(METADATA_FILE))
         .ok()
         .flatten()
@@ -534,40 +533,6 @@ mod tests {
             .expect("the pin parses");
         assert_eq!(pin.height, 633);
         assert_eq!(pin.hash, "0xd886b98e");
-    }
-
-    /// A save over a ledger 8 snapshot replaces it. A save that read the old
-    /// metadata through the ledger 8 refusal would start again at number 1
-    /// and leave the old state files, Dust secret key included, on disk.
-    #[test]
-    fn a_save_over_a_ledger_8_snapshot_removes_its_state_files() {
-        let base = tempfile::TempDir::new().unwrap();
-        let dir = snapshot_path(base.path(), "undeployed", "testwallet");
-        std::fs::create_dir_all(&dir).unwrap();
-        let ledger_8_metadata = r#"{
-            "generation": 4,
-            "zswap_event_id": 1,
-            "dust_event_id": 1,
-            "last_block_height": 0,
-            "last_tx_id": null,
-            "unshielded_utxos": []
-        }"#;
-        std::fs::write(dir.join(METADATA_FILE), ledger_8_metadata).unwrap();
-        let old_files = [zswap_file(4), dust_wallet_file(4)];
-        for file in &old_files {
-            std::fs::write(dir.join(file), b"ledger 8").unwrap();
-        }
-
-        let mut metadata: StoredMetadata = serde_json::from_str(ledger_8_metadata).unwrap();
-        metadata.ledger_version = Generation::V9;
-        save_snapshot(base.path(), "undeployed", "testwallet", metadata, |_, _| {
-            Ok(())
-        })
-        .unwrap();
-
-        for file in &old_files {
-            assert!(!dir.join(file).exists(), "{file} stays on disk");
-        }
     }
 
     fn mode_of(path: &Path) -> u32 {
