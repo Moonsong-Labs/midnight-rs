@@ -8,7 +8,8 @@
 //! trade.
 
 use midnight_core::contract::parse_contract_address;
-use midnight_core::provider::{HashOutput, ShieldedTokenType};
+use midnight_core::crypto::base::hash::HashOutput;
+use midnight_core::wallet::ShieldedTokenType;
 use midnight_core::{MidnightProvider, MidnightWallet, Seed};
 
 mod contract {

@@ -18,16 +18,14 @@ pub use provider::{MidnightProvider, NodeHeader};
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TransactionReceipt, Verdict};
 pub use types::TransactionHash;
 
-// Re-export the coin, token, key and hash vocabulary, the types that
-// `MidnightProvider`'s own signatures name, and the NIGHT and DUST units, so a
-// caller of the provider needs no separate dep for them. The implementation
-// types (`Wallet`, `WalletBuilder`) live in midnight-wallet; this crate never
-// names them.
+// Re-export the types that `MidnightProvider`'s own signatures name, so a
+// caller of the provider needs no separate dep for them. `CoinSelection` comes
+// with them: a `TransactionRequest` method takes it, and no other facade path
+// reaches it. The implementation types (`Wallet`, `WalletBuilder`) live in
+// midnight-wallet; this crate never names them.
 pub use midnight_types::{
-    BlockHash, CoinInfo, CoinPublicKey, CoinSelection, ContractAddress, DustPublicKey,
-    EncryptionPublicKey, ExtrinsicHash, HashOutput, MidnightWallet, NIGHT, Nonce, Nullifier,
-    SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, TransactionRequest,
-    TxEnvelope, UnshieldedRecipient, UnshieldedTokenType, WalletError,
+    BlockHash, CoinSelection, ExtrinsicHash, MidnightWallet, TransactionRequest, TxEnvelope,
+    WalletError,
 };
 
 // Re-export the private-state types so callers configure

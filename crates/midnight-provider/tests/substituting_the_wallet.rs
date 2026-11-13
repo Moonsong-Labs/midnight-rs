@@ -15,12 +15,13 @@ use midnight_helpers::{
     UnprovenTransaction,
 };
 use midnight_provider::{
-    HashOutput, MidnightProvider, MidnightWallet, Nullifier, ProviderError, ShieldedRecipient,
-    ShieldedTokenType, TransactionRequest, TxEnvelope, WalletError,
+    MidnightProvider, MidnightWallet, ProviderError, TransactionRequest, TxEnvelope, WalletError,
 };
 use midnight_types::build::{self, Funded, Reservation, ReservedInput, SpentInputs};
 use midnight_types::chain_pin::ChainView;
-use midnight_types::{FilledTx, FundedTx, ProvenTx};
+use midnight_types::{
+    FilledTx, FundedTx, HashOutput, Nullifier, ProvenTx, ShieldedRecipient, ShieldedTokenType,
+};
 
 /// A wallet that holds no keys and no coins. This file never asks it to fund
 /// or sign.

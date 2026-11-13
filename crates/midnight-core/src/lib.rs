@@ -6,7 +6,9 @@
 //! take, such as [`Bytes`](compact_bindgen::Bytes). Its root holds the names
 //! of the common path: sync a [`Wallet`], attach it to a [`MidnightProvider`],
 //! then deploy and call a contract that [`contract!`] binds. The provider funds
-//! and signs through the [`MidnightWallet`] trait.
+//! and signs through the [`MidnightWallet`] trait. The root also holds
+//! [`NIGHT`], the native token, and the unit counts [`STARS_PER_NIGHT`] and
+//! [`SPECKS_PER_DUST`] that a transfer request and a wallet balance name.
 //!
 #![cfg_attr(
     all(feature = "provider", feature = "wallet", feature = "contract"),
@@ -72,18 +74,12 @@ pub use midnight_contract as contract;
 #[cfg(feature = "crypto")]
 pub use midnight_crypto as crypto;
 
-// Re-export key provider types at top level.
 #[cfg(feature = "provider")]
-pub use midnight_provider::{
-    MidnightProvider, NotApplied, PendingTx, ProviderError, TransactionReceipt, Verdict,
-};
+pub use midnight_provider::MidnightProvider;
 
-// Re-export the private-state store types at top level.
-#[cfg(feature = "provider")]
-pub use midnight_provider::{
-    ConflictStrategy, EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions,
-    ImportResult, PrivateStateError, PrivateStateProvider, Snapshot, SnapshotStatus,
-};
+// A transfer request and a wallet balance both name the native token and the
+// unit counts, so no feature gates them.
+pub use midnight_types::{NIGHT, SPECKS_PER_DUST, STARS_PER_NIGHT};
 
 // Re-export the wallet types a caller names to sync one and attach it, so
 // the common path needs no `midnight_core::wallet::` prefix.
@@ -140,12 +136,6 @@ macro_rules! contract {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    #[cfg(feature = "provider")]
-    fn reexports_provider_types() {
-        let _: fn() -> Result<(), crate::ProviderError>;
-    }
-
     #[test]
     #[cfg(feature = "wallet")]
     fn reexports_the_wallet_trait() {

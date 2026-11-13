@@ -32,9 +32,8 @@
 use std::sync::Arc;
 
 use anyhow::bail;
-use midnight_core::{
-    FsPrivateStateProvider, MidnightProvider, PrivateStateProvider, Seed, SnapshotStatus, Wallet,
-};
+use midnight_core::provider::{FsPrivateStateProvider, PrivateStateProvider, SnapshotStatus};
+use midnight_core::{MidnightProvider, Seed, Wallet};
 
 mod secret_counter {
     midnight_core::contract!(

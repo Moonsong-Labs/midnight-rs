@@ -18,7 +18,8 @@ use midnight_helpers::{
     CostModel, DefaultDB, LocalProofServer, ProofProvider, ProvenTransaction, Resolver, StdRng,
     UnprovenTransaction,
 };
-use midnight_provider::{MidnightProvider, NIGHT, Prover, TransactionRequest};
+use midnight_provider::{MidnightProvider, Prover, TransactionRequest};
+use midnight_types::NIGHT;
 use midnight_wallet::Wallet;
 
 /// Wraps the real prover and records whether it ran.

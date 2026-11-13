@@ -12,7 +12,8 @@
 #[expect(dead_code, reason = "this test needs no synced_provider")]
 mod common;
 
-use midnight_provider::{MidnightProvider, NIGHT, TransactionRequest};
+use midnight_provider::{MidnightProvider, TransactionRequest};
+use midnight_types::NIGHT;
 
 #[tokio::test]
 async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
