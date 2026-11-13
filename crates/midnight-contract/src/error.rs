@@ -68,7 +68,7 @@ pub enum ContractError {
     ///
     /// A failed submit or wait does **not** retract the transaction, so it can
     /// still land. A deploy gives this error only from its submit. A wait that
-    /// reads a verdict other than `Success` gives
+    /// reads that the chain did not apply the transaction gives
     /// [`TransactionFailed`](ContractError::TransactionFailed) instead. Match
     /// the [`SubmitError`] kind in `source` to choose the recovery:
     ///
@@ -181,19 +181,17 @@ pub enum ContractError {
     },
 
     /// The transaction landed in a block, but the chain did not apply it.
-    /// The wrapped [`NotApplied`] carries the [`TransactionReceipt`], whose `verdict`
-    /// tells the two cases apart: [`Verdict::PartialSuccess`] (the guaranteed
-    /// phase committed, at least one fallible segment failed) and
-    /// [`Verdict::Failure`] (the dispatch errored entirely, so no phase ran).
-    /// Unlike [`SubmissionWait`] and [`FinalizeTimeout`], the chain gave a
-    /// verdict. `Contract::call_with` and `PendingCall::get_receipt` drop the
-    /// orphan `Pending` snapshot, when the call recorded one, with `mark_failed`
-    /// before they return this error.
+    /// The variant of the wrapped [`NotApplied`] tells the two cases apart:
+    /// [`NotApplied::PartialSuccess`] (the guaranteed phase committed, at least
+    /// one fallible segment failed) and [`NotApplied::Failure`] (the dispatch
+    /// errored entirely, so no phase ran). Each variant holds the
+    /// [`TransactionReceipt`]. Unlike [`SubmissionWait`] and
+    /// [`FinalizeTimeout`], the chain gave a verdict. `Contract::call_with` and
+    /// `PendingCall::get_receipt` drop the orphan `Pending` snapshot, when the
+    /// call recorded one, with `mark_failed` before they return this error.
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     /// [`FinalizeTimeout`]: ContractError::FinalizeTimeout
-    /// [`Verdict::PartialSuccess`]: midnight_provider::Verdict::PartialSuccess
-    /// [`Verdict::Failure`]: midnight_provider::Verdict::Failure
     #[error(transparent)]
     TransactionFailed(#[from] NotApplied),
 

@@ -30,7 +30,8 @@ pub enum ProviderError {
     Submission(#[from] SubmitError),
 
     /// The transaction landed in a block, but the chain did not apply it.
-    /// The [`NotApplied`] holds the inclusion and its verdict.
+    /// The [`NotApplied`] variant tells a partial success from a failure, and
+    /// its receipt names the transaction and the block.
     // Boxed: unboxed, it is the largest variant, and every `Result` that
     // carries a `ProviderError` pays its size.
     #[error(transparent)]

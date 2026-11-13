@@ -144,7 +144,7 @@ Two smaller pieces round out the parity:
 
 A Midnight transaction has **two phases** that execute in order. midnight-js's governance code documents the model explicitly; the same rules apply to transactions built by this SDK.
 
-**Guaranteed phase.** Runs first. Covers fee payment, Zswap input/output validity, signature checks. If anything in this phase fails, the transaction applies nothing. Normally the node rejects it at submission and the extrinsic never reaches a block, so there is no on-chain record at all. The exception is a dispatch that errors: the extrinsic still lands in a block, the pallet emits `System::ExtrinsicFailed` rather than an outcome event, and the SDK reports that as `Verdict::Failure`.
+**Guaranteed phase.** Runs first. Covers fee payment, Zswap input/output validity, signature checks. If anything in this phase fails, the transaction applies nothing. Normally the node rejects it at submission and the extrinsic never reaches a block, so there is no on-chain record at all. The exception is a dispatch that errors: the extrinsic still lands in a block, the pallet emits `System::ExtrinsicFailed` rather than an outcome event, and the SDK reports that as `NotApplied::Failure`.
 
 **Fallible phase.** Runs second. Covers contract calls, verifier-key updates, and other state mutations that the chain wants to record even on failure. If the fallible phase fails, the transaction **is included in a block** but its `TransactionResult` is `PartialSuccess` (or `Failure`) rather than `SucceedEntirely`. Fees are still paid; the partial mutation is **not** applied.
 
@@ -154,7 +154,7 @@ Practical consequences for SDK callers:
 - A contract call can land on-chain and still do nothing useful. `Contract::call_with` reports that as `ContractError::TransactionFailed`, and on the `send_transaction` path `get_receipt` reports it as `ProviderError::NotApplied`. An `Ok` from either means the call applied.
 - For multi-step intents (e.g. shielded offer + contract call), one segment can succeed while another fails. The chain records this as `PartialSuccess`.
 
-`get_receipt` returns [`TransactionReceipt`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. Only `Success` reaches the caller as `Ok`. For `PartialSuccess` and `Failure`, the wait fails with `ProviderError::NotApplied`, so `?` stops on a transaction that did not apply:
+`get_receipt` returns [`TransactionReceipt`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash and the Midnight transaction hash. The chain's verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. Only a transaction that the chain applied (`TxApplied`) reaches the caller as `Ok`. For a partial success and a failure, the wait fails with `ProviderError::NotApplied`, so `?` stops on a transaction that did not apply:
 
 ```rust,ignore
 let pending = provider
@@ -163,16 +163,15 @@ let pending = provider
 pending.get_receipt().await?;
 ```
 
-A caller that branches on the outcome matches the result of the wait. The `NotApplied` holds the `TransactionReceipt`, so its `verdict` tells the two failures apart:
+A caller that branches on the outcome matches the result of the wait. The variant of the `NotApplied` tells the two failures apart, and each variant holds the `TransactionReceipt`:
 
 ```rust,ignore
 match pending.get_receipt().await {
     Ok(receipt) => { /* applied */ }
-    Err(ProviderError::NotApplied(not_applied)) => match not_applied.0.verdict {
-        Verdict::PartialSuccess => { /* guaranteed phase committed, a fallible segment did not */ }
-        Verdict::Failure        => { /* the dispatch errored: the extrinsic is on chain, the
-                                        transaction applied nothing, and no fees were taken */ }
-        Verdict::Success        => unreachable!("the wait returns Success as Ok"),
+    Err(ProviderError::NotApplied(not_applied)) => match *not_applied {
+        NotApplied::PartialSuccess(_) => { /* guaranteed phase committed, a fallible segment did not */ }
+        NotApplied::Failure(_)        => { /* the dispatch errored: the extrinsic is on chain, the
+                                              transaction applied nothing, and no fees were taken */ }
     },
     Err(other) => { /* no verdict: see `SubmitError` below */ }
 }

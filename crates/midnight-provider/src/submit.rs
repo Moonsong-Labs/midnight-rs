@@ -102,9 +102,9 @@ pub enum SubmitError {
     WatchStream { message: String },
 
     /// The transaction landed in a block, but fetching or decoding the
-    /// extrinsic's events failed, so the chain's [`Verdict`] could not be
-    /// derived. The transaction is on chain; do **not** resubmit. Re-query
-    /// the chain for the extrinsic's events to learn whether it applied.
+    /// extrinsic's events failed, so the verdict could not be derived. The
+    /// transaction is on chain; do **not** resubmit. Re-query the chain for
+    /// the extrinsic's events to learn whether it applied.
     #[error("verdict fetch: {message}")]
     VerdictFetch { message: String },
 }
@@ -151,16 +151,12 @@ impl SubmitError {
     }
 }
 
-/// Where and how the chain included a transaction: its block, its hashes, and
-/// the chain's verdict on whether it applied.
+/// Where the chain included a transaction: its block and its hashes.
 ///
-/// [`PendingTx::get_receipt`] returns it. `block_hash` and `extrinsic_hash`
-/// come from subxt's `TransactionStatus::InFinalizedBlock`. `verdict` is the
-/// SDK's interpretation of the Midnight pallet's outcome events: the
-/// `Midnight` pallet always emits `TxApplied` (all segments applied) or
-/// `TxPartialSuccess` (at least one fallible segment failed) for a
-/// successful dispatch, and falls back to `System::ExtrinsicFailed` when the
-/// dispatch errored entirely. See [`Verdict`].
+/// [`PendingTx::get_receipt`] returns it when the chain applied the
+/// transaction, and [`NotApplied`] holds it when the chain did not.
+/// `block_hash` and `extrinsic_hash` come from subxt's
+/// `TransactionStatus::InFinalizedBlock`.
 #[derive(Debug, Clone, Copy)]
 pub struct TransactionReceipt {
     /// The block that includes the transaction.
@@ -172,46 +168,38 @@ pub struct TransactionReceipt {
     /// identity for it. The chain names this hash in its `TxApplied` /
     /// `TxPartialSuccess` events, and the indexer keys transactions by it.
     pub transaction_hash: TransactionHash,
-    pub verdict: Verdict,
+}
+
+enum Outcome {
+    Applied,
+    PartialSuccess,
+    Failure,
 }
 
 /// Return `receipt` when the chain applied the transaction, and
-/// [`NotApplied`] when it did not. Only [`Verdict::Success`] counts as applied:
-/// a partial success paid the fee, but a fallible segment did not apply.
-fn applied(receipt: TransactionReceipt) -> Result<TransactionReceipt, NotApplied> {
-    match receipt.verdict {
-        Verdict::Success => Ok(receipt),
-        Verdict::PartialSuccess | Verdict::Failure => Err(NotApplied(receipt)),
+/// [`NotApplied`] when it did not. Only [`Outcome::Applied`] counts as
+/// applied: a partial success paid the fee, but a fallible segment did not
+/// apply.
+fn applied(
+    receipt: TransactionReceipt,
+    outcome: Outcome,
+) -> Result<TransactionReceipt, NotApplied> {
+    match outcome {
+        Outcome::Applied => Ok(receipt),
+        Outcome::PartialSuccess => Err(NotApplied::PartialSuccess(receipt)),
+        Outcome::Failure => Err(NotApplied::Failure(receipt)),
     }
 }
 
 /// A transaction that landed in a block, but that the chain did not apply.
 ///
 /// [`PendingTx::get_receipt`] returns it, inside
-/// [`ProviderError::NotApplied`], for a [`Verdict::PartialSuccess`] or a
-/// [`Verdict::Failure`]. The wrapped [`TransactionReceipt`] names the
-/// transaction, the block and the verdict, so a caller who handles a partial
-/// success reads the verdict here.
+/// [`ProviderError::NotApplied`]. The SDK reads the variant from the outcome
+/// events of the transaction: for a dispatch that succeeds, the `Midnight`
+/// pallet emits `TxApplied` or `TxPartialSuccess`. Each variant holds the
+/// [`TransactionReceipt`], which names the transaction and the block.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
-#[error(
-    "transaction {} landed in block {} but the chain did not apply it ({})",
-    .0.transaction_hash,
-    hex::encode(.0.block_hash),
-    .0.verdict
-)]
-pub struct NotApplied(pub TransactionReceipt);
-
-/// What actually happened to a Midnight transaction once it landed in a block.
-///
-/// All Midnight transactions (deploys, contract calls, maintenance, shielded
-/// transfers, unshielded transfers, dust registration) go through the same
-/// `Midnight::send_mn_transaction` entrypoint, so every finalized tx emits
-/// exactly one of these outcomes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verdict {
-    /// `Midnight::TxApplied`: every fallible segment succeeded; the chain
-    /// state advanced fully.
-    Success,
+pub enum NotApplied {
     /// `Midnight::TxPartialSuccess`: the guaranteed phase committed
     /// (Zswap I/O, fees, signatures landed on chain), but at least one
     /// fallible segment failed and was not applied.
@@ -223,22 +211,22 @@ pub enum Verdict {
     /// those flows `PartialSuccess` unambiguously means "my segment didn't
     /// apply". For a transaction that merges several fallible segments, the
     /// event does not tell which of them failed.
-    PartialSuccess,
-    /// The dispatch errored entirely (`System::ExtrinsicFailed`). Nothing
-    /// landed on chain; no Zswap I/O, no fees taken. Rare in normal
-    /// operation, since guaranteed-phase failures are normally rejected at
-    /// submission.
-    Failure,
-}
-
-impl std::fmt::Display for Verdict {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Success => "success",
-            Self::PartialSuccess => "partial success",
-            Self::Failure => "failure",
-        })
-    }
+    #[error(
+        "transaction {} landed in block {} but the chain did not apply it (partial success)",
+        .0.transaction_hash,
+        hex::encode(.0.block_hash)
+    )]
+    PartialSuccess(TransactionReceipt),
+    /// The dispatch errored entirely (`System::ExtrinsicFailed`). The
+    /// extrinsic is in the block, but the chain applied no part of the
+    /// transaction: no Zswap I/O and no fees. This is rare, because the node
+    /// normally refuses a guaranteed-phase failure at submission.
+    #[error(
+        "transaction {} landed in block {} but the chain did not apply it (failure)",
+        .0.transaction_hash,
+        hex::encode(.0.block_hash)
+    )]
+    Failure(TransactionReceipt),
 }
 
 /// A sent transaction. [`get_receipt`](Self::get_receipt) waits for its
@@ -255,8 +243,8 @@ impl std::fmt::Display for Verdict {
 ///
 /// [`get_receipt`](Self::get_receipt) fails with
 /// [`ProviderError::NotApplied`] when the transaction landed but the chain did
-/// not apply it. Its [`NotApplied`] holds the [`TransactionReceipt`] with the
-/// verdict.
+/// not apply it. The [`NotApplied`] variant tells a partial success from a
+/// failure.
 ///
 /// Every other failure is [`ProviderError::Submission`] carrying a
 /// [`SubmitError`]; match its variants instead of parsing error text. The
@@ -343,8 +331,8 @@ impl PendingTx {
     ///
     /// # Errors
     ///
-    /// [`ProviderError::NotApplied`] when the final verdict is not
-    /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
+    /// [`ProviderError::NotApplied`] when the chain did not apply the
+    /// transaction. See the [type-level docs](PendingTx#errors) for
     /// the [`SubmitError`] kinds of the other failures and what each implies
     /// about retrying.
     pub async fn get_receipt(self) -> Result<TransactionReceipt, ProviderError> {
@@ -377,22 +365,23 @@ impl PendingTx {
                 return Err(err.into());
             }
             if let Some(in_block) = landed(&status) {
-                let receipt = receipt_with_verdict(in_block, self.transaction_hash).await?;
-                return Ok(applied(receipt)?);
+                let (receipt, outcome) =
+                    receipt_with_outcome(in_block, self.transaction_hash).await?;
+                return Ok(applied(receipt, outcome)?);
             }
         }
         Err(SubmitError::stream_ended(awaiting).into())
     }
 }
 
-/// Fetch the extrinsic's events and derive the [`Verdict`] from the
+/// Fetch the extrinsic's events and derive the [`Outcome`] from the
 /// `Midnight` pallet's `TxApplied` / `TxPartialSuccess` events. Default to
 /// `Failure` when neither is present (the dispatch errored and only
 /// `System::ExtrinsicFailed` was emitted).
-async fn receipt_with_verdict(
+async fn receipt_with_outcome(
     in_block: &InBlock,
     transaction_hash: TransactionHash,
-) -> Result<TransactionReceipt, ProviderError> {
+) -> Result<(TransactionReceipt, Outcome), ProviderError> {
     let block_hash = in_block.block_hash();
     let extrinsic_hash = in_block.extrinsic_hash();
     let events = in_block
@@ -401,29 +390,29 @@ async fn receipt_with_verdict(
         .map_err(|e| SubmitError::VerdictFetch {
             message: format!("fetch events: {e}"),
         })?;
-    let mut verdict = Verdict::Failure;
+    let mut outcome = Outcome::Failure;
     for ev in events.iter() {
         let ev = ev.map_err(|e| SubmitError::VerdictFetch {
             message: format!("decode event: {e}"),
         })?;
         match (ev.pallet_name(), ev.event_name()) {
             ("Midnight", "TxApplied") => {
-                verdict = Verdict::Success;
+                outcome = Outcome::Applied;
                 break;
             }
             ("Midnight", "TxPartialSuccess") => {
-                verdict = Verdict::PartialSuccess;
+                outcome = Outcome::PartialSuccess;
                 break;
             }
             _ => {}
         }
     }
-    Ok(TransactionReceipt {
+    let receipt = TransactionReceipt {
         block_hash,
         extrinsic_hash,
         transaction_hash,
-        verdict,
-    })
+    };
+    Ok((receipt, outcome))
 }
 
 /// A signed transaction in its unsigned extrinsic, not sent.
@@ -656,26 +645,21 @@ mod tests {
         }
     }
 
-    fn receipt(verdict: Verdict) -> TransactionReceipt {
-        TransactionReceipt {
-            block_hash: BlockHash::repeat_byte(1),
-            extrinsic_hash: ExtrinsicHash::repeat_byte(2),
-            transaction_hash: [3; 32].into(),
-            verdict,
-        }
-    }
-
     /// A partial success paid its fee and committed its guaranteed phase, so it
     /// is easy to count as applied. The error names the transaction hash, the
     /// key an indexer query takes, not the extrinsic hash, which no indexer
     /// stores.
     #[test]
-    fn only_success_counts_as_applied() {
-        assert!(applied(receipt(Verdict::Success)).is_ok());
+    fn only_tx_applied_counts_as_applied() {
+        let tx = TransactionReceipt {
+            block_hash: BlockHash::repeat_byte(1),
+            extrinsic_hash: ExtrinsicHash::repeat_byte(2),
+            transaction_hash: [3; 32].into(),
+        };
+        assert!(applied(tx, Outcome::Applied).is_ok());
 
-        for verdict in [Verdict::PartialSuccess, Verdict::Failure] {
-            let tx = receipt(verdict);
-            let err = applied(tx).expect_err("only Success counts as applied");
+        for outcome in [Outcome::PartialSuccess, Outcome::Failure] {
+            let err = applied(tx, outcome).expect_err("only TxApplied counts as applied");
             let message = err.to_string();
             assert!(
                 message.contains(&tx.transaction_hash.to_string()),

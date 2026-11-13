@@ -80,9 +80,9 @@ pub use compact_runtime as runtime;
 // `PendingDeploy::get_receipt` so callers don't need a separate dependency on
 // `midnight-provider` to name the types. `SubmitError` is the structured
 // failure the waits surface (inside `ProviderError::Submission`). `NotApplied`
-// and `Verdict` let a caller match `ContractError::TransactionFailed`.
+// lets a caller match `ContractError::TransactionFailed`.
 pub use midnight_provider::{
-    NotApplied, PendingTx, SubmitError, TransactionHash, TransactionReceipt, Verdict,
+    NotApplied, PendingTx, SubmitError, TransactionHash, TransactionReceipt,
 };
 // The signed transaction of a generated call builder's `without_fee`.
 pub use midnight_types::TxEnvelope;

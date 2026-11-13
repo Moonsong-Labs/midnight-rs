@@ -160,7 +160,6 @@ mod tests {
             block_hash: BlockHash::repeat_byte(1),
             extrinsic_hash: ExtrinsicHash::repeat_byte(2),
             transaction_hash: [3; 32].into(),
-            verdict: midnight_provider::Verdict::Success,
         };
 
         for (node, node_url) in nodes {
