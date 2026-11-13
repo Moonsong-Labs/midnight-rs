@@ -275,7 +275,7 @@ mod tests {
     /// skips the token filter counts the other token too.
     #[test]
     fn a_spendable_value_sums_the_spendable_entries_of_that_token_only() {
-        let balance = balance(&[(1, 5, true), (1, 7, false), (2, 100, true)]);
+        let balance = balance(&[(1, 5, true), (2, 100, true), (1, 7, false)]);
         let token = HashOutput([1; 32]);
         assert_eq!(balance.shielded_value(ShieldedTokenType(token)), 12);
         assert_eq!(balance.unshielded_value(UnshieldedTokenType(token)), 12);
