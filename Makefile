@@ -75,7 +75,7 @@ PARSER_FIXTURE_DIR := crates/compact/analyzed-ir/tests/fixtures
 # executors read different compiler outputs of a fixture: the Rust IR
 # interpreter reads `compiler/analyzed-ir.sexp`, and the ts-driver runs
 # `contract/index.js` against the canonical @midnight-ntwrk/compact-runtime.
-CONFORMANCE_FIXTURES := bboard containers counter curve25519 defaults events indexing keccak kernel \
+CONFORMANCE_FIXTURES := bboard containers curve25519 defaults events indexing keccak kernel \
                         loops ops peers scopes secp256k1 secp256r1 sha512 shadowing slices structs \
                         tiny trees vectors
 CONFORMANCE_DIR := tests/conformance

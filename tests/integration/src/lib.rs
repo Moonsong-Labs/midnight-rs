@@ -607,7 +607,7 @@ mod initial_state_defaults {
         }
     }
 
-    /// Answers tiny's witness with the key of the conformance case `tiny/get`.
+    /// Answers tiny's witness with the key of the conformance case `tiny/set-get-clear`.
     struct CaseKey;
 
     impl crate::tiny::Witnesses for CaseKey {
