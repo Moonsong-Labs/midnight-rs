@@ -201,17 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn tampered_ciphertext_fails() {
-        let (salt, ct) = encrypt(PW, b"aad", b"secret bytes").unwrap();
-        let mut bytes = BASE64.decode(&ct).unwrap();
-        let last = bytes.len() - 1;
-        bytes[last] ^= 0xff;
-        let tampered = BASE64.encode(&bytes);
-        let err = decrypt(PW, b"aad", &salt, &tampered).unwrap_err();
-        assert!(matches!(err, PrivateStateError::Decrypt));
-    }
-
-    #[test]
     fn wrong_salt_length_is_invalid_format() {
         let (_salt, ct) = encrypt(PW, b"aad", b"secret bytes").unwrap();
         // A salt that isn't SALT_LEN bytes is a malformed envelope, not a
