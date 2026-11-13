@@ -104,7 +104,7 @@ pub enum SnapshotStatus {
     Pending,
     /// The transaction is finalized on chain AND the `Midnight` pallet
     /// reported `TxApplied` (every fallible segment applied) for the
-    /// extrinsic. `Contract::call_with` reads the pallet's outcome events
+    /// extrinsic. `PendingCall::get_receipt` reads the pallet's outcome events
     /// from the finalized block, so a tx that finalized with
     /// `PartialSuccess` or `Failure` is never promoted to `Confirmed`: the
     /// contract path cascade-drops the pending snapshot via `mark_failed`

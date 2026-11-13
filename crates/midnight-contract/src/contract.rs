@@ -58,9 +58,9 @@ impl<T> CallOutcome<T> {
 ///
 /// It holds the circuit's value, the ledger after the call and the events that
 /// the circuit emitted, from a run on the contract's state at one block.
-/// [`Contract::simulate_with`] and the `simulate` method of a generated call
-/// builder return it. The result is true for the block that the run read. A
-/// later block can change the outcome of the real call.
+/// The `simulate` method of a generated call builder returns it. The result
+/// is true for the block that the run read. A later block can change the
+/// outcome of the real call.
 #[derive(Debug, Clone)]
 pub struct Simulated<T, L> {
     /// The circuit's return value.
@@ -308,22 +308,15 @@ async fn settle_snapshot(
     }
 }
 
-/// How long [`Contract::call_with`] waits for the chain to finalize a
-/// submitted tx before it treats it as a stalled submission.
-/// [`PendingTx::get_receipt`] has no internal timeout, so without this wrap a
-/// stalled grandpa would block the caller indefinitely.
-const DEFAULT_TX_FINALIZE_TIMEOUT: Duration = Duration::from_secs(60);
-
 /// A submitted circuit call, before the chain's verdict.
 ///
-/// [`Contract::send_call_with`] and the `send` method of a generated call
-/// builder return it. Use it to read the transaction's hashes before the wait,
-/// or to choose the deadline of the wait. Call
-/// [`get_receipt`](Self::get_receipt) to finish the call.
+/// The `send` method of a generated call builder returns it. Use it to read
+/// the transaction's hashes before the wait, or to choose the deadline of the
+/// wait. Call [`get_receipt`](Self::get_receipt) to finish the call.
 ///
 /// A dropped `PendingCall` does not retract the transaction, which can still
 /// land. It leaves the call's private-state snapshot `Pending`, as a
-/// [`ContractError::FinalizeTimeout`] does, and the recovery is the same.
+/// [`ContractError::SubmissionWait`] does, and the recovery is the same.
 ///
 /// Call `get_receipt` before you start the next call on the same contract.
 /// A call that starts before the verdict builds on this call's `Pending`
@@ -362,9 +355,7 @@ impl<T> PendingCall<T> {
     /// The SDK sets no deadline on the wait. subxt can end it: see the
     /// [timeouts of `PendingTx`](PendingTx#timeouts-and-cancellation). To bound
     /// the wait, wrap it in [`tokio::time::timeout`]. Read the hashes before
-    /// you call it, because a timeout drops the handle. [`Contract::call_with`]
-    /// bounds the wait for finality to 60 s, and settles the snapshot after
-    /// that wait.
+    /// you call it, because a timeout drops the handle.
     ///
     /// # Errors
     ///
@@ -375,12 +366,6 @@ impl<T> PendingCall<T> {
     /// - [`ContractError::PrivateState`] when the store cannot confirm or drop
     ///   the snapshot.
     pub async fn get_receipt(self) -> Result<CallOutcome<T>, ContractError> {
-        self.finish(None).await
-    }
-
-    /// Wait for finality, bounded by `deadline` when set, then settle. The
-    /// settle runs outside the bound, so the bound never cancels a store write.
-    async fn finish(self, deadline: Option<Duration>) -> Result<CallOutcome<T>, ContractError> {
         let Self {
             pending,
             value,
@@ -390,18 +375,7 @@ impl<T> PendingCall<T> {
         } = self;
         let extrinsic_hash = pending.extrinsic_hash();
         let transaction_hash = pending.transaction_hash();
-        let wait = pending.get_receipt();
-        let waited = match deadline {
-            None => wait.await,
-            Some(timeout) => tokio::time::timeout(timeout, wait)
-                .await
-                .map_err(|_elapsed| ContractError::FinalizeTimeout {
-                    transaction_hash,
-                    extrinsic_hash,
-                    timeout,
-                    snapshot_written: snapshot_store.is_some(),
-                })?,
-        };
+        let waited = pending.get_receipt().await;
         let receipt = settle_call(
             snapshot_store.as_deref(),
             &address,
@@ -1208,33 +1182,6 @@ impl<P> Contract<P> {
         crate::state::fetch_state(provider, &self.address, self.at_block).await
     }
 
-    /// Execute a circuit call on-chain.
-    ///
-    /// Reads the state and the block time at the node's best block (or at
-    /// the `at_block` pin), runs the circuit IR locally at that time, builds
-    /// a funded transaction, and submits it to the node.
-    pub async fn call(
-        &self,
-        circuit: &compact_codegen::ir::Circuit,
-        program: &compact_interpreter::Program<'_>,
-        circuit_name: &str,
-    ) -> Result<CallOutcome<crate::runtime::Value>, ContractError>
-    where
-        P: AsMidnightProvider,
-        P::Wallet: MidnightWallet,
-    {
-        self.call_with(
-            circuit,
-            program,
-            circuit_name,
-            &[],
-            &crate::runtime::NoWitnesses,
-            &[],
-            crate::call::ShieldedInputs::default(),
-        )
-        .await
-    }
-
     /// Run a circuit call locally, with no proof, fee or transaction.
     ///
     /// It returns the circuit's value, the contract state after the call and
@@ -1266,6 +1213,7 @@ impl<P> Contract<P> {
     ///   a circuit that calls `ownPublicKey()` fails with this error.
     /// - [`ContractError::Provider`] when the read of the state or the block
     ///   time fails.
+    #[doc(hidden)]
     pub async fn simulate_with(
         &self,
         circuit: &compact_codegen::ir::Circuit,
@@ -1334,7 +1282,7 @@ impl<P> Contract<P> {
     /// the circuit and before the build. A call that leaves the private state
     /// as it was, or a contract with no witnesses, builds as usual. The build
     /// reserves the wallet inputs that the transaction spends, as
-    /// [`Self::call_with`] does. A drop of the result hands them back. Its
+    /// [`Self::send_call_with`] does. A drop of the result hands them back. Its
     /// bytes keep them reserved until a sync sees the chain spend them, or
     /// until their TTL passes.
     ///
@@ -1342,7 +1290,7 @@ impl<P> Contract<P> {
     ///
     /// - [`ContractError::UnrecordedPrivateState`] when the witnesses change
     ///   the private state. The call reserves no input and makes no proof.
-    ///   Submit the call with [`Self::send_call_with`] or [`Self::call_with`].
+    ///   Submit the call with [`Self::send_call_with`].
     /// - [`ContractError::InvalidContractAddress`] when the handle's contract
     ///   address does not parse.
     /// - [`ContractError::Construction`] when the contract declares witnesses
@@ -1366,6 +1314,7 @@ impl<P> Contract<P> {
     ///   ledger values does not serialize.
     /// - [`ContractError::Provider`] when the read of the state or the block
     ///   time, or the fill fails.
+    #[doc(hidden)]
     #[allow(clippy::too_many_arguments)]
     pub async fn without_fee_call_with(
         &self,
@@ -1530,7 +1479,7 @@ impl<P> Contract<P> {
     /// wallet inputs that its build reserved, and the circuit's raw result.
     #[expect(
         clippy::too_many_arguments,
-        reason = "the inputs of a call, as `without_fee_call_with` and `call_with` take them"
+        reason = "the inputs of a call, as `without_fee_call_with` and `send_call_with` take them"
     )]
     async fn build_call(
         &self,
@@ -1570,69 +1519,11 @@ impl<P> Contract<P> {
         ))
     }
 
-    /// Execute a circuit call on-chain with arguments and witnesses.
-    ///
-    /// Reads the state and the block time at the node's best block (or at
-    /// the `at_block` pin), runs the circuit IR locally at that time, builds
-    /// a funded transaction, proves it, and submits to the node. The
-    /// contract handle is not mutated.
-    ///
-    /// It runs [`Self::send_call_with`], then [`PendingCall::get_receipt`]
-    /// with a bound of 60 s on the wait for finality. The snapshot settles
-    /// after that wait, so the bound does not cancel the store write.
-    ///
-    /// # Errors
-    ///
-    /// The errors of [`Self::send_call_with`] and of
-    /// [`PendingCall::get_receipt`], and [`ContractError::FinalizeTimeout`]
-    /// when the call does not finalize in 60 s.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn call_with(
-        &self,
-        circuit: &compact_codegen::ir::Circuit,
-        program: &compact_interpreter::Program<'_>,
-        circuit_name: &str,
-        args: &[(&str, crate::runtime::Value)],
-        witnesses: &dyn crate::runtime::WitnessProvider,
-        // The encryption key of each recipient of the shielded outputs this
-        // circuit creates (mints/sends). Each output whose coin public key
-        // matches a recipient gets a discovery ciphertext, so the recipient's
-        // wallet finds the coin through normal sync (no `watchFor`). The
-        // calling wallet's own coin public key needs no entry. Pass `&[]` for
-        // none.
-        coin_encryption_keys: &[crate::ShieldedRecipient],
-        // Coins of the caller's wallet that the call spends first, for a
-        // circuit's shielded-token deficit (e.g. `receiveShielded`). The
-        // wallet selects coins for what they leave. Pass
-        // `ShieldedInputs::default()` for none.
-        shielded: crate::call::ShieldedInputs,
-    ) -> Result<CallOutcome<crate::runtime::Value>, ContractError>
-    where
-        P: AsMidnightProvider,
-        P::Wallet: MidnightWallet,
-    {
-        let pending = self
-            .send_call_with(
-                circuit,
-                program,
-                circuit_name,
-                args,
-                witnesses,
-                coin_encryption_keys,
-                shielded,
-                Ok,
-            )
-            .await?;
-        // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
-        Box::pin(pending.finish(Some(DEFAULT_TX_FINALIZE_TIMEOUT))).await
-    }
-
     /// Submit a circuit call, and return a [`PendingCall`] before the chain's
     /// verdict.
     ///
-    /// It does the work of [`Self::call_with`] up to the submit. It runs the
-    /// circuit, builds and proves the funded transaction, and builds its
-    /// extrinsic. Then it decodes the circuit's result with `decode`, records
+    /// It runs the circuit, builds and proves the funded transaction, and
+    /// builds its extrinsic. Then it decodes the circuit's result with `decode`, records
     /// the private-state snapshot as `Pending`, and submits. A result that does
     /// not decode stops the call before the store records a snapshot and before
     /// the node gets the transaction. Call [`PendingCall::get_receipt`] to
@@ -1678,9 +1569,10 @@ impl<P> Contract<P> {
     /// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid) also
     /// hands them back. Any other error from the submit on keeps them reserved
     /// until a sync sees the chain spend them, or until their TTL passes.
+    #[doc(hidden)]
     #[expect(
         clippy::too_many_arguments,
-        reason = "the arguments of `call_with`, plus the decoder"
+        reason = "the inputs of a call, plus the decoder"
     )]
     pub async fn send_call_with<T>(
         &self,

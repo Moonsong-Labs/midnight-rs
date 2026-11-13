@@ -27,8 +27,7 @@ use crate::state::StateAtBlock;
 /// All coins come from the provider's single funding wallet. Spending coins
 /// owned by other wallets (multi-party offers) is not supported yet.
 ///
-/// Built by the generated `Circuits` builder's `with_shielded_inputs`, and
-/// accepted directly by [`Contract::call_with`](crate::Contract::call_with).
+/// Built by the generated `Circuits` builder's `with_shielded_inputs`.
 /// Empty by default (the common case: a call with no shielded input).
 #[derive(Default)]
 pub struct ShieldedInputs {

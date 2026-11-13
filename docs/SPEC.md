@@ -355,7 +355,7 @@ append the Pending private-state snapshot, if the witnesses changed the state
 prepared.send().await → PendingTx → PendingCall<T>        // .send() returns here
   └─ SubmitRpc: SubmissionWait, the snapshot stays Pending, and the inputs stay reserved
   ↓
-PendingCall::get_receipt → PendingTx::get_receipt         // no SDK deadline; Contract::call_with bounds the PendingTx wait by DEFAULT_TX_FINALIZE_TIMEOUT
+PendingCall::get_receipt → PendingTx::get_receipt         // no SDK deadline
   ↓
 settle the result of the wait:
   ├─ Ok: confirm the snapshot, if the call recorded one

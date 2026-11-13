@@ -87,7 +87,7 @@ pub struct FsPrivateStateProvider {
     root: PathBuf,
     /// Per-address mutexes serializing the journal read-modify-write
     /// operations (`append_pending` / `confirm` / `mark_failed` /
-    /// `rollback_from`). Without this, two concurrent `call_with`s on the
+    /// `rollback_from`). Without this, two concurrent contract calls on the
     /// same contract could both pass `append_pending`'s duplicate check and
     /// write sibling pending snapshots, branching the journal so `find_leaf`
     /// rejects every later read. Wrapped in `Arc` so cloned providers share
@@ -919,7 +919,7 @@ fn apply_import_entries(
 
     // Pass 5: run `find_leaf` on every address in the payload (even ones
     // that only saw `Skip` actions), so a pre-existing malformed journal
-    // surfaces here instead of at the next `call_with`. Validating Skip
+    // surfaces here instead of at the next contract call. Validating Skip
     // addresses also catches the case where the import silently no-op'd
     // against a broken destination.
     for address in &addresses_in_payload {
@@ -1702,7 +1702,7 @@ mod tests {
         p.append_pending("0200aa", ext(1), None, b"s1")
             .await
             .unwrap();
-        // First confirm with no height (the typical Contract::call_with
+        // First confirm with no height (the typical contract call
         // path: subxt's TxInBlock only exposes the hash).
         p.confirm("0200aa", ext(1), None, [0xbb; 32]).await.unwrap();
         assert_eq!(p.snapshots("0200aa").await.unwrap()[0].block_height, None);
@@ -1853,7 +1853,7 @@ mod tests {
         // Destination already has B<-A. Import a payload containing
         // C<-A. The merged journal has two leaves under A; the importer
         // must reject so the user discovers the breakage at the import
-        // call site instead of the next call_with.
+        // call site instead of the next contract call.
         let (_src_dir, src) = provider();
         // Populate the destination's pre-import state by importing a
         // single-tx history to make sure we end up with a valid sibling
@@ -1935,7 +1935,7 @@ mod tests {
         // existing snapshots no-ops every write, but the importer must
         // still surface the pre-existing branching so the user discovers
         // the breakage at the import call site instead of at the next
-        // call_with.
+        // contract call.
         let (_dir, dst) = provider();
         // A is the shared root; B and C are siblings under A.
         for (h, parent) in [(1, None), (2, Some(1)), (3, Some(1))] {

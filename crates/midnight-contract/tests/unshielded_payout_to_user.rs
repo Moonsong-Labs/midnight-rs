@@ -58,7 +58,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
 
     // Mint to the contract itself, so it has a balance to pay out of.
     contract
-        .call_with(
+        .send_call_with(
             &common::exported_circuit(&info, "mintToSelf").def,
             &program,
             "mintToSelf",
@@ -72,7 +72,11 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
             &midnight_contract::runtime::NoWitnesses,
             &[],
             midnight_contract::ShieldedInputs::default(),
+            Ok,
         )
+        .await
+        .expect("the call must reach the node")
+        .get_receipt()
         .await
         .expect("the contract must be able to mint to itself");
 
@@ -88,7 +92,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     eprintln!("recipient holds {before} before the payout");
 
     contract
-        .call_with(
+        .send_call_with(
             &common::exported_circuit(&info, "payUser").def,
             &program,
             "payUser",
@@ -103,7 +107,11 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
             &midnight_contract::runtime::NoWitnesses,
             &[],
             midnight_contract::ShieldedInputs::default(),
+            Ok,
         )
+        .await
+        .expect("the call must reach the node")
+        .get_receipt()
         .await
         .expect("paying a user an unshielded token must be accepted");
 
