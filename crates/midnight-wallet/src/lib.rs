@@ -95,4 +95,4 @@ pub use midnight_types::{
 pub use background::BackgroundSync;
 pub use local::Wallet;
 pub use midnight_types::hd::{self, AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
-pub use sync::{SyncHandle, SyncProgress, WalletBuilder};
+pub use sync::{SyncHandle, SyncProgress, SyncProgressReceiver, WalletBuilder};

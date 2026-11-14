@@ -32,11 +32,10 @@ use midnight_indexer_client::testutil::{
 };
 use midnight_provider::{BlockHash, MidnightProvider};
 use midnight_wallet::{
-    Network, Seed, SyncHandle, SyncProgress, Wallet, WalletBuilder, WalletError,
+    Network, Seed, SyncHandle, SyncProgressReceiver, Wallet, WalletBuilder, WalletError,
 };
 use serde_json::json;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------------------
 // Mock indexer
@@ -226,10 +225,7 @@ async fn synced_provider(url: &str) -> MidnightProvider<Wallet> {
 
 /// Stall mode: start a streamed sync, then wait until the mock holds its
 /// subscriptions.
-async fn stalled_streamed_sync(
-    url: &str,
-    state: &MockState,
-) -> (mpsc::Receiver<SyncProgress>, SyncHandle) {
+async fn stalled_streamed_sync(url: &str, state: &MockState) -> (SyncProgressReceiver, SyncHandle) {
     state.stall.store(true, Ordering::SeqCst);
     let sync = builder()
         .sync_with_progress(&SilentNode, url)
