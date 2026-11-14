@@ -31,7 +31,7 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time"] }
 tracing = { workspace = true }
 rand = { workspace = true }
 
@@ -52,3 +52,4 @@ compact-bindgen = { workspace = true }
 # The devnet tests keep wallet snapshots and private state in temporary
 # directories.
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
