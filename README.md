@@ -26,6 +26,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
 
+The `macros` and `rt-multi-thread` features are for the `#[tokio::main]` of the Quick start. The SDK itself runs on a tokio runtime of any flavor (see the Runtime section of the `midnight-core` crate docs).
+
 ## Quick start
 
 The Quick start runs against a local devnet (node, indexer and proof server) in Docker. Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
