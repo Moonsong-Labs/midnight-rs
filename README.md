@@ -28,7 +28,7 @@ anyhow = "1"
 
 ## Quick start
 
-The Quick start runs against a local devnet (node, indexer and proof server) in Docker. The Quick start proves in its own process. Its first proofs download the public parameters into a local cache (see [Proof backends](#proof-backends)). Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
+The Quick start runs against a local devnet (node, indexer and proof server) in Docker. Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
 
 ```rust
 use midnight_core::provider::TransactionRequest;
@@ -80,7 +80,7 @@ To sync a wallet against another network that runs ledger 9, give [`examples/wal
 
 ## Proof backends
 
-A `Prover` proves the transactions that the provider builds: transfers, Dust registrations, deploys, contract calls and maintenance updates. By default, the provider proves in its own process (`Prover::local`). To prove on a proof server, give `Prover::remote` to `with_prover`:
+A `Prover` proves the transactions that the provider builds. By default, the provider proves in its own process (`Prover::local`). To prove on a proof server, give `Prover::remote` to `with_prover`:
 
 ```rust,ignore
 use midnight_core::provider::Prover;
@@ -88,9 +88,7 @@ use midnight_core::provider::Prover;
 let provider = provider.with_prover(Prover::remote(&proof_url));
 ```
 
-The proof server must prove ledger 9 transactions, as the `proof-server` image of the devnet does.
-
-The local prover downloads the public parameters for the first proof of each circuit size, when the cache does not hold them. It downloads a built-in Zswap or Dust key for the first proof that uses that key, in the same way. The source is `MIDNIGHT_PARAM_SOURCE` (default `https://srs.midnight.network/`). The cache is the directory that upstream `MidnightDataProvider` picks, `MIDNIGHT_PP` first. For offline or container use, fill that cache once with network access. Then point `MIDNIGHT_PP` at it. A remote prover proves on the server and downloads none of these files.
+The local prover downloads the public parameters on its first proofs (see `Prover::local`).
 
 ## Swaps and sponsored fees
 
@@ -105,11 +103,11 @@ let swap = merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
 sponsor.send_transaction(TransactionRequest::sponsor(swap)).await?.get_receipt().await?;
 ```
 
-A party with no Dust fills a transfer with `TransactionRequest::without_fee`, or a contract call with the call builder's `.without_fee()`, and hands the bytes of the result (`TxEnvelope::into_bytes`) to the sponsor. A send refuses a transaction that pays no fee. A fee-less contract call records no private state. So it fails with `ContractError::UnrecordedPrivateState` when its witnesses change the private state, before it reserves an input or makes a proof. A sponsor pays the Dust fee with `TransactionRequest::sponsor`, after `merge_transactions` when there are several transactions. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
+A party with no Dust fills a transfer with `TransactionRequest::without_fee`, or a contract call with the call builder's `.without_fee()`, and hands the bytes of the result to the sponsor. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
 
 ## Compile a contract
 
-The SDK reads `compiler/analyzed-ir.sexp`. Only a fork of the Compact compiler ([`RomarQ/compact`](https://github.com/RomarQ/compact)) writes this file, when it runs with `--analyzed-ir`. The command below runs the public image of the fork at `COMPACT_REV`, the commit that the [`Makefile`](Makefile) names.
+The SDK reads `compiler/analyzed-ir.sexp`. Only a fork of the Compact compiler ([`RomarQ/compact`](https://github.com/RomarQ/compact)) writes this file, when it runs with `--analyzed-ir`.
 
 Run these commands from the root of your crate. They compile the counter contract that [Deploy and call a contract](#deploy-and-call-a-contract) uses:
 
@@ -119,13 +117,9 @@ docker run --rm -v "$PWD:/src" -w /src ghcr.io/romarq/compactc:536ef6dd63f15f910
   "compactc --analyzed-ir counter.compact compiled/counter"
 ```
 
-The container sees only the working directory, at `/src`. Give the source and the output directory as relative paths under it.
-
-The compiler writes only ZKIR v3, so each circuit gets a `verifier-key[v7]` key, which only a ledger 9 chain verifies.
-
 ## Deploy and call a contract
 
-The `contract!` macro generates typed bindings from the compiled contract. It also emits `counter::ZK_CONFIG_DIR`, the directory that `with_zk_config` reads. That path is absolute on the build machine, so a binary that runs on another machine passes its own directory. The code after the module runs in `main`, with the `provider` of the [Quick start](#quick-start):
+The `contract!` macro generates typed bindings from the compiled contract. It also emits `counter::ZK_CONFIG_DIR`, the directory that `with_zk_config` reads. The code after the module runs in `main`, with the `provider` of the [Quick start](#quick-start):
 
 ```rust,ignore
 mod counter {
@@ -153,7 +147,7 @@ println!("increment_by(5) returned {returned}");
 
 ## Deploy a contract with a constructor
 
-The deploy runs the contract's Compact constructor locally, before any proof, as midnight-js does. It deploys the state that the constructor leaves. The generated builder takes what the constructor needs:
+The deploy runs the contract's Compact constructor and deploys the state that it leaves. The generated builder takes what the constructor needs:
 
 - `with_constructor_args(..)`, only for a constructor with parameters. It takes the same Rust types as the circuit methods.
 - `with_witnesses(&w)` and `with_initial_private_state(state)`, only for a contract with witnesses. The witnesses answer the constructor's witness calls and start from the initial private state.
@@ -190,11 +184,11 @@ let contract = owned_counter::Contract::deploy(&provider)
     .await?;
 ```
 
-The deploy records the private state that the constructor leaves as the first snapshot of the new contract (see [`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy)). An `into_contract` with no wait before it leaves that snapshot `Pending`. To confirm it, call `PendingDeploy::get_receipt` before `into_contract`. A constructor that mints, claims, or spends or creates a coin fails the deploy with `ContractError::Construction` before any proof. A constructor that reads `kernel.self()` fails the deploy with `ContractError::Interpreter`, because the contract gets its address from the deploy.
+[`docs/private-state.md`](docs/private-state.md#threading-through-a-deploy) covers the private state of a deploy.
 
 ## Deploy with a shielded offer
 
-A deploy can carry a shielded offer. A `ShieldedOffer` holds coins from `Wallet::spendable_shielded_coins` and the `ShieldedPayment`s to make from them. `network` is `wallet.network()`:
+A deploy can carry a shielded offer. A `ShieldedOffer` holds coins from `Wallet::spendable_shielded_coins` and the `ShieldedPayment`s to make from them:
 
 ```rust,ignore
 use midnight_core::Contract;
@@ -228,10 +222,10 @@ let contract = Contract::deploy(&provider)
 
 ## Connecting to an existing contract
 
-`Contract::at` connects to a deployed contract by the address that `contract.address()` returns. It makes no network call. The handle reads fresh state at each call, the same as the handle that `deploy` returns:
+`Contract::at` connects to a deployed contract by the address that `contract.address()` returns:
 
 ```rust,ignore
-let contract = counter::Contract::at(&provider, &address)
+let contract = counter::Contract::at(&provider, address)
     .with_zk_config(counter::ZK_CONFIG_DIR)
     .build();
 
@@ -242,7 +236,7 @@ println!("round = {}", contract.ledger().await?.round()?);
 
 ## Observing inclusion explicitly
 
-`send` submits a deploy and returns a `PendingDeploy`. When no `get_receipt` ran on it, `into_contract` waits for the best block, then reads the contract from the node at that block. `with_deploy_timeout` sets one deadline for the wait and the read (60 s by default). To wait for finality, call `get_receipt` on the `PendingDeploy` before `into_contract`:
+`send` submits a deploy and returns a `PendingDeploy`. By itself, `into_contract` waits only for the best block. To wait for finality, call `get_receipt` on the `PendingDeploy` before `into_contract`:
 
 ```rust,ignore
 let pending = counter::Contract::deploy(&provider)
@@ -253,9 +247,7 @@ let (receipt, pending) = pending.get_receipt().await?;
 let contract           = pending.into_contract().await?;
 ```
 
-On this path, the deadline covers only `into_contract`. `get_receipt` has no deadline.
-
-A wait fails with `ContractError::TransactionFailed` when the chain did not apply the deploy. When the deadline passes, `into_contract` fails with `ContractError::DeployTimeout`, and the error message says what to do. [`docs/wallet.md`](docs/wallet.md#submission-and-waiting) lists the submission errors and what to do after each one.
+[`docs/wallet.md`](docs/wallet.md#submission-and-waiting) lists the submission errors and what to do after each one.
 
 ## Crates
 
@@ -264,7 +256,7 @@ A wait fails with `ContractError::TransactionFailed` when the chain did not appl
 | `midnight-core` | The crate to depend on. It re-exports the SDK as the modules `provider`, `wallet`, `contract` and `crypto` |
 | `midnight-provider` | `MidnightProvider`: node RPC, and the transactions that the attached `MidnightWallet` funds and signs |
 | `midnight-wallet` | `Wallet` state machine: sync, balances, funding and signing as a `MidnightWallet`, Dust, address derivation |
-| `midnight-indexer-client` | GraphQL client for the Midnight indexer API, which the wallet sync uses |
+| `midnight-indexer-client` | GraphQL client for the Midnight indexer API |
 | `midnight-crypto` | Re-exports `midnight-base-crypto`, `midnight-curves` and `midnight-transient-crypto` as modules |
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
 | `compact-bindgen` | `contract!` macro: generates typed bindings from `analyzed-ir.sexp` |
@@ -272,7 +264,7 @@ A wait fails with `ContractError::TransactionFailed` when the chain did not appl
 
 ## Development
 
-The `Makefile` wraps the workflow, and [CI](.github/workflows/ci.yml) calls the same targets. Run `make` for the full list.
+The `Makefile` wraps the workflow. Run `make` for the full list.
 
 ```bash
 make ci              # the local CI gates
@@ -282,5 +274,3 @@ make test-e2e        # devnet integration tests
 make examples        # run the examples of the EXAMPLES list against the devnet
 make conformance     # check the circuit interpreter against the TypeScript Compact runtime
 ```
-
-Git does not track compiler output: the compiled contracts in [`devnet/contracts`](devnet/contracts), the analyzed IR of the test and conformance fixtures, and the conformance goldens. The targets that build or run the workspace, such as `make check` and `make test`, first run `make contracts fixtures`. Each compiles what is missing, or was compiled from another source or `COMPACT_REV`, so that step needs Docker. `make test` and `make conformance` also run `make goldens`, which runs the corpus through the TypeScript runtime. It needs Node 22. A plain `cargo` command builds none of this, so run `make contracts fixtures` before it, and `make goldens` too before a test run.
