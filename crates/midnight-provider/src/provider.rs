@@ -51,27 +51,28 @@ struct NodeConnection {
     client: OnlineClient<subxt::SubstrateConfig>,
 }
 
-/// The cached [`NodeConnection`], and the task that polls its chainHead
-/// follow driver.
+/// The cached [`NodeConnection`], and a task on the runtime that opened it.
 ///
-/// The tasks of a connection run on the tokio runtime that opened it: the
-/// reconnecting client, the websocket tasks under it, and the driver task.
-/// When that runtime shuts down, it drops them all, and each request on the
-/// connection then fails. The driver ends at once on a node with no
-/// chainHead methods, and after a follow error that is not a disconnect. So
-/// the driver task stays alive after its driver ends. Only the shutdown of
-/// its runtime finishes it, and a finished driver task marks a dead
-/// connection.
+/// The tasks of a connection run on the tokio runtime that opened it. When
+/// that runtime shuts down, it drops them all, and each request on the
+/// connection then fails. The marker task never ends by itself, so only that
+/// shutdown finishes it. The chainHead driver cannot be the marker: it ends
+/// at once on a node with no chainHead methods.
 struct CachedConnection {
     conn: NodeConnection,
-    driver_task: JoinHandle<()>,
+    runtime_marker: JoinHandle<()>,
 }
 
 impl CachedConnection {
-    /// The connection, or `None` when the runtime that opened it has shut
-    /// down.
+    /// The connection, or `None` when the runtime that opened it shut down.
     fn live(&self) -> Option<&NodeConnection> {
-        (!self.driver_task.is_finished()).then_some(&self.conn)
+        (!self.runtime_marker.is_finished()).then_some(&self.conn)
+    }
+}
+
+impl Drop for CachedConnection {
+    fn drop(&mut self) {
+        self.runtime_marker.abort();
     }
 }
 
@@ -84,6 +85,9 @@ impl CachedConnection {
 /// transaction from node queries, the wallet funds it, the provider proves
 /// it, the wallet signs it, and the provider sends it.
 ///
+/// Run its futures on a tokio runtime with the I/O and time drivers enabled
+/// (see the Runtime section of the `midnight-core` crate docs).
+///
 /// The provider opens the node connection on first use and keeps it until
 /// the tokio runtime that opened it shuts down. The next query then opens a
 /// new connection on its own runtime. The connection reconnects with backoff
@@ -91,6 +95,11 @@ impl CachedConnection {
 /// and `midnight_*` RPCs through the subxt `RpcClient`, and the calls that
 /// need runtime metadata, such as transaction submission, through the
 /// `OnlineClient` built on the same transport.
+///
+/// A query from another runtime also runs on the tasks of the runtime that
+/// opened the connection. It waits while that runtime is current-thread and
+/// no thread is in its `block_on`. It fails when that runtime shuts down
+/// while the query is in flight.
 ///
 /// It reads the node through [`NodeApi`], within the bounds that the trait
 /// states. [`Self::prepare`] and [`Self::send_tx_envelope`] bound their
@@ -319,9 +328,9 @@ impl<W> MidnightProvider<W> {
     }
 
     /// The cached node connection, or a new one when the runtime that opened
-    /// the cached one has shut down (see [`CachedConnection`]). The websocket
-    /// reconnects with backoff after a network drop, so only the end of that
-    /// runtime replaces the connection.
+    /// the cached one shut down (see [`CachedConnection`]). The websocket
+    /// reconnects with backoff after a network drop, so a new connection
+    /// replaces the cached one only after that runtime shuts down.
     ///
     /// The caller runs the connect inside the bound of its query (see
     /// [`QUERY_TIMEOUT`]), because the client retries a refused dial forever.
@@ -346,7 +355,7 @@ impl<W> MidnightProvider<W> {
         let rpc = RpcClient::new(reconnecting);
         // The runtime-aware client shares the same auto-reconnecting
         // transport.
-        let (backend, driver) = CombinedBackend::builder()
+        let (backend, mut driver) = CombinedBackend::builder()
             .build(rpc.clone())
             .await
             .map_err(|e| ProviderError::Rpc(format!("building the node backend: {e}")))?;
@@ -359,22 +368,18 @@ impl<W> MidnightProvider<W> {
             return Ok(conn.clone());
         }
         let conn = NodeConnection { rpc, client };
-        // Spawn the follow driver only for the kept connection: the driver
-        // holds the client open until a hard error.
-        let driver_task = tokio::spawn(async move {
-            driver
-                .for_each(|res| async move {
-                    if let Err(e) = res {
-                        debug!(error = %e, "chainHead follow error");
-                    }
-                })
-                .await;
-            // Outlive the driver: see `CachedConnection`.
-            std::future::pending::<()>().await
+        // Spawn the follow driver only for the kept connection: a running
+        // driver holds its client open.
+        tokio::spawn(async move {
+            while let Some(res) = driver.next().await {
+                if let Err(e) = res {
+                    debug!(error = %e, "chainHead follow error");
+                }
+            }
         });
         *cache = Some(CachedConnection {
             conn: conn.clone(),
-            driver_task,
+            runtime_marker: tokio::spawn(std::future::pending()),
         });
         Ok(conn)
     }
