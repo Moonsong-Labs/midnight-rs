@@ -18,7 +18,7 @@ rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 
@@ -26,4 +26,4 @@ tracing = { workspace = true }
 # Self dev-dependency: enables the `test-util` feature (and with it the
 # `testutil` mock-server module) for this crate's own integration tests.
 midnight-indexer-client = { path = ".", features = ["test-util"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "time"] }

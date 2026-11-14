@@ -9,4 +9,4 @@ midnight-core = { workspace = true }
 anyhow = { workspace = true }
 k256 = { workspace = true }
 rand = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

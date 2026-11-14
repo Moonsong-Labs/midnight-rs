@@ -20,4 +20,4 @@ thiserror = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

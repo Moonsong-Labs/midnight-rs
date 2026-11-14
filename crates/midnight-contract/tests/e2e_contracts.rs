@@ -215,9 +215,7 @@ fn every_election_circuit_runs_without_an_interpreter_error() {
 /// only avoids inputs its own wallet reserved, `into_contract` returns at the
 /// best block rather than at finalization, and a second wallet syncing before
 /// the indexer surfaces the first spend re-selects it. That is ledger custom
-/// error 196, `DustDoubleSpend`. Sharing one provider across two
-/// `#[tokio::test]`s does not work either: each test owns its runtime, so the
-/// first runtime's shutdown drops the node connection the second would use.
+/// error 196, `DustDoubleSpend`.
 ///
 /// Requires a devnet + indexer (MIDNIGHT_NODE_URL, MIDNIGHT_INDEXER_URL).
 #[tokio::test]
