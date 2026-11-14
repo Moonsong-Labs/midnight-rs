@@ -85,9 +85,6 @@ impl Drop for CachedConnection {
 /// transaction from node queries, the wallet funds it, the provider proves
 /// it, the wallet signs it, and the provider sends it.
 ///
-/// Run its futures on a tokio runtime with the I/O and time drivers enabled
-/// (see the Runtime section of the `midnight-core` crate docs).
-///
 /// The provider opens the node connection on first use and keeps it until
 /// the tokio runtime that opened it shuts down. The next query then opens a
 /// new connection on its own runtime. The connection reconnects with backoff

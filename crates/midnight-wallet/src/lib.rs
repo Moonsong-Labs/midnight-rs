@@ -14,9 +14,6 @@
 //! background task. The wallet runs each replay against the indexer that it
 //! synced from.
 //!
-//! Sync the wallet on a tokio runtime (see the Runtime section of the
-//! `midnight-core` crate docs).
-//!
 //! For callers that only need an address (no synced state), use
 //! [`Seed::unshielded_address`], [`Seed::shielded_address`] and
 //! [`Seed::dust_address`].

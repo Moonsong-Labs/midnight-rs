@@ -55,16 +55,6 @@
 //! for the contract, which `with_zk_config` reads. [`compact_bindgen::contract!`]
 //! states when it emits the const.
 //!
-//! # Runtime
-//!
-//! The SDK runs on tokio 1. Run its futures on a tokio runtime that has the
-//! I/O and time drivers enabled. Any flavor works, so a current-thread
-//! runtime is enough. `#[tokio::main]` and `#[tokio::test]` build such a
-//! runtime.
-//!
-//! Outside a tokio runtime, the SDK panics at the first step that sets a
-//! timer, spawns a task or opens a network connection.
-//!
 //! # Features
 //!
 //! The four SDK modules each have a feature of the same name, and all four are

@@ -25,8 +25,6 @@ midnight-core = { git = "https://github.com/Moonsong-Labs/midnight-rs" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-The `macros` and `rt-multi-thread` features are only for the `#[tokio::main]` of the Quick start. The Runtime section in [`crates/midnight-core/src/lib.rs`](crates/midnight-core/src/lib.rs) states the runtime that the SDK needs.
-
 ## Quick start
 
 The Quick start runs against a local devnet (node, indexer and proof server) in Docker. Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
