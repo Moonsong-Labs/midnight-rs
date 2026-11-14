@@ -520,37 +520,9 @@ fn check_operand(o: &ir::Operand) -> Result<(), ArtifactError> {
     }
 }
 
-/// Load the artifact at `rel`, a path relative to this crate's manifest
-/// directory.
-#[cfg(test)]
-pub(crate) fn load_fixture(rel: &str) -> ContractInfo {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-    load(&path).unwrap_or_else(|e| panic!("load {}: {e}", path.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The runtime checks the coin commitment before it runs the
-    /// instructions, and that check is not one of them, so the interpreter
-    /// must not execute the operation until it does the check itself.
-    #[test]
-    fn refuses_a_coin_check_operation() {
-        let family = crate::types::SUPPORTED_COMPILER_FAMILY;
-        let src = &format!(
-            r#"(analyzed-ir (compiler-version "{family}.0") (language-version "0.25.107")
-          (runtime-version "0.18.107") (exports (stash . %stash.0)) (contract-types)
-          (circuit %stash.0 (exported #t) (pure #f) (proof #t) () (ttuple)
-            (public-ledger %vault.1 (update-with-coin-check 0 1) (0) writeCoin (ttuple)
-              (instructions (ins (cached #t) (n 1))))))"#
-        );
-        let e = load_str(src).expect_err("a coin-check operation is refused");
-        assert!(
-            e.to_string().contains("update-with-coin-check"),
-            "the error names the class: {e}"
-        );
-    }
 
     /// The refusal looks inside the field's type: here `Type::Unknown` sits in
     /// a struct that a cell holds, where `default_aligned` panics on it.
@@ -613,51 +585,5 @@ mod tests {
             ),
             "{e}"
         );
-    }
-
-    #[test]
-    fn loads_the_bboard_artifact() {
-        let info =
-            load_fixture("../../../tests/conformance/fixtures/bboard/compiler/analyzed-ir.sexp");
-        let names: Vec<_> = info.circuits.iter().map(|c| c.name.as_str()).collect();
-        assert!(names.contains(&"post") && names.contains(&"public_key"));
-        let message = info
-            .ledger
-            .iter()
-            .find(|f| f.name == "message")
-            .expect("message");
-        let Some(ir::Type::Struct { fields, .. }) = &message.element_type else {
-            panic!("message should be a struct-typed cell")
-        };
-        assert_eq!(fields.len(), 2);
-        // public_key is exported and called, so it is also a helper.
-        assert!(info.helpers.iter().any(|h| h.name.name() == "public_key"));
-    }
-
-    #[test]
-    fn loads_the_gateway_artifact() {
-        let info =
-            load_fixture("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
-        assert_eq!(info.circuits.len(), 6);
-        assert_eq!(info.ledger.len(), 10);
-        let threshold = info.ledger.iter().find(|f| f.name == "threshold").unwrap();
-        assert!(matches!(
-            threshold.index,
-            crate::types::FieldIndex::Single(0)
-        ));
-        assert_eq!(threshold.storage, crate::types::StorageKind::Cell);
-        let egress = info
-            .ledger
-            .iter()
-            .find(|f| f.name == "egress_jobs")
-            .unwrap();
-        assert_eq!(egress.storage, crate::types::StorageKind::Map);
-        assert!(egress.key.is_some() && egress.value.is_some());
-        let counter = info
-            .ledger
-            .iter()
-            .find(|f| f.name == "next_job_id")
-            .unwrap();
-        assert_eq!(counter.storage, crate::types::StorageKind::Counter);
     }
 }

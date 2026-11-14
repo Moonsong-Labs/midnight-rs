@@ -1169,34 +1169,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn head_returns_latest_pending_snapshot() {
-        let (_dir, p) = provider();
-        p.append_pending("0200aa", ext(1), None, b"s1")
-            .await
-            .unwrap();
-        p.append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
-            .await
-            .unwrap();
-        assert_eq!(p.head("0200aa").await.unwrap().as_deref(), Some(&b"s2"[..]));
-        assert_eq!(p.head_extrinsic("0200aa").await.unwrap(), Some(ext(2)));
-    }
-
-    #[tokio::test]
-    async fn confirm_promotes_pending_to_confirmed() {
-        let (_dir, p) = provider();
-        p.append_pending("0200aa", ext(1), None, b"s1")
-            .await
-            .unwrap();
-        p.confirm("0200aa", ext(1), Some(42), [0xbb; 32])
-            .await
-            .unwrap();
-        let snaps = p.snapshots("0200aa").await.unwrap();
-        assert_eq!(snaps.len(), 1);
-        assert_eq!(snaps[0].status, SnapshotStatus::Confirmed);
-        assert_eq!(snaps[0].block_height, Some(42));
-    }
-
-    #[tokio::test]
     async fn mark_failed_cascades_to_dependents() {
         let (_dir, p) = provider();
         p.append_pending("0200aa", ext(1), None, b"s1")
@@ -1265,7 +1237,6 @@ mod tests {
             .export_private_states(&ExportOptions::new(PW))
             .await
             .unwrap();
-        assert_eq!(exp.format, FORMAT_STATES);
 
         let (_dst_dir, dst) = provider();
         let res = dst
@@ -1324,9 +1295,10 @@ mod tests {
     #[tokio::test]
     async fn import_rejects_duplicate_extrinsic_hash_in_payload() {
         // Two entries with the same `(address, extrinsic_hash)` in one
-        // payload must be rejected before mutating the store. Without this
-        // check the first write would land, and only the second would error
-        // under `ConflictStrategy::Error`.
+        // payload must be rejected before mutating the store. Under
+        // `ConflictStrategy::Overwrite` the conflict check admits the second
+        // copy, so without this check the first copy is written before the
+        // second fails.
         let (_src_dir, src) = provider();
         src.append_pending("0200aa", ext(1), None, b"s1")
             .await
@@ -1343,7 +1315,10 @@ mod tests {
 
         let (_dst_dir, dst) = provider();
         let err = dst
-            .import_private_states(&dup, &ImportOptions::new(PW))
+            .import_private_states(
+                &dup,
+                &ImportOptions::new(PW).with_conflict(ConflictStrategy::Overwrite),
+            )
             .await
             .unwrap_err();
         assert!(
@@ -1352,31 +1327,6 @@ mod tests {
         );
         // The store is untouched: no partial write from the first copy.
         assert!(dst.head("0200aa").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn import_rejects_malformed_hash_fields() {
-        // A snapshot whose `extrinsic_hash` isn't 32 bytes of hex would
-        // round-trip through serde fine but break `head_extrinsic` /
-        // rollback logic later. The import path must reject these up front.
-        let bad = vec![ExportEntry {
-            address: "0200aa".into(),
-            snapshot: Snapshot {
-                extrinsic_hash: "not-hex".into(),
-                ..pending(0, None, b"bytes")
-            },
-        }];
-        let exp = envelope(FORMAT_STATES, &bad);
-
-        let (_dir, dst) = provider();
-        let err = dst
-            .import_private_states(&exp, &ImportOptions::new(PW))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, PrivateStateError::InvalidFormat(_)),
-            "expected InvalidFormat, got {err:?}"
-        );
     }
 
     #[tokio::test]
@@ -1398,31 +1348,6 @@ mod tests {
         );
         // Only one file ended up on disk.
         assert_eq!(p.snapshots("0200aa").await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn append_pending_rejects_branching_with_journal_conflict() {
-        // A second append whose `depends_on` is no longer the leaf is
-        // rejected, so the journal can't branch through the API.
-        let (_dir, p) = provider();
-        p.append_pending("0200aa", ext(1), None, b"s1")
-            .await
-            .unwrap();
-        p.append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
-            .await
-            .unwrap();
-        // ext(1) is no longer the leaf (ext(2) is).
-        let err = p
-            .append_pending("0200aa", ext(3), Some(ext(1)), b"branch")
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, PrivateStateError::JournalConflict { .. }),
-            "expected JournalConflict, got {err:?}"
-        );
-        assert_eq!(p.snapshots("0200aa").await.unwrap().len(), 2);
-        // The leaf is still unambiguous.
-        assert!(p.head("0200aa").await.is_ok());
     }
 
     #[tokio::test]
@@ -1468,21 +1393,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_cascade_from_mid_chain_removes_children_before_parents() {
-        // The chain is 1 <- 5 <- 3, given out of order. The cascade starts
-        // at 5, which is not a root, and its child 3 sorts below it.
-        let journal = [
-            pending(5, Some(1), b""),
-            pending(3, Some(5), b""),
-            pending(1, None, b""),
-        ];
-        let start = hex::encode(ext(5));
-        let delete_order: Vec<&str> = walk_children(&journal, vec![start.as_str()])
-            .into_iter()
-            .rev()
-            .collect();
-        assert_eq!(delete_order, [3, 5].map(|h| hex::encode(ext(h))));
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cascade_from_mid_chain_removes_children_before_parents() {
+        // The chain is 1 <- 5 <- 3. The cascade starts at 5, which is not a
+        // root, and its child 3 sorts below it. The read-only address
+        // directory makes the first removal fail, and the error names it.
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, p) = provider();
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        p.append_pending("0200aa", ext(5), Some(ext(1)), b"s5")
+            .await
+            .unwrap();
+        p.append_pending("0200aa", ext(3), Some(ext(5)), b"s3")
+            .await
+            .unwrap();
+
+        let dir = p.address_dir("0200aa");
+        let orig = std::fs::metadata(&dir).unwrap().permissions();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let err = p.mark_failed("0200aa", ext(5)).await.unwrap_err();
+        std::fs::set_permissions(&dir, orig).unwrap();
+
+        let first = format!("stopped at snapshot {}", hex::encode(ext(3)));
+        assert!(
+            matches!(err, PrivateStateError::Io(ref m) if m.contains(&first)),
+            "expected the first removal at the child, got {err:?}"
+        );
     }
 
     #[cfg(unix)]
@@ -1759,28 +1698,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn import_rejects_uppercase_hex() {
-        let bad = vec![ExportEntry {
-            address: "0200aa".into(),
-            snapshot: Snapshot {
-                // 64 chars, valid hex content, but uppercase: would not be
-                // byte-equal to an internally produced lowercase encoding
-                // of the same bytes.
-                extrinsic_hash: "AA".repeat(32),
-                ..pending(0, None, b"x")
-            },
-        }];
-        let exp = envelope(FORMAT_STATES, &bad);
-        let (_dir, dst) = provider();
-        let err = dst
-            .import_private_states(&exp, &ImportOptions::new(PW))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, PrivateStateError::InvalidFormat(ref m)
-                if m.contains("lowercase hex")),
-            "expected InvalidFormat(lowercase hex), got {err:?}"
-        );
+    async fn import_rejects_a_hash_that_is_not_lowercase_hex() {
+        for hash in [
+            "not-hex".to_string(),
+            // 64 chars, valid hex content, but uppercase: would not be
+            // byte-equal to an internally produced lowercase encoding
+            // of the same bytes.
+            "AA".repeat(32),
+        ] {
+            let bad = vec![ExportEntry {
+                address: "0200aa".into(),
+                snapshot: Snapshot {
+                    extrinsic_hash: hash.clone(),
+                    ..pending(0, None, b"x")
+                },
+            }];
+            let exp = envelope(FORMAT_STATES, &bad);
+            let (_dir, dst) = provider();
+            let err = dst
+                .import_private_states(&exp, &ImportOptions::new(PW))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, PrivateStateError::InvalidFormat(ref m)
+                    if m.contains("lowercase hex")),
+                "{hash}: expected InvalidFormat(lowercase hex), got {err:?}"
+            );
+        }
     }
 
     #[tokio::test]

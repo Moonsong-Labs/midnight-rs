@@ -341,33 +341,6 @@ async fn dropping_sync_handle_aborts_sync_and_closes_subscriptions() {
     .await;
 }
 
-/// A resync survives an indexer that has nothing to say about this address.
-///
-/// The three replays a resync runs are all resumes: the wallet already holds
-/// a cursor, so a stream that stays quiet means "you are at the tip", not
-/// "the sync failed". Dust and zswap read it that way. The unshielded replay
-/// was asked to read it the other way, and a quiet unshielded stream is the
-/// normal state of an address with no new transactions, so a resync failed
-/// with `timeout waiting for unshielded sync` whenever the indexer pushed
-/// nothing inside the idle bound. That took the devnet E2E job down.
-///
-/// The mock here answers dust and zswap and holds the unshielded stream open
-/// and silent. Reverting the resume flag on that replay makes this fail.
-#[tokio::test]
-async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
-    let (url, state) = spawn_mock().await;
-    let provider = synced_provider(&url).await;
-
-    state.quiet_unshielded.store(true, Ordering::SeqCst);
-
-    // The resume path settles on its own idle bound, around ten seconds.
-    // Thirty leaves room on a loaded machine while still failing fast.
-    tokio::time::timeout(Duration::from_secs(30), provider.wallet().sync(&provider))
-        .await
-        .expect("the resync must reach a verdict inside the idle bound")
-        .expect("a quiet unshielded stream means at-tip, not a failed resync");
-}
-
 /// A chain that can be replaced under the wallet, on command.
 ///
 /// Chain A's hashes start with `0xaa` and end with the height, and it is 100
@@ -428,7 +401,9 @@ impl midnight_wallet::chain_pin::SyncSource for SwappableChain {
 /// failure the pin creates.
 ///
 /// The replay is held open for about ten seconds by the quiet unshielded
-/// stream, which is the window the chain is replaced in.
+/// stream, which is the window the chain is replaced in. A resync that does
+/// not resume the unshielded replay reads that silence as a failure, and ends
+/// with `timeout waiting for unshielded sync`.
 #[tokio::test]
 async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
     let (url, state) = spawn_mock().await;
@@ -442,12 +417,22 @@ async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
     state.quiet_unshielded.store(true, Ordering::SeqCst);
 
     // The replace lands after the resync has checked the old pin and while its
-    // replay is still running.
-    let (resync, ()) = tokio::join!(wallet.sync(&chain), async {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        chain.replace();
-    });
-    resync.expect("the resync itself completes; the swap is not visible to it");
+    // replay is still running. The replay settles on the resume idle bound,
+    // around ten seconds. Thirty leaves room on a loaded machine while still
+    // failing fast.
+    let (resync, ()) = tokio::join!(
+        tokio::time::timeout(Duration::from_secs(30), wallet.sync(&chain)),
+        async {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            chain.replace();
+        }
+    );
+    resync
+        .expect("the resync must reach a verdict inside the idle bound")
+        .expect(
+            "the resync itself completes: a quiet unshielded stream means at-tip, and the swap \
+             is not visible to it",
+        );
 
     let err = wallet
         .sync(&chain)

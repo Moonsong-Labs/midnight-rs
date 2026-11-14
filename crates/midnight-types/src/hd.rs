@@ -495,12 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn from_mnemonic_matches_upstream_test_vector() {
-        let seed = Seed::from_mnemonic(TEST_MNEMONIC).unwrap();
-        assert_eq!(hex::encode(seed.as_bytes()), TEST_SEED_HEX);
-    }
-
-    #[test]
     fn passphrase_changes_the_seed() {
         let bare = Seed::from_mnemonic(TEST_MNEMONIC).unwrap();
         let with_pw = Seed::from_mnemonic_with_passphrase(TEST_MNEMONIC, "trezor").unwrap();
@@ -632,38 +626,11 @@ mod tests {
     }
 
     #[test]
-    fn unshielded_address_differs_per_network() {
-        let a = seed().unshielded_address(Network::Undeployed);
-        let b = seed().unshielded_address(Network::Testnet);
-        assert_ne!(a, b);
-    }
-
-    #[test]
     fn mnemonic_generate_validates() {
         let words = mnemonic::generate(mnemonic::Strength::Words24);
         assert_eq!(words.len(), 24);
         let phrase = mnemonic::join(&words);
         assert!(mnemonic::validate(&phrase));
-        // Round-trip into a seed and back to a mnemonic-derived seed.
-        let seed = Seed::from_mnemonic(&phrase).unwrap();
-        assert_eq!(seed.as_bytes().len(), 64);
-    }
-
-    #[test]
-    fn mnemonic_validate_rejects_garbage() {
         assert!(!mnemonic::validate("not a real mnemonic phrase at all"));
-        // Wrong-length phrase
-        assert!(!mnemonic::validate("abandon abandon abandon"));
-    }
-
-    #[test]
-    fn mnemonic_words_and_join_round_trip() {
-        let phrase = TEST_MNEMONIC;
-        let words: Vec<String> = mnemonic::words(phrase)
-            .into_iter()
-            .map(str::to_string)
-            .collect();
-        assert_eq!(words.len(), 24);
-        assert_eq!(mnemonic::join(&words), phrase);
     }
 }

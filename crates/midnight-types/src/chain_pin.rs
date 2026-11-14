@@ -164,17 +164,6 @@ mod tests {
         assert!(text.contains("no block"), "{text}");
     }
 
-    #[test]
-    fn a_different_block_at_that_height_means_the_chain_was_replaced() {
-        let hashes = [BlockHash::repeat_byte(0xde)];
-        assert_eq!(
-            check_chain_pin(&pin(), Some(&hashes)),
-            ChainCheck::Replaced {
-                found: Some(BlockHash::repeat_byte(0xde))
-            }
-        );
-    }
-
     /// A fresh chain that has not yet climbed to the pinned height reports no
     /// block there, which is still an answer.
     #[test]

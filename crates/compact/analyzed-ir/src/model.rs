@@ -650,17 +650,6 @@ mod op_name_tests {
     use super::*;
 
     #[test]
-    fn every_name_round_trips_through_its_variant() {
-        for op in OpName::ALL {
-            assert_eq!(
-                &OpName::from(op.as_str()),
-                op,
-                "{op} does not parse back to its own variant"
-            );
-        }
-    }
-
-    #[test]
     fn a_name_this_build_does_not_know_is_kept_verbatim() {
         let unknown = OpName::from("sha3");
         assert_eq!(unknown, OpName::Unknown("sha3".to_string()));

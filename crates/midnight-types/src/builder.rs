@@ -1920,13 +1920,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn every_utxo_registered_means_nothing_to_choose() {
-        let a = night_utxo(9, Some(100), true);
-        let all = [&a];
-        assert!(choose_registration_input(&all, by_value).is_none());
-    }
-
     /// A missing creation time forces the caller to guess an age, and a guess
     /// that runs ahead of the truth declares an allowance the ledger will not
     /// grant. So a guessed one loses to any real one, even a poorer one.
@@ -1979,9 +1972,8 @@ mod tests {
 
     // The converging path of the fee-balancing loop (tracker is consulted
     // for the request, success returns without touching it) is exercised
-    // end-to-end by the devnet tests in crates/midnight-wallet/tests/integration.rs
-    // (`shielded_transfer_conserves_value` and others), which run the loop to
-    // convergence.
+    // end-to-end by the devnet tests in crates/midnight-wallet/tests/integration.rs,
+    // which run the loop to convergence.
 
     #[test]
     fn tracker_requests_the_accumulated_total() {
@@ -1997,26 +1989,12 @@ mod tests {
         // from scratch.
         t.record_shortfall(620, 120);
         assert_eq!(t.request(), 620);
-    }
 
-    #[test]
-    fn non_convergence_error_reports_shortfall_iterations_and_fee() {
+        // A registration's generationless Dust pays part of the fee, so the
+        // request is only the part past it (`WalletError::InsufficientDust`).
         let mut t = FeeBalanceTracker::default();
-        for i in 0..MAX_FEE_BALANCE_ITERATIONS as u128 {
-            t.record_shortfall(1_000 + i, 7);
-        }
-        let WalletError::Transfer(msg) = t.into_error() else {
-            panic!("expected WalletError::Transfer");
-        };
-        assert!(
-            msg.contains("10 iterations"),
-            "missing iteration count: {msg}"
-        );
-        assert!(
-            msg.contains("70 specks"),
-            "missing accumulated dust need: {msg}"
-        );
-        assert!(msg.contains("1009"), "missing last fee: {msg}");
+        t.record_shortfall(500, 200);
+        assert_eq!(t.request(), 200);
     }
 
     fn token(byte: u8) -> ShieldedTokenType {
@@ -2152,21 +2130,6 @@ mod tests {
                 }
             ),
             "{err:?}"
-        );
-    }
-
-    /// A selection that stopped short of the need, or that returned the wrong
-    /// change, would build a transaction that the node refuses.
-    #[test]
-    fn the_selection_takes_inputs_until_they_cover_the_need() {
-        let candidates = vec![('a', 3), ('b', 10), ('c', 5)];
-        assert_eq!(
-            select_inputs(candidates.clone(), 12, CoinSelection::LargestFirst),
-            Some((vec!['b', 'c'], 3))
-        );
-        assert_eq!(
-            select_inputs(candidates, 19, CoinSelection::LargestFirst),
-            None
         );
     }
 

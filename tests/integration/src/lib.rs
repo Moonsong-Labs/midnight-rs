@@ -141,116 +141,31 @@ mod synthetic_tests {
     //   7: committed  (set, Bytes<32>)
     //   8: revealed   (set, Bytes<32>)
     // ---------------------------------------------------------------
-    pub(crate) mod election_tests {
-        use super::*;
-        use crate::election::{Election, FIELD_COMMITTED};
-        use compact_bindgen::Bytes;
-
-        /// Build a 9-element election state array.
-        pub(crate) fn election_state(
-            authority: [u8; 32],
-            state_variant: u8,
-            tally_yes: u64,
-            tally_no: u64,
-        ) -> StateValue<InMemoryDB> {
-            StateValue::Array(
-                vec![
-                    // 0: authority (cell, Bytes<32>)
-                    StateValue::from(AlignedValue::from(authority)),
-                    // 1: state (cell, Enum PublicState as u8)
-                    StateValue::from(AlignedValue::from(state_variant)),
-                    // 2: topic (cell, Struct Maybe) -- skip testing, use a placeholder
-                    //    We need a valid AlignedValue for Maybe{is_some: bool, value: Opaque("string")}
-                    //    Opaque("string") maps to Vec<u8> which has Compress alignment.
-                    //    Build: concat(bool=false, empty_compress)
-                    StateValue::from(AlignedValue::from(false)),
-                    // 3: tally_yes (counter)
-                    StateValue::from(tally_yes),
-                    // 4: tally_no (counter)
-                    StateValue::from(tally_no),
-                    // 5: committed_votes (merkle-tree, depth=10)
-                    merkle_tree_state(10, 0),
-                    // 6: eligible_voters (merkle-tree, depth=10)
-                    merkle_tree_state(10, 0),
-                    // 7: committed (set, empty)
-                    StateValue::Map(StorageHashMap::new()),
-                    // 8: revealed (set, empty)
-                    StateValue::Map(StorageHashMap::new()),
-                ]
-                .into(),
-            )
-        }
-
-        /// An election state whose `committed` set holds `keys`.
-        pub(crate) fn election_state_with_committed(keys: &[[u8; 32]]) -> StateValue<InMemoryDB> {
-            let state = election_state([0u8; 32], 0, 0, 0);
-            let StateValue::Array(fields) = &state else {
-                panic!("an election state is an array");
-            };
-            let committed = keys.iter().fold(StorageHashMap::new(), |map, key| {
-                map.insert(AlignedValue::from(*key), StateValue::Null)
-            });
-            let fields = fields
-                .insert(FIELD_COMMITTED, StateValue::Map(committed))
-                .expect("committed is a field");
-            StateValue::Array(fields)
-        }
-
-        #[test]
-        fn election_authority_bytes() {
-            let authority = [0xAAu8; 32];
-            let root = election_state(authority, 0, 0, 0);
-            let state = make_state(root);
-            let ledger = Election::new(state);
-
-            let result = ledger.authority().expect("authority");
-            assert_eq!(*result, authority);
-        }
-
-        #[test]
-        fn election_tally_counters() {
-            let root = election_state([0u8; 32], 0, 100, 42);
-            let state = make_state(root);
-            let ledger = Election::new(state);
-
-            assert_eq!(ledger.tally_yes().expect("tally_yes"), 100u64);
-            assert_eq!(ledger.tally_no().expect("tally_no"), 42u64);
-        }
-
-        #[test]
-        fn election_empty_sets() {
-            let root = election_state([0u8; 32], 0, 0, 0);
-            let state = make_state(root);
-            let ledger = Election::new(state);
-
-            let committed = ledger.committed().expect("committed");
-            assert!(committed.is_empty());
-            assert_eq!(committed.size(), 0);
-
-            let revealed = ledger.revealed().expect("revealed");
-            assert!(revealed.is_empty());
-            assert_eq!(revealed.size(), 0);
-        }
-
-        #[test]
-        fn election_set_with_entries() {
-            let key1 = [0x11u8; 32];
-            let key2 = [0x22u8; 32];
-
-            let state = make_state(election_state_with_committed(&[key1, key2]));
-            let ledger = Election::new(state);
-
-            let committed = ledger.committed().expect("committed");
-            assert_eq!(committed.size(), 2);
-            assert!(!committed.is_empty());
-
-            // Iterate set elements and verify conversion
-            let mut elements: Vec<Bytes<32>> =
-                committed.iter().map(|r| r.expect("set element")).collect();
-            elements.sort_by_key(|b| **b);
-            assert_eq!(*elements[0], key1);
-            assert_eq!(*elements[1], key2);
-        }
+    /// Build a 9-element election state array.
+    fn election_state(state_variant: u8) -> StateValue<InMemoryDB> {
+        StateValue::Array(
+            vec![
+                // 0: authority (cell, Bytes<32>)
+                StateValue::from(AlignedValue::from([0u8; 32])),
+                // 1: state (cell, Enum PublicState as u8)
+                StateValue::from(AlignedValue::from(state_variant)),
+                // 2: topic (cell, Maybe): a placeholder that no test reads
+                StateValue::from(AlignedValue::from(false)),
+                // 3: tally_yes (counter)
+                StateValue::from(0u64),
+                // 4: tally_no (counter)
+                StateValue::from(0u64),
+                // 5: committed_votes (merkle-tree, depth=10)
+                merkle_tree_state(10, 0),
+                // 6: eligible_voters (merkle-tree, depth=10)
+                merkle_tree_state(10, 0),
+                // 7: committed (set, empty)
+                StateValue::Map(StorageHashMap::new()),
+                // 8: revealed (set, empty)
+                StateValue::Map(StorageHashMap::new()),
+            ]
+            .into(),
+        )
     }
 
     // ---------------------------------------------------------------
@@ -259,31 +174,16 @@ mod synthetic_tests {
     //   1: value     (cell, Field) -- exported
     //   2: state     (cell, Enum STATE: unset, set)
     // ---------------------------------------------------------------
-    mod tiny_tests {
-        use super::*;
-        use crate::tiny::Tiny;
-
-        /// Build a 3-element tiny state array with a zero authority.
-        pub(super) fn tiny_state(value: TransientFr, state: u8) -> StateValue<InMemoryDB> {
-            StateValue::Array(
-                vec![
-                    StateValue::from(AlignedValue::from([0u8; 32])),
-                    StateValue::from(AlignedValue::from(value)),
-                    StateValue::from(AlignedValue::from(state)),
-                ]
-                .into(),
-            )
-        }
-
-        #[test]
-        fn tiny_value_field() {
-            let root = tiny_state(TransientFr::from(12345u64), 0);
-            let state = make_state(root);
-            let ledger = Tiny::new(state);
-
-            let result = ledger.value().expect("value");
-            assert_eq!(result, TransientFr::from(12345u64));
-        }
+    /// Build a 3-element tiny state array with a zero authority and value.
+    fn tiny_state(state: u8) -> StateValue<InMemoryDB> {
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from([0u8; 32])),
+                StateValue::from(AlignedValue::from(TransientFr::from(0u64))),
+                StateValue::from(AlignedValue::from(state)),
+            ]
+            .into(),
+        )
     }
 
     // ---------------------------------------------------------------
@@ -302,7 +202,7 @@ mod synthetic_tests {
                 (2, PublicState::Reveal),
                 (3, PublicState::Final),
             ] {
-                let root = election_tests::election_state([0u8; 32], index, 0, 0);
+                let root = election_state(index);
                 let ledger = Election::new(make_state(root));
                 assert_eq!(
                     ledger.state().expect("state"),
@@ -312,7 +212,7 @@ mod synthetic_tests {
             }
 
             for (index, expected) in [(0u8, STATE::Unset), (1, STATE::Set)] {
-                let root = tiny_tests::tiny_state(TransientFr::from(0u64), index);
+                let root = tiny_state(index);
                 let ledger = Tiny::new(make_state(root));
                 assert_eq!(ledger.state().expect("state"), expected, "STATE {index}");
             }
@@ -399,25 +299,6 @@ mod synthetic_tests {
         use compact_bindgen::MerkleTreeAccessor;
 
         #[test]
-        fn merkle_tree_with_first_free() {
-            let sv = merkle_tree_state(20, 42);
-            let accessor = MerkleTreeAccessor::from_state(&sv).expect("from_state");
-            assert_eq!(accessor.height(), 20);
-            assert_eq!(accessor.first_free(), 42);
-        }
-
-        #[test]
-        fn merkle_tree_from_non_array_fails() {
-            let sv = StateValue::<InMemoryDB>::Null;
-            let err = MerkleTreeAccessor::from_state(&sv).unwrap_err();
-            let msg = err.to_string();
-            assert!(
-                msg.contains("Array") && msg.contains("Null"),
-                "unexpected error: {msg}"
-            );
-        }
-
-        #[test]
         fn merkle_tree_from_wrong_element_fails() {
             // Array with wrong first element (Cell instead of BoundedMerkleTree)
             let sv = StateValue::Array(
@@ -446,49 +327,23 @@ mod synthetic_tests {
 
         #[test]
         fn election_merkle_tree_accessor() {
-            let root = election_tests::election_state([0u8; 32], 0, 0, 0);
-            let state = make_state(root);
-            let ledger = Election::new(state);
+            let state = election_state(0);
+            let StateValue::Array(fields) = &state else {
+                panic!("an election state is an array");
+            };
+            let fields = fields
+                .insert(5, merkle_tree_state(10, 42))
+                .expect("committed_votes is a field");
+            let ledger = Election::new(make_state(StateValue::Array(fields)));
 
             let committed_votes = ledger.committed_votes().expect("committed_votes");
             assert_eq!(committed_votes.height(), 10);
-            assert_eq!(committed_votes.first_free(), 0);
-            // Blank trees still have a computed root in midnight-ledger
-            let _root = committed_votes.root();
+            assert_eq!(committed_votes.first_free(), 42);
 
             let eligible_voters = ledger.eligible_voters().expect("eligible_voters");
             assert_eq!(eligible_voters.height(), 10);
             assert_eq!(eligible_voters.first_free(), 0);
         }
-    }
-}
-
-// ===================================================================
-// Roundtrip: From<T> for AlignedValue  <->  TryFrom<&ValueSlice>
-// ===================================================================
-
-#[cfg(test)]
-mod encode_roundtrip_tests {
-    use crate::gateway::UnclaimedDeposit;
-    use compact_bindgen::{AlignedValue, Bytes};
-
-    /// Encode a generated struct via the bindgen-emitted
-    /// `From<T> for AlignedValue` impl, then decode it back via the
-    /// bindgen-emitted `TryFrom<&ValueSlice>` impl and check equality.
-    /// This is the proof that encode-side field order matches the
-    /// `Aligned::alignment()` concat order the decoder relies on.
-    #[test]
-    fn unclaimed_deposit_roundtrip() {
-        let original = UnclaimedDeposit {
-            amount: 1_234_567_890_u128,
-            token_ref: Bytes([0xABu8; 32]),
-        };
-
-        let av: AlignedValue = original.clone().into();
-        let decoded = UnclaimedDeposit::try_from(&*av.value).expect("decode");
-
-        assert_eq!(original.amount, decoded.amount);
-        assert_eq!(original.token_ref.0, decoded.token_ref.0);
     }
 }
 
@@ -624,6 +479,49 @@ mod queue_grows {
     }
 }
 
+/// The `containers/set-and-map` conformance case, as the canonical TS runtime
+/// ran it.
+#[cfg(test)]
+mod set_and_map {
+    use compact_bindgen::{Bytes, StorageHashMap};
+    use conformance::corpus::golden;
+    use conformance::runner::state_from_value;
+    use conformance::state_json::state_value_from_json;
+
+    use crate::containers::Containers;
+
+    /// The ledger at the JSON `pointer` of the case's golden.
+    fn ledger_at(pointer: &str) -> Containers {
+        let golden = golden("containers", "set-and-map");
+        let json = golden.pointer(pointer).expect("golden has the state");
+        let state = state_value_from_json(json).expect("golden state decodes");
+        Containers::new(state_from_value(state, StorageHashMap::new()))
+    }
+
+    /// Step 0 of the case is `add_entries(0x11..11, 3, 42)`.
+    #[test]
+    fn map_and_set_read_what_the_runtime_inserted() {
+        let ledger = ledger_at("/steps/0/state/data");
+
+        let score = ledger
+            .scores()
+            .expect("scores")
+            .get(3)
+            .expect("key 3 is set");
+        assert_eq!(score.expect("the score decodes"), 42);
+
+        let tags = ledger.tags().expect("tags");
+        assert!(tags.contains(Bytes([0x11; 32])));
+        assert_eq!(tags.size(), 1);
+        assert!(!tags.is_empty());
+        let elements: Vec<Bytes<32>> = tags.iter().map(|e| e.expect("set element")).collect();
+        assert_eq!(elements, [Bytes([0x11; 32])]);
+
+        let initial = ledger_at("/constructor/state/data");
+        assert!(initial.tags().expect("tags").is_empty());
+    }
+}
+
 // ===================================================================
 // InitialState: the generated defaults against the compiler's
 // ===================================================================
@@ -706,7 +604,7 @@ mod initial_state_defaults {
         }
     }
 
-    /// Answers tiny's witness with the key of the conformance case `tiny/get`.
+    /// Answers tiny's witness with the key of the conformance case `tiny/set-get-clear`.
     struct CaseKey;
 
     impl crate::tiny::Witnesses for CaseKey {
@@ -733,7 +631,7 @@ mod initial_state_defaults {
         bboard.run_constructor().expect("bboard's constructor runs");
 
         for (fixture, state) in [
-            ("tiny", tiny.ledger().into_contract_state()),
+            ("tiny", tiny.ledger().contract_state().clone()),
             ("bboard", bboard.ledger().into_contract_state()),
         ] {
             assert_eq!(

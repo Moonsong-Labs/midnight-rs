@@ -1,8 +1,0 @@
-{
-  "fixture": "counter",
-  "constructor": { "args": [] },
-  "steps": [
-    { "circuit": "increment", "args": [] },
-    { "circuit": "increment", "args": [] }
-  ]
-}

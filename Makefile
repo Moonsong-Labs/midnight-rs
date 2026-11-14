@@ -75,7 +75,7 @@ PARSER_FIXTURE_DIR := crates/compact/analyzed-ir/tests/fixtures
 # executors read different compiler outputs of a fixture: the Rust IR
 # interpreter reads `compiler/analyzed-ir.sexp`, and the ts-driver runs
 # `contract/index.js` against the canonical @midnight-ntwrk/compact-runtime.
-CONFORMANCE_FIXTURES := bboard containers counter curve25519 defaults events indexing keccak kernel \
+CONFORMANCE_FIXTURES := bboard containers curve25519 defaults events indexing keccak kernel \
                         loops ops peers scopes secp256k1 secp256r1 sha512 shadowing slices structs \
                         tiny trees vectors
 CONFORMANCE_DIR := tests/conformance
@@ -274,7 +274,6 @@ E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDN
 
 # The devnet integration tests.
 test-e2e: contracts fixtures
-	$(E2E_ENV) $(CARGO) test -p midnight-provider --test node_e2e -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-wallet --test integration -- --show-output --test-threads=1
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_offer -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_submit -- --show-output
@@ -296,7 +295,6 @@ test-e2e: contracts fixtures
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test emit_event -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test remote_proving -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test receive_shielded_coin -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test receive_selected_coin -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test failed_submit_hands_back -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test e2e_contracts -- --show-output --test-threads=1

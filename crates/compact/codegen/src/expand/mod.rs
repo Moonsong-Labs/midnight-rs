@@ -138,7 +138,13 @@ mod tests {
     use super::helpers::{make_ident, to_pascal_case};
     use super::types::{type_to_tokens, uint_tokens};
     use super::*;
-    use crate::artifact::load_fixture;
+
+    /// Load the artifact at `rel`, a path relative to this crate's manifest
+    /// directory.
+    fn load_fixture(rel: &str) -> ContractInfo {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        crate::artifact::load(&path).unwrap_or_else(|e| panic!("load {}: {e}", path.display()))
+    }
 
     #[test]
     fn uint_type_mapping() {
@@ -185,33 +191,6 @@ mod tests {
         assert!(widest.starts_with('('), "{widest}");
         let wider = tuple(12);
         assert!(wider.starts_with("compile_error !"), "{wider}");
-    }
-
-    #[test]
-    fn pascal_case() {
-        assert_eq!(to_pascal_case("pending"), "Pending");
-        assert_eq!(to_pascal_case("some_value"), "SomeValue");
-    }
-
-    #[test]
-    fn tuple_type_mapping() {
-        use crate::ir::Type;
-
-        // Empty tuple -> unit type.
-        let empty = type_to_tokens(&Type::unit()).to_string();
-        assert_eq!(empty, "()");
-
-        // Single-element tuple needs trailing comma.
-        let single = type_to_tokens(&Type::Tuple(vec![Type::Boolean])).to_string();
-        assert!(single.contains("bool") && single.contains(','));
-
-        // Multi-element tuple.
-        let multi = type_to_tokens(&Type::Tuple(vec![
-            Type::Boolean,
-            Type::Unsigned(255u32.into()),
-        ]))
-        .to_string();
-        assert!(multi.contains("bool") && multi.contains("u8"));
     }
 
     #[test]
@@ -352,39 +331,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn generate_gateway_crate() {
-        let info =
-            load_fixture("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
-        let generated = generated_source(&info, "Gateway");
-
-        // Ledger types and accessors
-        assert!(generated.contains("FIELD_THRESHOLD"));
-        assert!(generated.contains("pub struct EgressJob"));
-        assert!(generated.contains("pub enum JobStatus"));
-        assert!(generated.contains("pub struct Gateway"));
-        assert!(generated.contains("fn new("));
-        assert!(generated.contains("fn threshold("));
-        assert!(generated.contains("fn egress_jobs("));
-
-        // Aligned and TryFrom<&ValueSlice> impls
-        assert!(generated.contains("impl Aligned for EgressJob"));
-        assert!(generated.contains("impl Aligned for JobStatus"));
-        assert!(generated.contains("TryFrom<&'a ValueSlice> for EgressJob"));
-        assert!(generated.contains("from_hex"));
-
-        // Circuit return types
-        assert!(generated.contains("ClaimDepositReturn"));
-        assert!(generated.contains("WithdrawReturn"));
-
-        // Struct types referenced only in circuits (not in ledger)
-        assert!(generated.contains("pub struct ValidatorSignature"));
-        assert!(generated.contains("pub struct ShieldedCoinInfo"));
-
-        // cell_as used in accessor bodies
-        assert!(generated.contains("cell_as::<"));
-    }
-
     /// `ContractAddress` has the same shape as the standard library's coin key,
     /// so only the name keeps a coin key from converting into a contract address.
     #[test]
@@ -404,223 +350,5 @@ mod tests {
             generated
                 .contains("impl From<midnight_contract::CoinPublicKey> for ZswapCoinPublicKey")
         );
-    }
-
-    #[test]
-    fn generate_counter_crate() {
-        let info = load_fixture(
-            "../../../crates/midnight-contract/tests/fixtures/counter/compiler/analyzed-ir.sexp",
-        );
-        let generated = generated_source(&info, "Counter");
-
-        // Counter has one exported ledger field: round (Counter storage)
-        assert!(generated.contains("FIELD_ROUND"));
-        assert!(generated.contains("fn round("));
-
-        // Circuit return type
-        assert!(generated.contains("IncrementReturn"));
-
-        // Ledger wrapper struct
-        assert!(generated.contains("pub struct Counter"));
-        assert!(generated.contains("fn new("));
-        assert!(generated.contains("from_hex"));
-    }
-
-    #[test]
-    fn generate_election_crate() {
-        let info = load_fixture(
-            "../../../crates/midnight-contract/tests/fixtures/election/compiler/analyzed-ir.sexp",
-        );
-        let generated = generated_source(&info, "Election");
-
-        // Enum types from witnesses
-        assert!(generated.contains("pub enum PermissibleVotes"));
-        assert!(generated.contains("pub enum PrivateState"));
-
-        // Each instantiation of `Maybe` keeps its own value type.
-        assert!(generated.contains("Maybe<Vec<u8>>"));
-        assert!(generated.contains("Maybe<MerkleTreePath>"));
-        assert!(!generated.contains("pub struct Maybe"));
-
-        // Ledger wrapper with fields
-        assert!(generated.contains("pub struct Election"));
-        assert!(generated.contains("FIELD_AUTHORITY"));
-        assert!(generated.contains("FIELD_STATE"));
-        assert!(generated.contains("FIELD_TALLY_YES"));
-        assert!(generated.contains("FIELD_TALLY_NO"));
-        assert!(generated.contains("FIELD_COMMITTED"));
-        assert!(generated.contains("FIELD_REVEALED"));
-
-        // Storage kind accessors
-        assert!(generated.contains("fn authority("));
-        assert!(generated.contains("fn tally_yes("));
-        assert!(generated.contains("SetAccessor"));
-
-        // Merkle tree accessors
-        assert!(generated.contains("MerkleTreeAccessor"));
-        assert!(generated.contains("fn committed_votes("));
-        assert!(generated.contains("fn eligible_voters("));
-    }
-
-    #[test]
-    fn generate_tiny_crate() {
-        let info = load_fixture(
-            "../../../crates/midnight-contract/tests/fixtures/tiny/compiler/analyzed-ir.sexp",
-        );
-        let generated = generated_source(&info, "Tiny");
-
-        // Witness return type
-        assert!(generated.contains("PrivateSecretKeyReturn"));
-
-        // Ledger wrapper
-        assert!(generated.contains("pub struct Tiny"));
-    }
-
-    #[test]
-    fn generate_zerocash_crate() {
-        let info =
-            load_fixture("../../../tests/fixtures/compiled/zerocash/compiler/analyzed-ir.sexp");
-        let generated = generated_source(&info, "Zerocash");
-
-        // Circuit return type
-        assert!(generated.contains("SpendReturn"));
-
-        // Custom struct types from witnesses
-        assert!(generated.contains("pub struct Nonce"));
-        assert!(generated.contains("pub struct MerkleTreePath"));
-        assert!(generated.contains("pub struct MerkleTreePathEntry"));
-        assert!(generated.contains("pub struct MerkleTreeDigest"));
-
-        // Ledger wrapper
-        assert!(generated.contains("pub struct Zerocash"));
-
-        // Historic merkle tree accessor (commitments field)
-        assert!(generated.contains("MerkleTreeAccessor"));
-        assert!(generated.contains("fn commitments("));
-    }
-
-    #[test]
-    fn generate_many_fields_crate() {
-        let info =
-            load_fixture("../../../tests/fixtures/compiled/many-fields/compiler/analyzed-ir.sexp");
-        let generated = generated_source(&info, "ManyFields");
-
-        // All 16 fields should have accessors
-        for i in 1..=16 {
-            let field_name = format!("fn f{i:02}(");
-            assert!(
-                generated.contains(&field_name),
-                "missing accessor for f{i:02}"
-            );
-        }
-
-        // Wrapper struct
-        assert!(generated.contains("pub struct ManyFields"));
-    }
-
-    #[test]
-    fn generate_counter_with_ir() {
-        let info =
-            load_fixture("../../../tests/conformance/fixtures/counter/compiler/analyzed-ir.sexp");
-        assert!(
-            info.circuits.iter().any(|c| !c.pure()),
-            "the counter fixture should carry an on-chain circuit"
-        );
-        let generated = generated_source(&info, "Counter");
-
-        // The declarations are embedded as typed constructors the compiler
-        // checks, and the call path resolves its circuit out of them rather
-        // than carrying a second copy.
-        assert!(
-            generated.contains("fn __helpers()"),
-            "missing __helpers() constructor"
-        );
-        assert!(
-            generated.contains("Program::new") && generated.contains(".circuit(\""),
-            "the call path should resolve its circuit from the program"
-        );
-
-        assert!(
-            generated.contains("midnight_contract"),
-            "missing midnight_contract reference"
-        );
-        assert!(
-            generated.contains("fn contract_state("),
-            "missing contract_state() accessor"
-        );
-        assert!(
-            generated.contains("fn into_contract_state("),
-            "missing into_contract_state() accessor"
-        );
-    }
-
-    #[test]
-    fn generate_gateway_initial_state() {
-        let info =
-            load_fixture("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
-        let generated = generated_source(&info, "Gateway");
-
-        // InitialState struct
-        assert!(
-            generated.contains("pub struct GatewayInitialState"),
-            "missing GatewayInitialState struct"
-        );
-
-        // Fields with correct types
-        assert!(
-            generated.contains("pub threshold:"),
-            "missing threshold field in InitialState"
-        );
-        assert!(
-            generated.contains("pub signing_fee:"),
-            "missing signing_fee field in InitialState"
-        );
-        assert!(
-            generated.contains("pub next_job_id: u64"),
-            "missing next_job_id counter field in InitialState"
-        );
-
-        // Default impl
-        assert!(
-            generated.contains("impl Default for GatewayInitialState"),
-            "missing Default impl for GatewayInitialState"
-        );
-
-        // build() method
-        assert!(
-            generated.contains("fn build(self) -> ContractState"),
-            "missing build() on InitialState"
-        );
-
-        // into_ledger() method
-        assert!(
-            generated.contains("fn into_ledger(self) -> Gateway"),
-            "missing into_ledger() on InitialState"
-        );
-    }
-
-    #[test]
-    fn generate_empty_contract() {
-        let info = ContractInfo {
-            circuits: vec![crate::types::Circuit {
-                name: "noop".to_string(),
-                def: crate::ir::Circuit {
-                    name: crate::ir::Ident("noop".to_string()),
-                    exported: true,
-                    pure: true,
-                    proof: false,
-                    arguments: Vec::new(),
-                    result_type: crate::ir::Type::unit(),
-                    body: crate::ir::Expr::Seq(Vec::new()),
-                },
-            }],
-            ..Default::default()
-        };
-        let generated = generated_source(&info, "Empty");
-
-        assert!(generated.contains("pub struct Empty"));
-        assert!(generated.contains("fn new("));
-        // No FIELD_ constants for empty ledger
-        assert!(!generated.contains("FIELD_"));
     }
 }

@@ -1,6 +1,6 @@
 ## Interpreter test fixtures
 
-These fixtures back the unit and integration tests in `crates/midnight-contract/tests/`. Each contract lives in its own subdirectory:
+These fixtures back tests in several crates. Each contract lives in its own subdirectory:
 
 ```
 <name>/

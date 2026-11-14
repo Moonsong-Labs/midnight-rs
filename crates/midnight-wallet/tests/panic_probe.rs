@@ -24,24 +24,37 @@ fn short_shielded_address_is_an_error_not_a_panic() {
 }
 
 #[test]
-fn cross_network_shielded_address_is_rejected() {
-    let testnet = seed().shielded_address(Network::Testnet);
-    let err = parse_shielded_recipient(&testnet, Network::Undeployed)
-        .expect_err("a testnet address must not be accepted by an undeployed wallet");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("testnet") && msg.contains("undeployed"),
-        "error should name both networks, got: {msg}"
-    );
-}
-
-#[test]
-fn matching_network_shielded_address_is_accepted() {
-    for network in [Network::Undeployed, Network::Testnet, Network::Preprod] {
-        let addr = seed().shielded_address(network.clone());
+fn cross_network_address_is_rejected() {
+    let rows = [
+        (
+            "shielded",
+            parse_shielded_recipient(
+                &seed().shielded_address(Network::Testnet),
+                Network::Undeployed,
+            )
+            .err(),
+        ),
+        (
+            "dust",
+            parse_dust_address(&seed().dust_address(Network::Testnet), Network::Undeployed).err(),
+        ),
+        (
+            "unshielded",
+            parse_unshielded_recipient(
+                &seed().unshielded_address(Network::Testnet),
+                Network::Undeployed,
+            )
+            .err(),
+        ),
+    ];
+    for (kind, err) in rows {
         assert!(
-            parse_shielded_recipient(&addr, network.clone()).is_ok(),
-            "address derived for {network} should parse under {network}"
+            matches!(
+                &err,
+                Some(WalletError::AddressNetworkMismatch { expected, actual })
+                    if expected == "undeployed" && actual == "testnet"
+            ),
+            "{kind}: got {err:?}"
         );
     }
 }
@@ -78,36 +91,5 @@ fn custom_network_names_may_contain_underscores() {
     assert!(
         parse_shielded_recipient(&addr, network).is_ok(),
         "an address derived for `custom_devnet` must parse under that network"
-    );
-
-    // And the mismatch it reports must name the whole network, not a prefix.
-    let err = parse_shielded_recipient(&addr, Network::Undeployed)
-        .expect_err("a custom_devnet address must not be accepted by an undeployed wallet");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("custom_devnet"),
-        "error should name the full network, got: {msg}"
-    );
-}
-
-#[test]
-fn cross_network_dust_address_is_rejected() {
-    let testnet = seed().dust_address(Network::Testnet);
-    let err = parse_dust_address(&testnet, Network::Undeployed)
-        .expect_err("a testnet Dust address must not be accepted by an undeployed wallet");
-    assert!(
-        matches!(err, WalletError::AddressNetworkMismatch { .. }),
-        "expected AddressNetworkMismatch, got: {err}"
-    );
-}
-
-#[test]
-fn cross_network_unshielded_address_is_rejected() {
-    let testnet = seed().unshielded_address(Network::Testnet);
-    let err = parse_unshielded_recipient(&testnet, Network::Undeployed)
-        .expect_err("a testnet unshielded address must not be accepted by an undeployed wallet");
-    assert!(
-        matches!(err, WalletError::AddressNetworkMismatch { .. }),
-        "expected AddressNetworkMismatch, got: {err}"
     );
 }

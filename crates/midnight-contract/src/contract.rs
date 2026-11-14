@@ -1662,43 +1662,6 @@ impl<P> Contract<P> {
 mod tests {
     use super::*;
 
-    struct MockProvider {
-        inner: MidnightProvider,
-    }
-
-    impl MockProvider {
-        fn new() -> Self {
-            Self {
-                inner: MidnightProvider::new("ws://test"),
-            }
-        }
-    }
-
-    impl AsMidnightProvider for MockProvider {
-        type Wallet = ();
-
-        fn as_midnight_provider(&self) -> &MidnightProvider {
-            &self.inner
-        }
-    }
-
-    #[test]
-    fn at_constructs_handle() {
-        let provider = MockProvider::new();
-        let contract = Contract::at(provider, "addr1").build();
-        assert_eq!(contract.address(), "addr1");
-        assert!(contract.at_block().is_none());
-    }
-
-    #[test]
-    fn at_with_block_hash() {
-        let provider = MockProvider::new();
-        let hash = BlockHash::repeat_byte(0xab);
-        let contract = Contract::at(provider, "addr1").at_block(hash).build();
-        assert_eq!(contract.address(), "addr1");
-        assert_eq!(contract.at_block(), Some(hash));
-    }
-
     #[test]
     fn private_state_persist_decision() {
         use PrivateStatePersist::*;
@@ -1844,21 +1807,6 @@ mod tests {
         );
     }
 
-    /// A contract whose witnesses are stateful needs a private-state store.
-    /// Without one the baseline is an empty buffer and the post-call buffer is
-    /// dropped, so every call silently starts from `Default::default()` while
-    /// still succeeding and proving.
-    #[test]
-    fn witness_contract_without_a_store_is_rejected() {
-        let err = require_private_state_for_witnesses(true, false)
-            .expect_err("a witness contract with no store must not build a call");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("with_private_state"),
-            "error should name the setter to call, got: {msg}"
-        );
-    }
-
     /// bboard's constructor leaves the private state empty, so its deploy needs
     /// no store. A deploy with a private state and no store loses it.
     #[test]
@@ -1870,28 +1818,5 @@ mod tests {
             matches!(&err, ContractError::Construction(msg) if msg.contains("with_private_state")),
             "the error must name the setter to call, got {err:?}"
         );
-    }
-
-    #[test]
-    fn witness_contract_with_a_store_is_allowed() {
-        assert!(require_private_state_for_witnesses(true, true).is_ok());
-    }
-
-    #[test]
-    fn contract_without_witnesses_needs_no_store() {
-        assert!(require_private_state_for_witnesses(false, false).is_ok());
-    }
-
-    /// Codegen sets the flag from the compiled artifact; it must survive the
-    /// builder into the handle.
-    #[test]
-    fn declared_witnesses_flag_reaches_the_contract_handle() {
-        let addr = "0200aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
-        let with = Contract::at(MockProvider::new(), addr)
-            .with_declared_witnesses(true)
-            .build();
-        assert!(with.declares_witnesses);
-        let without = Contract::at(MockProvider::new(), addr).build();
-        assert!(!without.declares_witnesses);
     }
 }

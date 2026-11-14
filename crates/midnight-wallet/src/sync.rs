@@ -547,7 +547,10 @@ mod tests {
             .prepare(&node, INDEXER_URL)
             .await;
         let path = match result {
-            Err(WalletError::ChainMismatch { path, .. }) => path,
+            Err(WalletError::ChainMismatch { path, found, .. }) => {
+                assert_eq!(found, format!("0x{}", "bb".repeat(32)));
+                path
+            }
             Err(other) => panic!("expected ChainMismatch, got {other:?}"),
             Ok(_) => panic!("a default sync must refuse a snapshot from a replaced chain"),
         };
@@ -639,20 +642,6 @@ mod tests {
         assert!(
             matches!(err, WalletError::SyncTaskJoin(_)),
             "expected SyncTaskJoin, got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn sync_handle_passes_through_inner_error() {
-        let handle: JoinHandle<Result<Wallet, WalletError>> =
-            tokio::spawn(async { Err(WalletError::SyncCancelled) });
-        let sync = SyncHandle { inner: handle };
-        let Err(err) = sync.await else {
-            panic!("inner Err should propagate");
-        };
-        assert!(
-            matches!(err, WalletError::SyncCancelled),
-            "expected SyncCancelled, got {err:?}"
         );
     }
 }

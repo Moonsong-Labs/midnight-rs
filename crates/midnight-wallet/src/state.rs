@@ -1452,19 +1452,6 @@ mod tests {
     }
 
     #[test]
-    fn decode_ledger_parameters_round_trips_block_parameters() {
-        let mut encoded = Vec::new();
-        tagged_serialize(&INITIAL_PARAMETERS, &mut encoded).unwrap();
-        let block = block_with_params(Some(hex::encode(&encoded)));
-
-        let decoded = decode_ledger_parameters(&block).unwrap();
-
-        let mut reencoded = Vec::new();
-        tagged_serialize(&decoded, &mut reencoded).unwrap();
-        assert_eq!(reencoded, encoded);
-    }
-
-    #[test]
     fn decode_ledger_parameters_rejects_missing_or_malformed() {
         assert!(matches!(
             decode_ledger_parameters(&block_with_params(None)),
@@ -1570,36 +1557,6 @@ mod tests {
         nullifier
     }
 
-    /// A shielded coin reserved by a pending build is hidden from both
-    /// `spendable_shielded_coins` and the coin set of the funding view, so a
-    /// later in-process build cannot re-select it.
-    #[test]
-    fn reserved_shielded_coin_is_filtered_from_selection_and_context() {
-        let mut wallet = test_wallet(None);
-        let nullifier = insert_shielded_coin(&mut wallet, 7, 100);
-
-        // Visible before it is reserved.
-        assert_eq!(wallet.spendable_shielded_coins().len(), 1);
-
-        // Reserving it removes it from selection.
-        wallet.reserve_pending(
-            Vec::new(),
-            Vec::new(),
-            vec![nullifier],
-            Timestamp::from_secs(100),
-            Timestamp::MAX,
-        );
-        assert!(wallet.spendable_shielded_coins().is_empty());
-
-        // And it is gone from the coin set of the funding view.
-        let funding = wallet.funding(&chain_context()).expect("funding");
-        assert_eq!(
-            funding.shielded.coins.iter().count(),
-            0,
-            "reserved coin must be removed from the funding view's Zswap state"
-        );
-    }
-
     /// A NIGHT UTXO that `ukey(0xab, 0)` names.
     fn tracked_night_utxo() -> TrackedUtxo {
         TrackedUtxo {
@@ -1617,22 +1574,28 @@ mod tests {
     /// reserved and that stays in the view is spent twice, and the node
     /// refuses one of the two transactions.
     #[test]
-    fn the_funding_view_leaves_out_a_reserved_utxo() {
+    fn the_funding_view_leaves_out_the_reserved_inputs() {
         let mut wallet = test_wallet(None);
         let free = TrackedUtxo {
             output_index: 1,
             ..tracked_night_utxo()
         };
         wallet.unshielded_utxos = vec![tracked_night_utxo(), free.clone()];
+        let coin = insert_shielded_coin(&mut wallet, 7, 100);
         wallet.reserve_pending(
             Vec::new(),
             vec![ukey(0xab, 0)],
-            Vec::new(),
+            vec![coin],
             Timestamp::from_secs(100),
             Timestamp::MAX,
         );
 
         let funding = wallet.funding(&chain_context()).expect("funding");
+        assert_eq!(
+            funding.shielded.coins.iter().count(),
+            0,
+            "reserved coin must be removed from the funding view's Zswap state"
+        );
 
         assert_eq!(
             funding
@@ -1718,34 +1681,6 @@ mod tests {
             .commitment(&Recipient::User(wallet.secret_keys.coin_public_key()))
     }
 
-    #[test]
-    fn watch_for_coins_records_the_commitment_the_output_carries() {
-        let mut wallet = test_wallet(None);
-        let coin = unreachable_coin(9, 42);
-
-        wallet.watch_for_coins([coin]).unwrap();
-
-        assert!(
-            wallet
-                .zswap_state()
-                .pending_outputs
-                .contains_key(&commitment_of(&wallet, &coin)),
-            "registration must key on the commitment a replay meets on chain"
-        );
-    }
-
-    /// Registering nothing must not rewrite the multi-MB generation files.
-    #[test]
-    fn registering_nothing_writes_nothing() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
-        wallet.save(dir.path()).unwrap();
-
-        wallet.watch_for_coins([]).unwrap();
-
-        assert_eq!(stored_generations(dir.path()), vec![1]);
-    }
-
     /// A coin registered before it lands on chain has to survive a restart,
     /// so the registration is part of the persisted wallet state.
     #[test]
@@ -1793,27 +1728,6 @@ mod tests {
         insert_shielded_coin(&mut wallet, 7, 100);
         wallet.zswap_event_id = 4;
         wallet.dust_event_id = 11;
-
-        wallet
-            .commit_shielded_rescan(ShieldedRescanCommit {
-                zswap_state: ZswapLocalState::new(),
-                zswap_event_id: 9,
-            })
-            .unwrap();
-
-        assert!(wallet.spendable_shielded_coins().is_empty());
-        assert_eq!(wallet.zswap_event_id, 9);
-        assert_eq!(wallet.dust_event_id, 11, "a rescan is shielded-only");
-        assert_eq!(stored_generations(dir.path()), vec![1]);
-    }
-
-    /// A rescan's plan seeds the replay with every registration, so one
-    /// missing from the state it commits was consumed: the replay claimed the
-    /// coin, and here also saw it spent. Putting the registration back would
-    /// make every later replay watch for a coin that is gone.
-    #[test]
-    fn commit_shielded_rescan_keeps_no_registration_its_replay_consumed() {
-        let mut wallet = test_wallet(None);
         wallet.watch_for_coins([unreachable_coin(9, 42)]).unwrap();
 
         wallet
@@ -1823,7 +1737,11 @@ mod tests {
             })
             .unwrap();
 
+        assert!(wallet.spendable_shielded_coins().is_empty());
         assert!(wallet.registered_coins().is_empty());
+        assert_eq!(wallet.zswap_event_id, 9);
+        assert_eq!(wallet.dust_event_id, 11, "a rescan is shielded-only");
+        assert_eq!(stored_generations(dir.path()), vec![2]);
     }
 
     /// Storage generations present on disk, identified by the `zswap-N.bin`
@@ -1949,7 +1867,7 @@ mod tests {
     }
 
     #[test]
-    fn resync_commit_persists_when_reservation_cleared() {
+    fn resync_commit_clears_only_the_observed_reservation_and_persists() {
         let (dir, mut wallet) = saved_wallet();
         let key = ukey(0xab, 0);
         wallet.reserve_pending(
@@ -1960,12 +1878,28 @@ mod tests {
             Timestamp::MAX,
         );
         lock(&wallet.pending).mark_proven(&spent_utxo(key.clone(), 100));
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![ukey(0xbb, 1)],
+            Vec::new(),
+            Timestamp::from_secs(101),
+            Timestamp::MAX,
+        );
 
         let mut commit = noop_commit(&wallet);
         commit.spent_unshielded = vec![key];
         wallet.commit_resync(commit).unwrap();
 
-        assert!(lock(&wallet.pending).reservations().is_empty());
+        let remaining: Vec<_> = lock(&wallet.pending)
+            .reservations()
+            .unshielded_spends()
+            .map(|spend| spend.key.clone())
+            .collect();
+        assert_eq!(
+            remaining,
+            vec![ukey(0xbb, 1)],
+            "a reservation the replay did not observe must survive"
+        );
         assert_eq!(stored_generations(dir.path()), vec![2]);
         assert!(
             PendingReservations::load(dir.path(), "undeployed", &wallet.storage_id())
@@ -2006,50 +1940,6 @@ mod tests {
             vec![1],
             "a successful save must stop the no-op commits from saving"
         );
-    }
-
-    #[test]
-    fn commit_resync_clears_confirmed_against_commit_time_pending() {
-        // The plan → run → commit split releases the wallet lock during the
-        // replay, so a transfer build can reserve pending entries between
-        // the plan snapshot and the commit. The commit must merge with the
-        // commit-time pending set: clear exactly what the replay observed
-        // confirmed, preserve reservations made after the snapshot.
-        let mut wallet = test_wallet(None);
-        wallet.last_tx_id = Some(3);
-        let confirmed = ukey(0xaa, 0);
-        wallet.reserve_pending(
-            Vec::new(),
-            vec![confirmed.clone()],
-            Vec::new(),
-            Timestamp::from_secs(100),
-            Timestamp::MAX,
-        );
-
-        // Snapshot the replay inputs (the plan itself must not mutate).
-        let _plan = wallet.resync_plan();
-
-        // A transfer build interleaves while the (conceptual) replay runs.
-        let late = ukey(0xbb, 1);
-        wallet.reserve_pending(
-            Vec::new(),
-            vec![late.clone()],
-            Vec::new(),
-            Timestamp::from_secs(101),
-            Timestamp::MAX,
-        );
-
-        // The replay observed only the first reservation's spend.
-        let mut commit = noop_commit(&wallet);
-        commit.spent_unshielded = vec![confirmed];
-        wallet.commit_resync(commit).unwrap();
-
-        let remaining: Vec<_> = lock(&wallet.pending)
-            .reservations()
-            .unshielded_spends()
-            .map(|spend| spend.key.clone())
-            .collect();
-        assert_eq!(remaining, vec![late], "late reservation must survive");
     }
 
     #[test]
@@ -2099,58 +1989,48 @@ mod tests {
     }
 
     #[test]
-    fn validate_ledger_parameters_rejects_zeroed_fields() {
+    fn decode_ledger_parameters_rejects_corrupt_values_at_decode() {
         use midnight_helpers::base_crypto::cost_model::FixedPoint;
 
-        let cases = vec![
+        // `decode_ledger_parameters` itself refuses a structurally valid blob
+        // with a zeroed field. So the initial sync and the resync both refuse
+        // it before any fee math runs. A valid blob decodes to the parameters
+        // it encodes.
+        let cases = [
+            (None, INITIAL_PARAMETERS),
             (
-                "global_ttl",
+                Some("global_ttl"),
                 params_with(|p| p.global_ttl = midnight_helpers::Duration::from_secs(0)),
             ),
             (
-                "dust.night_dust_ratio",
+                Some("dust.night_dust_ratio"),
                 params_with(|p| p.dust.night_dust_ratio = 0),
             ),
             (
-                "dust.generation_decay_rate",
+                Some("dust.generation_decay_rate"),
                 params_with(|p| p.dust.generation_decay_rate = 0),
             ),
             (
-                "fee_prices.overall_price",
+                Some("fee_prices.overall_price"),
                 params_with(|p| p.fee_prices.overall_price = FixedPoint::ZERO),
             ),
         ];
         for (expected_field, params) in cases {
-            match validate_ledger_parameters(&params) {
-                Err(WalletError::CorruptParameters { field, .. }) => {
-                    assert_eq!(field, expected_field);
+            let mut encoded = Vec::new();
+            tagged_serialize(&params, &mut encoded).unwrap();
+            match (
+                expected_field,
+                decode_ledger_parameters(&block_with_params(Some(hex::encode(&encoded)))),
+            ) {
+                (None, Ok(decoded)) => assert_eq!(decoded, params),
+                (Some(expected), Err(WalletError::CorruptParameters { field, .. })) => {
+                    assert_eq!(field, expected);
                 }
-                other => panic!("expected CorruptParameters for {expected_field}, got {other:?}"),
+                (expected, other) => {
+                    panic!("corrupt field {expected:?}: got {other:?}")
+                }
             }
         }
-    }
-
-    #[test]
-    fn decode_ledger_parameters_rejects_corrupt_values_at_decode() {
-        // A structurally valid blob with a zeroed TTL must be rejected by
-        // `decode_ledger_parameters` itself, so both the initial-sync and
-        // the resync plan/run paths refuse it before any fee math runs.
-        let corrupt = params_with(|p| p.global_ttl = midnight_helpers::Duration::from_secs(0));
-        let mut encoded = Vec::new();
-        tagged_serialize(&corrupt, &mut encoded).unwrap();
-
-        let err = decode_ledger_parameters(&block_with_params(Some(hex::encode(&encoded))))
-            .expect_err("zeroed global_ttl must be rejected at decode");
-        assert!(
-            matches!(
-                err,
-                WalletError::CorruptParameters {
-                    field: "global_ttl",
-                    ..
-                }
-            ),
-            "got: {err:?}"
-        );
     }
 
     /// Mock-WebSocket-server test for recovering a coin whose output carries
@@ -2233,61 +2113,6 @@ mod tests {
                     Some(0),
                 )
                 .expect("a claimed coin must still have a Merkle path to spend from");
-
-            server.await.unwrap();
-        }
-
-        /// The ledger consumes a registration when a replay claims it, so the
-        /// next rescan has nothing left to claim that coin by. A rescan that
-        /// only carried the unclaimed registrations would collapse the coin's
-        /// leaf and lose it, which is what registering a second coin (the
-        /// "one public nonce per mint" case) would do to the first.
-        #[tokio::test]
-        async fn a_later_rescan_keeps_the_coins_an_earlier_one_recovered() {
-            let (listener, url) = bind().await;
-            let mut wallet = test_wallet(None);
-            let first = unreachable_coin(9, 42);
-            let second = unreachable_coin(8, 77);
-            let stream = [
-                ciphertextless_output(&test_seed(), &first, 0),
-                ciphertextless_output(&test_seed(), &second, 1),
-            ];
-
-            let server = tokio::spawn(async move {
-                // One two-output stream, which each of the two rescans reads
-                // twice: once in the reader of the events before the fork,
-                // and once in ledger 9.
-                for _ in 0..4 {
-                    let (mut ws, sub) = accept_subscriber(&listener).await;
-                    assert_eq!(subscription_variable(&sub, "id"), 0);
-                    for (index, raw) in stream.iter().enumerate() {
-                        send_next(
-                            &mut ws,
-                            &sub,
-                            ledger_event("zswapLedgerEvents", index as i64 + 1, raw, 2),
-                        )
-                        .await;
-                    }
-                    while next_json(&mut ws).await.is_some() {}
-                }
-            });
-
-            wallet.watch_for_coins([first]).unwrap();
-            rescan(&mut wallet, &url).await;
-            assert_eq!(wallet.spendable_shielded_coins().len(), 1);
-
-            // Registering the second coin replays again, which must not cost
-            // us the first.
-            wallet.watch_for_coins([second]).unwrap();
-            rescan(&mut wallet, &url).await;
-
-            let mut values: Vec<u128> = wallet
-                .spendable_shielded_coins()
-                .iter()
-                .map(|c| c.value)
-                .collect();
-            values.sort_unstable();
-            assert_eq!(values, vec![42, 77], "the first coin must survive");
 
             server.await.unwrap();
         }

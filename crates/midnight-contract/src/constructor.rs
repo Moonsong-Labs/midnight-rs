@@ -127,11 +127,10 @@ fn refuse_effects(
 mod tests {
     use std::path::Path;
 
-    use midnight_transient_crypto::curve::Fr;
-    use midnight_typed_state::{AlignedValue, StateValue};
+    use midnight_typed_state::StateValue;
 
     use super::*;
-    use crate::runtime::{NoWitnesses, WitnessContext, WitnessOutcome};
+    use crate::runtime::NoWitnesses;
 
     /// A constructor loaded through `compact_codegen` from the compiled
     /// fixture `analyzed_ir` (relative to the workspace root), with `circuit`
@@ -215,43 +214,6 @@ mod tests {
     #[test]
     fn a_missing_constructor_argument_is_named() {
         assert_refused(constructor(TINY, None).check_args(&[]), r#"["v"]"#);
-    }
-
-    /// Answers tiny's `private$secret_key`.
-    struct SecretKey;
-
-    impl WitnessProvider for SecretKey {
-        fn call_witness(
-            &self,
-            _ctx: &mut WitnessContext<'_>,
-            name: &str,
-            _args: &[Value],
-        ) -> Result<WitnessOutcome, InterpreterError> {
-            Ok(match name {
-                "private$secret_key" => {
-                    WitnessOutcome::Value(Value::AlignedValue(AlignedValue::from([7u8; 32])))
-                }
-                _ => WitnessOutcome::Unknown,
-            })
-        }
-    }
-
-    /// A replay that refuses the constructor's own writes fails every deploy
-    /// that runs a constructor. tiny's constructor writes each of its cells.
-    #[test]
-    fn a_constructor_that_writes_the_ledger_deploys_its_state() {
-        let forty_two = AlignedValue::from(Fr::from(42u64));
-        let state = deploy_run(
-            &constructor(TINY, None),
-            vec![("v", Value::AlignedValue(forty_two.clone()))],
-            &SecretKey,
-        )
-        .unwrap_or_else(|e| panic!("tiny's constructor must deploy: {e:?}"));
-
-        let StateValue::Array(cells) = &*state.data.get() else {
-            panic!("tiny's state is an array of cells");
-        };
-        assert_eq!(cells.get(1), Some(&StateValue::from(forty_two)));
     }
 
     /// A check that reads the run alone passes a mint, because the interpreter

@@ -495,10 +495,10 @@ mod tests {
     }
 
     #[test]
-    fn validate_committee_enforces_non_empty_and_threshold_bounds() {
+    fn validate_committee_enforces_size_threshold_and_distinct_members() {
         let a = schnorr_member();
         let b = ecdsa_member();
-        let committee = vec![a.clone(), b];
+        let committee = vec![a, b];
         assert!(validate_committee(&committee, 2).is_ok());
         assert!(validate_committee(&committee, 1).is_ok());
         assert!(
@@ -513,24 +513,19 @@ mod tests {
             validate_committee(&committee, 3).is_err(),
             "threshold above committee size can never be met"
         );
-        assert!(
-            validate_committee(&[a.clone(), a.clone()], 2).is_err(),
-            "duplicate committee key collapses k-of-n to 1 signer"
-        );
-    }
 
-    #[test]
-    fn validate_committee_refuses_one_secret_as_a_schnorr_and_an_ecdsa_member() {
         let key = schnorr::SigningKey::sample(rand::thread_rng());
         // The same secret's ECDSA key: the even-y point, `02 || x`.
         let sec1 = [&[0x02][..], &encoded(&key.verifying_key())].concat();
         let same_secret = ecdsa::VerifyingKey::deserialize(&mut &sec1[..], 0).unwrap();
-        let committee = [
+        let one_secret = [
             ContractMaintenanceVerifyingKey::Schnorr(key.verifying_key()),
             ContractMaintenanceVerifyingKey::ECDSA(same_secret),
         ];
-
-        assert!(validate_committee(&committee, 2).is_err());
+        assert!(
+            validate_committee(&one_secret, 2).is_err(),
+            "one secret as a Schnorr and an ECDSA member collapses k-of-n to 1 signer"
+        );
     }
 
     #[test]

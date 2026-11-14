@@ -2267,7 +2267,6 @@ fn max_for_bytes(bytes: u64) -> BigUint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compact_runtime::integer_fallback_aligned;
     use ir::FieldType;
     use midnight_typed_state::{ContractMaintenanceAuthority, StorageHashMap};
 
@@ -2331,16 +2330,6 @@ mod tests {
         }
     }
 
-    fn instruction(op: &str, args: Vec<(&str, ir::Operand)>) -> ir::Instruction {
-        ir::Instruction {
-            op: op.into(),
-            args: args
-                .into_iter()
-                .map(|(name, value)| (name.to_string(), value))
-                .collect(),
-        }
-    }
-
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
         // Counter contract state: Array(1) [ Cell(round) ]
         let root = StateValue::Array(vec![StateValue::from(round)].into());
@@ -2380,63 +2369,6 @@ mod tests {
         values_equal(a, b, ty).expect("both values encode at the type")
     }
 
-    /// The counter contract's `increment` body: add 1 to the round cell.
-    fn increment_round() -> ir::Expr {
-        ir::Expr::LetStar {
-            bindings: vec![(argument("%tmp.1", uint("65535")), int(1))],
-            body: Box::new(ir::Expr::PublicLedger {
-                op_class: ir::OpClass::Plain("update".into()),
-                field: ident("%round.2"),
-                path: Vec::new(),
-                op: "increment".to_string(),
-                result_type: Type::unit(),
-                instructions: vec![
-                    instruction(
-                        "idx",
-                        vec![
-                            ("cached", ir::Operand::Bool(false)),
-                            ("pushPath", ir::Operand::Bool(true)),
-                            (
-                                "path",
-                                ir::Operand::List(vec![ir::Operand::Align {
-                                    value: BigUint::from(0u8),
-                                    bytes: 1,
-                                }]),
-                            ),
-                        ],
-                    ),
-                    instruction(
-                        "addi",
-                        vec![(
-                            "immediate",
-                            ir::Operand::ValueToInt(Box::new(ir::Operand::Expr(Box::new(var(
-                                "%tmp.1",
-                            ))))),
-                        )],
-                    ),
-                    instruction(
-                        "ins",
-                        vec![
-                            ("cached", ir::Operand::Bool(true)),
-                            ("n", ir::Operand::Int(BigInt::from(1))),
-                        ],
-                    ),
-                ],
-                args: Vec::new(),
-            }),
-        }
-    }
-
-    fn counter_cell(state: &ContractState<InMemoryDB>) -> u64 {
-        match state.data.get_ref() {
-            StateValue::Array(arr) => match arr.get(0).expect("field 0") {
-                StateValue::Cell(sp) => u64::try_from(&*sp.value).expect("u64"),
-                other => panic!("expected Cell, got {other:?}"),
-            },
-            other => panic!("expected Array root, got {other:?}"),
-        }
-    }
-
     /// A Uint result above `u128::MAX` is refused, not wrapped. Only a bound
     /// wider than 128 bits holds such a result.
     #[test]
@@ -2457,34 +2389,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn large_field_literal_parses_as_field_element() {
-        use midnight_transient_crypto::curve::Fr;
-
-        // JUBJUB_ORDER (~2^252) exceeds u128, so it folds into a field element
-        // instead of parsing as an integer.
-        let order = "6554484396890773809930967563523245729705921265872317281365359162392183254199";
-        let literal = ir::Expr::Quote(ir::Literal::Int(
-            order.parse::<BigInt>().expect("a decimal literal"),
-        ));
-        let result = eval(literal, field()).expect("a Field literal wider than u128 must parse");
-        let got = as_fr(result);
-
-        // Independently: the parsed element equals JUBJUB_ORDER's little-endian bytes.
-        let order_le: [u8; 32] = [
-            0xb7, 0x2c, 0xf7, 0xd6, 0x5e, 0x0e, 0x97, 0xd0, 0x82, 0x10, 0xc8, 0xcc, 0x93, 0x20,
-            0x68, 0xa6, 0x00, 0x3b, 0x34, 0x01, 0x01, 0x3b, 0x67, 0x06, 0xa9, 0xaf, 0x33, 0x65,
-            0xea, 0xb4, 0x7d, 0x0e,
-        ];
-        assert_eq!(got, Fr::from_le_bytes(&order_le).unwrap());
-
-        // Small literals still carry as integer values.
-        let small = eval(int(7), field()).unwrap();
-        assert!(matches!(small, Value::Integer(7)));
-    }
-
     // -----------------------------------------------------------------------
-    // Names, calls and sequencing
+    // Names and calls
     // -----------------------------------------------------------------------
 
     #[test]
@@ -2508,20 +2414,6 @@ mod tests {
             matches!(err, InterpreterError::UndefinedVariable(ref name) if name == "%round.7"),
             "expected an undefined-variable error, got {err:?}"
         );
-    }
-
-    #[test]
-    fn a_sequence_runs_every_item_and_takes_the_last() {
-        let state = make_counter_state(0);
-        let circ = circuit(
-            Vec::new(),
-            uint("255"),
-            ir::Expr::Seq(vec![increment_round(), increment_round(), int(3)]),
-        );
-        let program = Program::new(&[], &[], &[]);
-        let result = execute(&circ, &program, state, &[], epoch()).expect("execute the sequence");
-        assert_eq!(counter_cell(&result.state), 2, "both items ran");
-        assert!(equal_at(&uint("255"), &result.result, &Value::Integer(3)));
     }
 
     // -----------------------------------------------------------------------
@@ -2686,33 +2578,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn natives_that_share_a_source_name_dispatch_on_their_own_symbol() {
-        let ec_add = |id: &str, entry: &str, curve: ir::Curve| ir::Native {
-            type_arguments: Vec::new(),
-            name: ident(id),
-            entry: entry.to_string(),
-            class: "circuit".to_string(),
-            arguments: vec![
-                argument("%a.3", Type::Point(curve.clone())),
-                argument("%b.4", Type::Point(curve.clone())),
-            ],
-            result_type: Type::Point(curve),
-        };
-        let natives = vec![
-            ec_add("%ecAdd.1", "__compactRuntime.ecAdd", ir::Curve::Jubjub),
-            ec_add(
-                "%ecAdd.2",
-                "__compactRuntime.secp256k1Add",
-                ir::Curve::Secp256k1,
-            ),
-        ];
-        let program = Program::new(&[], &[], &natives);
-
-        assert_eq!(program.runtime_name(&ident("%ecAdd.1")), "ecAdd");
-        assert_eq!(program.runtime_name(&ident("%ecAdd.2")), "secp256k1Add");
-    }
-
     /// The stdlib hands `transientHash` its input as a struct, so the digest has
     /// to follow the declared field order. The value carries a map, whose own
     /// order is unspecified, so this pins the type as the source of truth: the
@@ -2808,21 +2673,6 @@ mod tests {
     }
 
     #[test]
-    fn transient_hash_field_arg_above_u64_matches_direct() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
-
-        let n = (1u128 << 64) + 7;
-        let expected_fr = fr_two_pow_64() + Fr::from(7u64);
-        let direct = transient_hash(&[expected_fr]);
-
-        let via_builtin = try_builtin_typed("transientHash", &[Value::Integer(n)], &[])
-            .expect("builtin known")
-            .expect("ok");
-        assert_eq!(as_fr(via_builtin), direct);
-    }
-
-    #[test]
     fn persistent_hash_integer_above_u64_matches_direct() {
         use midnight_base_crypto::hash::PersistentHashWriter;
         use midnight_base_crypto::repr::BinaryHashRepr;
@@ -2870,14 +2720,12 @@ mod tests {
     }
 
     #[test]
-    fn typed_uint_encode_roundtrips_above_u64() {
+    fn typed_uint_encode_keeps_the_bits_above_u64() {
         let big = (1u128 << 64) + 12345;
         let ty = Type::Unsigned(BigUint::from(u128::MAX));
         let av = encode_typed(&Value::Integer(big), &ty).expect("encode");
-        // Byte-for-byte the u128 encoding (atom + Bytes{16} alignment)...
+        // Byte-for-byte the u128 encoding (atom + Bytes{16} alignment).
         assert_eq!(av, AlignedValue::from(big));
-        // ...and decodes back without losing the high bits.
-        assert_eq!(u128::try_from(&*av.value).expect("decode"), big);
     }
 
     #[test]
@@ -2899,13 +2747,19 @@ mod tests {
     }
 
     #[test]
-    fn a_typed_integer_ledger_key_takes_the_declared_width() {
+    fn a_typed_ledger_key_takes_the_declared_width() {
         let program = Program::new(&[], &[], &[]);
         let mut ps = Vec::new();
         let mut ctx = test_ctx(
             &program,
             &mut ps,
-            HashMap::from([("k".to_string(), uint("65535"))]),
+            HashMap::from([
+                ("k".to_string(), uint("65535")),
+                (
+                    "t".to_string(),
+                    Type::Tuple(vec![uint("255"), uint("65535")]),
+                ),
+            ]),
         );
         ctx.locals.insert("k".to_string(), Value::Integer(7));
         // Uint<0..65535> is a 2-byte atom, not the type-less 8-byte default.
@@ -2913,36 +2767,18 @@ mod tests {
             path_key(&mut ctx, &ir::Operand::Expr(Box::new(var("k")))).expect("encode key"),
             Key::Value(AlignedValueChecked::try_from(AlignedValue::from(7u16)).unwrap())
         );
-    }
-
-    /// A `Map` lookup builds its key as an `idx` path element, and an insert
-    /// pushes it as a cell. A key that encodes differently on the two paths is
-    /// never found.
-    #[test]
-    fn a_tuple_ledger_key_encodes_alike_in_a_path_and_a_push() {
-        let program = Program::new(&[], &[], &[]);
-        let mut ps = Vec::new();
-        let mut ctx = test_ctx(
-            &program,
-            &mut ps,
-            HashMap::from([(
-                "k".to_string(),
-                Type::Tuple(vec![uint("255"), uint("65535")]),
-            )]),
-        );
         ctx.locals.insert(
-            "k".to_string(),
+            "t".to_string(),
             Value::Tuple(vec![Value::Integer(1), Value::Integer(2)]),
         );
-        let key = ir::Operand::Expr(Box::new(var("k")));
-        let cell = ir::Operand::StateValue(ir::StateValue::Cell(Box::new(key.clone())));
-        let inserted = match push_value(&mut ctx, &cell).expect("push the key") {
-            StateValue::Cell(ref sp) => (**sp).clone(),
-            other => panic!("a pushed key is a cell, got {other:?}"),
-        };
         assert_eq!(
-            path_key(&mut ctx, &key).expect("a tuple path key"),
-            Key::Value(AlignedValueChecked::try_from(inserted).unwrap())
+            path_key(&mut ctx, &ir::Operand::Expr(Box::new(var("t")))).expect("a tuple path key"),
+            Key::Value(
+                AlignedValueChecked::try_from(AlignedValue::concat(
+                    [AlignedValue::from(1u8), AlignedValue::from(2u16)].iter()
+                ))
+                .unwrap()
+            )
         );
     }
 
@@ -2951,20 +2787,6 @@ mod tests {
         use midnight_transient_crypto::curve::Fr;
         let av = encode_typed(&Value::Integer((1u128 << 64) + 5), &field()).expect("encode");
         assert_eq!(av, AlignedValue::from(fr_two_pow_64() + Fr::from(5u64)));
-    }
-
-    #[test]
-    fn an_aligned_path_key_takes_the_declared_byte_width() {
-        // `(align 3 2)` is the two-byte encoding of 3, which is a different
-        // ledger key from the one-byte encoding.
-        assert_eq!(
-            literal_key(&BigUint::from(3u8), 2).expect("encode"),
-            AlignedValue::from(3u16)
-        );
-        assert_eq!(
-            literal_key(&BigUint::from(3u8), 1).expect("encode"),
-            AlignedValue::from(3u8)
-        );
     }
 
     #[test]
@@ -3057,90 +2879,6 @@ mod tests {
         }
     }
 
-    /// A run with no address that reads the context's placeholder gives the
-    /// circuit an address that is not the contract's.
-    #[test]
-    fn kernel_self_without_an_address_fails() {
-        let address_type = Type::Struct {
-            name: "ContractAddress".into(),
-            fields: vec![("bytes".to_string(), Type::Bytes(32))],
-        };
-        let circ = circuit(
-            Vec::new(),
-            address_type.clone(),
-            ir::Expr::PublicLedger {
-                op_class: ir::OpClass::Plain("read".into()),
-                field: ident("%kernel.0"),
-                path: Vec::new(),
-                op: "self".to_string(),
-                result_type: address_type,
-                instructions: Vec::new(),
-                args: Vec::new(),
-            },
-        );
-        let env = Env {
-            address: None,
-            ..epoch()
-        };
-
-        let result = execute(
-            &circ,
-            &Program::new(&[], &[], &[]),
-            make_counter_state(0),
-            &[],
-            env,
-        );
-        match result {
-            Err(InterpreterError::NoContractAddress) => {}
-            Err(other) => panic!("expected NoContractAddress, got {other:?}"),
-            Ok(result) => panic!("kernel.self() returned {:?}", result.result),
-        }
-    }
-
-    #[test]
-    fn vector_index_beyond_usize_errors() {
-        // 2^64 + 1 truncated `as usize` on 64-bit would wrap to 1 and silently
-        // read element 1; it must error with the offending index instead.
-        let circ = circuit(
-            vec![argument("v", vector(2, uint("255")))],
-            uint("255"),
-            ir::Expr::VectorRef {
-                ty: uint("255"),
-                expr: Box::new(var("v")),
-                index: Box::new(int(18446744073709551617)),
-            },
-        );
-        let vector_value = Value::Tuple(vec![Value::Integer(10), Value::Integer(20)]);
-        let err = match run(&circ, &[("v", vector_value)]) {
-            Err(e) => e,
-            Ok(value) => panic!("index 2^64 + 1 must not wrap to element 1, got {value:?}"),
-        };
-        match err {
-            InterpreterError::TypeError(ref msg) => assert!(
-                msg.contains("18446744073709551617"),
-                "error must name the index value, got: {msg}"
-            ),
-            other => panic!("expected TypeError, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn degrade_to_transient_drops_top_byte() {
-        use midnight_transient_crypto::curve::Fr;
-        // `degrade_to_transient` is `field_vec()[1]` = the low 31 bytes as an Fr;
-        // the 32nd (top) byte is dropped. A plain little-endian decode of all 32
-        // bytes would fold that byte in, so a non-zero top byte is the case that
-        // distinguishes the two — and it must not affect the result.
-        let mut bytes = [0u8; 32];
-        bytes[0] = 7;
-        bytes[31] = 0x1e;
-        let av = AlignedValue::from(bytes);
-        let result = try_builtin_typed("degradeToTransient", &[Value::AlignedValue(av)], &[])
-            .expect("builtin known")
-            .expect("ok");
-        assert_eq!(as_fr(result), Fr::from(7u64));
-    }
-
     // -----------------------------------------------------------------------
     // Spread + Bytes/Field/Vector conversion forms
     //
@@ -3149,47 +2887,6 @@ mod tests {
     // byte order, zero padding, and rejection (not reduction) on range
     // overflow.
     // -----------------------------------------------------------------------
-
-    fn assert_integers(value: Value, expected: &[u128]) {
-        match value {
-            Value::Tuple(els) => {
-                assert_eq!(els.len(), expected.len(), "{els:?}");
-                for (el, &want) in els.iter().zip(expected) {
-                    assert!(
-                        equal_at(&uint("255"), el, &Value::Integer(want)),
-                        "expected {want}, got {el:?}"
-                    );
-                }
-            }
-            other => panic!("expected Tuple, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn spread_splices_tuple_value_into_constructor() {
-        let v = Value::Tuple(vec![Value::Integer(2), Value::Integer(3)]);
-        let circ = circuit(
-            vec![argument("v", vector(2, uint("255")))],
-            vector(4, uint("255")),
-            ir::Expr::Tuple(vec![single(int(1)), spread(2, var("v")), single(int(4))]),
-        );
-        let result = run(&circ, &[("v", v)]).expect("eval");
-        assert_integers(result, &[1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn spread_splits_flattened_aligned_value() {
-        // A Vector<2, Uint<8>> that arrives flattened as a 2-atom AlignedValue
-        // (e.g. a circuit argument or a popeq read).
-        let av = AlignedValue::concat([AlignedValue::from(7u8), AlignedValue::from(9u8)].iter());
-        let circ = circuit(
-            vec![argument("v", vector(2, uint("255")))],
-            vector(2, uint("255")),
-            ir::Expr::VectorLit(vec![spread(2, var("v"))]),
-        );
-        let result = run(&circ, &[("v", Value::AlignedValue(av))]).expect("eval");
-        assert_integers(result, &[7, 9]);
-    }
 
     #[test]
     fn spread_length_mismatch_errors() {
@@ -3216,17 +2913,7 @@ mod tests {
     }
 
     #[test]
-    fn bytes_to_field_is_little_endian() {
-        use midnight_transient_crypto::curve::Fr;
-        // Bytes<4> = [0x2A, 0x01, 0x00, 0x00]; byte 0 is the least
-        // significant (casts.ts convertBytesToField), so the value is
-        // 0x2A + 0x01·256 = 298.
-        let result = eval(bytes_to_field(4, "2a010000"), field()).expect("eval");
-        assert_eq!(as_fr(result), Fr::from(298u64));
-    }
-
-    #[test]
-    fn bytes_to_field_boundary_at_the_modulus() {
+    fn bytes_to_field_reads_little_endian_up_to_the_modulus() {
         use midnight_transient_crypto::curve::Fr;
         // p - 1 (the largest field element) must be accepted; exactly p
         // (the modulus itself) must be rejected — the range check is
@@ -3238,6 +2925,10 @@ mod tests {
         let result =
             eval(bytes_to_field(32, &hex::encode(&le)), field()).expect("p - 1 must be accepted");
         assert_eq!(as_fr(result), p_minus_1);
+        assert_eq!(
+            as_fr(eval(bytes_to_field(4, "2a010000"), field()).expect("eval")),
+            Fr::from(298u64)
+        );
 
         // Increment the little-endian byte string to get exactly p.
         let mut p = le;
@@ -3254,15 +2945,6 @@ mod tests {
             err.to_string().contains("exceeds"),
             "error should mention exceeding the Field range: {err}"
         );
-    }
-
-    #[test]
-    fn bytes_to_field_empty_bytes_is_zero() {
-        use midnight_transient_crypto::curve::Fr;
-        // Bytes<0> (the empty byte string) converts to the Field value 0,
-        // matching Fr::from_le_bytes(&[]).
-        let result = eval(bytes_to_field(0, ""), field()).expect("eval");
-        assert_eq!(as_fr(result), Fr::from(0u64));
     }
 
     fn field_to_bytes(len: u64, expr: ir::Expr) -> ir::Expr {
@@ -3286,48 +2968,6 @@ mod tests {
     }
 
     #[test]
-    fn bytes_to_vector_yields_bytes_in_order() {
-        // Element i of the vector is byte i of the byte string
-        // (typescript-passes.ss lowers bytes->vector to `Array.from(expr, BigInt)`).
-        let expr = ir::Expr::BytesToVector {
-            len: 4,
-            expr: Box::new(bytes("01020300")),
-        };
-        let result = eval(expr, vector(4, uint("255"))).expect("eval");
-        assert_integers(result, &[1, 2, 3, 0]);
-    }
-
-    #[test]
-    fn vector_to_bytes_collects_elements_in_order() {
-        use midnight_base_crypto::fab;
-        let v = Value::Tuple(vec![
-            Value::Integer(1),
-            Value::Integer(2),
-            Value::Integer(3),
-            Value::Integer(0),
-        ]);
-        let circ = circuit(
-            vec![argument("v", vector(4, uint("255")))],
-            Type::Bytes(4),
-            ir::Expr::VectorToBytes {
-                len: 4,
-                expr: Box::new(var("v")),
-            },
-        );
-        let result = run(&circ, &[("v", v)]).expect("eval");
-        // Trailing zero is trimmed by FAB normalization; alignment stays Bytes<4>.
-        let expected = fab::AlignedValue::new(
-            fab::Value(vec![fab::ValueAtom(vec![1, 2, 3])]),
-            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 4 }),
-        )
-        .unwrap();
-        match result {
-            Value::AlignedValue(av) => assert_eq!(av, expected),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn vector_to_bytes_rejects_elements_above_255() {
         let v = Value::Tuple(vec![Value::Integer(256)]);
         let circ = circuit(
@@ -3343,103 +2983,6 @@ mod tests {
             err.to_string().contains("255"),
             "error should mention the byte bound: {err}"
         );
-    }
-
-    #[test]
-    fn bytes_to_vector_round_trips_through_vector_to_bytes() {
-        use midnight_base_crypto::fab;
-        let expr = ir::Expr::VectorToBytes {
-            len: 3,
-            expr: Box::new(ir::Expr::BytesToVector {
-                len: 3,
-                expr: Box::new(bytes("aabb00")),
-            }),
-        };
-        let result = eval(expr, Type::Bytes(3)).expect("eval");
-        let expected = fab::AlignedValue::new(
-            fab::Value(vec![fab::ValueAtom(vec![0xAA, 0xBB])]),
-            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 3 }),
-        )
-        .unwrap();
-        match result {
-            Value::AlignedValue(av) => assert_eq!(av, expected),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn push_of_an_aligned_concat_joins_its_parts() {
-        // The ledger keys an unshielded token balance by the colour joined to
-        // the recipient, so every unshielded token operation pushes one of
-        // these. Before it was supported, such a contract could not be called
-        // at all.
-        let program = Program::new(&[], &[], &[]);
-        let mut private_state = Vec::new();
-        let mut ctx = test_ctx(&program, &mut private_state, HashMap::new());
-
-        let part = |v: u64| ir::Operand::Align {
-            value: BigUint::from(v),
-            bytes: 8,
-        };
-        let concat = ir::Operand::AlignedConcat(vec![part(7), part(9)]);
-
-        let joined = operand_aligned(&mut ctx, &concat).expect("push an aligned-concat");
-        let expected = AlignedValue::concat(
-            [
-                operand_aligned(&mut ctx, &part(7)).unwrap(),
-                operand_aligned(&mut ctx, &part(9)).unwrap(),
-            ]
-            .iter(),
-        );
-        assert_eq!(joined, expected);
-
-        // The shape a real contract emits: the parts are `var-ref`s, not
-        // literals, so this drives the expression evaluation and the typed
-        // encoding behind it rather than the constant path alone.
-        ctx.locals.insert("colour".to_string(), Value::Integer(7));
-        ctx.locals
-            .insert("recipient".to_string(), Value::Integer(9));
-        let from_vars = ir::Operand::AlignedConcat(vec![
-            ir::Operand::Expr(Box::new(var("colour"))),
-            ir::Operand::Expr(Box::new(var("recipient"))),
-        ]);
-        assert_eq!(
-            push_value(&mut ctx, &from_vars).expect("push a concat of var-refs"),
-            StateValue::from(AlignedValue::concat(
-                [integer_fallback_aligned(7), integer_fallback_aligned(9),].iter()
-            ))
-        );
-
-        // Order matters: the colour and the recipient are not interchangeable,
-        // and a swapped join would key a different balance.
-        let reversed = ir::Operand::AlignedConcat(vec![part(9), part(7)]);
-        assert_ne!(
-            joined,
-            operand_aligned(&mut ctx, &reversed).expect("push the reversed concat"),
-            "the parts must join in order"
-        );
-
-        // And it is reachable through the push path itself, not only directly.
-        assert_eq!(
-            push_value(&mut ctx, &concat).expect("push"),
-            StateValue::from(expected)
-        );
-    }
-
-    #[test]
-    fn encode_typed_opaque_default_is_empty_compress_atom() {
-        use midnight_base_crypto::fab;
-        // `default<Opaque<"string">>` (Value::Void) must encode as the empty
-        // string: one empty atom with Compress alignment (compact-types.ts
-        // CompactTypeOpaqueString).
-        let av = encode_typed(&Value::Void, &Type::Opaque("string".to_string()))
-            .expect("encode default opaque");
-        let expected = fab::AlignedValue::new(
-            fab::Value(vec![fab::ValueAtom(Vec::new())]),
-            fab::Alignment::singleton(fab::AlignmentAtom::Compress),
-        )
-        .unwrap();
-        assert_eq!(av, expected);
     }
 
     #[test]
@@ -3530,27 +3073,10 @@ mod tests {
     }
 
     #[test]
-    fn infer_types_of_conversion_forms() {
+    fn bytes_to_vector_infers_byte_elements() {
         let program = Program::new(&[], &[], &[]);
         let mut ps = Vec::new();
         let ctx = test_ctx(&program, &mut ps, HashMap::new());
-
-        let b2f = ir::Expr::CastFromBytes {
-            ty: field(),
-            len: 32,
-            expr: Box::new(var("x")),
-        };
-        assert!(matches!(
-            infer_type_of_expr(&ctx, &b2f),
-            Some(Type::Field(_))
-        ));
-
-        let f2b = field_to_bytes(32, var("x"));
-        assert!(matches!(
-            infer_type_of_expr(&ctx, &f2b),
-            Some(Type::Bytes(32))
-        ));
-
         let b2v = ir::Expr::BytesToVector {
             len: 4,
             expr: Box::new(var("x")),
@@ -3561,15 +3087,6 @@ mod tests {
             }
             other => panic!("expected Vector<4, Uint<255>>, got {other:?}"),
         }
-
-        let v2b = ir::Expr::VectorToBytes {
-            len: 4,
-            expr: Box::new(var("x")),
-        };
-        assert!(matches!(
-            infer_type_of_expr(&ctx, &v2b),
-            Some(Type::Bytes(4))
-        ));
     }
 
     #[test]

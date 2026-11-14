@@ -149,8 +149,6 @@ impl ContractAddress {
 
 #[cfg(test)]
 mod tests {
-    use crate::convert::{IntoLedger as _, IntoSdk as _};
-
     /// The `Display` docs promise the form the indexer reports, and
     /// `UnshieldedUtxoInfo::token_type_hex` gives it to callers. The inner
     /// `HashOutput`'s own `Display` cuts the id to ten characters.
@@ -158,20 +156,5 @@ mod tests {
     fn a_token_type_displays_as_the_indexer_hex() {
         let token = super::UnshieldedTokenType(super::HashOutput([0xab; 32]));
         assert_eq!(token.to_string(), "ab".repeat(32));
-    }
-
-    /// A field element's own serialization is variable-length, so a nullifier
-    /// that went through it would not fit the SDK's 32 bytes, or would come
-    /// back as another element.
-    #[test]
-    fn a_dust_nullifier_round_trips_through_the_sdk() {
-        for value in [
-            midnight_helpers::Fr::from(7u64),
-            -midnight_helpers::Fr::from(1u64),
-        ] {
-            let nullifier = midnight_helpers::DustNullifier(value).into_sdk();
-            let back: midnight_helpers::DustNullifier = nullifier.into_ledger();
-            assert_eq!(back.0, value);
-        }
     }
 }

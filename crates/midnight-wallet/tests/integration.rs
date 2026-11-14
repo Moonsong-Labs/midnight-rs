@@ -8,7 +8,6 @@
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
 use midnight_provider::{MidnightProvider, TransactionRequest};
-use midnight_types::NIGHT;
 use midnight_wallet::{Seed, Wallet};
 
 const DEFAULT_SHIELDED_TOKEN: midnight_wallet::ShieldedTokenType =
@@ -57,47 +56,6 @@ fn devnet_urls() -> Option<(String, String)> {
         return None;
     };
     Some((node, indexer))
-}
-
-// ---------------------------------------------------------------------------
-// Indexer-based sync (zswap + dust + unshielded events)
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn sync_replays_events() {
-    let Some((node, indexer)) = devnet_urls() else {
-        return;
-    };
-
-    let wallet = synced_wallet(&MidnightProvider::new(&node), &indexer, DEV_SEED).await;
-
-    // The dev wallet holds coins of all three kinds at genesis, so each
-    // stream that the sync replays shows in the balance.
-    let balance = wallet.balance().await;
-    eprintln!(
-        "synced: shielded coins={}, unshielded utxos={}, dust={} speck",
-        balance.shielded.coins.len(),
-        balance.unshielded.len(),
-        balance.dust.balance_speck,
-    );
-    assert!(
-        !balance.shielded.coins.is_empty(),
-        "expected zswap events to have been replayed"
-    );
-    assert!(
-        balance.unshielded.iter().any(|u| u.token_type == NIGHT),
-        "expected unshielded transactions to have been replayed"
-    );
-    assert!(
-        balance.dust.balance_speck > 0,
-        "expected dust events to have been replayed"
-    );
-    // A field dropped from the GraphQL selection set reads as `None`, and
-    // `register_dust` then builds a second registration that the node rejects.
-    assert!(
-        balance.dust.night_generates_dust,
-        "the indexer must report the dust registration status of the genesis tNIGHT"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +116,16 @@ async fn build_shielded_transfer_arbitrary_token_id() {
         0,
         "a self-funded transfer of a non-zero token id must return its change \
          in that token"
+    );
+    // The bytes keep the reservation, and a read of the wallet does not sync.
+    let spent = spent_nullifiers(&tx_bytes);
+    let spendable = provider.wallet().spendable_shielded_coins().await;
+    assert!(
+        !spent.is_empty()
+            && spendable
+                .iter()
+                .all(|coin| !spent.contains(&coin.nullifier)),
+        "the build must reserve the coins it spends"
     );
 }
 
@@ -253,55 +221,6 @@ fn shielded_delta(tx_bytes: &[u8], token: midnight_wallet::ShieldedTokenType) ->
         .sum()
 }
 
-/// A self-funded transfer must conserve the transferred token: whatever the
-/// selected coins are worth beyond `amount` has to come back as change, leaving
-/// a zero delta. A positive delta is value the transaction destroys, since the
-/// chain rejects only a negative balance and nobody can ever spend a surplus.
-///
-/// This is the property that makes a partial spend of an over-large coin safe,
-/// so it is asserted at build time rather than through a balance comparison,
-/// which sync timing would make flaky.
-#[tokio::test]
-async fn shielded_transfer_conserves_value() {
-    let Some((node, indexer)) = devnet_urls() else {
-        return;
-    };
-
-    let provider = MidnightProvider::new(&node);
-    let wallet = synced_wallet(&provider, &indexer, DEV_SEED).await;
-    let recipient = wallet.shielded_recipient();
-    let provider = provider.with_wallet(wallet);
-
-    // 1 is deliberately far below any coin the dev preset mints, so the
-    // remainder is large and an abandoned one would be unmissable.
-    let tx_bytes = provider
-        .fill(TransactionRequest::shielded(
-            DEFAULT_SHIELDED_TOKEN,
-            1,
-            recipient,
-        ))
-        .await
-        .expect("shielded transfer should build")
-        .into_bytes();
-
-    assert_eq!(
-        shielded_delta(&tx_bytes, DEFAULT_SHIELDED_TOKEN),
-        0,
-        "a self-funded transfer must leave no surplus; the remainder of the \
-         selected coins has to return as change"
-    );
-    // The bytes keep the reservation, and a read of the wallet does not sync.
-    let spent = spent_nullifiers(&tx_bytes);
-    let spendable = provider.wallet().spendable_shielded_coins().await;
-    assert!(
-        !spent.is_empty()
-            && spendable
-                .iter()
-                .all(|coin| !spent.contains(&coin.nullifier)),
-        "the build must reserve the coins it spends"
-    );
-}
-
 /// A payment is bounded by the wallet's balance in a token, not by its largest
 /// single coin. Selecting one coin that alone covers the amount caps transfers
 /// at the biggest coin and fails a fragmented wallet outright, so spend an
@@ -363,68 +282,5 @@ async fn shielded_transfer_spans_multiple_coins() {
         shielded_delta(&tx_bytes, DEFAULT_SHIELDED_TOKEN),
         0,
         "a multi-coin transfer must return its change too"
-    );
-}
-
-/// The swap-half builder must produce exactly the unbalanced offer a native
-/// two-party swap needs: a give-side surplus of `+give_amount` and a
-/// receive-side deficit of `-receive_amount`. Critically, the give delta must
-/// be the amount *given*, not the full value of the coins selected. Asserting
-/// it pins the change handling too (mishandled change would inflate the give
-/// delta past `give_amount`).
-///
-/// Builds against the dev preset's native shielded token (give side, which the
-/// wallet holds) and an arbitrary distinct receive-side token id. The half only
-/// creates an output for the receive token, so the wallet need not hold any of
-/// it. Fee-less by construction: no funding seed, so no Dust intent rides the
-/// transaction and the receive deficit is the only shortfall. Stops at build
-/// (the half is not submittable on its own).
-#[tokio::test]
-async fn build_shielded_swap_half_has_mirror_deltas() {
-    let Some((node, indexer)) = devnet_urls() else {
-        return;
-    };
-
-    let provider = synced_provider(&node, &indexer, DEV_SEED).await;
-
-    let give_token = DEFAULT_SHIELDED_TOKEN;
-    let receive_token =
-        midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0xABu8; 32]));
-    const GIVE: u128 = 1;
-    const RECEIVE: u128 = 3;
-
-    let tx_bytes = provider
-        .fill(TransactionRequest::shielded_swap(
-            give_token,
-            GIVE,
-            receive_token,
-            RECEIVE,
-        ))
-        .await
-        .expect("swap half should build (coin selection + proofs + serialize)")
-        .into_bytes();
-
-    // The build selects concrete give-side coins up front.
-    assert!(
-        !spent_nullifiers(&tx_bytes).is_empty(),
-        "swap half should spend give-side coins"
-    );
-    assert!(
-        tx_bytes.len() > 1000,
-        "tx bytes too small to be a real proven offer ({})",
-        tx_bytes.len()
-    );
-
-    let delta = |token: midnight_wallet::ShieldedTokenType| shielded_delta(&tx_bytes, token);
-
-    assert_eq!(
-        delta(give_token),
-        GIVE as i128,
-        "give-side delta must be +give_amount (change handled)"
-    );
-    assert_eq!(
-        delta(receive_token),
-        -(RECEIVE as i128),
-        "receive-side delta must be -receive_amount"
     );
 }

@@ -320,26 +320,6 @@ mod tests {
 
     use super::{Bytes, Uint, Vector};
 
-    /// A `Vector<N, T>` encodes as the flat concatenation of its `N` elements,
-    /// each at its own alignment, which is what the on-chain `Vector<N, T>`
-    /// descriptor produces. Uses `Bytes<32>` as a single-atom element.
-    #[test]
-    fn vector_alignment_and_encoding_is_flat_concat() {
-        let v: Vector<3, Bytes<32>> =
-            Vector([Bytes([1u8; 32]), Bytes([2u8; 32]), Bytes([3u8; 32])]);
-
-        assert_eq!(
-            <Vector<3, Bytes<32>> as Aligned>::alignment(),
-            <(Bytes<32>, Bytes<32>, Bytes<32>) as Aligned>::alignment(),
-            "a vector aligns like a struct whose fields all have the element type"
-        );
-
-        let av = AlignedValue::from(v);
-        assert_eq!(av.value.0.len(), 3, "one atom per element, in order");
-        assert_eq!(av.value.0[0].0, vec![1u8; 32]);
-        assert_eq!(av.value.0[2].0, vec![3u8; 32]);
-    }
-
     /// A vector of a multi-atom element (a `(Uint, Bytes<32>)` pair here, the
     /// shape of a struct field) must split back into exactly its elements on
     /// decode. This is the case a bare `[T; N]` could not support.
@@ -354,6 +334,12 @@ mod tests {
         ]);
 
         let av = AlignedValue::from(v.clone());
+        assert_eq!(
+            <Vector<3, Pair> as Aligned>::alignment(),
+            <(Pair, Pair, Pair) as Aligned>::alignment()
+        );
+        assert_eq!(av.value.0[1].0, vec![0xAA; 32]);
+        assert_eq!(av.value.0[5].0, vec![0xCC; 32]);
         assert_eq!(av.value.0.len(), 6, "3 elements * 2 atoms each");
 
         let decoded = Vector::<3, Pair>::try_from(&*av.value).expect("decode round-trips");

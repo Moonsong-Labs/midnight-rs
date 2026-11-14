@@ -18,6 +18,12 @@
 //! # fn read(state: ContractState<InMemoryDB>) -> Result<(), StateError> {
 //! let ledger = Gateway::new(state);
 //! let threshold: u8 = ledger.threshold()?;
+//! let threshold_index: usize = FIELD_THRESHOLD;
+//! # Ok(())
+//! # }
+//! # fn read_rpc(hex_state: &str) -> Result<(), StateError> {
+//! // Or build the ledger from the hex state that the node RPC returns.
+//! let ledger = Gateway::from_hex(hex_state)?;
 //! # Ok(())
 //! # }
 //! # fn main() {}

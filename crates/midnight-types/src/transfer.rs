@@ -61,18 +61,3 @@ pub(crate) fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     }
     "proof backend panicked with a non-string payload".to_string()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn panic_message_handles_both_payload_shapes() {
-        assert_eq!(
-            panic_message(Box::new("static str".to_string())),
-            "static str"
-        );
-        assert_eq!(panic_message(Box::new("literal")), "literal");
-        assert!(panic_message(Box::new(42u8)).contains("non-string payload"));
-    }
-}

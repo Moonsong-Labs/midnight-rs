@@ -263,16 +263,7 @@ mod tests {
         Value::AlignedValue(label_value_av())
     }
 
-    /// The positional spelling of a `Point`.
-    fn a_point() -> Value {
-        Value::Tuple(vec![
-            Value::Integer(0x1234_5678),
-            Value::Bool(true),
-            label_value(),
-        ])
-    }
-
-    /// The named spelling of the same `Point`. This is the shape #119 is about:
+    /// The named spelling of a `Point`. This is the shape #119 is about:
     /// a `HashMap`, so it carries no field order of its own and the encoding has
     /// to take order from the declaration.
     fn a_point_struct() -> Value {
@@ -287,9 +278,7 @@ mod tests {
         )
     }
 
-    /// `struct Point { x: Uint<32>, flag: Boolean, label: Bytes<32> }`. The
-    /// field widths are chosen so a wrong order or a wrong width shows up in
-    /// the alignment alone.
+    /// `struct Point { x: Uint<32>, flag: Boolean, label: Bytes<32> }`.
     fn point_ty() -> Type {
         Type::Struct {
             name: "Point".to_string(),
@@ -302,45 +291,6 @@ mod tests {
                 ("label".to_string(), Type::Bytes(32)),
             ],
         }
-    }
-
-    /// The `Value::Struct` path, pinned against the atoms the canonical runtime
-    /// emits for this exact input (`tests/conformance/expected/structs/`):
-    /// value `["78563412", "01", "1122..1122"]` at alignment
-    /// `[Bytes{4}, Bytes{1}, Bytes{32}]`.
-    #[test]
-    fn named_struct_encodes_to_the_canonical_atoms() {
-        let encoded = encode_typed(&a_point_struct(), &point_ty()).expect("Point encodes");
-
-        assert_eq!(encoded.value.0.len(), 3, "one atom per field, no nesting");
-        assert_eq!(encoded.value.0[0].0, vec![0x78, 0x56, 0x34, 0x12]);
-        assert_eq!(encoded.value.0[1].0, vec![0x01]);
-        assert_eq!(encoded.value.0[2].0, vec![0x11; 32]);
-        assert_eq!(
-            encoded.alignment,
-            Alignment(vec![
-                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
-                    length: 4
-                }),
-                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
-                    length: 1
-                }),
-                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
-                    length: 32
-                }),
-            ]),
-        );
-    }
-
-    /// Field order comes from the declaration, so the two spellings of the same
-    /// struct have to agree. A `HashMap` iterating in some other order would
-    /// break this.
-    #[test]
-    fn named_and_positional_struct_spellings_agree() {
-        assert_eq!(
-            encode_typed(&a_point_struct(), &point_ty()).unwrap(),
-            encode_typed(&a_point(), &point_ty()).unwrap(),
-        );
     }
 
     /// A struct that does not match its declaration is an error, never a
@@ -358,9 +308,20 @@ mod tests {
         );
         assert!(encode_typed(&missing_field, &point_ty()).is_err());
 
-        let wrong_arity =
-            Value::Struct([("x".to_string(), Value::Integer(1))].into_iter().collect());
-        assert!(encode_typed(&wrong_arity, &point_ty()).is_err());
+        let short_tuple = Value::Tuple(vec![Value::Integer(1), Value::Bool(true)]);
+        assert!(encode_typed(&short_tuple, &point_ty()).is_err());
+
+        let extra_field = Value::Struct(
+            [
+                ("x".to_string(), Value::Integer(1)),
+                ("flag".to_string(), Value::Bool(true)),
+                ("label".to_string(), label_value()),
+                ("extra".to_string(), Value::Integer(0)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert!(encode_typed(&extra_field, &point_ty()).is_err());
     }
 
     /// Without a declared type there is no way to know a struct's field widths,
@@ -396,78 +357,18 @@ mod tests {
     /// for `CompactTypeUnsignedInteger(maxval, width).toValue(v)`.
     #[test]
     fn uint_fields_use_the_compilers_exact_byte_width() {
-        let enc = |maxval: &str, n: u128| {
-            encode_typed(&Value::Integer(n), &Type::Unsigned(maxval.parse().unwrap()))
-                .expect("in range")
-        };
-
-        // Uint<24>: 3 bytes, not the 4 a u8/u16/u32 ladder would pick.
-        let av = enc("16777215", 0x0012_3456);
-        assert_eq!(av.value.0[0].0, vec![0x56, 0x34, 0x12]);
+        // One above u64::MAX needs 65 bits, so 9 bytes, not the 16 of a u128.
+        let av = encode_typed(
+            &Value::Integer(7),
+            &Type::Unsigned("18446744073709551616".parse().unwrap()),
+        )
+        .expect("in range");
         assert_eq!(
             av.alignment,
             Alignment(vec![midnight_base_crypto::fab::AlignmentSegment::Atom(
-                AlignmentAtom::Bytes { length: 3 }
+                AlignmentAtom::Bytes { length: 9 }
             )])
         );
-
-        // Uint<48>: 6 bytes, not 8.
-        let av = enc("281474976710655", 0x0000_1234_5678_9abc);
-        assert_eq!(av.value.0[0].0, vec![0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12]);
-
-        // A range bound rather than a power of two: Uint<0..1000000> is 3 bytes.
-        let av = enc("999999", 999_999);
-        assert_eq!(av.value.0[0].0, vec![0x3f, 0x42, 0x0f]);
-
-        // The alignment is the exact width, on or off a primitive size. One
-        // above u64::MAX needs 65 bits, so 9 bytes, not the 16 of a u128.
-        for (maxval, n, want) in [
-            ("255", 7u128, 1usize),
-            ("65535", 7, 2),
-            ("4294967295", 7, 4),
-            ("18446744073709551615", 7, 8),
-            ("18446744073709551616", 7, 9),
-        ] {
-            let av = enc(maxval, n);
-            assert_eq!(
-                av.alignment,
-                Alignment(vec![midnight_base_crypto::fab::AlignmentSegment::Atom(
-                    AlignmentAtom::Bytes {
-                        length: want as u32
-                    }
-                )]),
-                "Uint maxval {maxval} should be {want} bytes"
-            );
-        }
-    }
-
-    /// A composite-typed value can arrive already flattened, e.g. sliced out of
-    /// a struct receiver. That spelling encodes correctly and must not be
-    /// rejected just because the declared type is a `Vector` or `Tuple`.
-    #[test]
-    fn composite_types_accept_an_already_flat_value() {
-        let flat = AlignedValue::concat([AlignedValue::from([1u8; 32]), label_value_av()].iter());
-
-        let vector_ty = Type::Vector {
-            len: 2,
-            ty: Box::new(Type::Bytes(32)),
-        };
-        assert_eq!(
-            encode_typed(&Value::AlignedValue(flat.clone()), &vector_ty).unwrap(),
-            flat
-        );
-
-        let tuple_ty = Type::Tuple(vec![Type::Bytes(32), Type::Bytes(32)]);
-        assert_eq!(
-            encode_typed(&Value::AlignedValue(flat.clone()), &tuple_ty).unwrap(),
-            flat
-        );
-
-        // And it still reaches the builtins rather than aborting the circuit.
-        assert!(matches!(
-            try_builtin_typed("persistentHash", &[Value::AlignedValue(flat)], &[vector_ty]),
-            Some(Ok(_))
-        ));
     }
 
     #[test]

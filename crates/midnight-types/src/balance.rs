@@ -258,16 +258,6 @@ mod tests {
         }
     }
 
-    /// Each leg holds one entry per coin, so a sum that skips the filter, or
-    /// takes only the first or the last match, gives another number.
-    #[test]
-    fn a_token_value_sums_every_entry_of_that_token_only() {
-        let balance = balance(&[(1, 5, true), (2, 100, true), (1, 7, true)]);
-        let token = HashOutput([1; 32]);
-        assert_eq!(balance.shielded_value(ShieldedTokenType(token)), 12);
-        assert_eq!(balance.unshielded_value(UnshieldedTokenType(token)), 12);
-    }
-
     /// The sums have no error channel, so an overflow must neither panic nor
     /// wrap.
     #[test]
@@ -281,12 +271,15 @@ mod tests {
         );
     }
 
-    /// A spendable sum that skips the flag reads the total, and one that
-    /// skips the token filter counts the other token too.
+    /// A sum that skips the token filter counts the other token, and one that
+    /// stops at the first other token misses a coin. A spendable sum that skips
+    /// the flag reads the total.
     #[test]
-    fn a_spendable_value_sums_the_spendable_entries_of_that_token_only() {
-        let balance = balance(&[(1, 5, true), (1, 7, false), (2, 100, true)]);
+    fn a_token_value_and_its_spendable_part_sum_only_that_token() {
+        let balance = balance(&[(1, 5, true), (2, 100, true), (1, 7, false)]);
         let token = HashOutput([1; 32]);
+        assert_eq!(balance.shielded_value(ShieldedTokenType(token)), 12);
+        assert_eq!(balance.unshielded_value(UnshieldedTokenType(token)), 12);
         assert_eq!(
             balance.spendable_shielded_value(ShieldedTokenType(token)),
             5

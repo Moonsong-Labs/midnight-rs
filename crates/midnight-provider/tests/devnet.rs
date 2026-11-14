@@ -14,16 +14,10 @@ fn provider() -> Option<MidnightProvider> {
 }
 
 #[tokio::test]
-async fn the_finalized_height_is_past_genesis() {
-    let Some(p) = provider() else { return };
-    let finalized = p.get_finalized_block_height().await.unwrap();
-    assert!(finalized > 0);
-}
-
-#[tokio::test]
 async fn hash_by_height_is_unique_when_finalized_and_empty_past_the_chain() {
     let Some(p) = provider() else { return };
     let finalized = p.get_finalized_block_height().await.unwrap();
+    assert!(finalized > 0, "the devnet must finalize past genesis");
     let hashes = p.get_block_hashes_by_height(finalized).await.unwrap();
     assert_eq!(
         hashes.len(),
@@ -92,6 +86,10 @@ async fn block_timestamp_matches_the_indexer_at_a_past_block() {
         .await
         .unwrap()
         .expect("the indexer must hold block 1");
+    assert_eq!(
+        indexed.height, 1,
+        "the indexer must answer the height offset"
+    );
     assert_eq!(
         Some(i64::try_from(timestamp.as_millis()).unwrap()),
         indexed.timestamp,

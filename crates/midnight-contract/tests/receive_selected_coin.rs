@@ -29,7 +29,8 @@ mod shielded_mint {
 }
 
 use compact_bindgen::Bytes;
-use midnight_provider::MidnightProvider;
+use midnight_contract::ExtrinsicHash;
+use midnight_provider::{MidnightProvider, NodeApi};
 
 #[tokio::test]
 async fn a_call_with_no_pinned_coin_spends_a_selected_one_and_returns_the_change() {
@@ -94,7 +95,7 @@ async fn a_call_with_no_pinned_coin_spends_a_selected_one_and_returns_the_change
         color: Bytes(token_type.0.0),
         value: received,
     };
-    receiver
+    let outcome = receiver
         .circuits()
         .deposit(deposited)
         .send()
@@ -103,6 +104,20 @@ async fn a_call_with_no_pinned_coin_spends_a_selected_one_and_returns_the_change
         .get_receipt()
         .await
         .expect("a deposit that the wallet funds with a coin it selects");
+
+    assert_ne!(
+        outcome.extrinsic_hash,
+        ExtrinsicHash::zero(),
+        "a successful call must expose its extrinsic hash"
+    );
+    assert!(
+        provider
+            .get_block_header(outcome.block_hash)
+            .await
+            .expect("header of the call's block")
+            .is_some(),
+        "a successful call must name the block it landed in"
+    );
 
     common::resync_until_coin(
         &provider,
