@@ -62,7 +62,7 @@
 //! runtime is enough. `#[tokio::main]` and `#[tokio::test]` build such a
 //! runtime.
 //!
-//! Outside such a runtime, the SDK panics at the first step that sets a
+//! Outside a tokio runtime, the SDK panics at the first step that sets a
 //! timer, spawns a task or opens a network connection.
 //!
 //! # Features

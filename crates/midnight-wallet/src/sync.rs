@@ -337,11 +337,10 @@ impl WalletBuilder {
     /// Run the sync in a background task and stream progress events.
     ///
     /// Returns `(receiver, handle)`. The [`SyncProgressReceiver`] emits
-    /// [`SyncProgress`] events as each subscription replays. The
-    /// [`SyncHandle`] resolves to the synced [`Wallet`] when all three
-    /// subscriptions finish. The network
-    /// check and the chain pin work run before anything spawns, which is why
-    /// this is `async` and can refuse as [`Self::sync`] does.
+    /// [`SyncProgress`] events as each subscription replays. The [`SyncHandle`]
+    /// resolves to the synced [`Wallet`] when all three subscriptions finish.
+    /// The network check and the chain pin work run before anything spawns,
+    /// which is why this is `async` and can refuse as [`Self::sync`] does.
     ///
     /// **Cancellation:** the spawned task lives exactly as long as both
     /// returned ends do. Dropping the progress receiver mid-sync cancels the
