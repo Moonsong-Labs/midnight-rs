@@ -40,7 +40,7 @@ TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 
 ## What it covers
 
-- `Wallet::from_seed(seed.clone()).with_network(&network).sync_with_progress(&provider, &indexer_url)`: streamed `SyncProgress` events, then `with_wallet(&wallet)` to attach a borrow. The sync checks a persisted snapshot's chain pin.
+- `Wallet::from_seed(seed.clone()).with_network(&network).sync_with_progress(&provider, &indexer_url)`: `SyncProgress` events from a `SyncProgressReceiver`, then `with_wallet(&wallet)` to attach a borrow. The sync checks a persisted snapshot's chain pin.
 - `wallet.balance()`: the three asset legs (shielded coins, unshielded UTXOs, Dust)
 - `provider.send_transaction(TransactionRequest::register_dust())`: registers one tNIGHT UTXO for Dust generation
 - `provider.send_transaction(TransactionRequest::unshielded(NIGHT, amount, seed.unshielded_recipient()))`: an unshielded self-transfer

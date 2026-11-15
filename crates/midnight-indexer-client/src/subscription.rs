@@ -132,16 +132,6 @@ impl<T> Subscription<T> {
     pub async fn next(&mut self) -> Option<Result<T, IndexerError>> {
         self.rx.recv().await
     }
-
-    /// Try to receive the next event without waiting.
-    ///
-    /// Returns `Ok(result)` if an event is immediately available, or
-    /// `Err(TryRecvError)` if the channel is empty or closed.
-    pub fn try_recv(
-        &mut self,
-    ) -> Result<Result<T, IndexerError>, tokio::sync::mpsc::error::TryRecvError> {
-        self.rx.try_recv()
-    }
 }
 
 /// A WebSocket connection to the indexer's GraphQL subscription endpoint.

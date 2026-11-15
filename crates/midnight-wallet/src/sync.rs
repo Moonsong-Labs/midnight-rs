@@ -157,6 +157,57 @@ impl std::future::Future for SyncHandle {
     }
 }
 
+/// The receiver of the [`SyncProgress`] events of [`WalletBuilder::sync_with_progress`].
+///
+/// Read it with [`recv`](Self::recv) until it returns `None`. Then await the
+/// [`SyncHandle`] for the synced [`Wallet`].
+///
+/// **Dropping the receiver before the sync ends cancels the sync**, and the
+/// [`SyncHandle`] resolves to [`WalletError::SyncCancelled`]. See
+/// [`WalletBuilder::sync_with_progress`].
+///
+/// The sync does not wait for a slow reader. While the buffer is full, the
+/// sync drops new events.
+///
+/// ```rust,no_run
+/// # use midnight_provider::MidnightProvider;
+/// # use midnight_wallet::{Seed, Wallet};
+/// # const INDEXER_URL: &str = "http://localhost:8088";
+/// # async fn example(provider: MidnightProvider, seed: Seed) -> Result<(), Box<dyn std::error::Error>> {
+/// let (mut progress, handle) = Wallet::from_seed(seed)
+///     .sync_with_progress(&provider, INDEXER_URL)
+///     .await?;
+/// while let Some(event) = progress.recv().await {
+///     println!("{event:?}");
+/// }
+/// let wallet = handle.await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct SyncProgressReceiver {
+    inner: mpsc::Receiver<SyncProgress>,
+}
+
+impl std::fmt::Debug for SyncProgressReceiver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncProgressReceiver")
+            .finish_non_exhaustive()
+    }
+}
+
+impl SyncProgressReceiver {
+    /// Wait for the next progress event.
+    ///
+    /// Returns `None` when the sync ends or its [`SyncHandle`] drops. The
+    /// events that the sync sent before it ended come first.
+    ///
+    /// It is cancel safe: a `recv` that drops before it completes takes no
+    /// event.
+    pub async fn recv(&mut self) -> Option<SyncProgress> {
+        self.inner.recv().await
+    }
+}
+
 /// A wallet before its sync: its seed, and the options of the sync.
 ///
 /// It holds the seed until a sync step derives the keys of each role from it.
@@ -167,8 +218,8 @@ impl std::future::Future for SyncHandle {
 /// - [`sync`](Self::sync) syncs in the current task and returns the synced
 ///   [`Wallet`].
 /// - [`sync_with_progress`](Self::sync_with_progress) syncs in a background
-///   task. It returns a receiver of [`SyncProgress`] events and a
-///   [`SyncHandle`] that resolves to the synced wallet.
+///   task. It returns a [`SyncProgressReceiver`] of [`SyncProgress`] events
+///   and a [`SyncHandle`] that resolves to the synced wallet.
 ///
 /// A sync takes its source as a `&dyn` [`SyncSource`], so the builder names
 /// no provider. Attach the synced wallet afterwards:
@@ -285,11 +336,11 @@ impl WalletBuilder {
 
     /// Run the sync in a background task and stream progress events.
     ///
-    /// Returns `(receiver, handle)`. The receiver emits [`SyncProgress`]
-    /// events as each subscription replays. The [`SyncHandle`] resolves to
-    /// the synced [`Wallet`] when all three subscriptions finish. The network
-    /// check and the chain pin work run before anything spawns, which is why
-    /// this is `async` and can refuse as [`Self::sync`] does.
+    /// Returns `(receiver, handle)`. The [`SyncProgressReceiver`] emits
+    /// [`SyncProgress`] events as each subscription replays. The [`SyncHandle`]
+    /// resolves to the synced [`Wallet`] when all three subscriptions finish.
+    /// The network check and the chain pin work run before anything spawns,
+    /// which is why this is `async` and can refuse as [`Self::sync`] does.
     ///
     /// **Cancellation:** the spawned task lives exactly as long as both
     /// returned ends do. Dropping the progress receiver mid-sync cancels the
@@ -312,7 +363,7 @@ impl WalletBuilder {
         self,
         source: &dyn SyncSource,
         indexer_url: &str,
-    ) -> Result<(mpsc::Receiver<SyncProgress>, SyncHandle), WalletError> {
+    ) -> Result<(SyncProgressReceiver, SyncHandle), WalletError> {
         let plan = self.prepare(source, indexer_url).await?;
         let (tx, rx) = mpsc::channel(64);
         let handle = tokio::spawn(async move {
@@ -332,7 +383,10 @@ impl WalletBuilder {
                 result = sync => result,
             }
         });
-        Ok((rx, SyncHandle { inner: handle }))
+        Ok((
+            SyncProgressReceiver { inner: rx },
+            SyncHandle { inner: handle },
+        ))
     }
 
     /// The chain work, done eagerly so what remains borrows nothing: settle

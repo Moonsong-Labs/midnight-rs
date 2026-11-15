@@ -17,13 +17,12 @@
 
 ## Install
 
-Add the SDK, tokio and anyhow to the `Cargo.toml` of your crate:
+Add the SDK and tokio to the `Cargo.toml` of your crate:
 
 ```toml
 [dependencies]
 midnight-core = { git = "https://github.com/Moonsong-Labs/midnight-rs" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-anyhow = "1"
 ```
 
 ## Quick start
@@ -38,7 +37,7 @@ const NODE_URL: &str = "ws://localhost:9944";
 const INDEXER_URL: &str = "http://localhost:8088";
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = MidnightProvider::new(NODE_URL);
     // The dev seed, funded at genesis on the local devnet.
     let seed = Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000001")?;

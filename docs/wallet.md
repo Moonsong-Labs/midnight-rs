@@ -209,7 +209,7 @@ let wallet = handle.await?;
 let provider = provider.with_wallet(&wallet);
 ```
 
-`.sync(&provider, indexer_url)` runs the sync in the current task. `.sync_with_progress(&provider, indexer_url)` does the network check and the pin work first, so it can refuse a sync as `.sync(&provider, indexer_url)` does. Then it spawns the sync in a background task, and gives you progress events and a `SyncHandle` that resolves to the synced `Wallet`.
+`.sync(&provider, indexer_url)` runs the sync in the current task. `.sync_with_progress(&provider, indexer_url)` does the network check and the pin work first, so it can refuse a sync as `.sync(&provider, indexer_url)` does. Then it spawns the sync in a background task, and gives you a `SyncProgressReceiver` of progress events and a `SyncHandle` that resolves to the synced `Wallet`.
 
 The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally. For a sync without progress events, use `.sync(&provider, indexer_url)`.
 
