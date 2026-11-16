@@ -105,8 +105,8 @@ midnight-core                    meta-crate; re-exports the public API
 |---|---|---|
 | `MidnightProvider<W>` | provider | Network entry. Holds node URL, the attached wallet `W` (or `()` with none), the proof backends and the optional private-state store. It calls the wallet only through `MidnightWallet`. |
 | `Wallet` | wallet | One synced wallet, not `Clone`. It locks its own state, so a `&Wallet` serves every call and an `Arc<Wallet>` shares it. It runs the indexer replays of a sync and a rescan. It implements `MidnightWallet`. |
-| `NodeApi` | provider | The node reads: the best block hash, the finalized height, the hashes at a height, a block header, a block's time, contract state and the Midnight transactions that a block ran. `MidnightProvider` implements it. |
-| `BlockTransaction` / `TxOutcome` | provider | A Midnight transaction that a block ran: its hash, its outcome (`Applied`, `PartialSuccess`, or `Genesis` for block 0) and its bytes, `None` when the block ran it from storage. |
+| `NodeApi` | provider | The node reads: the best block hash, the finalized height, the hashes at a height, a block header, a block's time and contract state. It also reads the Midnight transactions that a block ran. `MidnightProvider` implements it. |
+| `BlockTransaction` / `TxOutcome` | provider | A Midnight transaction that a block ran: its hash, its outcome (`Applied`, `PartialSuccess`, or `Genesis` for block 0) and its bytes. The bytes are `None` when the block ran it from storage. |
 | `CallTranscript` / `CallStatus` | contract | One contract-call transcript of a block transaction: the address, the entry point, whether the chain applied it (`Applied`, `Failed` or `Undecided`) and its ops. `logs()` gives its logs. |
 | `MidnightWallet` | types | The trait that a provider funds and signs through: `shielded_recipient`, `fund_transaction`, `sign_transaction`. Implemented for `&T` and `Arc<T>`. Both `midnight-wallet` and `midnight-provider` depend on `midnight-types`, and neither depends on the other. |
 | `FilledTx` / `FundedTx` / `ProvenTx` / `TxEnvelope` | types | The stages of a transaction: filled by the provider, funded by the wallet, proven by the provider, signed by the wallet. Each from `FundedTx` on carries the reservation of what the wallet spends, and a drop of an unsent one hands it back. |
@@ -375,7 +375,7 @@ CallOutcome<T> → caller
 
 ### Read the events of a block
 
-The node keeps no contract log. The logged values are in the transaction bytes of the block body, as the `push` right before each `log` op, and the outcomes are in the events of the block:
+The node keeps no contract log. The logged values are in the transaction bytes of the block body, as the `push` right before each `log` op. The outcomes are in the events of the block:
 
 ```
 NodeApi::get_block_transactions(block_hash)   → Vec<BlockTransaction>      // 60 s bound
@@ -400,7 +400,7 @@ CallTranscript::logs()                        → Vec<VersionedLogItem>
 Misc::decode_log_data(&item)                  → Misc
 ```
 
-The status comes from the outcome event alone. A guaranteed transcript applied unless the transaction is in block 0. A fallible transcript applied under `TxApplied`. Under `TxPartialSuccess` it failed when the transaction has one fallible segment, and it is `Undecided` with two or more, because the event does not say which segment failed. Every transcript of block 0 is `Undecided`. The read needs the state at the block and at its parent, which a node with default pruning keeps for the last 256 finalized blocks.
+The status comes from the outcome event alone. A guaranteed transcript applied unless the transaction is in block 0. A fallible transcript applied under `TxApplied`. Under `TxPartialSuccess` it failed when the transaction has one fallible segment. With two or more it is `Undecided`, because the event does not say which segment failed. Every transcript of block 0 is `Undecided`. The read needs the state at the block and at its parent, which a node with default pruning keeps for the last 256 finalized blocks.
 
 ### Transfer (shielded / unshielded / swap / register dust / sponsor)
 

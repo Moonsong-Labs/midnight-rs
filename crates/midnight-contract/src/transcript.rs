@@ -68,9 +68,9 @@ pub fn call_transcripts(
     Ok(transcripts)
 }
 
-/// The status of a transcript of a transaction with `fallible_segments`
-/// fallible segments, under the transaction's `outcome`: a fallible
-/// transcript when `fallible` is true, else a guaranteed one.
+/// The status of a transcript under the transaction's `outcome`. `fallible`
+/// tells a fallible transcript from a guaranteed one, and
+/// `fallible_segments` counts the fallible segments of the transaction.
 fn call_status(outcome: TxOutcome, fallible: bool, fallible_segments: usize) -> CallStatus {
     match (outcome, fallible) {
         (TxOutcome::Genesis, _) => CallStatus::Undecided,
@@ -253,9 +253,9 @@ mod tests {
 
     /// The ledger 9 VM is the oracle: it runs `[push value, log]`, and
     /// `logs` must return the items that it logs. It catches a mirror that
-    /// drifts from the VM's private `decode_event`: the envelope of each
-    /// event tag, the version 0 form of a value that is not an event, and the
-    /// drop above `MAX_LOG_EMITTED`.
+    /// drifts from the VM's private `decode_event`. The cases are the envelope
+    /// of each event tag, the version 0 form of a value that is not an event,
+    /// and the drop above `MAX_LOG_EMITTED`.
     #[test]
     fn logs_decode_each_logged_value_as_the_vm_does() {
         // The data width of each event tag in compactc output.
