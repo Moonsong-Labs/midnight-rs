@@ -191,7 +191,7 @@ The differences:
 
 - An item carries no address. The interpreter refuses a cross-contract call, so every event comes from the called contract, and the caller has its address.
 - `ContractLog.decodeAll` decodes every event type. The SDK decodes only `Misc`. The ten standard events (`ShieldedSpend` to `Unpaused`) have no typed decode, so read their data with the cell helpers of `midnight_typed_state`, such as `cell_as`.
-- `ContractLog.decodeAll` marks a version 0 item as degraded, reads every other version with the version 1 layout, and does not check the width of the data. `Misc::decode_log_data` returns a `DecodeLogError` for a version other than 1 and for data that is not one cell under the alignment `bytes(288)`.
+- `ContractLog.decodeAll` marks a version 0 item as degraded. It reads every other version with the version 1 layout, and does not check the width of the data. `Misc::decode_log_data` returns a `DecodeLogError` for a version other than 1 and for data that is not one cell under the alignment `bytes(288)`.
 - The local run decodes each event as the ledger 9 VM does, so the SDK returns the item that the chain logs.
 
 ## ZK artifacts
