@@ -17,6 +17,8 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── state.rs             state fetch (node RPC) + deserialization
   │     ├── zk_config.rs         ZkConfigProvider: where prover/verifier keys come from
   │     ├── offer.rs             ShieldedOffer: coins and payments a deploy carries
+  │     ├── transcript.rs        call_transcripts: the contract calls of a transaction that a
+  │     │                        block ran, their CallStatus and their logs
   │     ├── ledger/              (private) the ledger 9 build of a call, deploy and
   │     │     │                  maintenance update
   │     │     ├── call.rs        a circuit call's transaction: transcripts, offers, proof, the wallet's cover
@@ -29,6 +31,7 @@ midnight-core                    meta-crate; re-exports the public API
   ├── midnight-provider          network entrypoint; wallet reached only through MidnightWallet
   │     ├── MidnightProvider<W>  prepare, send_tx_envelope
   │     ├── node_api.rs          NodeApi: the node reads, which MidnightProvider implements
+  │     ├── block_transactions.rs  (private) the body and event decode of get_block_transactions
   │     ├── pipeline.rs          send_transaction, fill: fill from node queries, then fund, prove
   │     │                        and sign; merge_transactions
   │     ├── prover.rs            Prover: local, remote, or custom (test-util)
@@ -102,7 +105,9 @@ midnight-core                    meta-crate; re-exports the public API
 |---|---|---|
 | `MidnightProvider<W>` | provider | Network entry. Holds node URL, the attached wallet `W` (or `()` with none), the proof backends and the optional private-state store. It calls the wallet only through `MidnightWallet`. |
 | `Wallet` | wallet | One synced wallet, not `Clone`. It locks its own state, so a `&Wallet` serves every call and an `Arc<Wallet>` shares it. It runs the indexer replays of a sync and a rescan. It implements `MidnightWallet`. |
-| `NodeApi` | provider | The node reads: the best block hash, the finalized height, the hashes at a height, a block header, a block's time and contract state. `MidnightProvider` implements it. |
+| `NodeApi` | provider | The node reads: the best block hash, the finalized height, the hashes at a height, a block header, a block's time, contract state and the Midnight transactions that a block ran. `MidnightProvider` implements it. |
+| `BlockTransaction` / `TxOutcome` | provider | A Midnight transaction that a block ran: its hash, its outcome (`Applied`, `PartialSuccess`, or `Genesis` for block 0) and its bytes, `None` when the block ran it from storage. |
+| `CallTranscript` / `CallStatus` | contract | One contract-call transcript of a block transaction: the address, the entry point, whether the chain applied it (`Applied`, `Failed` or `Undecided`) and its ops. `logs()` gives its logs. |
 | `MidnightWallet` | types | The trait that a provider funds and signs through: `shielded_recipient`, `fund_transaction`, `sign_transaction`. Implemented for `&T` and `Arc<T>`. Both `midnight-wallet` and `midnight-provider` depend on `midnight-types`, and neither depends on the other. |
 | `FilledTx` / `FundedTx` / `ProvenTx` / `TxEnvelope` | types | The stages of a transaction: filled by the provider, funded by the wallet, proven by the provider, signed by the wallet. Each from `FundedTx` on carries the reservation of what the wallet spends, and a drop of an unsent one hands it back. |
 | `BackgroundSync` | wallet | The handle of the task that `Wallet::sync_in_background` starts. The task syncs the wallet after each pause. Dropping the handle stops the sync. `last_error()` names the error of the last pass. `wait_until(done)` waits until `done` holds for the balance. It checks at the call and after each pass. |
@@ -367,6 +372,35 @@ CallOutcome<T> → caller
 ```
 
 `Contract<P>` is not mutated; the new state is discarded because the next call will fetch fresh state anyway.
+
+### Read the events of a block
+
+The node keeps no contract log. The logged values are in the transaction bytes of the block body, as the `push` right before each `log` op, and the outcomes are in the events of the block:
+
+```
+NodeApi::get_block_transactions(block_hash)   → Vec<BlockTransaction>      // 60 s bound
+  ├─ chain_getBlock(block_hash)               // the header and the body
+  ├─ the metadata of the runtime at the parent // block 0: its own
+  ├─ each Midnight.send_mn_transaction of the body, at any depth of a call,
+  │  that decodes as a ledger 9 transaction, with its transaction_hash()
+  ├─ System.Events at the block: TxApplied and TxPartialSuccess
+  └─ one item per outcome event, in event order, with the bytes of its copy,
+     or None when the block ran it from storage; block 0, which has no
+     events: each copy, in body order, as TxOutcome::Genesis
+  ↓
+call_transcripts(bytes, outcome)              → Vec<CallTranscript>
+  // the guaranteed transcripts of every intent by ascending segment id,
+  // then the fallible transcripts, each with its CallStatus
+  ↓
+CallTranscript::logs()                        → Vec<VersionedLogItem>
+  // the push right before each log, decoded as the ledger 9 VM does;
+  // UnreadableLog for a log that does not directly follow a push,
+  // or that a branch or jmp can skip
+  ↓
+Misc::decode_log_data(&item)                  → Misc
+```
+
+The status comes from the outcome event alone. A guaranteed transcript applied unless the transaction is in block 0. A fallible transcript applied under `TxApplied`. Under `TxPartialSuccess` it failed when the transaction has one fallible segment, and it is `Undecided` with two or more, because the event does not say which segment failed. Every transcript of block 0 is `Undecided`. The read needs the state at the block and at its parent, which a node with default pruning keeps for the last 256 finalized blocks.
 
 ### Transfer (shielded / unshielded / swap / register dust / sponsor)
 

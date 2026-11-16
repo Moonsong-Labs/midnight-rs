@@ -194,6 +194,22 @@ The differences:
 - `ContractLog.decodeAll` marks a version 0 item as degraded. It reads every other version with the version 1 layout, and does not check the width of the data. `Misc::decode_log_data` returns a `DecodeLogError` for a version other than 1 and for data that is not one cell under the alignment `bytes(288)`.
 - The local run decodes each event as the ledger 9 VM does, so the SDK returns the item that the chain logs.
 
+### The events of other calls
+
+midnight-js reads the events of other calls from the indexer. `PublicDataProvider.queryContractEvents` reads a page of the events of one contract, and `contractEventsObservable` replays them from a cursor, then follows the chain. midnight-rs reads them from the node, one block at a time:
+
+1. `NodeApi::get_block_transactions(block_hash)` gives the Midnight transactions that the block ran, in the order that the chain ran them. Each `BlockTransaction` holds the transaction hash, the `TxOutcome` from the events of the block, and the transaction bytes.
+2. `midnight_contract::call_transcripts(bytes, outcome)` gives the contract-call transcripts of a transaction, in the order that the ledger runs them. Each `CallTranscript` holds the contract address, the entry point, a `CallStatus` and the ops.
+3. `CallTranscript::logs` gives the logs of a transcript as the ledger 9 VM decodes them. `Misc::decode_log_data` decodes a `Misc` item.
+
+The differences:
+
+- The node read has no filter, page or cursor. The caller chooses the blocks, and keeps the transcripts whose `address` it follows. Pass a finalized block hash, because a reorg can replace a best block.
+- The node keeps no contract log. The read takes each logged value from the transaction bytes in the block body, and the outcome from the events of the block. So it needs the state at the block and at its parent. A node with default pruning keeps that state for the last 256 finalized blocks, and an archive node keeps it for every block.
+- `BlockTransaction.bytes` is `None` for a transaction that the block ran from storage: a collective `close`, a federated `motion_close` or the Scheduler. The block body holds no copy, so the content of that transaction is unknown. The indexer leaves such a transaction out, and also a transaction that a governance call wraps in the body. The node read finds the wrapped transaction.
+- `CallStatus` tells whether the chain applied a transcript. The outcome event of a partial success does not say which fallible segment failed. So a fallible transcript of a partial success with two or more fallible segments is `CallStatus::Undecided`. Every transcript of block 0 is `Undecided` too, because block 0 has no events. Every transaction that midnight-rs or midnight-js builds has one fallible segment, so the status of its transcripts is `Applied` or `Failed`.
+- `CallTranscript::logs` takes each logged value from the `push` right before the `log`. It refuses a `log` that does not directly follow a `push`, or that a `branch` or `jmp` can skip, with `UnreadableLog`. Only a run of the VM against the contract state gives the value of such a log. compactc output has none.
+
 ## ZK artifacts
 
 A Compact circuit compiles to three files per circuit name `<C>`:
