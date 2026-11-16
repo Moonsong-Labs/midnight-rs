@@ -177,7 +177,7 @@ match pending.get_receipt().await {
 }
 ```
 
-What the events do not carry is which segment failed. Every transaction the SDK builds holds one fallible segment, so `PartialSuccess` is unambiguous there. A merged multi-party transaction (`merge_transactions`, two `shielded_swap` halves) holds several, and the SDK does not report which of them failed.
+What the events do not carry is which segment failed. Every transaction the SDK builds holds one fallible segment that can fail, so `PartialSuccess` is unambiguous there. Its Dust fee intent is a second fallible segment, but that segment carries nothing the fallible phase can refuse. A merged multi-party transaction (`merge_transactions`, two `shielded_swap` halves) holds several, and the SDK does not report which of them failed.
 
 When `get_receipt` fails with no verdict, the error is `ProviderError::Submission` carrying a typed [`SubmitError`](../crates/midnight-provider/src/submit.rs) instead of a string to parse. The variants encode the retry semantics: `Invalid` is a definitive node rejection (safe to rebuild and resubmit), `Dropped` and `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means the watch subscription itself broke while the tx's fate stayed unknown.
 
