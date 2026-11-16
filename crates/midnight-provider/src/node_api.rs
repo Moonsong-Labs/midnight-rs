@@ -135,8 +135,9 @@ pub trait NodeApi: Send + Sync {
     /// [`ProviderError::Rpc`] when the node does not know the block, no
     /// longer holds a state that the read needs, or the body or the events
     /// do not decode with that metadata. Metadata with no
-    /// `Midnight.send_mn_transaction` call or no `TxApplied` event is also
-    /// an error, so a rename cannot read as an empty block.
+    /// `Midnight.send_mn_transaction` call, or no `TxApplied` or
+    /// `TxPartialSuccess` event, is also an error, so a rename cannot hide
+    /// the transactions of a block.
     ///
     /// A copy in the body that does not decode as a ledger 9 transaction is
     /// an error in block 0. In another block, it is an error when an outcome

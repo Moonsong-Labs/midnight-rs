@@ -24,22 +24,22 @@ pub(crate) fn system_events_key() -> [u8; 32] {
     subxt::ext::frame_decode::storage::encode_storage_key_prefix("System", "Events")
 }
 
-/// Refuse `metadata` that has no `Midnight.send_mn_transaction` call or no
-/// `Midnight.TxApplied` event. The read finds both by name, so a rename
-/// would read as a block with no Midnight transaction.
+/// Refuse `metadata` that has no `Midnight.send_mn_transaction` call, or no
+/// `Midnight.TxApplied` or `Midnight.TxPartialSuccess` event. The read finds
+/// them by name, so a rename would read as a block with fewer transactions.
 pub(crate) fn check_names(metadata: &Metadata) -> Result<(), ProviderError> {
     let pallet = metadata.pallet_by_name(MIDNIGHT);
     let has_call =
         pallet.is_some_and(|pallet| pallet.call_variant_by_name(SEND_MN_TRANSACTION).is_some());
-    let has_event = pallet
-        .and_then(|pallet| pallet.event_variants())
-        .is_some_and(|events| events.iter().any(|event| event.name == TX_APPLIED));
-    if has_call && has_event {
+    let events = pallet.and_then(|pallet| pallet.event_variants());
+    let has_event =
+        |name: &str| events.is_some_and(|events| events.iter().any(|event| event.name == name));
+    if has_call && has_event(TX_APPLIED) && has_event(TX_PARTIAL_SUCCESS) {
         Ok(())
     } else {
         Err(ProviderError::Rpc(format!(
-            "the runtime metadata has no {MIDNIGHT}.{SEND_MN_TRANSACTION} call or no \
-             {MIDNIGHT}.{TX_APPLIED} event"
+            "the runtime metadata has no {MIDNIGHT}.{SEND_MN_TRANSACTION} call, or no \
+             {MIDNIGHT}.{TX_APPLIED} or {MIDNIGHT}.{TX_PARTIAL_SUCCESS} event"
         )))
     }
 }
