@@ -71,10 +71,13 @@ pub fn call_transcripts(
     Ok(transcripts)
 }
 
-/// The number of fallible segments of `transaction` whose section can fail.
+/// The number of fallible segments of `transaction` that hold fallible
+/// coins, a fallible unshielded offer or a contract action.
 ///
-/// A section with no fallible coins, no fallible unshielded offer and no
-/// action leaves the ledger state as it is, so it cannot fail.
+/// A segment with none of these leaves the ledger state as it is, so it
+/// cannot fail. The count can include a segment that cannot fail, so the
+/// status can be `Undecided` where `Failed` is decidable, but never `Failed`
+/// for a transcript that applied.
 fn segments_that_can_fail<S, P, B, D>(transaction: &StandardTransaction<S, P, B, D>) -> usize
 where
     S: SignatureKind<D>,
@@ -197,7 +200,8 @@ pub enum CallStatus {
     /// Its segment failed, so the chain kept none of its effects or logs.
     Failed,
     /// The node does not say: a partial success with two or more fallible
-    /// segments, or a transaction of block 0.
+    /// segments that hold fallible coins, a fallible unshielded offer or a
+    /// contract action, or a transaction of block 0.
     Undecided,
 }
 
@@ -211,7 +215,10 @@ pub struct UnreadableLog {
 
 #[cfg(test)]
 mod tests {
-    use midnight_helpers::{ContractDeploy, ContractState, Intent, Timestamp, UnprovenIntent};
+    use midnight_helpers::{
+        ContractDeploy, ContractState, DustActions, Intent, Timestamp, UnprovenIntent,
+        UnshieldedOffer,
+    };
     use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
     use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
     use midnight_onchain_runtime::vm::run_program;
@@ -243,10 +250,12 @@ mod tests {
         }
     }
 
-    /// A wallet-paid call has its own intent and an empty Dust fee intent.
-    /// It catches a count of every fallible segment, which reads the failed
-    /// fallible part of such a call as `Undecided`. It also catches a count
-    /// that ignores the actions of an intent.
+    /// A wallet-paid call has its own intent and a Dust fee intent with no
+    /// fallible content. It catches a count of every fallible segment, or of
+    /// a segment with Dust actions, which reads the failed fallible part of
+    /// such a call as `Undecided`. It also catches a count that ignores the
+    /// actions of an intent, or a fallible unshielded offer: that count reads
+    /// an applied call as `Failed`.
     #[test]
     fn a_fee_intent_is_not_a_segment_that_can_fail() {
         let mut rng = rand::thread_rng();
@@ -262,19 +271,31 @@ mod tests {
             None,
             ttl,
         );
-        let fee_intent: UnprovenIntent<DefaultDB> = Intent::empty(&mut rng, ttl);
+        let mut offer_intent: UnprovenIntent<DefaultDB> = Intent::empty(&mut rng, ttl);
+        offer_intent.fallible_unshielded_offer = Some(Sp::new(UnshieldedOffer {
+            inputs: vec![].into(),
+            outputs: vec![].into(),
+            signatures: vec![].into(),
+        }));
+        let mut fee_intent: UnprovenIntent<DefaultDB> = Intent::empty(&mut rng, ttl);
+        fee_intent.dust_actions = Some(Sp::new(DustActions {
+            spends: vec![].into(),
+            registrations: vec![].into(),
+            ctime: ttl,
+        }));
         let transaction = StandardTransaction {
             network_id: "undeployed".to_string(),
             intents: StorageHashMap::new()
                 .insert(1, call_intent)
+                .insert(2, offer_intent)
                 .insert(0xFEED, fee_intent),
             guaranteed_coins: None,
             fallible_coins: StorageHashMap::new(),
             binding_randomness: rng.r#gen(),
         };
 
-        assert_eq!(transaction.fallible_segments(), [1, 0xFEED]);
-        assert_eq!(segments_that_can_fail(&transaction), 1);
+        assert_eq!(transaction.fallible_segments(), [1, 2, 0xFEED]);
+        assert_eq!(segments_that_can_fail(&transaction), 2);
     }
 
     fn transcript(ops: Vec<Op<ResultModeVerify, InMemoryDB>>) -> CallTranscript {
@@ -329,6 +350,24 @@ mod tests {
             .collect();
         values.push(cell(&[0x2a; 40], 40));
         values.push(cell(&[0x2a; 2000], 2000));
+        // Arrays that fail the envelope: four cells, an unknown tag, and a
+        // version cell that is not a `u32`.
+        let array =
+            |entries: Vec<StateValue<InMemoryDB>>| StateValue::Array(entries.into_iter().collect());
+        let version = || StateValue::from(AlignedValue::from(1u32));
+        let tag = |tag: u8| StateValue::from(AlignedValue::from(tag));
+        values.push(array(vec![
+            version(),
+            tag(LogEventType::Misc as u8),
+            cell(&[1; 4], 4),
+            cell(&[2; 4], 4),
+        ]));
+        values.push(array(vec![version(), tag(11), cell(&[1; 4], 4)]));
+        values.push(array(vec![
+            cell(&[0x2a; 5], 5),
+            tag(LogEventType::Misc as u8),
+            cell(&[1; 4], 4),
+        ]));
 
         let near_bound = event(LogEventType::Misc as u8, 950);
         let fits = |value: &StateValue<InMemoryDB>| {
