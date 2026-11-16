@@ -229,7 +229,9 @@ pub fn merge_transactions(txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
     Ok(out)
 }
 
-fn deserialize_transaction(bytes: &[u8]) -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
+pub(crate) fn deserialize_transaction(
+    bytes: &[u8],
+) -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
     tagged_deserialize(&mut &bytes[..])
         .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))
 }

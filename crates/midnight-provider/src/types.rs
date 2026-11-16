@@ -44,6 +44,34 @@ impl std::fmt::Debug for TransactionHash {
     }
 }
 
+/// A Midnight transaction that a block ran, with its outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockTransaction {
+    /// The hash that the outcome event of the transaction names.
+    pub transaction_hash: TransactionHash,
+    /// What the chain reports for the transaction.
+    pub outcome: TxOutcome,
+    /// The tagged transaction bytes, the form of
+    /// [`TxEnvelope::into_bytes`](midnight_types::TxEnvelope::into_bytes).
+    /// `None` when the block ran the transaction from storage (a collective
+    /// `close`, a federated `motion_close`, the Scheduler) and its body
+    /// holds no copy. The content of that transaction is then unknown.
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// What the chain reports for a transaction of a block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxOutcome {
+    /// `Midnight.TxApplied`: every segment applied.
+    Applied,
+    /// `Midnight.TxPartialSuccess`: segment 0 applied and at least one
+    /// fallible segment failed. The event does not say which.
+    PartialSuccess,
+    /// A transaction in the body of block 0. The node does not run block 0
+    /// and records no outcome for it.
+    Genesis,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

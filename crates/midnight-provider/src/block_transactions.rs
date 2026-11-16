@@ -1,0 +1,232 @@
+//! The decode behind
+//! [`NodeApi::get_block_transactions`](crate::NodeApi::get_block_transactions):
+//! the copies of `Midnight.send_mn_transaction` in a block body, the outcome
+//! events in the block's `System.Events`, and the pairing of the two.
+
+use subxt::client::OnlineClientAtBlockImpl;
+use subxt::dynamic::Value;
+use subxt::error::EventsError;
+use subxt::events::Events;
+use subxt::ext::scale_value::{ValueDef, Variant};
+use subxt::extrinsics::Extrinsics;
+use subxt::{Metadata, SubstrateConfig};
+
+use crate::pipeline::deserialize_transaction;
+use crate::{BlockTransaction, ProviderError, TransactionHash, TxOutcome};
+
+const MIDNIGHT: &str = "Midnight";
+const SEND_MN_TRANSACTION: &str = "send_mn_transaction";
+const TX_APPLIED: &str = "TxApplied";
+const TX_PARTIAL_SUCCESS: &str = "TxPartialSuccess";
+
+/// The storage key of `System.Events`.
+pub(crate) fn system_events_key() -> [u8; 32] {
+    subxt::ext::frame_decode::storage::encode_storage_key_prefix("System", "Events")
+}
+
+/// Refuse `metadata` that has no `Midnight.send_mn_transaction` call or no
+/// `Midnight.TxApplied` event. The read finds both by name, so a rename
+/// would read as a block with no Midnight transaction.
+pub(crate) fn check_names(metadata: &Metadata) -> Result<(), ProviderError> {
+    let pallet = metadata.pallet_by_name(MIDNIGHT);
+    let has_call =
+        pallet.is_some_and(|pallet| pallet.call_variant_by_name(SEND_MN_TRANSACTION).is_some());
+    let has_event = pallet
+        .and_then(|pallet| pallet.event_variants())
+        .is_some_and(|events| events.iter().any(|event| event.name == TX_APPLIED));
+    if has_call && has_event {
+        Ok(())
+    } else {
+        Err(ProviderError::Rpc(format!(
+            "the runtime metadata has no {MIDNIGHT}.{SEND_MN_TRANSACTION} call or no \
+             {MIDNIGHT}.{TX_APPLIED} event"
+        )))
+    }
+}
+
+/// The Midnight transactions in a block body, in body order, each with the
+/// ledger's `transaction_hash()`. A copy that does not decode as a ledger
+/// transaction is left out, because the chain cannot run it.
+pub(crate) fn body_copies(
+    extrinsics: &Extrinsics<'_, SubstrateConfig, OnlineClientAtBlockImpl<SubstrateConfig>>,
+) -> Result<Vec<(TransactionHash, Vec<u8>)>, ProviderError> {
+    let mut copies = Vec::new();
+    for extrinsic in extrinsics.iter() {
+        let call = extrinsic
+            .map_err(|e| ProviderError::Rpc(format!("decoding the block body: {e}")))?
+            .decode_call_data_as::<Value<()>>()
+            .map_err(|e| ProviderError::Rpc(format!("decoding the block body: {e}")))?;
+        collect_midnight_transactions(&call, &mut copies)?;
+    }
+    Ok(copies
+        .into_iter()
+        .filter_map(|bytes| {
+            let hash = deserialize_transaction(&bytes).ok()?.transaction_hash();
+            Some((TransactionHash::from(hash.0.0), bytes))
+        })
+        .collect())
+}
+
+/// Push the argument of each `Midnight.send_mn_transaction` in `call` to
+/// `copies`, at any depth of the call.
+fn collect_midnight_transactions(
+    call: &Value<()>,
+    copies: &mut Vec<Vec<u8>>,
+) -> Result<(), ProviderError> {
+    let fields = match &call.value {
+        ValueDef::Variant(variant) => {
+            if let Some(bytes) = send_mn_transaction_argument(variant)? {
+                copies.push(bytes);
+                return Ok(());
+            }
+            &variant.values
+        }
+        ValueDef::Composite(composite) => composite,
+        _ => return Ok(()),
+    };
+    fields
+        .values()
+        .try_for_each(|field| collect_midnight_transactions(field, copies))
+}
+
+/// The bytes that `pallet` passes when it is the call
+/// `Midnight.send_mn_transaction`, or `None` for any other value.
+fn send_mn_transaction_argument(pallet: &Variant<()>) -> Result<Option<Vec<u8>>, ProviderError> {
+    if pallet.name != MIDNIGHT {
+        return Ok(None);
+    }
+    let Some(ValueDef::Variant(call)) = pallet.values.values().next().map(|call| &call.value)
+    else {
+        return Ok(None);
+    };
+    if call.name != SEND_MN_TRANSACTION {
+        return Ok(None);
+    }
+    let mut arguments = call.values.values();
+    match (arguments.next().and_then(byte_sequence), arguments.next()) {
+        (Some(bytes), None) => Ok(Some(bytes)),
+        _ => Err(ProviderError::Rpc(format!(
+            "a {MIDNIGHT}.{SEND_MN_TRANSACTION} call does not take one byte sequence"
+        ))),
+    }
+}
+
+/// The bytes of a decoded `Vec<u8>`.
+fn byte_sequence(value: &Value<()>) -> Option<Vec<u8>> {
+    let ValueDef::Composite(bytes) = &value.value else {
+        return None;
+    };
+    bytes
+        .values()
+        .map(|byte| byte.as_u128().and_then(|byte| u8::try_from(byte).ok()))
+        .collect()
+}
+
+/// The `Midnight.TxApplied` and `Midnight.TxPartialSuccess` events of
+/// `events`, in event order, each with the transaction hash it names.
+pub(crate) fn outcome_events(
+    events: &Events<SubstrateConfig>,
+) -> Result<Vec<(TransactionHash, TxOutcome)>, ProviderError> {
+    let decode_error = |e: EventsError| ProviderError::Rpc(format!("decoding System.Events: {e}"));
+    let mut outcomes = Vec::new();
+    for event in events.iter() {
+        let event = event.map_err(decode_error)?;
+        let outcome = match (event.pallet_name(), event.event_name()) {
+            (MIDNIGHT, TX_APPLIED) => TxOutcome::Applied,
+            (MIDNIGHT, TX_PARTIAL_SUCCESS) => TxOutcome::PartialSuccess,
+            _ => continue,
+        };
+        let (tx_hash,) = event
+            .decode_fields_unchecked_as::<([u8; 32],)>()
+            .map_err(decode_error)?;
+        outcomes.push((TransactionHash::from(tx_hash), outcome));
+    }
+    Ok(outcomes)
+}
+
+/// The transactions that a block ran: one for each of `outcomes`, in that
+/// order, with the bytes of its copy in `copies` when the body holds one.
+///
+/// `outcomes` is `None` for block 0, which has no events. Each copy then
+/// comes in body order, as [`TxOutcome::Genesis`].
+pub(crate) fn pair_with_outcomes(
+    copies: Vec<(TransactionHash, Vec<u8>)>,
+    outcomes: Option<Vec<(TransactionHash, TxOutcome)>>,
+) -> Vec<BlockTransaction> {
+    let Some(outcomes) = outcomes else {
+        return copies
+            .into_iter()
+            .map(|(transaction_hash, bytes)| BlockTransaction {
+                transaction_hash,
+                outcome: TxOutcome::Genesis,
+                bytes: Some(bytes),
+            })
+            .collect();
+    };
+    outcomes
+        .into_iter()
+        .map(|(transaction_hash, outcome)| BlockTransaction {
+            transaction_hash,
+            outcome,
+            bytes: copies
+                .iter()
+                .find(|(hash, _)| *hash == transaction_hash)
+                .map(|(_, bytes)| bytes.clone()),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hash(byte: u8) -> TransactionHash {
+        TransactionHash::from([byte; 32])
+    }
+
+    fn ran(byte: u8, outcome: TxOutcome, bytes: Option<&[u8]>) -> BlockTransaction {
+        BlockTransaction {
+            transaction_hash: hash(byte),
+            outcome,
+            bytes: bytes.map(<[u8]>::to_vec),
+        }
+    }
+
+    /// The events decide what a block ran and in which order. It catches a
+    /// pairing that skips an outcome whose transaction the body does not hold
+    /// (the indexer's behaviour), one that reports a copy that has no outcome
+    /// and so did not run, and one that keeps the body order.
+    #[test]
+    fn a_block_ran_one_transaction_for_each_outcome_event_in_event_order() {
+        let copies = vec![(hash(1), vec![1]), (hash(2), vec![2]), (hash(3), vec![3])];
+        let outcomes = vec![
+            (hash(2), TxOutcome::Applied),
+            (hash(4), TxOutcome::PartialSuccess),
+            (hash(1), TxOutcome::PartialSuccess),
+        ];
+
+        assert_eq!(
+            pair_with_outcomes(copies, Some(outcomes)),
+            [
+                ran(2, TxOutcome::Applied, Some(&[2])),
+                ran(4, TxOutcome::PartialSuccess, None),
+                ran(1, TxOutcome::PartialSuccess, Some(&[1])),
+            ]
+        );
+    }
+
+    /// Block 0 has no events, so a pairing by outcome drops its
+    /// transactions.
+    #[test]
+    fn block_0_ran_every_copy_in_body_order() {
+        let copies = vec![(hash(2), vec![2]), (hash(1), vec![1])];
+
+        assert_eq!(
+            pair_with_outcomes(copies, None),
+            [
+                ran(2, TxOutcome::Genesis, Some(&[2])),
+                ran(1, TxOutcome::Genesis, Some(&[1])),
+            ]
+        );
+    }
+}

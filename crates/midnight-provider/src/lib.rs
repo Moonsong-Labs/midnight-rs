@@ -1,5 +1,6 @@
 #![warn(missing_debug_implementations)]
 
+mod block_transactions;
 mod error;
 mod local_prover;
 mod node_api;
@@ -18,7 +19,7 @@ pub use pipeline::merge_transactions;
 pub use prover::Prover;
 pub use provider::MidnightProvider;
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TransactionReceipt};
-pub use types::TransactionHash;
+pub use types::{BlockTransaction, TransactionHash, TxOutcome};
 
 // Re-export the types that `MidnightProvider`'s own signatures name, so a
 // caller of the provider needs no separate dep for them. `CoinSelection` comes
