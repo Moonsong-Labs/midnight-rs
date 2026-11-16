@@ -395,7 +395,7 @@ call_transcripts(bytes, outcome)              → Vec<CallTranscript>
 CallTranscript::logs()                        → Vec<VersionedLogItem>
   // the push right before each log, decoded as the ledger 9 VM does;
   // UnreadableLog for a log that does not directly follow a push,
-  // or that a branch or jmp can skip
+  // or whose push a branch or jmp can skip
   ↓
 Misc::decode_log_data(&item)                  → Misc
 ```

@@ -137,6 +137,11 @@ pub trait NodeApi: Send + Sync {
     /// do not decode with that metadata. Metadata with no
     /// `Midnight.send_mn_transaction` call or no `TxApplied` event is also
     /// an error, so a rename cannot read as an empty block.
+    ///
+    /// A copy in the body that does not decode as a ledger 9 transaction is
+    /// an error in block 0. In another block, it is an error when an outcome
+    /// event of the block has no copy. So the transactions of a block from
+    /// before a ledger fork cannot read as runs from storage.
     async fn get_block_transactions(
         &self,
         block_hash: BlockHash,

@@ -44,12 +44,14 @@ pub(crate) fn check_names(metadata: &Metadata) -> Result<(), ProviderError> {
     }
 }
 
-/// The Midnight transactions in a block body, in body order, each with the
-/// ledger's `transaction_hash()`. A copy that does not decode as a ledger
-/// transaction is left out, because the chain cannot run it.
+/// A Midnight transaction in a block body, with the ledger's
+/// `transaction_hash()` when it decodes as a ledger 9 transaction.
+type BodyCopy = (Option<TransactionHash>, Vec<u8>);
+
+/// The Midnight transactions in a block body, in body order.
 pub(crate) fn body_copies(
     extrinsics: &Extrinsics<'_, SubstrateConfig, OnlineClientAtBlockImpl<SubstrateConfig>>,
-) -> Result<Vec<(TransactionHash, Vec<u8>)>, ProviderError> {
+) -> Result<Vec<BodyCopy>, ProviderError> {
     let mut copies = Vec::new();
     for extrinsic in extrinsics.iter() {
         let call = extrinsic
@@ -60,9 +62,11 @@ pub(crate) fn body_copies(
     }
     Ok(copies
         .into_iter()
-        .filter_map(|bytes| {
-            let hash = deserialize_transaction(&bytes).ok()?.transaction_hash();
-            Some((TransactionHash::from(hash.0.0), bytes))
+        .map(|bytes| {
+            let hash = deserialize_transaction(&bytes)
+                .ok()
+                .map(|transaction| TransactionHash::from(transaction.transaction_hash().0.0));
+            (hash, bytes)
         })
         .collect())
 }
@@ -144,36 +148,58 @@ pub(crate) fn outcome_events(
     Ok(outcomes)
 }
 
-/// The transactions that a block ran: one for each of `outcomes`, in that
-/// order, with the bytes of its copy in `copies` when the body holds one.
+/// The transactions that a block ran, one for each of `outcomes` and in that
+/// order. Each has the bytes of its copy in `copies` when the body holds one.
 ///
 /// `outcomes` is `None` for block 0, which has no events. Each copy then
 /// comes in body order, as [`TxOutcome::Genesis`].
+///
+/// A copy with no hash does not decode as a ledger 9 transaction. It is an
+/// error in block 0, and when an outcome has no copy, because the block can
+/// have run it. A governance call can carry such a copy and not run it, so
+/// the copy alone is not an error.
 pub(crate) fn pair_with_outcomes(
-    copies: Vec<(TransactionHash, Vec<u8>)>,
+    copies: Vec<BodyCopy>,
     outcomes: Option<Vec<(TransactionHash, TxOutcome)>>,
-) -> Vec<BlockTransaction> {
-    let Some(outcomes) = outcomes else {
-        return copies
+) -> Result<Vec<BlockTransaction>, ProviderError> {
+    let undecodable = copies.iter().any(|(hash, _)| hash.is_none());
+    let copies: Vec<_> = copies
+        .into_iter()
+        .filter_map(|(hash, bytes)| Some((hash?, bytes)))
+        .collect();
+    let genesis = outcomes.is_none();
+    let transactions: Vec<_> = match outcomes {
+        None => copies
             .into_iter()
             .map(|(transaction_hash, bytes)| BlockTransaction {
                 transaction_hash,
                 outcome: TxOutcome::Genesis,
                 bytes: Some(bytes),
             })
-            .collect();
+            .collect(),
+        Some(outcomes) => outcomes
+            .into_iter()
+            .map(|(transaction_hash, outcome)| BlockTransaction {
+                transaction_hash,
+                outcome,
+                bytes: copies
+                    .iter()
+                    .find(|(hash, _)| *hash == transaction_hash)
+                    .map(|(_, bytes)| bytes.clone()),
+            })
+            .collect(),
     };
-    outcomes
-        .into_iter()
-        .map(|(transaction_hash, outcome)| BlockTransaction {
-            transaction_hash,
-            outcome,
-            bytes: copies
+    if undecodable
+        && (genesis
+            || transactions
                 .iter()
-                .find(|(hash, _)| *hash == transaction_hash)
-                .map(|(_, bytes)| bytes.clone()),
-        })
-        .collect()
+                .any(|transaction| transaction.bytes.is_none()))
+    {
+        return Err(ProviderError::Rpc(format!(
+            "a {MIDNIGHT} transaction of the block does not decode as a ledger 9 transaction"
+        )));
+    }
+    Ok(transactions)
 }
 
 #[cfg(test)]
@@ -194,11 +220,15 @@ mod tests {
 
     /// The events decide what a block ran and in which order. It catches a
     /// pairing that skips an outcome whose transaction the body does not hold
-    /// (the indexer's behaviour), one that reports a copy that has no outcome
-    /// and so did not run, and one that keeps the body order.
+    /// (the indexer's behaviour). It also catches a pairing that reports a
+    /// copy with no outcome, and one that keeps the body order.
     #[test]
     fn a_block_ran_one_transaction_for_each_outcome_event_in_event_order() {
-        let copies = vec![(hash(1), vec![1]), (hash(2), vec![2]), (hash(3), vec![3])];
+        let copies = vec![
+            (Some(hash(1)), vec![1]),
+            (Some(hash(2)), vec![2]),
+            (Some(hash(3)), vec![3]),
+        ];
         let outcomes = vec![
             (hash(2), TxOutcome::Applied),
             (hash(4), TxOutcome::PartialSuccess),
@@ -206,7 +236,7 @@ mod tests {
         ];
 
         assert_eq!(
-            pair_with_outcomes(copies, Some(outcomes)),
+            pair_with_outcomes(copies, Some(outcomes)).expect("every copy decodes"),
             [
                 ran(2, TxOutcome::Applied, Some(&[2])),
                 ran(4, TxOutcome::PartialSuccess, None),
@@ -219,14 +249,41 @@ mod tests {
     /// transactions.
     #[test]
     fn block_0_ran_every_copy_in_body_order() {
-        let copies = vec![(hash(2), vec![2]), (hash(1), vec![1])];
+        let copies = vec![(Some(hash(2)), vec![2]), (Some(hash(1)), vec![1])];
 
         assert_eq!(
-            pair_with_outcomes(copies, None),
+            pair_with_outcomes(copies, None).expect("every copy decodes"),
             [
                 ran(2, TxOutcome::Genesis, Some(&[2])),
                 ran(1, TxOutcome::Genesis, Some(&[1])),
             ]
         );
+    }
+
+    /// A copy that does not decode as a ledger 9 transaction can be a
+    /// transaction that the block ran. A block before a ledger fork holds
+    /// such copies. It catches a pairing that reports such a transaction as
+    /// a run from storage, or drops it from block 0. It also catches a
+    /// pairing that refuses a copy that a governance call carries and does
+    /// not run.
+    #[test]
+    fn a_copy_that_does_not_decode_fails_the_read_only_when_the_block_can_have_run_it() {
+        let copies = vec![(Some(hash(1)), vec![1]), (None, vec![9])];
+
+        assert_eq!(
+            pair_with_outcomes(copies.clone(), Some(vec![(hash(1), TxOutcome::Applied)]))
+                .expect("every outcome has its copy"),
+            [ran(1, TxOutcome::Applied, Some(&[1]))]
+        );
+        let outcome_with_no_copy =
+            vec![(hash(1), TxOutcome::Applied), (hash(2), TxOutcome::Applied)];
+        assert!(matches!(
+            pair_with_outcomes(copies.clone(), Some(outcome_with_no_copy)),
+            Err(ProviderError::Rpc(_))
+        ));
+        assert!(matches!(
+            pair_with_outcomes(copies, None),
+            Err(ProviderError::Rpc(_))
+        ));
     }
 }

@@ -622,7 +622,7 @@ impl<W: Send + Sync> NodeApi for MidnightProvider<W> {
             let copies =
                 block_transactions::body_copies(&runtime.extrinsics().from_bytes(body).await)?;
             if block.header.number == 0 {
-                return Ok(block_transactions::pair_with_outcomes(copies, None));
+                return block_transactions::pair_with_outcomes(copies, None);
             }
             let events = legacy
                 .state_get_storage(&block_transactions::system_events_key(), Some(block_hash))
@@ -633,10 +633,7 @@ impl<W: Send + Sync> NodeApi for MidnightProvider<W> {
                 })?;
             let outcomes =
                 block_transactions::outcome_events(&runtime.events().from_bytes(events))?;
-            Ok(block_transactions::pair_with_outcomes(
-                copies,
-                Some(outcomes),
-            ))
+            block_transactions::pair_with_outcomes(copies, Some(outcomes))
         })
         .await
     }

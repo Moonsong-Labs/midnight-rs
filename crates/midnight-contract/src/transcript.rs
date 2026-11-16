@@ -236,8 +236,8 @@ mod tests {
         StateValue::from(bytes_aligned_value(data.to_vec(), width).expect("data fits the width"))
     }
 
-    /// The value that compactc pushes for an event of `tag` whose data has
-    /// `width` bytes: an array of the version 1, the tag and the data.
+    /// The value that compactc pushes for an event of `tag` with `width`
+    /// bytes of data. It is an array of the version 1, the tag and the data.
     fn event(tag: u8, width: usize) -> StateValue<InMemoryDB> {
         let data: Vec<u8> = (1..=width).map(|byte| byte as u8).collect();
         StateValue::Array(
@@ -254,8 +254,9 @@ mod tests {
     /// The ledger 9 VM is the oracle: it runs `[push value, log]`, and
     /// `logs` must return the items that it logs. It catches a mirror that
     /// drifts from the VM's private `decode_event`. The cases are the envelope
-    /// of each event tag, the version 0 form of a value that is not an event,
-    /// and the drop above `MAX_LOG_EMITTED`.
+    /// of each event tag, and the version 0 form of a value that is not an
+    /// event. Two more cases test the bound `MAX_LOG_EMITTED`, which the VM
+    /// applies to the data of an event and not to its envelope.
     #[test]
     fn logs_decode_each_logged_value_as_the_vm_does() {
         // The data width of each event tag in compactc output.
@@ -266,6 +267,21 @@ mod tests {
             .collect();
         values.push(cell(&[0x2a; 40], 40));
         values.push(cell(&[0x2a; 2000], 2000));
+
+        let near_bound = event(LogEventType::Misc as u8, 950);
+        let fits = |value: &StateValue<InMemoryDB>| {
+            Sp::<_, InMemoryDB>::new(value.clone())
+                .serialize_to_node_list_bounded(MAX_LOG_EMITTED)
+                .is_some()
+        };
+        let StateValue::Array(entries) = &near_bound else {
+            unreachable!("an event is an array");
+        };
+        assert!(
+            fits(entries.get(2).expect("an event has data")) && !fits(&near_bound),
+            "the data of the event fits MAX_LOG_EMITTED and its envelope does not"
+        );
+        values.push(near_bound);
 
         for value in values {
             let checked = value.try_into_checked().expect("a canonical literal");
@@ -312,12 +328,14 @@ mod tests {
     }
 
     /// Whether the VM runs an op inside a `branch` window depends on the
-    /// state. It catches a read that ignores the window.
+    /// state. When the window holds only the `push`, the `log` can log
+    /// another value. It catches a read that ignores the window, and one
+    /// that checks the window of the `log` alone.
     #[test]
-    fn logs_refuse_a_log_inside_a_branch_window() {
+    fn logs_refuse_a_log_whose_push_is_inside_a_branch_window() {
         let ops = vec![
             push(StateValue::from(AlignedValue::from(true))),
-            Op::Branch { skip: 2 },
+            Op::Branch { skip: 1 },
             push(event(LogEventType::Misc as u8, 288)),
             Op::Log,
         ];
