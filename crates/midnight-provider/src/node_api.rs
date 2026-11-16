@@ -122,8 +122,9 @@ pub trait NodeApi: Send + Sync {
     /// It decodes the body and the events with the metadata of the runtime
     /// that ran the block, which is the runtime in the parent's state (block
     /// 0 has no parent and uses its own). So it needs the state at the block
-    /// and at its parent: on a node with default pruning, the last 256
-    /// finalized blocks. This read needs no archive node, but
+    /// and at its parent. A node with default pruning keeps the state of the
+    /// last 256 finalized blocks, so the read reaches the last 255. This read
+    /// needs no archive node, but
     /// [`get_block_hashes_by_height`](Self::get_block_hashes_by_height), the
     /// read that gives a finalized hash for a height, does. Pass a finalized
     /// hash, because a best block can reorg. It ends within 60 s, its connect

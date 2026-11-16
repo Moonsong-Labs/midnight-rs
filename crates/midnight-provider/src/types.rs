@@ -47,7 +47,8 @@ impl std::fmt::Debug for TransactionHash {
 /// A Midnight transaction that a block ran, with its outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockTransaction {
-    /// The hash that the outcome event of the transaction names.
+    /// The ledger's `transaction_hash()` of the transaction, which is the
+    /// hash that its outcome event names.
     pub transaction_hash: TransactionHash,
     /// What the chain reports for the transaction.
     pub outcome: TxOutcome,
