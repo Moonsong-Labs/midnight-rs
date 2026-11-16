@@ -48,8 +48,26 @@ pub(crate) fn check_names(metadata: &Metadata) -> Result<(), ProviderError> {
 /// `transaction_hash()` when it decodes as a ledger 9 transaction.
 type BodyCopy = (Option<TransactionHash>, Vec<u8>);
 
+/// The stack of the thread that decodes a block body. The runtime admits a
+/// call nested 255 levels deep, and the decode of such a call overflows a
+/// 2 MiB stack in a debug build.
+const BODY_DECODE_STACK: usize = 8 << 20;
+
 /// The Midnight transactions in a block body, in body order.
 pub(crate) fn body_copies(
+    extrinsics: &Extrinsics<'_, SubstrateConfig, OnlineClientAtBlockImpl<SubstrateConfig>>,
+) -> Result<Vec<BodyCopy>, ProviderError> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(BODY_DECODE_STACK)
+            .spawn_scoped(scope, || body_copies_on_this_stack(extrinsics))
+            .map_err(|e| ProviderError::Rpc(format!("starting the block body decode: {e}")))?
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+fn body_copies_on_this_stack(
     extrinsics: &Extrinsics<'_, SubstrateConfig, OnlineClientAtBlockImpl<SubstrateConfig>>,
 ) -> Result<Vec<BodyCopy>, ProviderError> {
     let mut copies = Vec::new();
