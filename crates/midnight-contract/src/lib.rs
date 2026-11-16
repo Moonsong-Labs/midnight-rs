@@ -13,6 +13,7 @@ pub mod maintenance;
 mod offer;
 mod resolver;
 pub mod state;
+mod transcript;
 pub mod zk_config;
 
 // Re-exports referenced by the bindgen `contract!` macro's generated code.
@@ -29,6 +30,8 @@ pub use contract::{
     PendingDeploy, Simulated,
 };
 pub use error::{ContractError, KeyMismatch};
+// The contract calls of a transaction that a block ran.
+pub use transcript::{CallStatus, CallTranscript, UnreadableLog, call_transcripts};
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };

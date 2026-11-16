@@ -205,12 +205,14 @@ pub enum NotApplied {
     /// fallible segment failed and was not applied.
     ///
     /// The on-chain event doesn't carry a per-segment breakdown, but the
-    /// SDK's tx shapes hold one fallible segment each
+    /// SDK's tx shapes hold one fallible segment that can fail each
     /// (a circuit call -> one contract call;
     /// `DeployBuilder` -> one deploy; maintenance -> one update), so within
     /// those flows `PartialSuccess` unambiguously means "my segment didn't
-    /// apply". For a transaction that merges several fallible segments, the
-    /// event does not tell which of them failed.
+    /// apply". Their Dust fee intent is a second fallible segment, but it
+    /// holds nothing that the fallible phase can refuse. For a transaction
+    /// that merges several fallible segments, the event does not tell which
+    /// of them failed.
     #[error(
         "transaction {} landed in block {} but the chain did not apply it (partial success)",
         .0.transaction_hash,

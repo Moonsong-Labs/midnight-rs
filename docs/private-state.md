@@ -147,7 +147,7 @@ The SDK reads the `Midnight` pallet's outcome events for the extrinsic and expos
 - `Midnight::TxPartialSuccess` ↔ `NotApplied::PartialSuccess`: guaranteed phase committed, at least one fallible segment failed.
 - No `Midnight` outcome event and `System::ExtrinsicFailed` ↔ `NotApplied::Failure`: the dispatch errored entirely.
 
-A contract call builds a single-fallible-segment tx (one contract call per submission), so `PartialSuccess` unambiguously means the contract action did not apply. The Pending snapshot is dropped via `mark_failed` and the call returns `ContractError::TransactionFailed(NotApplied)`, whose variant tells a partial success from a failure. Callers that learn out of band that a tx in `Confirmed` state should be reverted can still invoke `mark_failed` manually.
+A contract call builds a tx with one fallible segment that can fail (one contract call per submission), so `PartialSuccess` unambiguously means the contract action did not apply. Its Dust fee intent is a second fallible segment, but that segment holds nothing that the fallible phase can refuse. The Pending snapshot is dropped via `mark_failed` and the call returns `ContractError::TransactionFailed(NotApplied)`, whose variant tells a partial success from a failure. Callers that learn out of band that a tx in `Confirmed` state should be reverted can still invoke `mark_failed` manually.
 
 ## Recovery and rollback
 
