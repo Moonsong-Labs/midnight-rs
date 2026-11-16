@@ -183,14 +183,15 @@ When `get_receipt` fails with no verdict, the error is `ProviderError::Submissio
 
 ## Contract events
 
-A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes the payloads.
+A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes them.
 
-midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::get_receipt`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the payload as a raw `StateValue`. Read the payload with the cell helpers of `midnight_typed_state`, such as `cell_as`.
+midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::get_receipt`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the event data as a raw `StateValue`. `Misc::decode_log_data`, from the same module, decodes a `Misc` event into its `name` and `payload`. A custom Compact event is a `Misc`.
 
 The differences:
 
 - An item carries no address. The interpreter refuses a cross-contract call, so every event comes from the called contract, and the caller has its address.
-- The SDK has no typed decoder like `ContractLog.decodeAll`.
+- `ContractLog.decodeAll` decodes every event type. The SDK decodes only `Misc`. The ten standard events (`ShieldedSpend` to `Unpaused`) have no typed decode, so read their data with the cell helpers of `midnight_typed_state`, such as `cell_as`.
+- `ContractLog.decodeAll` marks a version 0 item as degraded. It reads every other version with the version 1 layout, and does not check the width of the data. `Misc::decode_log_data` returns a `DecodeLogError` for a version other than 1 and for data that is not one cell under the alignment `bytes(288)`.
 - The local run decodes each event as the ledger 9 VM does, so the SDK returns the item that the chain logs.
 
 ## ZK artifacts

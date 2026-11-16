@@ -37,6 +37,8 @@ pub struct CallOutcome<T> {
     /// The events that the circuit emitted, in emission order. They come from
     /// the local run of the call, and the chain logs the same events. See
     /// [`ExecutionResult::logs`](crate::runtime::ExecutionResult::logs).
+    /// [`Misc::decode_log_data`](crate::runtime::Misc::decode_log_data)
+    /// decodes a `Misc` event.
     pub logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
 }
 
@@ -71,6 +73,8 @@ pub struct Simulated<T, L> {
     pub block_hash: BlockHash,
     /// The events that the circuit emitted, in emission order. See
     /// [`ExecutionResult::logs`](crate::runtime::ExecutionResult::logs).
+    /// [`Misc::decode_log_data`](crate::runtime::Misc::decode_log_data)
+    /// decodes a `Misc` event.
     pub logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
 }
 
