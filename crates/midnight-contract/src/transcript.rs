@@ -1,7 +1,10 @@
 //! The contract-call transcripts of a transaction that a block ran, and the
 //! logs that each transcript emits.
 
-use midnight_helpers::{ContractAction, DefaultDB, FinalizedTransaction, Sp, Transaction};
+use midnight_helpers::{
+    ContractAction, DB, DefaultDB, Deserializable, FinalizedTransaction, ProofKind, Serializable,
+    SignatureKind, Sp, StandardTransaction, Storable, Transaction,
+};
 use midnight_onchain_runtime::state_value_ext::StateValueExt;
 use midnight_onchain_runtime::vm::MAX_LOG_EMITTED;
 use midnight_provider::TxOutcome;
@@ -33,7 +36,7 @@ pub fn call_transcripts(
     let Transaction::Standard(transaction) = transaction else {
         return Ok(Vec::new());
     };
-    let fallible_segments = transaction.fallible_segments().len();
+    let fallible_segments = segments_that_can_fail(&transaction);
     let mut intents: Vec<_> = transaction
         .intents
         .iter()
@@ -68,9 +71,32 @@ pub fn call_transcripts(
     Ok(transcripts)
 }
 
+/// The number of fallible segments of `transaction` whose section can fail.
+///
+/// A section with no fallible coins, no fallible unshielded offer and no
+/// action leaves the ledger state as it is, so it cannot fail.
+fn segments_that_can_fail<S, P, B, D>(transaction: &StandardTransaction<S, P, B, D>) -> usize
+where
+    S: SignatureKind<D>,
+    P: ProofKind<D> + Serializable + Deserializable,
+    B: Storable<D> + Clone,
+    D: DB,
+{
+    transaction
+        .fallible_segments()
+        .into_iter()
+        .filter(|segment| {
+            transaction.fallible_coins.contains_key(segment)
+                || transaction.intents.get(segment).is_some_and(|intent| {
+                    intent.fallible_unshielded_offer.is_some() || !intent.actions.is_empty()
+                })
+        })
+        .count()
+}
+
 /// The status of a transcript under the transaction's `outcome`. `fallible`
 /// tells a fallible transcript from a guaranteed one, and
-/// `fallible_segments` counts the fallible segments of the transaction.
+/// `fallible_segments` counts the fallible segments whose section can fail.
 fn call_status(outcome: TxOutcome, fallible: bool, fallible_segments: usize) -> CallStatus {
     match (outcome, fallible) {
         (TxOutcome::Genesis, _) => CallStatus::Undecided,
@@ -185,11 +211,13 @@ pub struct UnreadableLog {
 
 #[cfg(test)]
 mod tests {
+    use midnight_helpers::{ContractDeploy, ContractState, Intent, Timestamp, UnprovenIntent};
     use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
     use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
     use midnight_onchain_runtime::vm::run_program;
-    use midnight_typed_state::AlignedValue;
+    use midnight_typed_state::{AlignedValue, StorageHashMap};
     use midnight_types::HashOutput;
+    use rand::Rng;
 
     use super::*;
     use crate::runtime::bytes_aligned_value;
@@ -213,6 +241,40 @@ mod tests {
                 "{outcome:?}, fallible: {fallible}, {fallible_segments} fallible segments"
             );
         }
+    }
+
+    /// A wallet-paid call has its own intent and an empty Dust fee intent.
+    /// It catches a count of every fallible segment, which reads the failed
+    /// fallible part of such a call as `Undecided`. It also catches a count
+    /// that ignores the actions of an intent.
+    #[test]
+    fn a_fee_intent_is_not_a_segment_that_can_fail() {
+        let mut rng = rand::thread_rng();
+        let ttl = Timestamp::from_secs(0);
+        let deploy = ContractDeploy::new(&mut rng, ContractState::default());
+        let call_intent: UnprovenIntent<DefaultDB> = Intent::new(
+            &mut rng,
+            None,
+            None,
+            vec![],
+            vec![],
+            vec![deploy],
+            None,
+            ttl,
+        );
+        let fee_intent: UnprovenIntent<DefaultDB> = Intent::empty(&mut rng, ttl);
+        let transaction = StandardTransaction {
+            network_id: "undeployed".to_string(),
+            intents: StorageHashMap::new()
+                .insert(1, call_intent)
+                .insert(0xFEED, fee_intent),
+            guaranteed_coins: None,
+            fallible_coins: StorageHashMap::new(),
+            binding_randomness: rng.r#gen(),
+        };
+
+        assert_eq!(transaction.fallible_segments(), [1, 0xFEED]);
+        assert_eq!(segments_that_can_fail(&transaction), 1);
     }
 
     fn transcript(ops: Vec<Op<ResultModeVerify, InMemoryDB>>) -> CallTranscript {

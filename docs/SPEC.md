@@ -400,7 +400,7 @@ CallTranscript::logs()                        → Vec<VersionedLogItem>
 Misc::decode_log_data(&item)                  → Misc
 ```
 
-The status comes from the outcome event alone. A guaranteed transcript applied unless the transaction is in block 0. A fallible transcript applied under `TxApplied`. Under `TxPartialSuccess` it failed when the transaction has one fallible segment. With two or more it is `Undecided`, because the event does not say which segment failed. Every transcript of block 0 is `Undecided`. The read needs the state at the block and at its parent, which a node with default pruning keeps for the last 256 finalized blocks.
+The status comes from the outcome event alone. A guaranteed transcript applied unless the transaction is in block 0. A fallible transcript applied under `TxApplied`. Under `TxPartialSuccess` it failed when the transaction has one fallible segment that can fail. A segment with no fallible coins, no fallible unshielded offer and no action cannot fail, such as the Dust fee intent of a wallet-paid call. With two or more segments that can fail it is `Undecided`, because the event does not say which segment failed. Every transcript of block 0 is `Undecided`. The read needs the state at the block and at its parent, which a node with default pruning keeps for the last 256 finalized blocks.
 
 ### Transfer (shielded / unshielded / swap / register dust / sponsor)
 
