@@ -16,8 +16,8 @@ mod events {
     compact_bindgen::contract!("../../devnet/contracts/events/compiled/compiler/analyzed-ir.sexp");
 }
 
-use compact_bindgen::{Bytes, cell_as};
-use midnight_contract::runtime::LogEventType;
+use compact_bindgen::Bytes;
+use midnight_contract::runtime::Misc;
 use midnight_provider::MidnightProvider;
 
 const NAME: [u8; 32] = [0x07; 32];
@@ -60,14 +60,13 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
     let [event] = simulated.logs.as_slice() else {
         panic!("record emits one event, got {:?}", simulated.logs);
     };
-    assert_eq!((event.version, event.event_type), (1, LogEventType::Misc));
-    let payload: Bytes<288> = cell_as(&event.data).expect("the Misc payload is one cell");
-    let mut expected = [0u8; 288];
-    expected[..NAME.len()].copy_from_slice(&NAME);
-    expected[NAME.len()..NAME.len() + PAYLOAD_TEXT.len()].copy_from_slice(PAYLOAD_TEXT);
+    let misc = Misc::decode_log_data(event).expect("record emits a Misc event");
+    let mut payload = [0u8; 256];
+    payload[..PAYLOAD_TEXT.len()].copy_from_slice(PAYLOAD_TEXT);
     assert_eq!(
-        payload.0, expected,
-        "the Misc payload is the name, then the padded text"
+        (misc.name, misc.payload),
+        (Bytes(NAME), Bytes(payload)),
+        "the Misc event holds the name and the padded text"
     );
 
     // `get_receipt` waits for finality, so the test ends on a final
