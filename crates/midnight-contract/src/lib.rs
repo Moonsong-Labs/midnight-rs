@@ -31,7 +31,7 @@ pub use contract::{
 };
 pub use error::{ContractError, KeyMismatch};
 // The contract calls of a transaction that a block ran.
-pub use transcript::{CallStatus, CallTranscript, UnreadableLog, call_transcripts};
+pub use transcript::{CallStatus, CallTranscript, UnreadableEvent, call_transcripts};
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };
