@@ -222,6 +222,17 @@ pub(crate) fn emit_ledger_wrapper(
                     shielded: ::core::default::Default::default(),
                 }
             }
+
+            /// Get the logs that this contract emitted from the block at `from`
+            /// to the latest block of the indexer at `indexer_url`. See
+            /// `midnight_contract::Contract::latest_logs`.
+            pub async fn latest_logs(
+                &self,
+                indexer_url: &str,
+                from: midnight_contract::FromBlock,
+            ) -> Result<midnight_contract::LatestLogs, midnight_contract::ContractError> {
+                self.0.latest_logs(indexer_url, from).await
+            }
         }
 
         impl<P> Contract<P>

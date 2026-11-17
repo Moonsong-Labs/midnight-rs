@@ -281,6 +281,20 @@ pub enum ContractError {
         /// The ledger's hash of the transaction.
         transaction_hash: TransactionHash,
     },
+
+    /// A read from the indexer failed. Only
+    /// [`Contract::latest_logs`](crate::Contract::latest_logs) returns it.
+    #[error("indexer read failed")]
+    Indexer {
+        /// Whether the same read can succeed later: true for a transient
+        /// failure, such as a dropped connection or a silent indexer, and
+        /// false for one that repeats, such as a GraphQL error or a row that
+        /// is not a log of the contract.
+        retryable: bool,
+        /// The cause: the indexer client's error, or why a row is not a log
+        /// of the contract.
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 /// What a contract state holds for a circuit whose local verifier key it does
