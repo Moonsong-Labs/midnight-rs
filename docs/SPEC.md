@@ -375,7 +375,7 @@ CallOutcome<T> → caller
 
 ### Read the events of a block
 
-The node does not store contract events. The logged values are in the transaction bytes of the block body, as the `push` right before each `log` op. The outcomes are in the events of the block:
+The node does not store contract events. The logged values are in the transaction bytes of the block body, as the `push` right before each `log` op. The outcomes are in the block's `System.Events`:
 
 ```
 NodeApi::get_block_transactions(block_hash)   → Vec<BlockTransaction>      // 60 s bound
