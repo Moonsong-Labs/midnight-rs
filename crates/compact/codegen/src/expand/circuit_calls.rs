@@ -99,9 +99,10 @@ pub(crate) fn is_void_type(ty: &Type) -> bool {
 pub(crate) fn value_to_type_conversion(ty: &Type, context: &str) -> TokenStream {
     match ty {
         Type::Alias { ty: inner, .. } => value_to_type_conversion(inner, context),
-        // The interpreter holds one value in more than one form (a literal as
-        // `Integer` or `Bool`, a ledger read or a struct field as `AlignedValue`,
-        // a vector or a tuple as `Tuple`), so encode the value at its type first.
+        // The interpreter holds a value in more than one form. A literal is an
+        // `Integer` or a `Bool`, a ledger read or a struct field is an
+        // `AlignedValue`, and a vector or a tuple is a `Tuple`. So encode the
+        // value at its type first.
         _ => {
             let rust_ty = type_to_tokens(ty);
             let ir_ty = super::emit_ir::type_ref(ty);

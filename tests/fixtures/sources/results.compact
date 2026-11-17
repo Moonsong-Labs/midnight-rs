@@ -1,9 +1,9 @@
 pragma language_version >= 0.23;
 import CompactStandardLibrary;
 
-// Circuit results in the shapes that the interpreter holds apart from their
-// encoding. A vector or a tuple is a tuple of values, an enum member is an
-// integer, and a ledger read is an aligned value.
+// Circuit results in each form that the interpreter holds them in. A vector
+// or a tuple is a tuple of values, an enum member is an integer, and a ledger
+// read is an aligned value.
 
 export enum Phase { open, closed }
 

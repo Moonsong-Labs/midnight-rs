@@ -1,6 +1,6 @@
 //! A circuit result decodes through its type. The interpreter holds a vector or
-//! a tuple as a tuple of values, an enum member as an integer, and a ledger read
-//! as an aligned value.
+//! a tuple as a tuple of values. It holds an enum member as an integer and a
+//! ledger read as an aligned value.
 
 compact_bindgen::contract!("../../../../tests/fixtures/compiled/results/compiler/analyzed-ir.sexp");
 
