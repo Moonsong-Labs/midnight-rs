@@ -18,9 +18,9 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── zk_config.rs         ZkConfigProvider: where prover/verifier keys come from
   │     ├── offer.rs             ShieldedOffer: coins and payments a deploy carries
   │     ├── transcript.rs        call_transcripts: the contract calls of a transaction that a
-  │     │                        block ran, their CallStatus and their logs
-  │     ├── logs.rs              Contract::logs_at and Log: the logs of a contract in a block,
-  │     │                        from the node
+  │     │                        block ran, their CallStatus and their events
+  │     ├── events.rs            Contract::events_at and ContractEvent: the events of a contract
+  │     │                        in a block, from the node
   │     ├── indexer_logs.rs      Contract::latest_logs, LatestLogs, BlockLogs, FromBlock: the
   │     │                        logs of a contract up to the indexer's latest block
   │     ├── ledger/              (private) the ledger 9 build of a call, deploy and
@@ -112,7 +112,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Wallet` | wallet | One synced wallet, not `Clone`. It locks its own state, so a `&Wallet` serves every call and an `Arc<Wallet>` shares it. It runs the indexer replays of a sync and a rescan. It implements `MidnightWallet`. |
 | `NodeApi` | provider | The node reads: the best block hash, the finalized height, the hashes at a height, a block header, a block's time and contract state. It also reads the Midnight transactions that a block ran. `MidnightProvider` implements it. |
 | `BlockTransaction` / `TxOutcome` | provider | A Midnight transaction that a block ran: its hash, its outcome (`Applied`, `PartialSuccess`, or `Genesis` for block 0) and its bytes. The bytes are `None` when the block ran it from storage and its body holds no copy. |
-| `CallTranscript` / `CallStatus` | contract | One contract-call transcript of a block transaction: the address, the entry point, whether the chain applied it (`Applied`, `Failed` or `Undecided`) and its ops. `logs()` gives its logs. |
+| `CallTranscript` / `CallStatus` | contract | One contract-call transcript of a block transaction: the address, the entry point, whether the chain applied it (`Applied`, `Failed` or `Undecided`) and its ops. `events()` gives its events. |
 | `MidnightWallet` | types | The trait that a provider funds and signs through: `shielded_recipient`, `fund_transaction`, `sign_transaction`. Implemented for `&T` and `Arc<T>`. Both `midnight-wallet` and `midnight-provider` depend on `midnight-types`, and neither depends on the other. |
 | `FilledTx` / `FundedTx` / `ProvenTx` / `TxEnvelope` | types | The stages of a transaction: filled by the provider, funded by the wallet, proven by the provider, signed by the wallet. Each from `FundedTx` on carries the reservation of what the wallet spends, and a drop of an unsent one hands it back. |
 | `BackgroundSync` | wallet | The handle of the task that `Wallet::sync_in_background` starts. The task syncs the wallet after each pause. Dropping the handle stops the sync. `last_error()` names the error of the last pass. `wait_until(done)` waits until `done` holds for the balance. It checks at the call and after each pass. |
@@ -287,7 +287,7 @@ Contract<P>   // stateless handle, no cached state
 ```
 Contract::at(&provider, address)              // ConnectBuilder<P>
   .with_zk_config("compiled")
-  [.at_block(node_block_hash)]                // pin the state reads and calls (logs_at takes its own block)
+  [.at_block(node_block_hash)]                // pin the state reads and calls (events_at takes its own block)
   .build()                                    // synchronous, no network calls
   → Contract<P>
 ```
@@ -300,7 +300,7 @@ contract.circuits().increment_by(5)                      // IncrementByCallBuild
   .send().await   →  PendingCall<T>                      // Contract::send_call_with
     ├─ .transaction_hash() / .extrinsic_hash()
     └─ .get_receipt().await      → CallOutcome<T>        // no SDK deadline
-                                                         // value, hashes, and the logs of the run
+                                                         // value, hashes, and the events of the run
 ```
 
 Internally:
@@ -320,7 +320,7 @@ provider.wallet().shielded_recipient().coin_public_key // the wallet's coin publ
   ↓
 interpreter::execute(ir, program, state, args,
                      Env { witnesses, private_state, address, block_time, coin_public_key })
-  → ExecutionResult { state, reads, gather_ops, communication_outputs, result, logs }
+  → ExecutionResult { state, reads, gather_ops, communication_outputs, result, events }
   ↓
 build verify-ops:
   gather_ops.iter().map(|op| op.clone().translate(|()| reads.next()))
@@ -380,7 +380,7 @@ CallOutcome<T> → caller
 
 ### Read the events of a block
 
-The node keeps no contract log. The logged values are in the transaction bytes of the block body, as the `push` right before each `log` op. The outcomes are in the events of the block:
+The node does not store contract events. The logged values are in the transaction bytes of the block body, as the `push` right before each `log` op. The outcomes are in the events of the block:
 
 ```
 NodeApi::get_block_transactions(block_hash)   → Vec<BlockTransaction>      // 60 s bound
@@ -397,32 +397,32 @@ call_transcripts(bytes, outcome)              → Vec<CallTranscript>
   // the guaranteed transcripts of every intent by ascending segment id,
   // then the fallible transcripts, each with its CallStatus
   ↓
-CallTranscript::logs()                        → Vec<VersionedLogItem>
+CallTranscript::events()                      → Vec<VersionedLogItem>
   // the push right before each log, decoded as the ledger 9 VM does;
-  // UnreadableLog for a log that does not directly follow a push,
+  // UnreadableEvent for a log that does not directly follow a push,
   // or whose push a branch or jmp can skip
   ↓
-Misc::decode_log_data(&item)                  → Misc
+Misc::decode_event(&event)                    → Misc
 ```
 
 The status comes from the outcome event alone. A guaranteed transcript applied unless the transaction is in block 0. A fallible transcript applied under `TxApplied`. Under `TxPartialSuccess` it failed when the transaction has one fallible segment that can fail. A segment with no fallible coins, no fallible unshielded offer and no action cannot fail, such as the Dust fee intent of a wallet-paid call. With two or more segments that can fail it is `Undecided`, because the event does not say which segment failed. Every transcript of block 0 is `Undecided`. The read needs the state at the block and at its parent. A node with default pruning keeps the state of the last 256 finalized blocks, so the read reaches the last 255.
 
-`Contract::logs_at` does the first three steps for the address of the handle:
+`Contract::events_at` does the first three steps for the address of the handle:
 
 ```
-Contract::logs_at(block_hash)                 → Vec<Log>
+Contract::events_at(block_hash)               → Vec<ContractEvent>
   // the block that block_hash names, not the at_block pin
   ├─ get_block_transactions(block_hash)
-  ├─ each transaction, in order: bytes None → UnknownLogs
+  ├─ each transaction, in order: bytes None → UnknownEvents
   ├─ call_transcripts(bytes, outcome), then the transcripts of the handle's address only
   └─ each transcript, by its CallStatus:
-       Failed    → no log, with no call of logs()
-       Applied   → each item of logs() as Log { transaction_hash, entry_point, item }
-       Undecided → no log when logs() is empty, else UnknownLogs
-       logs() refuses with UnreadableLog → UnknownLogs
+       Failed    → no event, with no call of events()
+       Applied   → each item of events() as ContractEvent { transaction_hash, entry_point, item }
+       Undecided → no event when events() is empty, else UnknownEvents
+       events() refuses with UnreadableEvent → UnknownEvents
 ```
 
-The read gives every log that the chain kept in the block, or an error with no partial result. It filters the transcripts by address before it reads a status, so an undecided call of another contract does not fail the read.
+The read gives every event that the chain kept in the block, or an error with no partial result. It filters the transcripts by address before it reads a status, so an undecided call of another contract does not fail the read.
 
 ### Read the latest logs from the indexer
 
@@ -447,7 +447,7 @@ Contract::latest_logs(indexer_url, from)      → LatestLogs { blocks, next_heig
        the logs of a block keep the row order
 ```
 
-The read holds every log of its range in memory. To follow the contract, read again from `FromBlock::Height(next_height)`. The indexer leaves out a transaction that governance dispatches, and the node does not check the indexer's run of the ledger. So `Contract::logs_at` is the authority for a block that the node holds. A failure gives `ContractError::Indexer`. Its `retryable` keeps the rule of `IndexerError::is_retryable`. A silent indexer is retryable, and a row that fails a check is not.
+The read holds every log of its range in memory. To follow the contract, read again from `FromBlock::Height(next_height)`. The indexer leaves out a transaction that governance dispatches, and the node does not check the indexer's run of the ledger. So `Contract::events_at` is the authority for a block that the node holds. A failure gives `ContractError::Indexer`. Its `retryable` keeps the rule of `IndexerError::is_retryable`. A silent indexer is retryable, and a row that fails a check is not.
 
 ### Transfer (shielded / unshielded / swap / register dust / sponsor)
 

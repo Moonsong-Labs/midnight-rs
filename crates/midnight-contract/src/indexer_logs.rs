@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use crate::contract::Contract;
 use crate::error::ContractError;
-use crate::logs::Log;
+use crate::events::ContractEvent;
 use crate::{format_contract_address, parse_contract_address};
 
 /// The `contractEvents` subscription. It selects `raw`, the tagged ledger
@@ -39,10 +39,10 @@ const ROW_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct BlockLogs {
     /// The height of the block.
     pub height: u64,
-    /// The hash of the block, the input of [`Contract::logs_at`].
+    /// The hash of the block, the input of [`Contract::events_at`].
     pub hash: BlockHash,
     /// The logs, in the order in which the indexer stored them.
-    pub logs: Vec<Log>,
+    pub logs: Vec<ContractEvent>,
 }
 
 /// The result of [`Contract::latest_logs`].
@@ -74,10 +74,10 @@ impl<P> Contract<P> {
     /// The node does not check that run. The indexer leaves out a transaction
     /// that Council, TechnicalCommittee, FederatedAuthority or the Scheduler
     /// dispatches. So the logs of such a transaction are missing with no
-    /// error. [`Self::logs_at`] reads a block from the node and gives them
+    /// error. [`Self::events_at`] reads a block from the node and gives them
     /// when the block body holds a copy of the transaction. When the block
-    /// ran the transaction from storage, as for a Scheduler call, `logs_at`
-    /// fails with [`ContractError::UnknownLogs`].
+    /// ran the transaction from storage, as for a Scheduler call, `events_at`
+    /// fails with [`ContractError::UnknownEvents`].
     ///
     /// The read covers every block from `from` to the indexer's latest block
     /// at the start of the read, and holds all their logs in memory. To
@@ -188,7 +188,7 @@ fn covered(from: FromBlock, latest: Option<u64>) -> (Option<RangeInclusive<u64>>
 /// The logs by block, in height order. Each height must lie in `range` and
 /// have one hash.
 fn group_by_block(
-    logs: Vec<(u64, BlockHash, Log)>,
+    logs: Vec<(u64, BlockHash, ContractEvent)>,
     range: &RangeInclusive<u64>,
 ) -> Result<Vec<BlockLogs>, ContractError> {
     let mut blocks = BTreeMap::<u64, BlockLogs>::new();
@@ -254,7 +254,7 @@ fn disagrees(reason: String) -> ContractError {
 fn decode_row(
     Rows { row }: Rows,
     address: &ContractAddress,
-) -> Result<(u64, BlockHash, Log), ContractError> {
+) -> Result<(u64, BlockHash, ContractEvent), ContractError> {
     let raw = hex::decode(&row.raw).map_err(|e| disagrees(format!("raw is not hex: {e}")))?;
     let event: Event<DefaultDB> = tagged_deserialize(raw.as_slice())
         .map_err(|e| disagrees(format!("raw is not a ledger 9 event: {e}")))?;
@@ -297,7 +297,7 @@ fn decode_row(
     Ok((
         row.transaction.block.height,
         block_hash,
-        Log {
+        ContractEvent {
             transaction_hash,
             entry_point: entry_point.0,
             item: logged_item,
@@ -405,8 +405,8 @@ mod tests {
         }
     }
 
-    fn log(byte: u8) -> Log {
-        Log {
+    fn log(byte: u8) -> ContractEvent {
+        ContractEvent {
             transaction_hash: TransactionHash::from([byte; 32]),
             entry_point: b"record".to_vec(),
             item: VersionedLogItem::<InMemoryDB> {

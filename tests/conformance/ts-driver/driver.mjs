@@ -72,7 +72,7 @@ const stateValueToJson = (encoded) => {
 };
 
 // The events of a step, without the address the runtime tags each with.
-const logToJson = (event) => ({
+const eventToJson = (event) => ({
   version: event.version,
   eventType: event.eventType,
   data: stateValueToJson(event.data),
@@ -336,7 +336,7 @@ const runCase = async (fixture, caseName, caseJson) => {
       privateTranscriptOutputs: proofData.privateTranscriptOutputs.map(alignedValueToJson),
       state: stateReport(stateValue),
       zswapOutputs: [],
-      logs: result.context.events.map(logToJson),
+      events: result.context.events.map(eventToJson),
     });
   }
 

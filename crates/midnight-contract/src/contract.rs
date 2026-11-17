@@ -35,11 +35,11 @@ pub struct CallOutcome<T> {
     /// Hash of the block it landed in.
     pub block_hash: BlockHash,
     /// The events that the circuit emitted, in emission order. They come from
-    /// the local run of the call, and the chain logs the same events. See
-    /// [`ExecutionResult::logs`](crate::runtime::ExecutionResult::logs).
-    /// [`Misc::decode_log_data`](crate::runtime::Misc::decode_log_data)
+    /// the local run of the call, and the chain emits the same events. See
+    /// [`ExecutionResult::events`](crate::runtime::ExecutionResult::events).
+    /// [`Misc::decode_event`](crate::runtime::Misc::decode_event)
     /// decodes a `Misc` event.
-    pub logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
+    pub events: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
 }
 
 impl<T> CallOutcome<T> {
@@ -51,7 +51,7 @@ impl<T> CallOutcome<T> {
             extrinsic_hash: self.extrinsic_hash,
             transaction_hash: self.transaction_hash,
             block_hash: self.block_hash,
-            logs: self.logs,
+            events: self.events,
         }
     }
 }
@@ -72,10 +72,10 @@ pub struct Simulated<T, L> {
     /// The block whose state and time the run read.
     pub block_hash: BlockHash,
     /// The events that the circuit emitted, in emission order. See
-    /// [`ExecutionResult::logs`](crate::runtime::ExecutionResult::logs).
-    /// [`Misc::decode_log_data`](crate::runtime::Misc::decode_log_data)
+    /// [`ExecutionResult::events`](crate::runtime::ExecutionResult::events).
+    /// [`Misc::decode_event`](crate::runtime::Misc::decode_event)
     /// decodes a `Misc` event.
-    pub logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
+    pub events: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
 }
 
 /// A circuit call that ran locally, before the build of its transaction
@@ -330,7 +330,7 @@ async fn settle_snapshot(
 pub struct PendingCall<T> {
     pending: PendingTx,
     value: T,
-    logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
+    events: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
     address: String,
     /// The store that holds the call's `Pending` snapshot, or `None` when the
     /// call recorded none.
@@ -373,7 +373,7 @@ impl<T> PendingCall<T> {
         let Self {
             pending,
             value,
-            logs,
+            events,
             address,
             snapshot_store,
         } = self;
@@ -393,7 +393,7 @@ impl<T> PendingCall<T> {
             extrinsic_hash,
             transaction_hash: receipt.transaction_hash,
             block_hash: receipt.block_hash,
-            logs,
+            events,
         })
     }
 }
@@ -1023,7 +1023,7 @@ impl<P> ConnectBuilder<P> {
 
     /// Pin the state reads and the circuit calls to the block `hash`.
     /// Default is the node's best block. A circuit call runs at the time of
-    /// that block. [`Contract::logs_at`] takes its own block and ignores the
+    /// that block. [`Contract::events_at`] takes its own block and ignores the
     /// pin. A circuit call or a full state read pinned to a block before the
     /// chain's hard fork to ledger 9 fails with [`ContractError::StateFetch`],
     /// which names the ledger 8 tag `contract-state[v6]`.
@@ -1058,8 +1058,8 @@ impl<P> ConnectBuilder<P> {
 /// This is a stateless, immutable handle. It does not cache contract state.
 /// Each circuit call reads the state and the block time from the node RPC
 /// at one block: the `at_block` pin, else the node's best block. Ledger
-/// queries go through the node RPC directly. [`Contract::logs_at`] reads the
-/// logs of the contract at the block that it takes, from the node.
+/// queries go through the node RPC directly. [`Contract::events_at`] reads
+/// the events of the contract at the block that it takes, from the node.
 pub struct Contract<P> {
     address: String,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
@@ -1271,7 +1271,7 @@ impl<P> Contract<P> {
             value: run.result,
             ledger: run.state,
             block_hash: state.hash,
-            logs: run.logs,
+            events: run.events,
         })
     }
 
@@ -1611,7 +1611,7 @@ impl<P> Contract<P> {
             store.as_deref(),
         ))
         .await?;
-        let logs = std::mem::take(&mut ran.exec_result.logs);
+        let events = std::mem::take(&mut ran.exec_result.events);
         let (built, result) = Box::pin(self.build_call(
             ran,
             circuit,
@@ -1658,7 +1658,7 @@ impl<P> Contract<P> {
         Ok(PendingCall {
             pending,
             value,
-            logs,
+            events,
             address: self.address.clone(),
             snapshot_store,
         })

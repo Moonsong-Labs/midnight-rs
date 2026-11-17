@@ -185,51 +185,51 @@ When `get_receipt` fails with no verdict, the error is `ProviderError::Submissio
 
 A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes them.
 
-midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::get_receipt`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the event data as a raw `StateValue`. `Misc::decode_log_data`, from the same module, decodes a `Misc` event into its `name` and `payload`. A custom Compact event is a `Misc`.
+midnight-rs returns the events in the `events` field of `CallOutcome` (from `PendingCall::get_receipt`) and of `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::events`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the event data as a raw `StateValue`. `Misc::decode_event`, from the same module, decodes a `Misc` event into its `name` and `payload`. A custom Compact event is a `Misc`.
 
 The differences:
 
 - An item carries no address. The interpreter refuses a cross-contract call, so every event comes from the called contract, and the caller has its address.
 - `ContractLog.decodeAll` decodes every event type. The SDK decodes only `Misc`. The ten standard events (`ShieldedSpend` to `Unpaused`) have no typed decode, so read their data with the cell helpers of `midnight_typed_state`, such as `cell_as`.
-- `ContractLog.decodeAll` marks a version 0 item as degraded. It reads every other version with the version 1 layout, and does not check the width of the data. `Misc::decode_log_data` returns a `DecodeLogError` for a version other than 1 and for data that is not one cell under the alignment `bytes(288)`.
-- The local run decodes each event as the ledger 9 VM does, so the SDK returns the item that the chain logs.
+- `ContractLog.decodeAll` marks a version 0 item as degraded. It reads every other version with the version 1 layout, and does not check the width of the data. `Misc::decode_event` returns a `DecodeEventError` for a version other than 1 and for data that is not one cell under the alignment `bytes(288)`.
+- The local run decodes each event as the ledger 9 VM does, so the SDK returns the event that the chain emits.
 
 ### The events of other calls
 
-midnight-js reads the events of other calls from the indexer. `PublicDataProvider.queryContractEvents` reads a page of the events of one contract, and `contractEventsObservable` replays them from a cursor, then follows the chain. midnight-rs has two reads on the contract handle, for different purposes. `Contract::latest_logs` reads the indexer, as `queryContractEvents` and `contractEventsObservable` do. `Contract::logs_at` reads one block from the node.
+midnight-js reads the events of other calls from the indexer. `PublicDataProvider.queryContractEvents` reads a page of the events of one contract, and `contractEventsObservable` replays them from a cursor, then follows the chain. midnight-rs has two reads on the contract handle, for different purposes. `Contract::latest_logs` reads the indexer, as `queryContractEvents` and `contractEventsObservable` do. `Contract::events_at` reads one block from the node.
 
-| | `contract.logs_at(block_hash)` | `contract.latest_logs(indexer_url, from)` |
+| | `contract.events_at(block_hash)` | `contract.latest_logs(indexer_url, from)` |
 |---|---|---|
 | Purpose | the events of this contract at a given block | the latest events of this contract |
-| Source | the node: `get_block_transactions`, `call_transcripts`, `CallTranscript::logs` | the indexer: a `contractEvents` subscription bounded by `toBlock` |
+| Source | the node: `get_block_transactions`, `call_transcripts`, `CallTranscript::events` | the indexer: a `contractEvents` subscription bounded by `toBlock` |
 | Selection | one block, by hash | from a start block to the indexer's latest block |
-| Guarantee | every log that the chain kept in the block, or `UnknownLogs` | the indexer's own ledger run. Transactions that governance dispatches are missing, with no error |
+| Guarantee | every event that the chain kept in the block, or `UnknownEvents` | the indexer's own ledger run. Transactions that governance dispatches are missing, with no error |
 | Reach | the node's state window: the last 255 finalized blocks on a default node | all indexed history, on preview, devnets and self-hosted 4.4.x indexers |
 | Needs | a node | an indexer URL. No archive node |
 
-Both reads give `Log` records. `CallOutcome.logs` stays the way to get the events of your own call.
+Both reads give `ContractEvent` records. `CallOutcome.events` stays the way to get the events of your own call.
 
 The node read takes one block at a time:
 
 1. `NodeApi::get_block_transactions(block_hash)` gives the Midnight transactions that the block ran, in the order that the chain ran them. Each `BlockTransaction` holds the transaction hash, the `TxOutcome` from the events of the block, and the transaction bytes.
 2. `midnight_contract::call_transcripts(bytes, outcome)` gives the contract-call transcripts of a transaction, in the order that the ledger runs them. Each `CallTranscript` holds the contract address, the entry point, a `CallStatus` and the ops.
-3. `CallTranscript::logs` gives the logs of a transcript as the ledger 9 VM decodes them. `Misc::decode_log_data` decodes a `Misc` item.
+3. `CallTranscript::events` gives the events of a transcript as the ledger 9 VM decodes them. `Misc::decode_event` decodes a `Misc` event.
 
-`Contract::logs_at(block_hash)` is the handle form of steps 1 to 3. It keeps the transcripts whose `address` is the address of the handle. It gives one `Log` for each log of an `Applied` transcript, with the transaction hash and the entry point of the call. It leaves out a `Failed` transcript, and an `Undecided` transcript that logs nothing. It returns `ContractError::UnknownLogs`, and no log of the block, when it cannot tell which logs a transaction kept. These are the causes:
+`Contract::events_at(block_hash)` is the handle form of steps 1 to 3. It keeps the transcripts whose `address` is the address of the handle. It gives one `ContractEvent` for each event of an `Applied` transcript, with the transaction hash and the entry point of the call. It leaves out a `Failed` transcript, and an `Undecided` transcript that emits no event. It returns `ContractError::UnknownEvents`, and no event of the block, when it cannot tell which events a transaction kept. These are the causes:
 
 - A transaction of the block has `bytes` of `None`. The read then cannot tell whether that transaction calls the contract, so this cause applies to every contract.
-- A transcript of the contract that logs is `Undecided`.
-- A log of a transcript of the contract that is not `Failed` is an `UnreadableLog`.
+- A transcript of the contract that emits an event is `Undecided`.
+- An event of a transcript of the contract that is not `Failed` is an `UnreadableEvent`.
 
 Steps 1 to 3 then show which cause applies. A caller can use them with its own policy.
 
 The differences:
 
-- The node reads have no page or cursor. The caller chooses the blocks. With steps 1 to 3, it keeps the transcripts whose `address` it follows, and `Contract::logs_at` keeps those of its own contract. Pass a finalized block hash, because a reorg can replace a best block.
-- The node keeps no contract log. The read takes each logged value from the transaction bytes in the block body, and the outcome from the events of the block. So it needs the state at the block and at its parent. A node with default pruning keeps that state for the last 256 finalized blocks, so the read reaches the last 255. An archive node keeps it for every block.
+- The node reads have no page or cursor. The caller chooses the blocks. With steps 1 to 3, it keeps the transcripts whose `address` it follows, and `Contract::events_at` keeps those of its own contract. Pass a finalized block hash, because a reorg can replace a best block.
+- The node does not store contract events. The read takes each logged value from the transaction bytes in the block body, and the outcome from the events of the block. So it needs the state at the block and at its parent. A node with default pruning keeps that state for the last 256 finalized blocks, so the read reaches the last 255. An archive node keeps it for every block.
 - `BlockTransaction.bytes` is `None` for a transaction that the block ran from storage (a collective `close`, a federated `motion_close` or the Scheduler) when the block body holds no copy of it. The content of that transaction is then unknown. The indexer leaves such a transaction out, and also a transaction that a governance call wraps in the body. The node read finds the wrapped transaction.
 - `CallStatus` tells whether the chain applied a transcript. The outcome event of a partial success does not say which fallible segment failed. So a fallible transcript of a partial success with two or more fallible segments that can fail is `CallStatus::Undecided`. A segment with no fallible coins, no fallible unshielded offer and no action cannot fail. The Dust fee intent of a wallet-paid call is such a segment, so the fallible transcript of a call that midnight-rs builds is `Applied` or `Failed`. Every transcript of block 0 is `Undecided`, because block 0 has no events.
-- `CallTranscript::logs` takes each logged value from the `push` right before the `log`. It refuses a `log` that does not directly follow a `push`, or whose `push` a `branch` or `jmp` can skip, with `UnreadableLog`. Only a run of the VM against the contract state gives the value of such a log. compactc output has none.
+- `CallTranscript::events` takes each logged value from the `push` right before the `log`. It refuses a `log` that does not directly follow a `push`, or whose `push` a `branch` or `jmp` can skip, with `UnreadableEvent`. Only a run of the VM against the contract state gives the value of such a `log`. compactc output has none.
 
 ### The latest events, from the indexer
 
@@ -238,8 +238,8 @@ The differences:
 The differences:
 
 - The read reaches preview, the devnets and a self-hosted indexer of the 4.4 line. It does not reach Blockfrost, or an indexer of the 4.3 line, which has no `contractEvents`. The indexer marks `contractEvents` `@beta`.
-- The indexer leaves out a transaction that Council, TechnicalCommittee, FederatedAuthority or the Scheduler dispatches. The logs of such a transaction are missing, with no error. `logs_at` gives them when the block body holds a copy of the transaction. When the block ran the transaction from storage, as for a Scheduler call, `logs_at` fails with `UnknownLogs`.
-- The indexer runs each finalized transaction on its own copy of the ledger. The node does not check that run, so the node read is the authority. While the node holds the state of a block, `logs_at` with the `hash` of a `BlockLogs` confirms its logs, unless the block ran a transaction from storage.
+- The indexer leaves out a transaction that Council, TechnicalCommittee, FederatedAuthority or the Scheduler dispatches. The logs of such a transaction are missing, with no error. `events_at` gives them when the block body holds a copy of the transaction. When the block ran the transaction from storage, as for a Scheduler call, `events_at` fails with `UnknownEvents`.
+- The indexer runs each finalized transaction on its own copy of the ledger. The node does not check that run, so the node read is the authority. While the node holds the state of a block, `events_at` with the `hash` of a `BlockLogs` confirms its logs, unless the block ran a transaction from storage.
 - The SDK decodes each log from `raw`, the ledger event that the indexer stores, and not from the fields that the indexer decodes. It checks that the event is a log of the contract, from the transaction of its row, in the range of the read.
 - The read has no page. It holds every log of its range in memory.
 - Each row, and the end of the read, must come within 60 s of the one before. If not, the read fails with `ContractError::Indexer`, with `retryable` true.

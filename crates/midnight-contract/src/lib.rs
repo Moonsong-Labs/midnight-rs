@@ -4,9 +4,9 @@ mod constructor;
 mod contract;
 pub mod deploy;
 mod error;
+mod events;
 mod indexer_logs;
 mod ledger;
-mod logs;
 // The Compact IR interpreter now lives in the `compact-interpreter` crate;
 // aliased here so `midnight_contract::interpreter::*` paths keep resolving.
 pub use compact_interpreter as interpreter;
@@ -32,11 +32,11 @@ pub use contract::{
     PendingDeploy, Simulated,
 };
 pub use error::{ContractError, KeyMismatch};
-// The logs that a contract emitted, from the node and from the indexer.
+// The events that a contract emitted, from the node and from the indexer.
+pub use events::ContractEvent;
 pub use indexer_logs::{BlockLogs, FromBlock, LatestLogs};
-pub use logs::Log;
 // The contract calls of a transaction that a block ran.
-pub use transcript::{CallStatus, CallTranscript, UnreadableLog, call_transcripts};
+pub use transcript::{CallStatus, CallTranscript, UnreadableEvent, call_transcripts};
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };

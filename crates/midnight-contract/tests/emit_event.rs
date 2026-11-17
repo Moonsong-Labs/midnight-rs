@@ -5,10 +5,11 @@
 //! that the SDK proves and submits. The chain replays that transcript and
 //! checks it against the proof. So the chain accepts the call only when the
 //! local run builds the event exactly as the circuit does, and the event that
-//! the call returns is the one that the chain logs. A read of the call's block
+//! the call returns is the one that the chain emits. A read of the call's block
 //! from the node gives the same event, from the transcript that the chain
-//! applied. `Contract::logs_at` gives it as the log of the call's transaction,
-//! and `Contract::latest_logs` gives the same log from the indexer.
+//! applied. `Contract::events_at` gives it as the event of the call's
+//! transaction, and `Contract::latest_logs` gives the same event from the
+//! indexer.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
@@ -22,7 +23,7 @@ mod events {
 use compact_bindgen::Bytes;
 use midnight_contract::runtime::Misc;
 use midnight_contract::{
-    CallStatus, ContractError, FromBlock, Log, call_transcripts, parse_contract_address,
+    CallStatus, ContractError, ContractEvent, FromBlock, call_transcripts, parse_contract_address,
 };
 use midnight_provider::{MidnightProvider, NodeApi, TxOutcome};
 
@@ -63,10 +64,10 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
         .simulate()
         .await
         .unwrap_or_else(|e| panic!("the simulation must run: {e:?}"));
-    let [event] = simulated.logs.as_slice() else {
-        panic!("record emits one event, got {:?}", simulated.logs);
+    let [event] = simulated.events.as_slice() else {
+        panic!("record emits one event, got {:?}", simulated.events);
     };
-    let misc = Misc::decode_log_data(event).expect("record emits a Misc event");
+    let misc = Misc::decode_event(event).expect("record emits a Misc event");
     let mut payload = [0u8; 256];
     payload[..PAYLOAD_TEXT.len()].copy_from_slice(PAYLOAD_TEXT);
     assert_eq!(
@@ -95,7 +96,7 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
         .await
         .unwrap_or_else(|e| panic!("the emitting call must apply: {e:?}"));
     assert_eq!(
-        outcome.logs, simulated.logs,
+        outcome.events, simulated.events,
         "the call must return the event that its run emitted"
     );
 
@@ -131,24 +132,24 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
         )
     );
     assert_eq!(
-        call.logs()
-            .expect("the logs of compactc output read statically"),
-        outcome.logs,
-        "the transcript that the chain applied must log the events of the run"
+        call.events()
+            .expect("the events of compactc output read statically"),
+        outcome.events,
+        "the transcript that the chain applied must emit the events of the run"
     );
 
-    let node_logs = contract
-        .logs_at(outcome.block_hash)
+    let node_events = contract
+        .events_at(outcome.block_hash)
         .await
         .unwrap_or_else(|e| panic!("the node read of the call's block must succeed: {e:?}"));
     assert_eq!(
-        node_logs,
-        [Log {
+        node_events,
+        [ContractEvent {
             transaction_hash: outcome.transaction_hash,
             entry_point: b"record".to_vec(),
             item: event.clone(),
         }],
-        "the node read gives the log of the call"
+        "the node read gives the event of the call"
     );
 
     // The indexer trails finality, so read from `start` until it holds the
@@ -183,7 +184,7 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
     };
     assert_eq!(
         (block.hash, block.logs),
-        (outcome.block_hash, node_logs),
+        (outcome.block_hash, node_events),
         "the indexer gives the logs of the call's block that the node gives"
     );
 }

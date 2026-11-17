@@ -43,8 +43,8 @@ pub struct ExecutionResult {
     /// The events that the circuit emitted with `emit`, in emission order, as
     /// the VM decodes each `log` op: a version, an event type and the payload.
     /// The public transcript holds the same `log` ops, so a chain that applies
-    /// the call logs the same events. Empty for a circuit that emits none.
-    pub logs: Vec<VersionedLogItem<InMemoryDB>>,
+    /// the call emits the same events. Empty for a circuit that emits none.
+    pub events: Vec<VersionedLogItem<InMemoryDB>>,
 }
 
 impl ExecutionResult {
