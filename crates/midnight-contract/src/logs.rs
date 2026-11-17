@@ -32,9 +32,9 @@ impl<P> Contract<P> {
     /// It reads the block with [`NodeApi::get_block_transactions`] and the
     /// calls of this contract with [`CallTranscript::logs`]. It gives the
     /// logs of the calls that the chain applied, in the order in which the
-    /// chain ran them, and leaves out a call whose segment failed. So it
-    /// gives every log that the chain kept in the block, or an error. It
-    /// finds a call that a governance call wraps.
+    /// chain ran them. It leaves out a call whose segment failed. So it gives
+    /// every log that the chain kept in the block, or an error. It finds a
+    /// call that a governance call wraps.
     ///
     /// It reads the block that `block_hash` names, not the
     /// [`at_block`](Self::at_block) pin. Pass a finalized block hash, because
@@ -153,11 +153,12 @@ mod tests {
     }
 
     /// The status matters only for a call that logs, and a failed call kept
-    /// nothing. It catches a read that returns the logs of a failed call, one
-    /// that returns the logs of an undecided call as kept, one that fails a
-    /// block for an undecided call that logs nothing, one that skips an
-    /// unreadable log, and one that reads the logs of a call before it checks
-    /// for `Failed`.
+    /// nothing. It catches a read that does one of these:
+    /// - returns the logs of a failed call;
+    /// - returns the logs of an undecided call as kept;
+    /// - fails a block for an undecided call that logs nothing;
+    /// - skips an unreadable log;
+    /// - reads the logs of a call before it checks for `Failed`.
     #[test]
     fn a_call_gives_the_logs_that_the_chain_kept() {
         let unreadable = vec![Op::Dup { n: 0 }, Op::Log];
