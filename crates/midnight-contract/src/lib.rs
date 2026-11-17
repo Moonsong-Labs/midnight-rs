@@ -5,6 +5,7 @@ mod contract;
 pub mod deploy;
 mod error;
 mod ledger;
+mod logs;
 // The Compact IR interpreter now lives in the `compact-interpreter` crate;
 // aliased here so `midnight_contract::interpreter::*` paths keep resolving.
 pub use compact_interpreter as interpreter;
@@ -30,6 +31,8 @@ pub use contract::{
     PendingDeploy, Simulated,
 };
 pub use error::{ContractError, KeyMismatch};
+// The logs that a contract emitted in a block, from the node.
+pub use logs::Log;
 // The contract calls of a transaction that a block ran.
 pub use transcript::{CallStatus, CallTranscript, UnreadableLog, call_transcripts};
 pub use zk_config::{

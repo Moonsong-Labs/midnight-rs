@@ -261,6 +261,26 @@ pub enum ContractError {
 
     #[error("maintenance error: {0}")]
     Maintenance(String),
+
+    /// [`Contract::logs_at`](crate::Contract::logs_at) cannot tell which
+    /// logs of the contract transaction `transaction_hash` kept.
+    ///
+    /// The block ran the transaction from storage, so its body holds no copy
+    /// ([`BlockTransaction::bytes`](midnight_provider::BlockTransaction::bytes)
+    /// is `None`). Or a call of the contract in the transaction emits logs,
+    /// and its status is [`CallStatus::Undecided`](crate::CallStatus::Undecided)
+    /// or a log op is an [`UnreadableLog`](crate::UnreadableLog). The read
+    /// returns no log of the block. The low-level read
+    /// ([`NodeApi::get_block_transactions`](midnight_provider::NodeApi::get_block_transactions),
+    /// [`call_transcripts`](crate::call_transcripts)) shows which case
+    /// applies.
+    #[error(
+        "the node read cannot tell which logs of the contract transaction {transaction_hash} kept"
+    )]
+    UnknownLogs {
+        /// The ledger's hash of the transaction.
+        transaction_hash: TransactionHash,
+    },
 }
 
 /// What a contract state holds for a circuit whose local verifier key it does
