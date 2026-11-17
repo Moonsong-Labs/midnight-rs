@@ -211,7 +211,7 @@ Both reads give `ContractEvent` records. `CallOutcome.events` stays the way to g
 
 The node read takes one block at a time:
 
-1. `NodeApi::get_block_transactions(block_hash)` gives the Midnight transactions that the block ran, in the order that the chain ran them. Each `BlockTransaction` holds the transaction hash, the `TxOutcome` from the events of the block, and the transaction bytes.
+1. `NodeApi::get_block_transactions(block_hash)` gives the Midnight transactions that the block ran, in the order that the chain ran them. Each `BlockTransaction` holds the transaction hash, the `TxOutcome` from the block's `System.Events`, and the transaction bytes.
 2. `midnight_contract::call_transcripts(bytes, outcome)` gives the contract-call transcripts of a transaction, in the order that the ledger runs them. Each `CallTranscript` holds the contract address, the entry point, a `CallStatus` and the ops.
 3. `CallTranscript::events` gives the events of a transcript as the ledger 9 VM decodes them. `Misc::decode_event` decodes a `Misc` event.
 
@@ -226,7 +226,7 @@ Steps 1 to 3 then show which cause applies. A caller can use them with its own p
 The differences:
 
 - The node reads have no page or cursor. The caller chooses the blocks. With steps 1 to 3, it keeps the transcripts whose `address` it follows, and `Contract::events_at` keeps those of its own contract. Pass a finalized block hash, because a reorg can replace a best block.
-- The node does not store contract events. The read takes each logged value from the transaction bytes in the block body, and the outcome from the events of the block. So it needs the state at the block and at its parent. A node with default pruning keeps that state for the last 256 finalized blocks, so the read reaches the last 255. An archive node keeps it for every block.
+- The node does not store contract events. The read takes each logged value from the transaction bytes in the block body, and the outcome from the block's `System.Events`. So it needs the state at the block and at its parent. A node with default pruning keeps that state for the last 256 finalized blocks, so the read reaches the last 255. An archive node keeps it for every block.
 - `BlockTransaction.bytes` is `None` for a transaction that the block ran from storage (a collective `close`, a federated `motion_close` or the Scheduler) when the block body holds no copy of it. The content of that transaction is then unknown. The indexer leaves such a transaction out, and also a transaction that a governance call wraps in the body. The node read finds the wrapped transaction.
 - `CallStatus` tells whether the chain applied a transcript. The outcome event of a partial success does not say which fallible segment failed. So a fallible transcript of a partial success with two or more fallible segments that can fail is `CallStatus::Undecided`. A segment with no fallible coins, no fallible unshielded offer and no action cannot fail. The Dust fee intent of a wallet-paid call is such a segment, so the fallible transcript of a call that midnight-rs builds is `Applied` or `Failed`. Every transcript of block 0 is `Undecided`, because block 0 has no events.
 - `CallTranscript::events` takes each logged value from the `push` right before the `log`. It refuses a `log` that does not directly follow a `push`, or whose `push` a `branch` or `jmp` can skip, with `UnreadableEvent`. Only a run of the VM against the contract state gives the value of such a `log`. compactc output has none.

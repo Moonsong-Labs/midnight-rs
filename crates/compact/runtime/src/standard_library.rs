@@ -141,7 +141,7 @@ impl Misc {
     /// # Errors
     ///
     /// - [`DecodeEventError::Version`] for a version other than 1. Version 0 is
-    ///   the ledger's form for a logged value that is not an event.
+    ///   the ledger's form for a logged value that has no event envelope.
     /// - [`DecodeEventError::EventType`] for another event type.
     /// - [`DecodeEventError::Data`] for any other data.
     pub fn decode_event(event: &VersionedLogItem<InMemoryDB>) -> Result<Misc, DecodeEventError> {
@@ -168,7 +168,7 @@ impl Misc {
     }
 }
 
-/// Why an event is not the event that the caller asked for.
+/// Why an event does not decode as the event type that the caller asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DecodeEventError {
     #[error("event version {0} is not 1")]
