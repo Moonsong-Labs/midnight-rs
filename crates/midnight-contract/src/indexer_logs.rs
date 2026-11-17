@@ -30,7 +30,7 @@ const CONTRACT_EVENTS: &str = r#"
 "#;
 
 /// How long the read waits for the next row, or for the end of the read.
-/// The indexer answers the client's pings while it waits on the chain, so
+/// The indexer answers the client's pings while it waits on the chain. So
 /// only a bound on the rows ends a wait for a block that it lacks.
 const ROW_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -73,7 +73,7 @@ impl<P> Contract<P> {
     /// ledger, and keeps the logs of the segments that applied in that run.
     /// The node does not check that run. The indexer leaves out a transaction
     /// that Council, TechnicalCommittee, FederatedAuthority or the Scheduler
-    /// dispatches, so the logs of such a transaction are missing with no
+    /// dispatches. So the logs of such a transaction are missing with no
     /// error. [`Self::logs_at`] reads a block from the node and gives them
     /// when the block body holds a copy of the transaction. When the block
     /// ran the transaction from storage, as for a Scheduler call, `logs_at`
@@ -95,13 +95,19 @@ impl<P> Contract<P> {
     /// # Errors
     ///
     /// - [`ContractError::Indexer`] when the read fails. `retryable` is true
-    ///   when the WebSocket connection fails, the connection closes before
-    ///   the indexer completes the read, the indexer sends no row for 60 s,
-    ///   or the latest-block query fails before a response or gets a 5xx
-    ///   status. It is false when the indexer refuses the read (for example
-    ///   an indexer with no `contractEvents`), the latest-block query times
-    ///   out or gets another status, the indexer's latest height is negative,
-    ///   or a row is not a ledger 9 log of this contract in the range.
+    ///   in these cases:
+    ///   - the WebSocket connection fails;
+    ///   - the connection closes before the indexer completes the read;
+    ///   - the indexer sends no row for 60 s;
+    ///   - the latest-block query fails before a response, or gets a 5xx
+    ///     status.
+    ///
+    ///   `retryable` is false in these cases:
+    ///   - the indexer refuses the read, for example an indexer with no
+    ///     `contractEvents`;
+    ///   - the latest-block query times out, or gets another status;
+    ///   - the indexer's latest height is negative;
+    ///   - a row is not a ledger 9 log of this contract in the range.
     /// - [`ContractError::InvalidContractAddress`] when the handle's address
     ///   does not parse.
     pub async fn latest_logs(
@@ -308,11 +314,13 @@ mod tests {
     use super::*;
     use crate::runtime::{LogEventType, VersionedLogItem};
 
-    /// It catches a `Latest` that starts at block 0 (the whole history), a
-    /// next height of the last block (the read gives that block twice), a
-    /// subscription with `fromBlock` above `toBlock` (the indexer refuses it
-    /// at every poll of a follower at the tip), and a next height below
-    /// `from` when the indexer trails the caller.
+    /// It catches these mistakes:
+    /// - a `Latest` that starts at block 0 (the whole history);
+    /// - a next height of the last block (the read gives that block twice);
+    /// - a subscription with `fromBlock` above `toBlock` (the indexer refuses
+    ///   it at every poll of a follower at the tip);
+    /// - a next height below `from` when the indexer trails the caller;
+    /// - a next height other than 0 when the indexer holds no block.
     #[test]
     fn a_read_covers_its_start_to_the_indexer_latest_block() {
         let cases = [
@@ -321,6 +329,7 @@ mod tests {
             (FromBlock::Height(90), Some(90), (Some(90..=90), 91)),
             (FromBlock::Height(95), Some(90), (None, 95)),
             (FromBlock::Height(5), None, (None, 5)),
+            (FromBlock::Latest, None, (None, 0)),
         ];
         for (from, latest, expected) in cases {
             assert_eq!(covered(from, latest), expected, "{from:?}, {latest:?}");
@@ -360,9 +369,9 @@ mod tests {
         }
     }
 
-    /// It catches `raw` read as the log payload, a read that trusts the
-    /// indexer's address filter, and one that trusts its join of an event to
-    /// a transaction.
+    /// It catches `raw` read as the log payload. It also catches a read that
+    /// trusts the indexer's address filter, or its join of an event to a
+    /// transaction.
     #[test]
     fn a_row_that_disagrees_with_the_read_is_an_error() {
         let address = ContractAddress(HashOutput([1; 32]));
@@ -408,9 +417,9 @@ mod tests {
         }
     }
 
-    /// It catches a grouping that trusts the row order (two `BlockLogs` for
-    /// one height), and a read that keeps a row past the range: the next read
-    /// gives that row again.
+    /// It catches a grouping that trusts the row order, which gives two
+    /// `BlockLogs` for one height. It also catches a read that keeps a row
+    /// outside the range, which a read of the next range gives again.
     #[test]
     fn rows_group_by_height_inside_the_range() {
         let (a, b) = (BlockHash::from([5; 32]), BlockHash::from([7; 32]));
@@ -434,6 +443,7 @@ mod tests {
             ]
         );
         for (name, rows) in [
+            ("a row before the range", vec![(1, a, log(1))]),
             ("a row past the range", vec![(10, b, log(1))]),
             (
                 "two hashes for one height",
@@ -442,7 +452,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    group_by_block(rows, &(0..=9)),
+                    group_by_block(rows, &(2..=9)),
                     Err(ContractError::Indexer {
                         retryable: false,
                         ..
@@ -453,9 +463,9 @@ mod tests {
         }
     }
 
-    /// The indexer answers the latest-block query with height 9, checks the
-    /// subscription filter, then sends one row of block 7 and ends the
-    /// subscription with `complete` or a close frame.
+    /// A read from a mock indexer that holds one log, and ends the
+    /// subscription with `complete` when `complete` is true, else with a
+    /// close frame.
     async fn read_one_row(complete: bool) -> Result<LatestLogs, ContractError> {
         use midnight_indexer_client::testutil::{
             accept_subscriber, bind, next_json, read_http_request, send_json, send_next,
@@ -506,8 +516,8 @@ mod tests {
     }
 
     /// It catches a read that stops at the first error and returns the rows
-    /// before it, which passes a cut read as a complete one, and a filter
-    /// with no `toBlock`, which the indexer never completes.
+    /// before it, so that a cut read passes as a complete one. It also
+    /// catches a filter with no `toBlock`, which the indexer never completes.
     #[tokio::test]
     async fn only_a_completed_subscription_gives_the_logs() {
         let read = read_one_row(true).await.expect("a completed read");

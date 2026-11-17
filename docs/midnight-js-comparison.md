@@ -239,7 +239,7 @@ The differences:
 
 - The read reaches preview, the devnets and a self-hosted indexer of the 4.4 line. It does not reach Blockfrost, or an indexer of the 4.3 line, which has no `contractEvents`. The indexer marks `contractEvents` `@beta`.
 - The indexer leaves out a transaction that Council, TechnicalCommittee, FederatedAuthority or the Scheduler dispatches. The logs of such a transaction are missing, with no error. `logs_at` gives them when the block body holds a copy of the transaction. When the block ran the transaction from storage, as for a Scheduler call, `logs_at` fails with `UnknownLogs`.
-- The indexer runs each finalized transaction on its own copy of the ledger. The node does not check that run, so the node read is the authority. While the node holds the state of a block, `logs_at` with the `hash` of a `BlockLogs` confirms its logs.
+- The indexer runs each finalized transaction on its own copy of the ledger. The node does not check that run, so the node read is the authority. While the node holds the state of a block, `logs_at` with the `hash` of a `BlockLogs` confirms its logs, unless the block ran a transaction from storage.
 - The SDK decodes each log from `raw`, the ledger event that the indexer stores, and not from the fields that the indexer decodes. It checks that the event is a log of the contract, from the transaction of its row, in the range of the read.
 - The read has no page. It holds every log of its range in memory.
 - Each row, and the end of the read, must come within 60 s of the one before. If not, the read fails with `ContractError::Indexer`, with `retryable` true.

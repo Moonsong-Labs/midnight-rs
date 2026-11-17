@@ -286,13 +286,12 @@ pub enum ContractError {
     /// [`Contract::latest_logs`](crate::Contract::latest_logs) returns it.
     #[error("indexer read failed")]
     Indexer {
-        /// Whether the same read can succeed later: true for a transient
-        /// failure, such as a dropped connection or a silent indexer, and
-        /// false for one that repeats, such as a GraphQL error or a row that
-        /// is not a log of the contract.
+        /// Whether the same read can succeed later.
+        /// [`Contract::latest_logs`](crate::Contract::latest_logs) lists the
+        /// failures of each kind.
         retryable: bool,
-        /// The cause: the indexer client's error, or why a row is not a log
-        /// of the contract.
+        /// The cause: the indexer client's error, or why the read refused
+        /// the indexer's answer.
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 }
