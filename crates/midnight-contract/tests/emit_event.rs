@@ -7,7 +7,7 @@
 //! local run builds the event exactly as the circuit does, and the event that
 //! the call returns is the one that the chain logs. A read of the call's block
 //! from the node gives the same event, from the transcript that the chain
-//! applied.
+//! applied. `Contract::logs_at` gives it as the log of the call's transaction.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
@@ -20,7 +20,7 @@ mod events {
 
 use compact_bindgen::Bytes;
 use midnight_contract::runtime::Misc;
-use midnight_contract::{CallStatus, call_transcripts, parse_contract_address};
+use midnight_contract::{CallStatus, Log, call_transcripts, parse_contract_address};
 use midnight_provider::{MidnightProvider, NodeApi, TxOutcome};
 
 const NAME: [u8; 32] = [0x07; 32];
@@ -125,5 +125,19 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
             .expect("the logs of compactc output read statically"),
         outcome.logs,
         "the transcript that the chain applied must log the events of the run"
+    );
+
+    let node_logs = contract
+        .logs_at(outcome.block_hash)
+        .await
+        .unwrap_or_else(|e| panic!("the node read of the call's block must succeed: {e:?}"));
+    assert_eq!(
+        node_logs,
+        [Log {
+            transaction_hash: outcome.transaction_hash,
+            entry_point: b"record".to_vec(),
+            item: event.clone(),
+        }],
+        "the node read gives the log of the call"
     );
 }

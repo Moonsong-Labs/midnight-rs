@@ -188,9 +188,9 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_zk_config(zk_config))
             }
 
-            /// Pin queries to the block `hash`. Default is the node's best block.
-            /// Both circuit calls and `ledger` reads honour the pin through the
-            /// node RPC, and a circuit call runs at the time of that block.
+            /// Pin the `ledger` reads and the circuit calls to the block `hash`.
+            /// Default is the node's best block. A circuit call runs at the time
+            /// of that block. `logs_at` takes its own block and ignores the pin.
             pub fn at_block(self, hash: midnight_contract::BlockHash) -> Self {
                 Self(self.0.at_block(hash))
             }
@@ -241,6 +241,16 @@ pub(crate) fn emit_ledger_wrapper(
                     self.0.at_block(),
                 ).await?;
                 Ok(#struct_name::new(state))
+            }
+
+            /// Get the logs that this contract emitted in the block with
+            /// `block_hash`, from the node. See
+            /// `midnight_contract::Contract::logs_at`.
+            pub async fn logs_at(
+                &self,
+                block_hash: midnight_contract::BlockHash,
+            ) -> Result<::std::vec::Vec<midnight_contract::Log>, midnight_contract::ContractError> {
+                self.0.logs_at(block_hash).await
             }
 
             /// Maintenance / governance operations (verifier-key rotation,
