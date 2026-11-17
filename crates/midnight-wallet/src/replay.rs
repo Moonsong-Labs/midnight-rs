@@ -450,8 +450,8 @@ pub(crate) async fn replay_ledger_events(
                         send_progress(&progress, stream.complete(0));
                         break 'reconnect;
                     }
-                    // Mid-replay stream end without a `complete`: treat as a
-                    // dropped connection and resume from the cursor.
+                    // A server `complete` mid-replay: treat as a dropped
+                    // connection and resume from the cursor.
                     if retries < RECONNECT_MAX_RETRIES {
                         retries += 1;
                         warn!(retries, "{kind} subscription ended early, reconnecting");
@@ -997,7 +997,7 @@ mod tests {
     }
 
     /// Mock-WebSocket-server tests for the replay loops' reconnect, resume,
-    /// and dedupe behavior, driven through `replay_unshielded_events`, whose
+    /// and dedupe behavior. Most drive `replay_unshielded_events`, whose
     /// events are plain JSON. `replay_ledger_events` shares the same
     /// retry and dedupe helpers. The mock server
     /// itself lives in `midnight_indexer_client::testutil` (behind the
@@ -1005,8 +1005,8 @@ mod tests {
     /// provider test suites.
     mod reconnect_ws {
         use midnight_indexer_client::testutil::{
-            accept_subscriber, bind, next_json, send_json, send_next, subscription_variable,
-            unshielded_progress,
+            accept_subscriber, bind, ledger_event, next_json, send_json, send_next,
+            subscription_variable, unshielded_progress,
         };
         use serde_json::json;
 
@@ -1069,6 +1069,49 @@ mod tests {
             assert_eq!(values, vec![100, 200, 300], "a re-delivered tx re-applied?");
             assert_eq!(replay.last_tx_id, 3);
             assert_eq!(replay.last_block_height, 30);
+
+            server.await.unwrap();
+        }
+
+        /// A resume that meets a close before `complete` must reconnect. A
+        /// replay that reads the close as the end of the events reports
+        /// "already at tip". The wallet then misses the events that the
+        /// indexer holds.
+        #[tokio::test]
+        async fn a_close_before_complete_during_a_resume_reconnects() {
+            let (listener, url) = bind().await;
+            let raw = hex::encode(b"midnight:event[v14]:");
+            let server = tokio::spawn(async move {
+                let (mut ws, _sub) = accept_subscriber(&listener).await;
+                ws.close(None).await.unwrap();
+                while next_json(&mut ws).await.is_some() {}
+
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                assert_eq!(subscription_variable(&sub, "id"), 4);
+                send_next(&mut ws, &sub, ledger_event("zswapLedgerEvents", 5, &raw, 5)).await;
+                while next_json(&mut ws).await.is_some() {}
+            });
+
+            let mut applied = Vec::new();
+            replay_ledger_events(
+                &SubscriptionClient::new(&url),
+                LedgerStream::Zswap,
+                Generation::V9,
+                5,
+                true,
+                None,
+                |id, _, _| {
+                    applied.push(id);
+                    Ok(())
+                },
+            )
+            .await
+            .expect("the resume must reconnect and finish");
+            assert_eq!(
+                applied,
+                [5],
+                "the resume must apply the event of the second connection"
+            );
 
             server.await.unwrap();
         }
