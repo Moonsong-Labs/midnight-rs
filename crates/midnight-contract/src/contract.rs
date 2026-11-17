@@ -1021,12 +1021,12 @@ impl<P> ConnectBuilder<P> {
         self
     }
 
-    /// Pin queries to the block `hash`. Default is the node's best block.
-    /// Both circuit calls and full state reads honour the pin through the
-    /// node RPC, and a circuit call runs at the time of that block. A circuit
-    /// call or a full state read pinned to a block before the chain's hard
-    /// fork to ledger 9 fails with [`ContractError::StateFetch`], which names
-    /// the ledger 8 tag `contract-state[v6]`.
+    /// Pin the state reads and the circuit calls to the block `hash`.
+    /// Default is the node's best block. A circuit call runs at the time of
+    /// that block. [`Contract::events_at`] takes its own block and ignores the
+    /// pin. A circuit call or a full state read pinned to a block before the
+    /// chain's hard fork to ledger 9 fails with [`ContractError::StateFetch`],
+    /// which names the ledger 8 tag `contract-state[v6]`.
     pub fn at_block(mut self, hash: BlockHash) -> Self {
         self.at_block = Some(hash);
         self
@@ -1058,12 +1058,14 @@ impl<P> ConnectBuilder<P> {
 /// This is a stateless, immutable handle. It does not cache contract state.
 /// Each circuit call reads the state and the block time from the node RPC
 /// at one block: the `at_block` pin, else the node's best block. Ledger
-/// queries go through the node RPC directly.
+/// queries go through the node RPC directly. [`Contract::events_at`] reads
+/// the events of the contract at the block that it takes, from the node.
 pub struct Contract<P> {
     address: String,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
     provider: P,
-    /// Optional block pin for queries. `None` means latest.
+    /// Optional block pin of the state reads and the circuit calls. `None`
+    /// means the node's best block.
     at_block: Option<BlockHash>,
     /// Whether the compiled contract declares witnesses, and so needs a
     /// private-state provider for its calls to be meaningful.
@@ -1130,7 +1132,8 @@ impl<P> Contract<P> {
         &self.provider
     }
 
-    /// The block pin for queries. `None` means latest.
+    /// The block pin of the state reads and the circuit calls. `None` means
+    /// the node's best block.
     pub fn at_block(&self) -> Option<BlockHash> {
         self.at_block
     }
@@ -1177,7 +1180,7 @@ impl<P> Contract<P> {
     }
 
     /// Fetch the contract's `ContractState`, honoring the handle's `at_block`
-    /// pin (latest when unpinned), through the node RPC.
+    /// pin (the node's best block when unpinned), through the node RPC.
     async fn fetch_state(&self) -> Result<ContractState<InMemoryDB>, ContractError>
     where
         P: AsMidnightProvider,
