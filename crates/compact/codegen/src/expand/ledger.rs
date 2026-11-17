@@ -188,7 +188,7 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_zk_config(zk_config))
             }
 
-            /// Pin the `ledger` reads and the circuit calls to the block `hash`.
+            /// Pin the state reads and the circuit calls to the block `hash`.
             /// Default is the node's best block. A circuit call runs at the time
             /// of that block. `logs_at` takes its own block and ignores the pin.
             pub fn at_block(self, hash: midnight_contract::BlockHash) -> Self {

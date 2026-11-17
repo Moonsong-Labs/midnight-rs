@@ -305,8 +305,9 @@ impl<'a, P> ContractMaintenance<'a, P> {
         let address_hex = self.contract.address();
         let address = crate::address::parse_contract_address(address_hex)?;
 
-        // Read the current authority at latest (the signed counter must match
-        // what the chain will check at submission — not any pinned block).
+        // Read the current authority at the node's best block, not at a
+        // pinned block: the signed counter must match what the chain checks
+        // at submission.
         let state = crate::state::fetch_state(provider, address_hex, None).await?;
         let counter = state.maintenance_authority.counter;
 
