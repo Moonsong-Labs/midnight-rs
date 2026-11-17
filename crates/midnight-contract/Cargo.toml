@@ -8,6 +8,8 @@ description = "Typed contract state access for Midnight smart contracts"
 
 [dependencies]
 midnight-provider = { workspace = true }
+midnight-indexer-client = { workspace = true }
+serde_json = { workspace = true }
 # midnight-contract uses only the runtime re-exports (ContractState, InMemoryDB,
 # StateValue, ContractMaintenanceAuthority, AlignedValue, StorageHashMap,
 # StateError). It must NOT depend on compact-bindgen here, because
@@ -38,9 +40,10 @@ rand = { workspace = true }
 [dev-dependencies]
 # `test-util`: the devnet tests prove with test provers (`Prover::custom`).
 midnight-provider = { workspace = true, features = ["test-util"] }
+# `test-util`: the mock indexer of the indexer read tests.
+midnight-indexer-client = { workspace = true, features = ["test-util"] }
 midnight-coin-structure = { workspace = true }
 midnight-transient-crypto = { workspace = true }
-serde_json = { workspace = true }
 # The devnet tests sync a real wallet with `midnight-wallet`; the library
 # itself depends only on midnight-types.
 midnight-wallet = { workspace = true }

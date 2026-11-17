@@ -3054,6 +3054,7 @@ dependencies = [
  "midnight-base-crypto",
  "midnight-coin-structure 3.0.1",
  "midnight-helpers",
+ "midnight-indexer-client",
  "midnight-onchain-runtime 4.0.1",
  "midnight-provider",
  "midnight-serialize",

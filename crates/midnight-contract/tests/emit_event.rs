@@ -8,7 +8,8 @@
 //! the call returns is the one that the chain emits. A read of the call's block
 //! from the node gives the same event, from the transcript that the chain
 //! applied. `Contract::events_at` gives it as the event of the call's
-//! transaction.
+//! transaction, and `Contract::latest_events` gives the same event from the
+//! indexer.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
@@ -21,7 +22,9 @@ mod events {
 
 use compact_bindgen::Bytes;
 use midnight_contract::runtime::Misc;
-use midnight_contract::{CallStatus, ContractEvent, call_transcripts, parse_contract_address};
+use midnight_contract::{
+    CallStatus, ContractError, ContractEvent, FromBlock, call_transcripts, parse_contract_address,
+};
 use midnight_provider::{MidnightProvider, NodeApi, TxOutcome};
 
 const NAME: [u8; 32] = [0x07; 32];
@@ -72,6 +75,13 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
         (Bytes(NAME), Bytes(payload)),
         "the Misc event holds the name and the padded text"
     );
+
+    // The call lands in a block after the indexer's latest block now.
+    let start = contract
+        .latest_events(&indexer_url, FromBlock::Latest)
+        .await
+        .unwrap_or_else(|e| panic!("the indexer read must succeed: {e:?}"))
+        .next_height;
 
     // `get_receipt` waits for finality, so the test ends on a final
     // block. The next test in the suite is another process on the same seed,
@@ -140,5 +150,41 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
             item: event.clone(),
         }],
         "the node read gives the event of the call"
+    );
+
+    // The indexer trails finality, so read from `start` until it holds the
+    // call's block. The test deployed the contract, so no other block holds
+    // an event of it.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut from = FromBlock::Height(start);
+    let block = loop {
+        match contract.latest_events(&indexer_url, from).await {
+            Ok(read) => {
+                if let [block] = read.blocks.as_slice() {
+                    break block.clone();
+                }
+                assert!(
+                    read.blocks.is_empty(),
+                    "one block holds an event, got {:?}",
+                    read.blocks
+                );
+                from = FromBlock::Height(read.next_height);
+            }
+            Err(ContractError::Indexer {
+                retryable: true, ..
+            }) => {}
+            Err(e) => panic!("the indexer read must succeed: {e:?}"),
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the indexer must index block {:x} within 60 s",
+            outcome.block_hash
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    };
+    assert_eq!(
+        (block.hash, block.events),
+        (outcome.block_hash, node_events),
+        "the indexer gives the events of the call's block that the node gives"
     );
 }
