@@ -1021,7 +1021,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                             value: __decode(__simulated.value)?,
                             ledger: #ledger_name::new(__simulated.ledger),
                             block_hash: __simulated.block_hash,
-                            logs: __simulated.logs,
+                            events: __simulated.events,
                         })
                     })
                     .await

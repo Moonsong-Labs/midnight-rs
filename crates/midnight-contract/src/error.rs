@@ -269,7 +269,7 @@ pub enum ContractError {
     /// ([`BlockTransaction::bytes`](midnight_provider::BlockTransaction::bytes)
     /// is `None`). Or a call of the contract in the transaction emits logs,
     /// and its status is [`CallStatus::Undecided`](crate::CallStatus::Undecided)
-    /// or a log op is an [`UnreadableLog`](crate::UnreadableLog). The read
+    /// or a log op is an [`UnreadableEvent`](crate::UnreadableEvent). The read
     /// returns no log of the block. The low-level read
     /// ([`NodeApi::get_block_transactions`](midnight_provider::NodeApi::get_block_transactions),
     /// [`call_transcripts`](crate::call_transcripts)) shows which case

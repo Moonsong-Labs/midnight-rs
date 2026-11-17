@@ -115,6 +115,52 @@ async fn abrupt_server_drop_yields_retryable_transport_error() {
 }
 
 #[tokio::test]
+async fn only_a_complete_ends_a_subscription_without_an_error() {
+    let (listener, url) = bind().await;
+    let server = tokio::spawn(async move {
+        let (mut ws, sub) = accept_subscriber(&listener).await;
+        send_next(&mut ws, &sub, json!({"value": 1})).await;
+        send_json(&mut ws, &json!({"type": "complete", "id": sub["id"]})).await;
+        while next_json(&mut ws).await.is_some() {}
+
+        let (mut ws, sub) = accept_subscriber(&listener).await;
+        send_next(&mut ws, &sub, json!({"value": 2})).await;
+        ws.close(None).await.unwrap();
+        while next_json(&mut ws).await.is_some() {}
+    });
+
+    let client = SubscriptionClient::new(&url);
+    let mut completed = client
+        .subscribe::<serde_json::Value>(QUERY, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(recv(&mut completed).await.unwrap().unwrap()["value"], 1);
+    assert!(
+        recv(&mut completed).await.is_none(),
+        "a complete must end the subscription with no error"
+    );
+    drop(completed);
+
+    let mut closed = client
+        .subscribe::<serde_json::Value>(QUERY, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(recv(&mut closed).await.unwrap().unwrap()["value"], 2);
+    match recv(&mut closed).await {
+        Some(Err(err)) => assert!(
+            matches!(err, IndexerError::Transport(_)) && err.is_retryable(),
+            "got: {err:?}"
+        ),
+        other => {
+            panic!("a close before complete must give a retryable Transport error, got: {other:?}")
+        }
+    }
+    assert!(recv(&mut closed).await.is_none());
+
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn graphql_error_message_is_fatal_protocol_error() {
     let (listener, url) = bind().await;
     let server = tokio::spawn(async move {

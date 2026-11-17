@@ -156,16 +156,16 @@ pub fn step_report(
                 ),
             }))
             .collect::<Vec<_>>(),
-        "logs": result.logs.iter().map(log_to_json).collect::<Vec<_>>(),
+        "events": result.events.iter().map(event_to_json).collect::<Vec<_>>(),
     })
 }
 
 /// Canonical JSON for an emitted event, matching the TS runtime's `LogEvent`
 /// without its `address`.
-fn log_to_json(item: &VersionedLogItem<InMemoryDB>) -> Json {
+fn event_to_json(event: &VersionedLogItem<InMemoryDB>) -> Json {
     json!({
-        "version": item.version,
-        "eventType": serde_json::to_value(item.event_type).expect("LogEventType serializes"),
-        "data": state_value_to_json(&item.data),
+        "version": event.version,
+        "eventType": serde_json::to_value(event.event_type).expect("LogEventType serializes"),
+        "data": state_value_to_json(&event.data),
     })
 }

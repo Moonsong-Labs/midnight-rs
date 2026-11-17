@@ -19,8 +19,8 @@ pub struct Log {
     /// compactc output.
     pub entry_point: Vec<u8>,
     /// The log, of the item type of
-    /// [`CallOutcome::logs`](crate::CallOutcome::logs).
-    /// [`Misc::decode_log_data`](crate::runtime::Misc::decode_log_data)
+    /// [`CallOutcome::events`](crate::CallOutcome::events).
+    /// [`Misc::decode_event`](crate::runtime::Misc::decode_event)
     /// decodes a `Misc` event.
     pub item: VersionedLogItem<InMemoryDB>,
 }
@@ -30,7 +30,7 @@ impl<P> Contract<P> {
     /// `block_hash`, from the node.
     ///
     /// It reads the block with [`NodeApi::get_block_transactions`] and the
-    /// calls of this contract with [`CallTranscript::logs`]. It gives the
+    /// calls of this contract with [`CallTranscript::events`]. It gives the
     /// logs of the calls that the chain applied, in the order in which the
     /// chain ran them. It leaves out a call whose segment failed. So it gives
     /// every log that the chain kept in the block, or an error. It finds a
@@ -108,7 +108,7 @@ fn kept_logs(call: &CallTranscript) -> Option<Vec<VersionedLogItem<InMemoryDB>>>
     if call.status == CallStatus::Failed {
         return Some(Vec::new());
     }
-    let logs = call.logs().ok()?;
+    let logs = call.events().ok()?;
     if call.status == CallStatus::Undecided && !logs.is_empty() {
         return None;
     }
@@ -163,7 +163,7 @@ mod tests {
     fn a_call_gives_the_logs_that_the_chain_kept() {
         let unreadable = vec![Op::Dup { n: 0 }, Op::Log];
         let logged = call(CallStatus::Applied, push_log())
-            .logs()
+            .events()
             .expect("a push then a log");
         let cases = [
             (CallStatus::Applied, push_log(), Some(logged)),
@@ -189,7 +189,7 @@ mod tests {
             call_of(2, CallStatus::Applied, push_log()),
             call_of(2, CallStatus::Undecided, push_log()),
         ];
-        let item = calls[0].logs().expect("a push then a log").remove(0);
+        let item = calls[0].events().expect("a push then a log").remove(0);
         assert_eq!(
             contract_logs(
                 &ContractAddress(HashOutput([1; 32])),

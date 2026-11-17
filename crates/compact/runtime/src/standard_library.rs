@@ -130,9 +130,9 @@ pub struct Misc {
 }
 
 impl Misc {
-    /// Decode a log item as a `Misc` event of the layout compactc writes.
+    /// Decode `event` as a `Misc` event of the layout compactc writes.
     ///
-    /// The item must have version 1 and the type `Misc`. Its data must be one
+    /// The event must have version 1 and the type `Misc`. Its data must be one
     /// cell under the alignment `bytes(288)`, with one atom of at most 288
     /// bytes. The decode pads the atom with zeros to 288 bytes, because the
     /// ledger trims trailing zeros. `name` is bytes 0..32 and `payload` is
@@ -140,22 +140,23 @@ impl Misc {
     ///
     /// # Errors
     ///
-    /// - [`DecodeLogError::Version`] for a version other than 1. Version 0 is
+    /// - [`DecodeEventError::Version`] for a version other than 1. Version 0 is
     ///   the ledger's form for a logged value that is not an event.
-    /// - [`DecodeLogError::EventType`] for another event type.
-    /// - [`DecodeLogError::Data`] for any other data.
-    pub fn decode_log_data(item: &VersionedLogItem<InMemoryDB>) -> Result<Misc, DecodeLogError> {
-        if item.version != 1 {
-            return Err(DecodeLogError::Version(item.version));
+    /// - [`DecodeEventError::EventType`] for another event type.
+    /// - [`DecodeEventError::Data`] for any other data.
+    pub fn decode_event(event: &VersionedLogItem<InMemoryDB>) -> Result<Misc, DecodeEventError> {
+        if event.version != 1 {
+            return Err(DecodeEventError::Version(event.version));
         }
-        if item.event_type != LogEventType::Misc {
-            return Err(DecodeLogError::EventType(item.event_type));
+        if event.event_type != LogEventType::Misc {
+            return Err(DecodeEventError::EventType(event.event_type));
         }
-        let cell = cell_value(&item.data).map_err(|_| DecodeLogError::Data)?;
+        let cell = cell_value(&event.data).map_err(|_| DecodeEventError::Data)?;
         if cell.alignment != Bytes::<288>::alignment() {
-            return Err(DecodeLogError::Data);
+            return Err(DecodeEventError::Data);
         }
-        let Bytes(data) = Bytes::<288>::try_from(&*cell.value).map_err(|_| DecodeLogError::Data)?;
+        let Bytes(data) =
+            Bytes::<288>::try_from(&*cell.value).map_err(|_| DecodeEventError::Data)?;
         let mut name = [0; 32];
         let mut payload = [0; 256];
         name.copy_from_slice(&data[..32]);
@@ -167,12 +168,12 @@ impl Misc {
     }
 }
 
-/// Why a log item is not the event that the caller asked for.
+/// Why an event is not the event that the caller asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum DecodeLogError {
+pub enum DecodeEventError {
     #[error("event version {0} is not 1")]
     Version(u32),
-    #[error("the log is a {0:?} event")]
+    #[error("the event has the type {0:?}")]
     EventType(LogEventType),
     #[error("the event data is not one cell of the event's width")]
     Data,
@@ -228,8 +229,8 @@ mod tests {
     #[test]
     fn misc_refuses_version_2() {
         assert_eq!(
-            Misc::decode_log_data(&misc_item::<288>(2)),
-            Err(DecodeLogError::Version(2))
+            Misc::decode_event(&misc_item::<288>(2)),
+            Err(DecodeEventError::Version(2))
         );
     }
 
@@ -240,6 +241,6 @@ mod tests {
             cell_as::<Bytes<288>>(&item.data).is_ok(),
             "the bytes(287) cell must pass every check but the width"
         );
-        assert_eq!(Misc::decode_log_data(&item), Err(DecodeLogError::Data));
+        assert_eq!(Misc::decode_event(&item), Err(DecodeEventError::Data));
     }
 }
