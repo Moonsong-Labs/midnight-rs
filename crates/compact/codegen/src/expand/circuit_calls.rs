@@ -98,42 +98,10 @@ pub(crate) fn is_void_type(ty: &Type) -> bool {
 /// methods convert via `From<InterpreterError> for ContractError`.
 pub(crate) fn value_to_type_conversion(ty: &Type, context: &str) -> TokenStream {
     match ty {
-        Type::Boolean => {
-            let mismatch = mismatch_arm(context, "a Bool value");
-            quote! {
-                match __val {
-                    midnight_contract::runtime::Value::Bool(__b) => {
-                        ::core::result::Result::Ok(__b)
-                    }
-                    #mismatch
-                }
-            }
-        }
-        Type::Unsigned(_) => {
-            let rust_ty = type_to_tokens(ty);
-            let overflow_msg = format!("{context}: value {{}} does not fit in {{}}");
-            let mismatch = mismatch_arm(context, "an Integer value");
-            quote! {
-                match __val {
-                    midnight_contract::runtime::Value::Integer(__n) => {
-                        <#rust_ty>::try_from(__n).map_err(|_| {
-                            midnight_contract::runtime::InterpreterError::TypeError(
-                                ::std::format!(
-                                    #overflow_msg,
-                                    __n,
-                                    ::core::stringify!(#rust_ty)
-                                )
-                            )
-                        })
-                    }
-                    #mismatch
-                }
-            }
-        }
         Type::Alias { ty: inner, .. } => value_to_type_conversion(inner, context),
-        // The interpreter holds a vector or a tuple as `Value::Tuple` and a
-        // small `Field` as `Value::Integer`, so the value is encoded at its
-        // type before it is decoded.
+        // The interpreter holds one value in more than one form (a literal as
+        // `Integer` or `Bool`, a ledger read or a struct field as `AlignedValue`,
+        // a vector or a tuple as `Tuple`), so encode the value at its type first.
         _ => {
             let rust_ty = type_to_tokens(ty);
             let ir_ty = super::emit_ir::type_ref(ty);
@@ -163,19 +131,6 @@ pub(crate) fn value_to_type_conversion(ty: &Type, context: &str) -> TokenStream 
                 }
             }
         }
-    }
-}
-
-/// The match arm of [`value_to_type_conversion`] for a `Value` of another
-/// variant than `expected`.
-fn mismatch_arm(context: &str, expected: &str) -> TokenStream {
-    let msg = format!("{context}: expected {expected}, got {{:?}}");
-    quote! {
-        __other => ::core::result::Result::Err(
-            midnight_contract::runtime::InterpreterError::TypeError(
-                ::std::format!(#msg, __other)
-            )
-        ),
     }
 }
 
