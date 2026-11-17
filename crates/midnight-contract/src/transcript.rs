@@ -1,5 +1,5 @@
 //! The contract-call transcripts of a transaction that a block ran, and the
-//! logs that each transcript emits.
+//! events that each transcript emits.
 
 use midnight_helpers::{
     ContractAction, DB, DefaultDB, Deserializable, FinalizedTransaction, ProofKind, Serializable,
@@ -124,19 +124,19 @@ pub struct CallTranscript {
 }
 
 impl CallTranscript {
-    /// The logs that this transcript emits when it runs, in op order, as the
+    /// The events that this transcript emits when it runs, in op order, as the
     /// ledger 9 VM decodes each `log` op. It takes each logged value from the
     /// `push` right before the `log`, which is exact for compactc output. It
     /// does not say whether the transcript ran: read `status` for that.
     ///
     /// # Errors
     ///
-    /// [`UnreadableLog`] when a `log` does not directly follow a `push`, or
+    /// [`UnreadableEvent`] when a `log` does not directly follow a `push`, or
     /// when the `log` or its `push` is inside a `branch` or `jmp` window.
-    /// Only a VM run against the contract state before the call gives such a
-    /// log, so the read refuses it.
-    pub fn logs(&self) -> Result<Vec<VersionedLogItem<InMemoryDB>>, UnreadableLog> {
-        let mut logs = Vec::new();
+    /// Only a VM run against the contract state before the call gives the
+    /// event of such a `log`, so the read refuses it.
+    pub fn events(&self) -> Result<Vec<VersionedLogItem<InMemoryDB>>, UnreadableEvent> {
+        let mut events = Vec::new();
         // A `branch` or a `jmp` at `i` can skip the ops `i + 1 ..= i + skip`.
         // An op is in a window when it comes before the end of an earlier one.
         let mut window_end = 0;
@@ -146,9 +146,9 @@ impl CallTranscript {
             match op {
                 Op::Log => match previous {
                     Some((Op::Push { value, .. }, false)) if !in_window => {
-                        logs.extend(decode_event(value.clone().into()));
+                        events.extend(decode_event(value.clone().into()));
                     }
-                    _ => return Err(UnreadableLog { op: index }),
+                    _ => return Err(UnreadableEvent { op: index }),
                 },
                 Op::Branch { skip } | Op::Jmp { skip } => {
                     window_end = window_end.max((index + 1).saturating_add(*skip as usize));
@@ -157,7 +157,7 @@ impl CallTranscript {
             }
             previous = Some((op, in_window));
         }
-        Ok(logs)
+        Ok(events)
     }
 }
 
@@ -195,9 +195,9 @@ fn event_envelope(value: &StateValue<InMemoryDB>) -> Option<VersionedLogItem<InM
 /// Whether the chain applied a transcript, as far as the node says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallStatus {
-    /// Its segment applied, so its effects and its logs are on chain.
+    /// Its segment applied, so its effects and its events are on chain.
     Applied,
-    /// Its segment failed, so the chain kept none of its effects or logs.
+    /// Its segment failed, so the chain kept none of its effects or events.
     Failed,
     /// The node does not say: a partial success with two or more fallible
     /// segments that hold fallible coins, a fallible unshielded offer or a
@@ -205,10 +205,10 @@ pub enum CallStatus {
     Undecided,
 }
 
-/// A `log` op that the static read cannot decode exactly.
+/// An event whose `log` op the static read cannot decode exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("log op {op} is not a push then log pair outside every branch and jmp window")]
-pub struct UnreadableLog {
+pub struct UnreadableEvent {
     /// The index of the `log` op in [`ops`](CallTranscript::ops).
     pub op: usize,
 }
@@ -335,13 +335,13 @@ mod tests {
     }
 
     /// The ledger 9 VM is the oracle: it runs `[push value, log]`, and
-    /// `logs` must return the items that it logs. It catches a mirror that
+    /// `events` must return the items that it logs. It catches a mirror that
     /// drifts from the VM's private `decode_event`. The cases are the envelope
     /// of each event tag, and the version 0 form of a value that is not an
     /// event. Two more cases test the bound `MAX_LOG_EMITTED`, which the VM
     /// applies to the data of an event and not to its envelope.
     #[test]
-    fn logs_decode_each_logged_value_as_the_vm_does() {
+    fn events_decode_each_logged_value_as_the_vm_does() {
         // The data width of each event tag in compactc output.
         const WIDTHS: [usize; 11] = [32, 578, 81, 49, 145, 145, 80, 113, 0, 0, 288];
         let mut values: Vec<_> = (0..)
@@ -410,7 +410,7 @@ mod tests {
                 },
                 Op::Log,
             ])
-            .logs();
+            .events();
             assert_eq!(read, Ok(logged), "for the logged value {value:?}");
         }
     }
@@ -419,13 +419,13 @@ mod tests {
     /// gives the value. It catches a read that takes the nearest earlier
     /// `push`.
     #[test]
-    fn logs_refuse_a_log_after_a_dup() {
+    fn events_refuse_a_log_after_a_dup() {
         let ops = vec![
             push(event(LogEventType::Misc as u8, 288)),
             Op::Dup { n: 0 },
             Op::Log,
         ];
-        assert_eq!(transcript(ops).logs(), Err(UnreadableLog { op: 2 }));
+        assert_eq!(transcript(ops).events(), Err(UnreadableEvent { op: 2 }));
     }
 
     /// Whether the VM runs an op inside a `branch` window depends on the
@@ -433,13 +433,13 @@ mod tests {
     /// another value. It catches a read that ignores the window, and one
     /// that checks the window of the `log` alone.
     #[test]
-    fn logs_refuse_a_log_whose_push_is_inside_a_branch_window() {
+    fn events_refuse_a_log_whose_push_is_inside_a_branch_window() {
         let ops = vec![
             push(StateValue::from(AlignedValue::from(true))),
             Op::Branch { skip: 1 },
             push(event(LogEventType::Misc as u8, 288)),
             Op::Log,
         ];
-        assert_eq!(transcript(ops).logs(), Err(UnreadableLog { op: 3 }));
+        assert_eq!(transcript(ops).events(), Err(UnreadableEvent { op: 3 }));
     }
 }
