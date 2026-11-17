@@ -74,7 +74,10 @@ impl<P> Contract<P> {
     /// The node does not check that run. The indexer leaves out a transaction
     /// that Council, TechnicalCommittee, FederatedAuthority or the Scheduler
     /// dispatches, so the logs of such a transaction are missing with no
-    /// error. [`Self::logs_at`] reads a block from the node and gives them.
+    /// error. [`Self::logs_at`] reads a block from the node and gives them
+    /// when the block body holds a copy of the transaction. When the block
+    /// ran the transaction from storage, as for a Scheduler call, `logs_at`
+    /// fails with [`ContractError::UnknownLogs`].
     ///
     /// The read covers every block from `from` to the indexer's latest block
     /// at the start of the read, and holds all their logs in memory. To
