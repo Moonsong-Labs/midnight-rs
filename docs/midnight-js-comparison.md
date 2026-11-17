@@ -185,30 +185,30 @@ When `get_receipt` fails with no verdict, the error is `ProviderError::Submissio
 
 A Compact circuit emits an event (MIP-0002) with `emit`. midnight-js returns the events of a call as `CallResultPublic.logEvents`, in emission order across the whole call tree. Each `LogEvent` carries the address of the contract that emitted it, and `ContractLog.decodeAll` decodes them.
 
-midnight-rs returns the events as `logs` on `CallOutcome` (from `PendingCall::get_receipt`) and on `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::logs`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the event data as a raw `StateValue`. `Misc::decode_log_data`, from the same module, decodes a `Misc` event into its `name` and `payload`. A custom Compact event is a `Misc`.
+midnight-rs returns the events in the `events` field of `CallOutcome` (from `PendingCall::get_receipt`) and of `Simulated` (from `.simulate()`). The interpreter puts them on `ExecutionResult::events`. Each item is the upstream `VersionedLogItem`, re-exported with its `LogEventType` from `midnight_contract::runtime`. It holds a version, an event type and the event data as a raw `StateValue`. `Misc::decode_event`, from the same module, decodes a `Misc` event into its `name` and `payload`. A custom Compact event is a `Misc`.
 
 The differences:
 
 - An item carries no address. The interpreter refuses a cross-contract call, so every event comes from the called contract, and the caller has its address.
 - `ContractLog.decodeAll` decodes every event type. The SDK decodes only `Misc`. The ten standard events (`ShieldedSpend` to `Unpaused`) have no typed decode, so read their data with the cell helpers of `midnight_typed_state`, such as `cell_as`.
-- `ContractLog.decodeAll` marks a version 0 item as degraded. It reads every other version with the version 1 layout, and does not check the width of the data. `Misc::decode_log_data` returns a `DecodeLogError` for a version other than 1 and for data that is not one cell under the alignment `bytes(288)`.
-- The local run decodes each event as the ledger 9 VM does, so the SDK returns the item that the chain logs.
+- `ContractLog.decodeAll` marks a version 0 item as degraded. It reads every other version with the version 1 layout, and does not check the width of the data. `Misc::decode_event` returns a `DecodeEventError` for a version other than 1 and for data that is not one cell under the alignment `bytes(288)`.
+- The local run decodes each event as the ledger 9 VM does, so the SDK returns the event that the chain emits.
 
 ### The events of other calls
 
 midnight-js reads the events of other calls from the indexer. `PublicDataProvider.queryContractEvents` reads a page of the events of one contract, and `contractEventsObservable` replays them from a cursor, then follows the chain. midnight-rs reads them from the node, one block at a time:
 
-1. `NodeApi::get_block_transactions(block_hash)` gives the Midnight transactions that the block ran, in the order that the chain ran them. Each `BlockTransaction` holds the transaction hash, the `TxOutcome` from the events of the block, and the transaction bytes.
+1. `NodeApi::get_block_transactions(block_hash)` gives the Midnight transactions that the block ran, in the order that the chain ran them. Each `BlockTransaction` holds the transaction hash, the `TxOutcome` from the block's `System.Events`, and the transaction bytes.
 2. `midnight_contract::call_transcripts(bytes, outcome)` gives the contract-call transcripts of a transaction, in the order that the ledger runs them. Each `CallTranscript` holds the contract address, the entry point, a `CallStatus` and the ops.
-3. `CallTranscript::logs` gives the logs of a transcript as the ledger 9 VM decodes them. `Misc::decode_log_data` decodes a `Misc` item.
+3. `CallTranscript::events` gives the events of a transcript as the ledger 9 VM decodes them. `Misc::decode_event` decodes a `Misc` event.
 
 The differences:
 
 - The node read has no filter, page or cursor. The caller chooses the blocks, and keeps the transcripts whose `address` it follows. Pass a finalized block hash, because a reorg can replace a best block.
-- The node keeps no contract log. The read takes each logged value from the transaction bytes in the block body, and the outcome from the events of the block. So it needs the state at the block and at its parent. A node with default pruning keeps that state for the last 256 finalized blocks, so the read reaches the last 255. An archive node keeps it for every block.
+- The node does not store contract events. The read takes each logged value from the transaction bytes in the block body, and the outcome from the block's `System.Events`. So it needs the state at the block and at its parent. A node with default pruning keeps that state for the last 256 finalized blocks, so the read reaches the last 255. An archive node keeps it for every block.
 - `BlockTransaction.bytes` is `None` for a transaction that the block ran from storage (a collective `close`, a federated `motion_close` or the Scheduler) when the block body holds no copy of it. The content of that transaction is then unknown. The indexer leaves such a transaction out, and also a transaction that a governance call wraps in the body. The node read finds the wrapped transaction.
 - `CallStatus` tells whether the chain applied a transcript. The outcome event of a partial success does not say which fallible segment failed. So a fallible transcript of a partial success with two or more fallible segments that can fail is `CallStatus::Undecided`. A segment with no fallible coins, no fallible unshielded offer and no action cannot fail. The Dust fee intent of a wallet-paid call is such a segment, so the fallible transcript of a call that midnight-rs builds is `Applied` or `Failed`. Every transcript of block 0 is `Undecided`, because block 0 has no events.
-- `CallTranscript::logs` takes each logged value from the `push` right before the `log`. It refuses a `log` that does not directly follow a `push`, or whose `push` a `branch` or `jmp` can skip, with `UnreadableLog`. Only a run of the VM against the contract state gives the value of such a log. compactc output has none.
+- `CallTranscript::events` takes each logged value from the `push` right before the `log`. It refuses a `log` that does not directly follow a `push`, or whose `push` a `branch` or `jmp` can skip, with `UnreadableEvent`. Only a run of the VM against the contract state gives the value of such a `log`. compactc output has none.
 
 ## ZK artifacts
 

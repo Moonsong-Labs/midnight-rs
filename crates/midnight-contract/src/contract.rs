@@ -35,11 +35,11 @@ pub struct CallOutcome<T> {
     /// Hash of the block it landed in.
     pub block_hash: BlockHash,
     /// The events that the circuit emitted, in emission order. They come from
-    /// the local run of the call, and the chain logs the same events. See
-    /// [`ExecutionResult::logs`](crate::runtime::ExecutionResult::logs).
-    /// [`Misc::decode_log_data`](crate::runtime::Misc::decode_log_data)
+    /// the local run of the call, and the chain emits the same events. See
+    /// [`ExecutionResult::events`](crate::runtime::ExecutionResult::events).
+    /// [`Misc::decode_event`](crate::runtime::Misc::decode_event)
     /// decodes a `Misc` event.
-    pub logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
+    pub events: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
 }
 
 impl<T> CallOutcome<T> {
@@ -51,7 +51,7 @@ impl<T> CallOutcome<T> {
             extrinsic_hash: self.extrinsic_hash,
             transaction_hash: self.transaction_hash,
             block_hash: self.block_hash,
-            logs: self.logs,
+            events: self.events,
         }
     }
 }
@@ -72,10 +72,10 @@ pub struct Simulated<T, L> {
     /// The block whose state and time the run read.
     pub block_hash: BlockHash,
     /// The events that the circuit emitted, in emission order. See
-    /// [`ExecutionResult::logs`](crate::runtime::ExecutionResult::logs).
-    /// [`Misc::decode_log_data`](crate::runtime::Misc::decode_log_data)
+    /// [`ExecutionResult::events`](crate::runtime::ExecutionResult::events).
+    /// [`Misc::decode_event`](crate::runtime::Misc::decode_event)
     /// decodes a `Misc` event.
-    pub logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
+    pub events: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
 }
 
 /// A circuit call that ran locally, before the build of its transaction
@@ -330,7 +330,7 @@ async fn settle_snapshot(
 pub struct PendingCall<T> {
     pending: PendingTx,
     value: T,
-    logs: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
+    events: Vec<crate::runtime::VersionedLogItem<InMemoryDB>>,
     address: String,
     /// The store that holds the call's `Pending` snapshot, or `None` when the
     /// call recorded none.
@@ -373,7 +373,7 @@ impl<T> PendingCall<T> {
         let Self {
             pending,
             value,
-            logs,
+            events,
             address,
             snapshot_store,
         } = self;
@@ -393,7 +393,7 @@ impl<T> PendingCall<T> {
             extrinsic_hash,
             transaction_hash: receipt.transaction_hash,
             block_hash: receipt.block_hash,
-            logs,
+            events,
         })
     }
 }
@@ -1268,7 +1268,7 @@ impl<P> Contract<P> {
             value: run.result,
             ledger: run.state,
             block_hash: state.hash,
-            logs: run.logs,
+            events: run.events,
         })
     }
 
@@ -1608,7 +1608,7 @@ impl<P> Contract<P> {
             store.as_deref(),
         ))
         .await?;
-        let logs = std::mem::take(&mut ran.exec_result.logs);
+        let events = std::mem::take(&mut ran.exec_result.events);
         let (built, result) = Box::pin(self.build_call(
             ran,
             circuit,
@@ -1655,7 +1655,7 @@ impl<P> Contract<P> {
         Ok(PendingCall {
             pending,
             value,
-            logs,
+            events,
             address: self.address.clone(),
             snapshot_store,
         })

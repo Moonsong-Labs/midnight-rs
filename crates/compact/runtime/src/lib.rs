@@ -34,7 +34,7 @@ pub use foreign::{
 pub use midnight_onchain_runtime::ops::{LogEventType, Op, VersionedLogItem};
 pub use midnight_onchain_runtime::result_mode::ResultModeVerify;
 pub use result::ExecutionResult;
-pub use standard_library::{DecodeLogError, Either, Maybe, Misc};
+pub use standard_library::{DecodeEventError, Either, Maybe, Misc};
 pub use value::{Value, integer_fallback_aligned};
 pub use witness::{NoWitnesses, WitnessContext, WitnessOutcome, WitnessProvider};
 pub use zswap::{CircuitZswapInput, CircuitZswapOutput, WitnessNative};

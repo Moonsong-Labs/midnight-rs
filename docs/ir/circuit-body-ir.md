@@ -16,7 +16,7 @@ The artifact holds the whole program, not only the circuit bodies. It has the ex
 
 `compact-codegen` reads the artifact through its `artifact` module (`crates/compact/codegen/src/artifact.rs`). The `compact_bindgen::contract!` macro calls it at compile time. Codegen generates the typed Rust bindings and embeds each circuit, witness and native in them as typed `ir` values. The generated bindings do not read the artifact at run time. A caller can also load the artifact at run time with `compact_codegen::artifact::load_str`.
 
-In both cases, the interpreter (`crates/compact/interpreter/src/lib.rs`) executes `ir::Circuit` values. It runs a circuit body against the current contract state, calls host witnesses, and returns an `ExecutionResult` (reads, gather ops, communication outputs, result, logs). From that result, `midnight-contract` builds the public transcript (an Impact `Op` program, see [impact-onchain-vm.md](impact-onchain-vm.md)) and the `ProofPreimage`. ZKIR and the prover key then make the proof (see [zkir.md](zkir.md)).
+In both cases, the interpreter (`crates/compact/interpreter/src/lib.rs`) executes `ir::Circuit` values. It runs a circuit body against the current contract state, calls host witnesses, and returns an `ExecutionResult` (reads, gather ops, communication outputs, result, events). From that result, `midnight-contract` builds the public transcript (an Impact `Op` program, see [impact-onchain-vm.md](impact-onchain-vm.md)) and the `ProofPreimage`. ZKIR and the prover key then make the proof (see [zkir.md](zkir.md)).
 
 Codegen also lowers the contract's constructor to an `ir::Circuit` with a unit result, so the interpreter runs it as it runs a circuit.
 
