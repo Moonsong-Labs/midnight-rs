@@ -190,7 +190,7 @@ pub(crate) fn emit_ledger_wrapper(
 
             /// Pin the state reads and the circuit calls to the block `hash`.
             /// Default is the node's best block. A circuit call runs at the time
-            /// of that block. `logs_at` takes its own block and ignores the pin.
+            /// of that block. `events_at` takes its own block and ignores the pin.
             pub fn at_block(self, hash: midnight_contract::BlockHash) -> Self {
                 Self(self.0.at_block(hash))
             }
@@ -243,14 +243,17 @@ pub(crate) fn emit_ledger_wrapper(
                 Ok(#struct_name::new(state))
             }
 
-            /// Get the logs that this contract emitted in the block with
+            /// Get the events that this contract emitted in the block with
             /// `block_hash`, from the node. See
-            /// `midnight_contract::Contract::logs_at`.
-            pub async fn logs_at(
+            /// `midnight_contract::Contract::events_at`.
+            pub async fn events_at(
                 &self,
                 block_hash: midnight_contract::BlockHash,
-            ) -> Result<::std::vec::Vec<midnight_contract::Log>, midnight_contract::ContractError> {
-                self.0.logs_at(block_hash).await
+            ) -> Result<
+                ::std::vec::Vec<midnight_contract::ContractEvent>,
+                midnight_contract::ContractError,
+            > {
+                self.0.events_at(block_hash).await
             }
 
             /// Maintenance / governance operations (verifier-key rotation,

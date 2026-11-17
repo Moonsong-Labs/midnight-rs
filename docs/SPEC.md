@@ -19,8 +19,8 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── offer.rs             ShieldedOffer: coins and payments a deploy carries
   │     ├── transcript.rs        call_transcripts: the contract calls of a transaction that a
   │     │                        block ran, their CallStatus and their events
-  │     ├── logs.rs              Contract::logs_at and Log: the logs of a contract in a block,
-  │     │                        from the node
+  │     ├── events.rs            Contract::events_at and ContractEvent: the events of a contract
+  │     │                        in a block, from the node
   │     ├── ledger/              (private) the ledger 9 build of a call, deploy and
   │     │     │                  maintenance update
   │     │     ├── call.rs        a circuit call's transaction: transcripts, offers, proof, the wallet's cover
@@ -284,7 +284,7 @@ Contract<P>   // stateless handle, no cached state
 ```
 Contract::at(&provider, address)              // ConnectBuilder<P>
   .with_zk_config("compiled")
-  [.at_block(node_block_hash)]                // pin the state reads and calls (logs_at takes its own block)
+  [.at_block(node_block_hash)]                // pin the state reads and calls (events_at takes its own block)
   .build()                                    // synchronous, no network calls
   → Contract<P>
 ```
@@ -404,22 +404,22 @@ Misc::decode_event(&event)                    → Misc
 
 The status comes from the outcome event alone. A guaranteed transcript applied unless the transaction is in block 0. A fallible transcript applied under `TxApplied`. Under `TxPartialSuccess` it failed when the transaction has one fallible segment that can fail. A segment with no fallible coins, no fallible unshielded offer and no action cannot fail, such as the Dust fee intent of a wallet-paid call. With two or more segments that can fail it is `Undecided`, because the event does not say which segment failed. Every transcript of block 0 is `Undecided`. The read needs the state at the block and at its parent. A node with default pruning keeps the state of the last 256 finalized blocks, so the read reaches the last 255.
 
-`Contract::logs_at` does the first three steps for the address of the handle:
+`Contract::events_at` does the first three steps for the address of the handle:
 
 ```
-Contract::logs_at(block_hash)                 → Vec<Log>
+Contract::events_at(block_hash)               → Vec<ContractEvent>
   // the block that block_hash names, not the at_block pin
   ├─ get_block_transactions(block_hash)
-  ├─ each transaction, in order: bytes None → UnknownLogs
+  ├─ each transaction, in order: bytes None → UnknownEvents
   ├─ call_transcripts(bytes, outcome), then the transcripts of the handle's address only
   └─ each transcript, by its CallStatus:
-       Failed    → no log, with no call of events()
-       Applied   → each item of events() as Log { transaction_hash, entry_point, item }
-       Undecided → no log when events() is empty, else UnknownLogs
-       events() refuses with UnreadableEvent → UnknownLogs
+       Failed    → no event, with no call of events()
+       Applied   → each item of events() as ContractEvent { transaction_hash, entry_point, item }
+       Undecided → no event when events() is empty, else UnknownEvents
+       events() refuses with UnreadableEvent → UnknownEvents
 ```
 
-The read gives every log that the chain kept in the block, or an error with no partial result. It filters the transcripts by address before it reads a status, so an undecided call of another contract does not fail the read.
+The read gives every event that the chain kept in the block, or an error with no partial result. It filters the transcripts by address before it reads a status, so an undecided call of another contract does not fail the read.
 
 ### Transfer (shielded / unshielded / swap / register dust / sponsor)
 

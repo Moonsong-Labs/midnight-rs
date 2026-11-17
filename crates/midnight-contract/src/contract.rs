@@ -1023,7 +1023,7 @@ impl<P> ConnectBuilder<P> {
 
     /// Pin the state reads and the circuit calls to the block `hash`.
     /// Default is the node's best block. A circuit call runs at the time of
-    /// that block. [`Contract::logs_at`] takes its own block and ignores the
+    /// that block. [`Contract::events_at`] takes its own block and ignores the
     /// pin. A circuit call or a full state read pinned to a block before the
     /// chain's hard fork to ledger 9 fails with [`ContractError::StateFetch`],
     /// which names the ledger 8 tag `contract-state[v6]`.
@@ -1058,8 +1058,8 @@ impl<P> ConnectBuilder<P> {
 /// This is a stateless, immutable handle. It does not cache contract state.
 /// Each circuit call reads the state and the block time from the node RPC
 /// at one block: the `at_block` pin, else the node's best block. Ledger
-/// queries go through the node RPC directly. [`Contract::logs_at`] reads the
-/// logs of the contract at the block that it takes, from the node.
+/// queries go through the node RPC directly. [`Contract::events_at`] reads
+/// the events of the contract at the block that it takes, from the node.
 pub struct Contract<P> {
     address: String,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,

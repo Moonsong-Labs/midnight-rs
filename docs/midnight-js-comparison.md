@@ -202,17 +202,17 @@ midnight-js reads the events of other calls from the indexer. `PublicDataProvide
 2. `midnight_contract::call_transcripts(bytes, outcome)` gives the contract-call transcripts of a transaction, in the order that the ledger runs them. Each `CallTranscript` holds the contract address, the entry point, a `CallStatus` and the ops.
 3. `CallTranscript::events` gives the events of a transcript as the ledger 9 VM decodes them. `Misc::decode_event` decodes a `Misc` event.
 
-`Contract::logs_at(block_hash)` is the handle form of steps 1 to 3. It keeps the transcripts whose `address` is the address of the handle. It gives one `Log` for each log of an `Applied` transcript, with the transaction hash and the entry point of the call. It leaves out a `Failed` transcript, and an `Undecided` transcript that logs nothing. It returns `ContractError::UnknownLogs`, and no log of the block, when it cannot tell which logs a transaction kept. These are the causes:
+`Contract::events_at(block_hash)` is the handle form of steps 1 to 3. It keeps the transcripts whose `address` is the address of the handle. It gives one `ContractEvent` for each event of an `Applied` transcript, with the transaction hash and the entry point of the call. It leaves out a `Failed` transcript, and an `Undecided` transcript that emits no event. It returns `ContractError::UnknownEvents`, and no event of the block, when it cannot tell which events a transaction kept. These are the causes:
 
 - A transaction of the block has `bytes` of `None`. The read then cannot tell whether that transaction calls the contract, so this cause applies to every contract.
-- A transcript of the contract that logs is `Undecided`.
-- A log of a transcript of the contract that is not `Failed` is an `UnreadableEvent`.
+- A transcript of the contract that emits an event is `Undecided`.
+- An event of a transcript of the contract that is not `Failed` is an `UnreadableEvent`.
 
 Steps 1 to 3 then show which cause applies. A caller can use them with its own policy.
 
 The differences:
 
-- The node reads have no page or cursor. The caller chooses the blocks. With steps 1 to 3, it keeps the transcripts whose `address` it follows, and `Contract::logs_at` keeps those of its own contract. Pass a finalized block hash, because a reorg can replace a best block.
+- The node reads have no page or cursor. The caller chooses the blocks. With steps 1 to 3, it keeps the transcripts whose `address` it follows, and `Contract::events_at` keeps those of its own contract. Pass a finalized block hash, because a reorg can replace a best block.
 - The node does not store contract events. The read takes each logged value from the transaction bytes in the block body, and the outcome from the events of the block. So it needs the state at the block and at its parent. A node with default pruning keeps that state for the last 256 finalized blocks, so the read reaches the last 255. An archive node keeps it for every block.
 - `BlockTransaction.bytes` is `None` for a transaction that the block ran from storage (a collective `close`, a federated `motion_close` or the Scheduler) when the block body holds no copy of it. The content of that transaction is then unknown. The indexer leaves such a transaction out, and also a transaction that a governance call wraps in the body. The node read finds the wrapped transaction.
 - `CallStatus` tells whether the chain applied a transcript. The outcome event of a partial success does not say which fallible segment failed. So a fallible transcript of a partial success with two or more fallible segments that can fail is `CallStatus::Undecided`. A segment with no fallible coins, no fallible unshielded offer and no action cannot fail. The Dust fee intent of a wallet-paid call is such a segment, so the fallible transcript of a call that midnight-rs builds is `Applied` or `Failed`. Every transcript of block 0 is `Undecided`, because block 0 has no events.
