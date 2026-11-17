@@ -1,4 +1,4 @@
-//! The logs that a contract emitted up to the latest block of the indexer.
+//! The events that a contract emitted up to the latest block of the indexer.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -34,63 +34,63 @@ const CONTRACT_EVENTS: &str = r#"
 /// only a bound on the rows ends a wait for a block that it lacks.
 const ROW_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The logs that a contract emitted in one block.
+/// The events that a contract emitted in one block.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BlockLogs {
+pub struct BlockEvents {
     /// The height of the block.
     pub height: u64,
     /// The hash of the block, the input of [`Contract::events_at`].
     pub hash: BlockHash,
-    /// The logs, in the order in which the indexer stored them.
-    pub logs: Vec<ContractEvent>,
+    /// The events, in the order in which the indexer stored them.
+    pub events: Vec<ContractEvent>,
 }
 
-/// The result of [`Contract::latest_logs`].
+/// The result of [`Contract::latest_events`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LatestLogs {
-    /// Each block of the read that holds a log of the contract, by height.
-    pub blocks: Vec<BlockLogs>,
+pub struct LatestEvents {
+    /// Each block of the read that holds an event of the contract, by height.
+    pub blocks: Vec<BlockEvents>,
     /// The first height that the read did not cover. Pass it as
-    /// [`FromBlock::Height`] to read the logs that follow.
+    /// [`FromBlock::Height`] to read the events that follow.
     pub next_height: u64,
 }
 
-/// The first block of [`Contract::latest_logs`].
+/// The first block of [`Contract::latest_events`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FromBlock {
-    /// The indexer's latest block, so the read gives only the logs of that
-    /// block. A follower of new logs starts here.
+    /// The indexer's latest block, so the read gives only the events of that
+    /// block. A follower of new events starts here.
     Latest,
     /// The block at this height.
     Height(u64),
 }
 
 impl<P> Contract<P> {
-    /// Get the logs that this contract emitted from the block at `from` to
-    /// the latest block of the indexer at `indexer_url`.
+    /// Get the events that this contract emitted from the block at `from`
+    /// to the latest block of the indexer at `indexer_url`.
     ///
     /// The indexer runs each finalized transaction on its own copy of the
-    /// ledger, and keeps the logs of the segments that applied in that run.
+    /// ledger, and keeps the events of the segments that applied in that run.
     /// The node does not check that run. The indexer leaves out a transaction
     /// that Council, TechnicalCommittee, FederatedAuthority or the Scheduler
-    /// dispatches. So the logs of such a transaction are missing with no
+    /// dispatches. So the events of such a transaction are missing with no
     /// error. [`Self::events_at`] reads a block from the node and gives them
     /// when the block body holds a copy of the transaction. When the block
     /// ran the transaction from storage, as for a Scheduler call, `events_at`
     /// fails with [`ContractError::UnknownEvents`].
     ///
     /// The read covers every block from `from` to the indexer's latest block
-    /// at the start of the read, and holds all their logs in memory. To
+    /// at the start of the read, and holds all their events in memory. To
     /// follow the contract, read again from
-    /// [`next_height`](LatestLogs::next_height). When the indexer's latest
-    /// block is below `from`, the read gives no logs and keeps `from` as the
-    /// next height.
+    /// [`next_height`](LatestEvents::next_height). When the indexer's latest
+    /// block is below `from`, the read gives no events and keeps `from` as
+    /// the next height.
     ///
-    /// It decodes each log from the ledger event that the indexer stores, not
-    /// from the indexer's decoded fields. It uses the indexer's
-    /// `contractEvents` subscription, which the indexer marks `@beta`, so it
-    /// needs an indexer of the 4.4 line. `indexer_url` takes the forms that
-    /// `WalletBuilder::sync` takes.
+    /// It decodes each [`ContractEvent`] from the ledger event that the
+    /// indexer stores, not from the indexer's decoded fields. It uses the
+    /// indexer's `contractEvents` subscription, which the indexer marks
+    /// `@beta`, so it needs an indexer of the 4.4 line. `indexer_url` takes
+    /// the forms that `WalletBuilder::sync` takes.
     ///
     /// # Errors
     ///
@@ -107,14 +107,14 @@ impl<P> Contract<P> {
     ///     `contractEvents`;
     ///   - the latest-block query times out, or gets another status;
     ///   - the indexer's latest height is negative;
-    ///   - a row is not a ledger 9 log of this contract in the range.
+    ///   - a row is not a ledger 9 event of this contract in the range.
     /// - [`ContractError::InvalidContractAddress`] when the handle's address
     ///   does not parse.
-    pub async fn latest_logs(
+    pub async fn latest_events(
         &self,
         indexer_url: &str,
         from: FromBlock,
-    ) -> Result<LatestLogs, ContractError> {
+    ) -> Result<LatestEvents, ContractError> {
         let address = parse_contract_address(self.address())?;
         read(indexer_url, &address, from).await
     }
@@ -124,7 +124,7 @@ async fn read(
     indexer_url: &str,
     address: &ContractAddress,
     from: FromBlock,
-) -> Result<LatestLogs, ContractError> {
+) -> Result<LatestEvents, ContractError> {
     let latest = IndexerClient::new(indexer_url)
         .map_err(indexer_error)?
         .get_block(None)
@@ -137,7 +137,7 @@ async fn read(
         .transpose()?;
     let (range, next_height) = covered(from, latest);
     let Some(range) = range else {
-        return Ok(LatestLogs {
+        return Ok(LatestEvents {
             blocks: Vec::new(),
             next_height,
         });
@@ -151,7 +151,7 @@ async fn read(
         .subscribe::<Rows>(CONTRACT_EVENTS, serde_json::json!({ "filter": filter }))
         .await
         .map_err(indexer_error)?;
-    let mut logs = Vec::new();
+    let mut events = Vec::new();
     loop {
         let row = match tokio::time::timeout(ROW_TIMEOUT, rows.next()).await {
             Err(_) => {
@@ -163,10 +163,10 @@ async fn read(
             Ok(None) => break,
             Ok(Some(row)) => row.map_err(indexer_error)?,
         };
-        logs.push(decode_row(row, address)?);
+        events.push(decode_row(row, address)?);
     }
-    Ok(LatestLogs {
-        blocks: group_by_block(logs, &range)?,
+    Ok(LatestEvents {
+        blocks: group_by_block(events, &range)?,
         next_height,
     })
 }
@@ -185,28 +185,28 @@ fn covered(from: FromBlock, latest: Option<u64>) -> (Option<RangeInclusive<u64>>
     }
 }
 
-/// The logs by block, in height order. Each height must lie in `range` and
+/// The events by block, in height order. Each height must lie in `range` and
 /// have one hash.
 fn group_by_block(
-    logs: Vec<(u64, BlockHash, ContractEvent)>,
+    events: Vec<(u64, BlockHash, ContractEvent)>,
     range: &RangeInclusive<u64>,
-) -> Result<Vec<BlockLogs>, ContractError> {
-    let mut blocks = BTreeMap::<u64, BlockLogs>::new();
-    for (height, hash, log) in logs {
+) -> Result<Vec<BlockEvents>, ContractError> {
+    let mut blocks = BTreeMap::<u64, BlockEvents>::new();
+    for (height, hash, event) in events {
         if !range.contains(&height) {
             return Err(disagrees(format!(
                 "a row of block {height}, outside {range:?}"
             )));
         }
-        let block = blocks.entry(height).or_insert_with(|| BlockLogs {
+        let block = blocks.entry(height).or_insert_with(|| BlockEvents {
             height,
             hash,
-            logs: Vec::new(),
+            events: Vec::new(),
         });
         if block.hash != hash {
             return Err(disagrees(format!("two hashes for block {height}")));
         }
-        block.logs.push(log);
+        block.events.push(event);
     }
     Ok(blocks.into_values().collect())
 }
@@ -264,12 +264,12 @@ fn decode_row(
         logged_item,
     } = event.content
     else {
-        return Err(disagrees("an event that is not a contract log".into()));
+        return Err(disagrees("a ledger event that is not a ContractLog".into()));
     };
     let emitter: ContractAddress = emitter.into_sdk();
     if emitter != *address {
         return Err(disagrees(format!(
-            "a log of another contract, {}",
+            "an event of another contract, {}",
             format_contract_address(&emitter)
         )));
     }
@@ -280,7 +280,7 @@ fn decode_row(
         .eq_ignore_ascii_case(&transaction_hash.to_string())
     {
         return Err(disagrees(format!(
-            "the log names transaction {transaction_hash}, the row {}",
+            "the event names transaction {transaction_hash}, the row {}",
             row.transaction.hash
         )));
     }
@@ -369,20 +369,20 @@ mod tests {
         }
     }
 
-    /// It catches `raw` read as the log payload. It also catches a read that
-    /// trusts the indexer's address filter, or its join of an event to a
+    /// It catches `raw` read as a `VersionedLogItem`. It also catches a read
+    /// that trusts the indexer's address filter, or its join of an event to a
     /// transaction.
     #[test]
     fn a_row_that_disagrees_with_the_read_is_an_error() {
         let address = ContractAddress(HashOutput([1; 32]));
-        let (height, hash, log) =
-            decode_row(row(1, 2, 2), &address).expect("a log of the contract");
+        let (height, hash, event) =
+            decode_row(row(1, 2, 2), &address).expect("an event of the contract");
         assert_eq!(
             (
                 height,
                 hash,
-                log.transaction_hash,
-                log.entry_point.as_slice()
+                event.transaction_hash,
+                event.entry_point.as_slice()
             ),
             (
                 7,
@@ -405,7 +405,7 @@ mod tests {
         }
     }
 
-    fn log(byte: u8) -> ContractEvent {
+    fn event(byte: u8) -> ContractEvent {
         ContractEvent {
             transaction_hash: TransactionHash::from([byte; 32]),
             entry_point: b"record".to_vec(),
@@ -418,36 +418,36 @@ mod tests {
     }
 
     /// It catches a grouping that trusts the row order, which gives two
-    /// `BlockLogs` for one height. It also catches a read that keeps a row
+    /// `BlockEvents` for one height. It also catches a read that keeps a row
     /// outside the range, which a read of the next range gives again.
     #[test]
     fn rows_group_by_height_inside_the_range() {
         let (a, b) = (BlockHash::from([5; 32]), BlockHash::from([7; 32]));
         let blocks = group_by_block(
-            vec![(7, b, log(1)), (5, a, log(2)), (7, b, log(3))],
+            vec![(7, b, event(1)), (5, a, event(2)), (7, b, event(3))],
             &(0..=9),
         );
         assert_eq!(
             blocks.expect("rows inside the range"),
             [
-                BlockLogs {
+                BlockEvents {
                     height: 5,
                     hash: a,
-                    logs: vec![log(2)],
+                    events: vec![event(2)],
                 },
-                BlockLogs {
+                BlockEvents {
                     height: 7,
                     hash: b,
-                    logs: vec![log(1), log(3)],
+                    events: vec![event(1), event(3)],
                 },
             ]
         );
         for (name, rows) in [
-            ("a row before the range", vec![(1, a, log(1))]),
-            ("a row past the range", vec![(10, b, log(1))]),
+            ("a row before the range", vec![(1, a, event(1))]),
+            ("a row past the range", vec![(10, b, event(1))]),
             (
                 "two hashes for one height",
-                vec![(7, a, log(1)), (7, b, log(2))],
+                vec![(7, a, event(1)), (7, b, event(2))],
             ),
         ] {
             assert!(
@@ -463,10 +463,10 @@ mod tests {
         }
     }
 
-    /// A read from a mock indexer that holds one log, and ends the
+    /// A read from a mock indexer that holds one event, and ends the
     /// subscription with `complete` when `complete` is true, else with a
     /// close frame.
-    async fn read_one_row(complete: bool) -> Result<LatestLogs, ContractError> {
+    async fn read_one_row(complete: bool) -> Result<LatestEvents, ContractError> {
         use midnight_indexer_client::testutil::{
             accept_subscriber, bind, next_json, read_http_request, send_json, send_next,
             write_json_response,
@@ -519,13 +519,13 @@ mod tests {
     /// before it, so that a cut read passes as a complete one. It also
     /// catches a filter with no `toBlock`, which the indexer never completes.
     #[tokio::test]
-    async fn only_a_completed_subscription_gives_the_logs() {
+    async fn only_a_completed_subscription_gives_the_events() {
         let read = read_one_row(true).await.expect("a completed read");
         assert_eq!(
             (
                 read.blocks
                     .iter()
-                    .map(|block| (block.height, block.logs.len()))
+                    .map(|block| (block.height, block.events.len()))
                     .collect::<Vec<_>>(),
                 read.next_height
             ),

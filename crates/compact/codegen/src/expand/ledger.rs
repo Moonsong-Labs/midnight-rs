@@ -223,15 +223,15 @@ pub(crate) fn emit_ledger_wrapper(
                 }
             }
 
-            /// Get the logs that this contract emitted from the block at `from`
-            /// to the latest block of the indexer at `indexer_url`. See
-            /// `midnight_contract::Contract::latest_logs`.
-            pub async fn latest_logs(
+            /// Get the events that this contract emitted from the block at
+            /// `from` to the latest block of the indexer at `indexer_url`. See
+            /// `midnight_contract::Contract::latest_events`.
+            pub async fn latest_events(
                 &self,
                 indexer_url: &str,
                 from: midnight_contract::FromBlock,
-            ) -> Result<midnight_contract::LatestLogs, midnight_contract::ContractError> {
-                self.0.latest_logs(indexer_url, from).await
+            ) -> Result<midnight_contract::LatestEvents, midnight_contract::ContractError> {
+                self.0.latest_events(indexer_url, from).await
             }
         }
 

@@ -21,8 +21,8 @@ midnight-core                    meta-crate; re-exports the public API
   │     │                        block ran, their CallStatus and their events
   │     ├── events.rs            Contract::events_at and ContractEvent: the events of a contract
   │     │                        in a block, from the node
-  │     ├── indexer_logs.rs      Contract::latest_logs, LatestLogs, BlockLogs, FromBlock: the
-  │     │                        logs of a contract up to the indexer's latest block
+  │     ├── indexer_events.rs    Contract::latest_events, LatestEvents, BlockEvents, FromBlock:
+  │     │                        the events of a contract up to the indexer's latest block
   │     ├── ledger/              (private) the ledger 9 build of a call, deploy and
   │     │     │                  maintenance update
   │     │     ├── call.rs        a circuit call's transaction: transcripts, offers, proof, the wallet's cover
@@ -85,7 +85,7 @@ midnight-core                    meta-crate; re-exports the public API
   │                              with password-encrypted export/import
   │
   ├── midnight-indexer-client    GraphQL client + subscriptions for the wallet sync and
-  │                              Contract::latest_logs
+  │                              Contract::latest_events
   │
   ├── compact-bindgen           `contract!` macro entry point
   │     ├── compact-bindgen-macro      proc-macro → compact-codegen
@@ -424,12 +424,12 @@ Contract::events_at(block_hash)               → Vec<ContractEvent>
 
 The read gives every event that the chain kept in the block, or an error with no partial result. It filters the transcripts by address before it reads a status, so an undecided call of another contract does not fail the read.
 
-### Read the latest logs from the indexer
+### Read the latest events from the indexer
 
-`Contract::latest_logs` reads the indexer's `contractEvents` subscription, from a start block to the indexer's latest block:
+`Contract::latest_events` reads the indexer's `contractEvents` subscription, from a start block to the indexer's latest block:
 
 ```
-Contract::latest_logs(indexer_url, from)      → LatestLogs { blocks, next_height }
+Contract::latest_events(indexer_url, from)    → LatestEvents { blocks, next_height }
   ├─ IndexerClient::get_block(None)           // the indexer's latest block T, or None
   ├─ covered(from, T)                         → the range, and next_height
   │    Latest, T              → T..=T, T + 1
@@ -444,10 +444,10 @@ Contract::latest_logs(indexer_url, from)      → LatestLogs { blocks, next_heig
   ├─ each row: raw → Event (event[v14]), a ContractLog of the handle's address,
   │    from the transaction of the row, in a block with a 32-byte hash
   └─ group by height: each height in the range, with one hash;
-       the logs of a block keep the row order
+       the events of a block keep the row order
 ```
 
-The read holds every log of its range in memory. To follow the contract, read again from `FromBlock::Height(next_height)`. The indexer leaves out a transaction that governance dispatches, and the node does not check the indexer's run of the ledger. So `Contract::events_at` is the authority for a block that the node holds. A failure gives `ContractError::Indexer`. Its `retryable` keeps the rule of `IndexerError::is_retryable`. A silent indexer is retryable, and a row that fails a check is not.
+The read holds every event of its range in memory. To follow the contract, read again from `FromBlock::Height(next_height)`. The indexer leaves out a transaction that governance dispatches, and the node does not check the indexer's run of the ledger. So `Contract::events_at` is the authority for a block that the node holds. A failure gives `ContractError::Indexer`. Its `retryable` keeps the rule of `IndexerError::is_retryable`. A silent indexer is retryable, and a row that fails a check is not.
 
 ### Transfer (shielded / unshielded / swap / register dust / sponsor)
 

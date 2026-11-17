@@ -8,7 +8,7 @@
 //! the call returns is the one that the chain emits. A read of the call's block
 //! from the node gives the same event, from the transcript that the chain
 //! applied. `Contract::events_at` gives it as the event of the call's
-//! transaction, and `Contract::latest_logs` gives the same event from the
+//! transaction, and `Contract::latest_events` gives the same event from the
 //! indexer.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
@@ -78,7 +78,7 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
 
     // The call lands in a block after the indexer's latest block now.
     let start = contract
-        .latest_logs(&indexer_url, FromBlock::Latest)
+        .latest_events(&indexer_url, FromBlock::Latest)
         .await
         .unwrap_or_else(|e| panic!("the indexer read must succeed: {e:?}"))
         .next_height;
@@ -154,18 +154,18 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
 
     // The indexer trails finality, so read from `start` until it holds the
     // call's block. The test deployed the contract, so no other block holds
-    // a log of it.
+    // an event of it.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let mut from = FromBlock::Height(start);
     let block = loop {
-        match contract.latest_logs(&indexer_url, from).await {
+        match contract.latest_events(&indexer_url, from).await {
             Ok(read) => {
                 if let [block] = read.blocks.as_slice() {
                     break block.clone();
                 }
                 assert!(
                     read.blocks.is_empty(),
-                    "one block holds a log, got {:?}",
+                    "one block holds an event, got {:?}",
                     read.blocks
                 );
                 from = FromBlock::Height(read.next_height);
@@ -183,8 +183,8 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     };
     assert_eq!(
-        (block.hash, block.logs),
+        (block.hash, block.events),
         (outcome.block_hash, node_events),
-        "the indexer gives the logs of the call's block that the node gives"
+        "the indexer gives the events of the call's block that the node gives"
     );
 }
