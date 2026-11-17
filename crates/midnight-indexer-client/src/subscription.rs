@@ -90,8 +90,9 @@ fn ensure_crypto_provider() {
 ///
 /// An event that does not deserialize as `T` arrives as
 /// [`IndexerError::Deserialization`], and the subscription continues.
-/// When the server completes the subscription or sends a WebSocket close
-/// frame, the subscription ends with no `Err` item.
+/// Only a `complete` from the server ends the subscription with no `Err`
+/// item. A close frame or a socket end before it gives a retryable
+/// [`IndexerError::Transport`].
 ///
 /// # Example
 ///
@@ -337,7 +338,10 @@ impl SubscriptionClient {
                     msg = stream.next() => {
                         last_frame = tokio::time::Instant::now();
                         ping_sent = false;
-                        let Some(msg) = msg else { break };
+                        let Some(msg) = msg else {
+                            let _ = tx.send(Err(ended_before_complete())).await;
+                            break;
+                        };
                         let msg = match msg {
                             Ok(msg) => msg,
                             Err(e) => {
@@ -354,7 +358,10 @@ impl SubscriptionClient {
                                 let _ = sink.send(Message::Pong(payload)).await;
                                 continue;
                             }
-                            Message::Close(_) => break,
+                            Message::Close(_) => {
+                                let _ = tx.send(Err(ended_before_complete())).await;
+                                break;
+                            }
                             _ => continue,
                         };
                         let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -421,6 +428,12 @@ impl SubscriptionClient {
             _cancel: cancel_tx,
         })
     }
+}
+
+fn ended_before_complete() -> IndexerError {
+    IndexerError::Transport(
+        "the connection closed before the server completed the subscription".into(),
+    )
 }
 
 fn pong_frame() -> Message {
