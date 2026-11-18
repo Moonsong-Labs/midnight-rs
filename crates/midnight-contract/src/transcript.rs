@@ -36,7 +36,21 @@ pub fn call_transcripts(
     let Transaction::Standard(transaction) = transaction else {
         return Ok(Vec::new());
     };
-    let fallible_segments = segments_that_can_fail(&transaction);
+    Ok(transcripts_in_run_order(&transaction, outcome))
+}
+
+/// The contract-call transcripts of `transaction` in the order that
+/// [`call_transcripts`] gives.
+fn transcripts_in_run_order<S, P, B>(
+    transaction: &StandardTransaction<S, P, B, DefaultDB>,
+    outcome: TxOutcome,
+) -> Vec<CallTranscript>
+where
+    S: SignatureKind<DefaultDB>,
+    P: ProofKind<DefaultDB> + Serializable + Deserializable,
+    B: Storable<DefaultDB> + Clone,
+{
+    let fallible_segments = segments_that_can_fail(transaction);
     let mut intents: Vec<_> = transaction
         .intents
         .iter()
@@ -68,7 +82,7 @@ pub fn call_transcripts(
             }
         }
     }
-    Ok(transcripts)
+    transcripts
 }
 
 /// The number of fallible segments of `transaction` that hold fallible
@@ -215,12 +229,16 @@ pub struct UnreadableEvent {
 
 #[cfg(test)]
 mod tests {
+    use midnight_base_crypto::cost_model::RunningCost;
+    use midnight_helpers::mn_ledger::structure::ContractCall;
     use midnight_helpers::{
-        ContractDeploy, ContractState, DustActions, Intent, Timestamp, UnprovenIntent,
-        UnshieldedOffer,
+        ContractDeploy, ContractState, DustActions, EntryPointBuf, Fr, Intent, Timestamp,
+        UnprovenIntent, UnshieldedOffer,
     };
+    use midnight_onchain_runtime::context::Effects;
     use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
     use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
+    use midnight_onchain_runtime::transcript::Transcript;
     use midnight_onchain_runtime::vm::run_program;
     use midnight_typed_state::{AlignedValue, StorageHashMap};
     use midnight_types::HashOutput;
@@ -296,6 +314,71 @@ mod tests {
 
         assert_eq!(transaction.fallible_segments(), [1, 2, 0xFEED]);
         assert_eq!(segments_that_can_fail(&transaction), 2);
+    }
+
+    /// It catches a single pass that gives the two transcripts of a call
+    /// together. It catches an order that follows the intent map instead of
+    /// the segment id. It also catches a guaranteed pass that reads the
+    /// fallible transcript of a call.
+    #[test]
+    fn transcripts_follow_the_ledger_run_order() {
+        let mut rng = rand::thread_rng();
+        let ttl = Timestamp::from_secs(0);
+        let transcript = |program: Vec<Op<ResultModeVerify, DefaultDB>>| {
+            Some(Sp::new(Transcript {
+                gas: RunningCost::default(),
+                effects: Effects::default(),
+                program: program.into(),
+                version: None,
+            }))
+        };
+        let mut intent = |entry_point: &[u8]| {
+            let call: ContractCall<(), DefaultDB> = ContractCall {
+                address: midnight_helpers::ContractAddress(HashOutput([0; 32])),
+                entry_point: EntryPointBuf(entry_point.to_vec()),
+                guaranteed_transcript: transcript(vec![]),
+                fallible_transcript: transcript(vec![Op::Ckpt]),
+                communication_commitment: Fr::default(),
+                proof: (),
+            };
+            let mut intent = UnprovenIntent::<DefaultDB>::empty(&mut rng, ttl).erase_proofs();
+            intent.actions = vec![ContractAction::Call(Sp::new(call))].into();
+            intent
+        };
+        let (a, b) = (intent(b"a"), intent(b"b"));
+        let transaction = StandardTransaction {
+            network_id: "undeployed".to_string(),
+            intents: StorageHashMap::new().insert(1, a).insert(5, b),
+            guaranteed_coins: None,
+            fallible_coins: StorageHashMap::new(),
+            binding_randomness: rng.r#gen(),
+        };
+        let map_order: Vec<_> = transaction.intents.iter().map(|entry| *entry.0).collect();
+        assert_eq!(
+            map_order,
+            [5, 1],
+            "the test needs an intent map whose order is not the segment order"
+        );
+
+        let order: Vec<_> = transcripts_in_run_order(&transaction, TxOutcome::PartialSuccess)
+            .into_iter()
+            .map(|transcript| {
+                (
+                    transcript.entry_point,
+                    transcript.status,
+                    transcript.ops.len(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            order,
+            [
+                (b"a".to_vec(), CallStatus::Applied, 0),
+                (b"b".to_vec(), CallStatus::Applied, 0),
+                (b"a".to_vec(), CallStatus::Undecided, 1),
+                (b"b".to_vec(), CallStatus::Undecided, 1),
+            ]
+        );
     }
 
     fn transcript(ops: Vec<Op<ResultModeVerify, InMemoryDB>>) -> CallTranscript {
