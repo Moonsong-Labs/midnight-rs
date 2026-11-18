@@ -3,11 +3,15 @@
 //! the copies of `Midnight.send_mn_transaction` in a block body, the outcome
 //! events in the block's `System.Events`, and the pairing of the two.
 
+use std::marker::PhantomData;
+
 use subxt::client::OnlineClientAtBlockImpl;
-use subxt::dynamic::Value;
 use subxt::error::EventsError;
 use subxt::events::Events;
-use subxt::ext::scale_value::{ValueDef, Variant};
+use subxt::ext::scale_decode::visitor::types::{Array, Composite, Sequence, Tuple, Variant};
+use subxt::ext::scale_decode::visitor::{DecodeItemIterator, TypeIdFor, Unexpected};
+use subxt::ext::scale_decode::{self, IntoVisitor, Visitor};
+use subxt::ext::scale_type_resolver::TypeResolver;
 use subxt::extrinsics::Extrinsics;
 use subxt::{Metadata, SubstrateConfig};
 
@@ -72,11 +76,11 @@ fn body_copies_on_this_stack(
 ) -> Result<Vec<BodyCopy>, ProviderError> {
     let mut copies = Vec::new();
     for extrinsic in extrinsics.iter() {
-        let call = extrinsic
+        let MidnightTransactions(call_copies) = extrinsic
             .map_err(|e| ProviderError::Rpc(format!("decoding the block body: {e}")))?
-            .decode_call_data_as::<Value<()>>()
+            .decode_call_data_as::<MidnightTransactions>()
             .map_err(|e| ProviderError::Rpc(format!("decoding the block body: {e}")))?;
-        collect_midnight_transactions(&call, &mut copies)?;
+        copies.extend(call_copies);
     }
     Ok(copies
         .into_iter()
@@ -89,59 +93,122 @@ fn body_copies_on_this_stack(
         .collect())
 }
 
-/// Push the argument of each `Midnight.send_mn_transaction` in `call` to
-/// `copies`, at any depth of the call.
-fn collect_midnight_transactions(
-    call: &Value<()>,
-    copies: &mut Vec<Vec<u8>>,
-) -> Result<(), ProviderError> {
-    let fields = match &call.value {
-        ValueDef::Variant(variant) => {
-            if let Some(bytes) = send_mn_transaction_argument(variant)? {
-                copies.push(bytes);
-                return Ok(());
-            }
-            &variant.values
+/// The argument of each `Midnight.send_mn_transaction` in a call, at any
+/// depth of the call, in call order.
+///
+/// The decode allocates nothing for the other values of the call, such as
+/// the code of a runtime upgrade.
+struct MidnightTransactions(Vec<Vec<u8>>);
+
+impl IntoVisitor for MidnightTransactions {
+    type AnyVisitor<R: TypeResolver> = CallVisitor<R>;
+
+    fn into_visitor<R: TypeResolver>() -> CallVisitor<R> {
+        CallVisitor::new(false)
+    }
+}
+
+struct CallVisitor<R> {
+    /// The value is the first field of a `Midnight` variant, the place of
+    /// the pallet's call.
+    midnight_call: bool,
+    resolver: PhantomData<R>,
+}
+
+impl<R> CallVisitor<R> {
+    fn new(midnight_call: bool) -> Self {
+        Self {
+            midnight_call,
+            resolver: PhantomData,
         }
-        ValueDef::Composite(composite) => composite,
-        _ => return Ok(()),
-    };
-    fields
-        .values()
-        .try_for_each(|field| collect_midnight_transactions(field, copies))
+    }
 }
 
-/// The bytes that `pallet` passes when it is the call
-/// `Midnight.send_mn_transaction`, or `None` for any other value.
-fn send_mn_transaction_argument(pallet: &Variant<()>) -> Result<Option<Vec<u8>>, ProviderError> {
-    if pallet.name != MIDNIGHT {
-        return Ok(None);
+impl<R: TypeResolver> Visitor for CallVisitor<R> {
+    type Value<'scale, 'resolver> = MidnightTransactions;
+    type Error = scale_decode::Error;
+    type TypeResolver = R;
+
+    fn visit_unexpected<'scale, 'resolver>(
+        self,
+        _unexpected: Unexpected,
+    ) -> Result<Self::Value<'scale, 'resolver>, Self::Error> {
+        Ok(MidnightTransactions(Vec::new()))
     }
-    let Some(ValueDef::Variant(call)) = pallet.values.values().next().map(|call| &call.value)
-    else {
-        return Ok(None);
+
+    fn visit_variant<'scale, 'resolver>(
+        self,
+        value: &mut Variant<'scale, 'resolver, R>,
+        _type_id: TypeIdFor<Self>,
+    ) -> Result<Self::Value<'scale, 'resolver>, Self::Error> {
+        if self.midnight_call && value.name() == SEND_MN_TRANSACTION {
+            return send_mn_transaction_argument(value.fields())
+                .map(|bytes| MidnightTransactions(vec![bytes]));
+        }
+        let first_is_midnight_call = value.name() == MIDNIGHT;
+        collect_midnight_transactions(value.fields(), first_is_midnight_call)
+    }
+
+    fn visit_composite<'scale, 'resolver>(
+        self,
+        value: &mut Composite<'scale, 'resolver, R>,
+        _type_id: TypeIdFor<Self>,
+    ) -> Result<Self::Value<'scale, 'resolver>, Self::Error> {
+        collect_midnight_transactions(value, false)
+    }
+
+    fn visit_tuple<'scale, 'resolver>(
+        self,
+        value: &mut Tuple<'scale, 'resolver, R>,
+        _type_id: TypeIdFor<Self>,
+    ) -> Result<Self::Value<'scale, 'resolver>, Self::Error> {
+        collect_midnight_transactions(value, false)
+    }
+
+    fn visit_sequence<'scale, 'resolver>(
+        self,
+        value: &mut Sequence<'scale, 'resolver, R>,
+        _type_id: TypeIdFor<Self>,
+    ) -> Result<Self::Value<'scale, 'resolver>, Self::Error> {
+        collect_midnight_transactions(value, false)
+    }
+
+    fn visit_array<'scale, 'resolver>(
+        self,
+        value: &mut Array<'scale, 'resolver, R>,
+        _type_id: TypeIdFor<Self>,
+    ) -> Result<Self::Value<'scale, 'resolver>, Self::Error> {
+        collect_midnight_transactions(value, false)
+    }
+}
+
+/// The `Midnight.send_mn_transaction` arguments in `items`, in item order.
+fn collect_midnight_transactions<'scale, 'resolver, R: TypeResolver>(
+    items: &mut impl DecodeItemIterator<'scale, 'resolver, R>,
+    first_is_midnight_call: bool,
+) -> Result<MidnightTransactions, scale_decode::Error> {
+    let mut copies = Vec::new();
+    let mut visitor = CallVisitor::new(first_is_midnight_call);
+    while let Some(item) = items.decode_item(visitor) {
+        copies.extend(item?.0);
+        visitor = CallVisitor::new(false);
+    }
+    Ok(MidnightTransactions(copies))
+}
+
+/// The one byte sequence that a `Midnight.send_mn_transaction` call takes.
+fn send_mn_transaction_argument<R: TypeResolver>(
+    arguments: &mut Composite<'_, '_, R>,
+) -> Result<Vec<u8>, scale_decode::Error> {
+    let argument = match arguments.remaining() {
+        1 => arguments.decode_item(Vec::<u8>::into_visitor()),
+        _ => None,
     };
-    if call.name != SEND_MN_TRANSACTION {
-        return Ok(None);
-    }
-    let mut arguments = call.values.values();
-    match (arguments.next().and_then(byte_sequence), arguments.next()) {
-        (Some(bytes), None) => Ok(Some(bytes)),
-        _ => Err(ProviderError::Rpc(format!(
+    argument.and_then(Result::ok).ok_or_else(|| {
+        scale_decode::Error::custom_string(format!(
             "a {MIDNIGHT}.{SEND_MN_TRANSACTION} call does not take one byte sequence"
-        ))),
-    }
-}
-
-/// The bytes of a decoded `Vec<u8>`.
-fn byte_sequence(value: &Value<()>) -> Option<Vec<u8>> {
-    let ValueDef::Composite(bytes) = &value.value else {
-        return None;
-    };
-    bytes
-        .values()
-        .map(|byte| byte.as_u128().and_then(|byte| u8::try_from(byte).ok()))
-        .collect()
+        ))
+    })
 }
 
 /// The `Midnight.TxApplied` and `Midnight.TxPartialSuccess` events of
@@ -222,7 +289,75 @@ pub(crate) fn pair_with_outcomes(
 
 #[cfg(test)]
 mod tests {
+    use subxt::ext::codec::Encode;
+    use subxt::ext::scale_decode::DecodeAsType;
+
     use super::*;
+
+    #[derive(Encode, scale_info::TypeInfo)]
+    #[codec(crate = subxt::ext::codec)]
+    enum RuntimeCall {
+        Midnight(MidnightCall),
+        Council(CouncilCall),
+    }
+
+    #[derive(Encode, scale_info::TypeInfo)]
+    #[codec(crate = subxt::ext::codec)]
+    #[expect(
+        non_camel_case_types,
+        reason = "a runtime names its calls in snake case"
+    )]
+    enum MidnightCall {
+        send_mn_transaction { midnight_tx: Vec<u8> },
+        set_parameter { value: Vec<u8> },
+    }
+
+    #[derive(Encode, scale_info::TypeInfo)]
+    #[codec(crate = subxt::ext::codec)]
+    #[expect(
+        non_camel_case_types,
+        reason = "a runtime names its calls in snake case"
+    )]
+    enum CouncilCall {
+        execute {
+            proposal: Box<RuntimeCall>,
+            #[codec(compact)]
+            length_bound: u32,
+        },
+    }
+
+    fn council_execute(proposal: RuntimeCall) -> RuntimeCall {
+        RuntimeCall::Council(CouncilCall::execute {
+            proposal: Box::new(proposal),
+            length_bound: 1024,
+        })
+    }
+
+    fn body_copies_of(call: &RuntimeCall) -> Vec<Vec<u8>> {
+        let mut registry = scale_info::Registry::new();
+        let call_type = registry
+            .register_type(&scale_info::MetaType::new::<RuntimeCall>())
+            .id;
+        let types = scale_info::PortableRegistry::from(registry);
+        let MidnightTransactions(copies) =
+            MidnightTransactions::decode_as_type(&mut &call.encode()[..], call_type, &types)
+                .expect("the call decodes");
+        copies
+    }
+
+    /// A governance call carries a Midnight transaction as an argument. It
+    /// catches a walk that reads only the top-level call, and one that takes
+    /// the bytes of any `Midnight` call.
+    #[test]
+    fn a_body_copy_is_a_send_mn_transaction_at_any_depth_of_a_call() {
+        let send = RuntimeCall::Midnight(MidnightCall::send_mn_transaction {
+            midnight_tx: vec![1, 2, 3],
+        });
+        let other = RuntimeCall::Midnight(MidnightCall::set_parameter { value: vec![4] });
+
+        assert_eq!(body_copies_of(&council_execute(send)), [vec![1, 2, 3]]);
+        assert!(body_copies_of(&council_execute(other)).is_empty());
+    }
 
     fn hash(byte: u8) -> TransactionHash {
         TransactionHash::from([byte; 32])
