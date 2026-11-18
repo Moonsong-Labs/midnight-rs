@@ -1,5 +1,6 @@
-//! A circuit result decodes through its type. The interpreter holds a vector or
-//! a tuple as a tuple of values. It holds an enum member as an integer and a
+//! A circuit result decodes through its type, and a Counter takes an amount in
+//! each form that the interpreter holds. The interpreter holds a vector or a
+//! tuple as a tuple of values. It holds an enum member as an integer and a
 //! ledger read as an aligned value.
 
 compact_bindgen::contract!("../../../../tests/fixtures/compiled/results/compiler/analyzed-ir.sexp");
@@ -14,5 +15,7 @@ fn main() {
     );
     assert_eq!(simulator.close().unwrap(), Phase::Closed);
     assert_eq!(simulator.bump().unwrap(), 1);
+    // Above one byte, so a read of a single byte gives a wrong count.
+    assert_eq!(simulator.bump_by_step(300).unwrap(), 301);
     assert!(simulator.raise().unwrap());
 }

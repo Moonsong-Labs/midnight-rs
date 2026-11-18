@@ -20,14 +20,6 @@ pub enum Value {
 }
 
 impl Value {
-    /// Extract as u32 for Op::Addi immediate.
-    pub fn as_u32(&self) -> Option<u32> {
-        match self {
-            Value::Integer(n) => u32::try_from(*n).ok(),
-            _ => None,
-        }
-    }
-
     /// Convert to an AlignedValue for use as circuit input.
     ///
     /// The type-free encoding: what a value flattens to when no declared

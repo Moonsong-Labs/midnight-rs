@@ -2169,21 +2169,18 @@ fn resolve_immediate(
     op: &ir::OpName,
     o: &ir::Operand,
 ) -> Result<u32, InterpreterError> {
-    match reduce_operand(o) {
-        VmArg::Int(n) => u32::try_from(n).map_err(|_| {
-            InterpreterError::TypeError(format!("{op} immediate {n} out of u32 range"))
-        }),
-        VmArg::Expr(e) => {
-            let val = eval_expr(ctx, e)?;
-            val.as_u32().ok_or_else(|| {
-                InterpreterError::TypeError(format!("{op} immediate is not u32: {val:?}"))
-            })
+    let n = match reduce_operand(o) {
+        VmArg::Int(n) => n.clone(),
+        VmArg::Expr(e) => BigInt::from(eval_as_integer(ctx, e)?),
+        other => {
+            return Err(InterpreterError::TypeError(format!(
+                "cannot resolve a {} {op} immediate",
+                other.kind()
+            )));
         }
-        other => Err(InterpreterError::TypeError(format!(
-            "cannot resolve a {} {op} immediate",
-            other.kind()
-        ))),
-    }
+    };
+    u32::try_from(&n)
+        .map_err(|_| InterpreterError::TypeError(format!("{op} immediate {n} out of u32 range")))
 }
 
 /// A `push` / `addi` operand reduced to what the interpreter acts on. The

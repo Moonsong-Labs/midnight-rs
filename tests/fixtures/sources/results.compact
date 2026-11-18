@@ -1,9 +1,9 @@
 pragma language_version >= 0.23;
 import CompactStandardLibrary;
 
-// Circuit results in each form that the interpreter holds them in. A vector
-// or a tuple is a tuple of values, an enum member is an integer, and a ledger
-// read is an aligned value.
+// Circuit results and Counter amounts in each form that the interpreter holds
+// them in. A vector or a tuple is a tuple of values, an enum member is an
+// integer, and a ledger read is an aligned value.
 
 export enum Phase { open, closed }
 
@@ -11,6 +11,7 @@ export ledger total: Field;
 export ledger phase_cell: Phase;
 export ledger count: Counter;
 export ledger flag: Boolean;
+export ledger step: Uint<16>;
 
 export circuit pair(a: Field, b: Field): [Field, Vector<2, Field>] {
   total = disclose(a);
@@ -24,6 +25,12 @@ export circuit close(): Phase {
 
 export circuit bump(): Uint<64> {
   count.increment(1);
+  return count as Uint<64>;
+}
+
+export circuit bump_by_step(s: Uint<16>): Uint<64> {
+  step = disclose(s);
+  count.increment(step);
   return count as Uint<64>;
 }
 
