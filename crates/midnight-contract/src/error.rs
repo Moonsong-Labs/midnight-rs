@@ -149,10 +149,14 @@ pub enum ContractError {
     /// [`NotApplied::PartialSuccess`] (the guaranteed phase committed, at least
     /// one fallible segment failed) and [`NotApplied::Failure`] (the dispatch
     /// errored entirely, so no phase ran). Each variant holds the
-    /// [`TransactionReceipt`]. Unlike [`SubmissionWait`], the chain gave a
-    /// verdict. `PendingCall::get_receipt` drops the orphan `Pending` snapshot,
-    /// when the call recorded one, with `mark_failed` before it returns this
-    /// error.
+    /// [`TransactionReceipt`]. A partial success of a call that the SDK split
+    /// at a `kernel.checkpoint()` applied the part before the split, with its
+    /// state writes and events.
+    /// [`Contract::events_at`](crate::Contract::events_at) with the block
+    /// hash of the receipt gives those events. Unlike [`SubmissionWait`], the
+    /// chain gave a verdict. `PendingCall::get_receipt` drops the orphan
+    /// `Pending` snapshot, when the call recorded one, with `mark_failed`
+    /// before it returns this error.
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     #[error(transparent)]
@@ -286,9 +290,10 @@ pub enum ContractError {
     /// [`Contract::latest_events`](crate::Contract::latest_events) returns it.
     #[error("indexer read failed")]
     Indexer {
-        /// Whether the same read can succeed later.
+        /// True when a retry is likely to clear the failure.
         /// [`Contract::latest_events`](crate::Contract::latest_events) lists
-        /// the failures of each kind.
+        /// the failures of each kind. A read that failed with false can still
+        /// succeed later, for example after an internal error of the indexer.
         retryable: bool,
         /// The cause: the indexer client's error, or why the read refused
         /// the indexer's answer.

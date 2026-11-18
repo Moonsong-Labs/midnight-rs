@@ -103,8 +103,9 @@ impl<P> Contract<P> {
     ///     status.
     ///
     ///   `retryable` is false in these cases:
-    ///   - the indexer refuses the read, for example an indexer with no
-    ///     `contractEvents`;
+    ///   - the indexer answers with a GraphQL error, for example a refusal
+    ///     from an indexer with no `contractEvents`, or its own
+    ///     `Internal Server Error`;
     ///   - the latest-block query times out, or gets another status;
     ///   - the indexer's latest height is negative;
     ///   - a row is not a ledger 9 event of this contract in the range.

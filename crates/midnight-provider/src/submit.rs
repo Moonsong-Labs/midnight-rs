@@ -202,7 +202,9 @@ fn applied(
 pub enum NotApplied {
     /// `Midnight::TxPartialSuccess`: the guaranteed phase committed
     /// (Zswap I/O, fees, signatures landed on chain), but at least one
-    /// fallible segment failed and was not applied.
+    /// fallible segment failed and was not applied. The guaranteed phase also
+    /// applied the guaranteed transcript of each contract call, with its state
+    /// writes and its events.
     ///
     /// The on-chain event doesn't carry a per-segment breakdown, but the
     /// SDK's tx shapes hold one fallible segment that can fail each
