@@ -93,8 +93,8 @@ impl<'a> Program<'a> {
     fn callee(&self, id: &ir::Ident) -> Callee<'a> {
         match self.declaration(id) {
             Some(Decl::Circuit(c)) => Callee::Circuit(c),
-            Some(Decl::Native(n)) if n.class == "witness" => Callee::Witness,
-            Some(Decl::Witness(_)) => Callee::Witness,
+            Some(Decl::Native(n)) if n.class == "witness" => Callee::Witness(&n.result_type),
+            Some(Decl::Witness(w)) => Callee::Witness(&w.result_type),
             Some(Decl::Native(_)) | None => Callee::Pure,
         }
     }
@@ -144,9 +144,10 @@ enum Decl<'a> {
 enum Callee<'a> {
     /// A circuit in this program: its body runs in place.
     Circuit(&'a ir::Circuit),
-    /// A witness declaration, or a native declared in the witness class: the
-    /// witness provider answers it and its value joins the private transcript.
-    Witness,
+    /// A witness declaration, or a native declared in the witness class, with
+    /// its declared result type: the witness provider answers it and its value
+    /// joins the private transcript.
+    Witness(&'a Type),
     /// Anything else, which is a native: a runtime builtin computed in place.
     Pure,
 }
@@ -224,8 +225,9 @@ impl std::fmt::Debug for Env<'_> {
 ///
 /// # Errors
 ///
-/// An [`InterpreterError`] when the circuit fails: a failed `assert`, a
-/// witness failure, a ledger operation that the VM rejects, or a construct
+/// An [`InterpreterError`] when an argument or a witness result does not
+/// encode at its declared type, or when the circuit fails: a failed `assert`,
+/// a witness failure, a ledger operation that the VM rejects, or a construct
 /// that the interpreter does not support.
 pub fn execute(
     circuit: &ir::Circuit,
@@ -259,6 +261,9 @@ pub fn execute(
         check_type(&argument.ty)?;
         local_types.insert(argument.name.0.clone(), argument.ty.clone());
         if let Some((_, value)) = args.iter().find(|(name, _)| *name == argument.name.name()) {
+            encode_typed(value, &argument.ty).map_err(|e| {
+                InterpreterError::TypeError(format!("argument `{}`: {e}", argument.name.name()))
+            })?;
             locals.insert(argument.name.0.clone(), value.clone());
         }
     }
@@ -693,7 +698,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                 .collect::<Result<_, _>>()?;
             match program.callee(name) {
                 Callee::Circuit(c) => call_circuit(ctx, &c.arguments, &c.body, &values),
-                Callee::Witness => eval_witness_call(ctx, name, values),
+                Callee::Witness(result_type) => eval_witness_call(ctx, name, result_type, values),
                 Callee::Pure => eval_pure_call(ctx, name, values),
             }
         }
@@ -1283,6 +1288,7 @@ fn eval_pure_call(
 fn eval_witness_call(
     ctx: &mut ExecContext,
     id: &ir::Ident,
+    result_type: &Type,
     values: Vec<Value>,
 ) -> Result<Value, InterpreterError> {
     let program = ctx.program;
@@ -1352,6 +1358,8 @@ fn eval_witness_call(
             w.call_witness(&mut wctx, name, &values)
         };
         if let WitnessOutcome::Value(v) = outcome? {
+            encode_typed(&v, result_type)
+                .map_err(|e| InterpreterError::Witness(format!("witness `{name}` result: {e}")))?;
             // Capture the witness's private value as a private transcript
             // output, in call order, for the prover.
             ctx.private_transcript_outputs
@@ -2413,6 +2421,66 @@ mod tests {
         );
     }
 
+    /// The body ignores the argument, so only the check at the binding sees
+    /// it.
+    #[test]
+    fn an_argument_outside_its_type_is_refused() {
+        let circ = circuit(vec![argument("%v.1", uint("9"))], uint("9"), int(0));
+        let err = run(&circ, &[("v", Value::Integer(200))]).expect_err("200 is not a Uint<0..10>");
+        assert!(
+            matches!(err, InterpreterError::TypeError(ref msg) if msg.contains("`v`")),
+            "expected a type error that names `v`, got {err:?}"
+        );
+    }
+
+    /// The circuit returns the witness value at a wider type, so only the check
+    /// of the witness result sees it.
+    #[test]
+    fn a_witness_result_outside_its_type_is_refused() {
+        struct Pick;
+        impl WitnessProvider for Pick {
+            fn call_witness(
+                &self,
+                _ctx: &mut WitnessContext<'_>,
+                _name: &str,
+                _args: &[Value],
+            ) -> Result<WitnessOutcome, InterpreterError> {
+                Ok(WitnessOutcome::Value(Value::Integer(200)))
+            }
+        }
+
+        let witnesses = vec![ir::Witness {
+            name: ident("%pick.3"),
+            arguments: Vec::new(),
+            result_type: uint("9"),
+        }];
+        let program = Program::new(&[], &witnesses, &[]);
+        let circ = circuit(
+            Vec::new(),
+            uint("255"),
+            ir::Expr::Call {
+                name: ident("%pick.3"),
+                args: Vec::new(),
+            },
+        );
+        let err = execute(
+            &circ,
+            &program,
+            make_counter_state(0),
+            &[],
+            Env {
+                witnesses: &Pick,
+                ..epoch()
+            },
+        )
+        .map(|r| r.result)
+        .expect_err("200 is not a Uint<0..10>");
+        assert!(
+            matches!(err, InterpreterError::Witness(ref msg) if msg.contains("`pick`")),
+            "expected a witness error that names `pick`, got {err:?}"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Jubjub builtins
     // -----------------------------------------------------------------------
@@ -2744,6 +2812,23 @@ mod tests {
     }
 
     #[test]
+    fn a_boolean_encodes_only_from_zero_or_one() {
+        for two in [
+            Value::Integer(2),
+            Value::AlignedValue(AlignedValue::from(2u8)),
+        ] {
+            let err = encode_typed(&two, &Type::Boolean).expect_err("2 is not a Boolean");
+            assert!(matches!(err, InterpreterError::TypeError(_)), "got {err:?}");
+        }
+        // The atom of `false` is zero-trimmed to no bytes.
+        let read_false = Value::AlignedValue(AlignedValue::from(false));
+        assert_eq!(
+            encode_typed(&read_false, &Type::Boolean).expect("false is a Boolean"),
+            AlignedValue::from(false)
+        );
+    }
+
+    #[test]
     fn a_typed_ledger_key_takes_the_declared_width() {
         let program = Program::new(&[], &[], &[]);
         let mut ps = Vec::new();
@@ -2792,17 +2877,26 @@ mod tests {
         // captures its coin arg into `zswap_inputs` for the call path to
         // build the `Input` / `Transient`. Here the coin is passed as a
         // struct-encoded `QualifiedShieldedCoinInfo` value.
+        let coin_type = Type::Struct {
+            name: "QualifiedShieldedCoinInfo".to_string(),
+            fields: vec![
+                ("nonce".to_string(), Type::Bytes(32)),
+                ("color".to_string(), Type::Bytes(32)),
+                ("value".to_string(), uint(&u128::MAX.to_string())),
+                ("mt_index".to_string(), uint(&u64::MAX.to_string())),
+            ],
+        };
         let natives = vec![ir::Native {
             type_arguments: Vec::new(),
             name: ident("%createZswapInput.9"),
             entry: "__compactRuntime.createZswapInput".to_string(),
             class: "witness".to_string(),
-            arguments: vec![argument("%coin.10", Type::Unknown)],
+            arguments: vec![argument("%coin.10", coin_type.clone())],
             result_type: Type::unit(),
         }];
         let program = Program::new(&[], &[], &natives);
         let circ = circuit(
-            vec![argument("coin", Type::Unknown)],
+            vec![argument("coin", coin_type)],
             Type::unit(),
             ir::Expr::Call {
                 name: ident("%createZswapInput.9"),

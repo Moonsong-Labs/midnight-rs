@@ -10,7 +10,7 @@ use midnight_typed_state::{Aligned, AlignedValue};
 use compact_codegen::ir::{Curve, Type, uint_byte_width};
 use num_bigint::BigUint;
 
-use crate::conversions::{aligned_atom_to_u128, value_to_u128};
+use crate::conversions::value_to_u128;
 use crate::error::InterpreterError;
 use crate::foreign::{Curve25519Point, ForeignField, Secp256k1Point, Secp256r1Point, encode_as};
 use crate::value::Value;
@@ -241,15 +241,8 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
         || InterpreterError::TypeError(format!("cannot encode value {val:?} as type {ty:?}"));
 
     match ty {
-        Type::Boolean => match val {
-            Value::Bool(b) => Ok(AlignedValue::from(*b)),
-            Value::Integer(n) => Ok(AlignedValue::from(*n != 0)),
-            // A Boolean sliced out of a struct (e.g. `recipient.is_left`)
-            // arrives as a single-byte `AlignedValue` (0x00/0x01); re-encode
-            // it as a Boolean so it can flow into another struct field.
-            Value::AlignedValue(av) => aligned_atom_to_u128(av)
-                .map(|n| AlignedValue::from(n != 0))
-                .ok_or_else(unsupported),
+        Type::Boolean => match value_to_u128(val) {
+            Some(n @ (0 | 1)) => Ok(AlignedValue::from(n == 1)),
             _ => Err(unsupported()),
         },
         Type::Unsigned(maxval) => {
