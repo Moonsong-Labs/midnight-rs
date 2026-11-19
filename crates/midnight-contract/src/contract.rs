@@ -1571,8 +1571,10 @@ impl<P> Contract<P> {
     ///   transaction. The variant says how to reconcile it.
     ///
     /// The build reserves the wallet inputs that the transaction spends: the
-    /// fee Dust, and the coins of `shielded`. An error before the submit hands
-    /// them back before it returns. A wait on the [`PendingCall`] that reads
+    /// fee Dust, the coins of `shielded`, and the coins and UTXOs that the
+    /// wallet selects for what the call takes from it. An error before the
+    /// submit hands them back before it returns. A wait on the [`PendingCall`]
+    /// that reads
     /// [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid) also
     /// hands them back. Any other error from the submit on keeps them reserved
     /// until a sync sees the chain spend them, or until their TTL passes.

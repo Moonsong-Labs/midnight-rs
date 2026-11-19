@@ -137,7 +137,7 @@ Because each half carries only a guaranteed Zswap offer and no intent, two halve
 
 Two smaller pieces round out the parity:
 
-- **Naming a coin.** midnight-js's balancer auto-selects coins by amount, and so does the wallet for a call: it covers each shielded deficit of the call, such as a `receiveShielded(coin)`, with coins it selects, and returns the change. `Wallet::spendable_shielded_coins()` enumerates the wallet's coins with their nonces and nullifiers, and `contract.circuits().<circuit>().with_shielded_inputs([coin])` names exact, nullifier-pinned coins that the wallet spends first.
+- **Naming a coin.** midnight-js's balancer auto-selects coins by amount, and so does the wallet for a call: it covers each shielded deficit of the call, such as a `receiveShielded(coin)`, with coins it selects, and returns the change. It covers an unshielded token that the guaranteed part of a call takes with `receiveUnshielded` from UTXOs it selects, and returns the change too. `Wallet::spendable_shielded_coins()` enumerates the wallet's coins with their nonces and nullifiers, and `contract.circuits().<circuit>().with_shielded_inputs([coin])` names exact, nullifier-pinned coins that the wallet spends first.
 - **Coin discovery.** midnight-js returns the coins that a call creates for the caller as `newCoins`, in the private data of the call result. Our analogue is `with_coin_encryption_keys` on a call: it attaches a discovery ciphertext to circuit-created outputs so the recipient finds them through normal sync (no `watchFor`). Different mechanism, same goal.
 
 ## Guaranteed vs Fallible transaction phases
