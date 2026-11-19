@@ -316,6 +316,35 @@ impl LedgerStream {
 /// Events between two progress reports of a ledger-event replay.
 const PROGRESS_INTERVAL: u64 = 10_000;
 
+/// The most events that a ledger-event replay hands to one `apply` call.
+///
+/// The ledger rehashes its Merkle trees once per `replay_events` call, so the
+/// events of one call share the upper levels of their paths. A call cannot
+/// yield, so this size also bounds how long a replay holds its thread.
+const REPLAY_BATCH: usize = 256;
+
+/// An event that a ledger-event replay read, in its encoding.
+pub(crate) struct EncodedEvent {
+    /// The indexer's id of the event.
+    pub id: i64,
+    /// The tagged encoding of the event.
+    pub bytes: Vec<u8>,
+    /// The generation that the tag of the event names.
+    pub ledger: Generation,
+}
+
+/// The ids of the first and the last event of a batch.
+///
+/// # Panics
+///
+/// If `events` is empty. A replay never hands `apply` an empty batch.
+pub(crate) fn id_range(events: &[EncodedEvent]) -> std::ops::RangeInclusive<i64> {
+    let (Some(first), Some(last)) = (events.first(), events.last()) else {
+        panic!("a ledger-event replay hands `apply` at least one event");
+    };
+    first.id..=last.id
+}
+
 /// Where a ledger-event replay stopped.
 pub(crate) struct LedgerReplay {
     /// The id of the last event consumed.
@@ -325,6 +354,17 @@ pub(crate) struct LedgerReplay {
     pub later_ledger: Option<(i64, Generation)>,
 }
 
+/// Why a ledger-event replay stopped reading its stream.
+enum Stop {
+    /// The replay read up to the highest event id that the indexer reports.
+    Tip,
+    /// The indexer reports no events on the stream.
+    NoEvents,
+    /// The stream moves to a later generation at this event, which the
+    /// replay did not read.
+    LaterLedger(i64, Generation),
+}
+
 /// Hex-decode the event a `LedgerEventMessage` carries.
 fn event_bytes(msg: &LedgerEventMessage, kind: &str) -> Result<Vec<u8>, WalletError> {
     hex::decode(&msg.raw).map_err(|e| WalletError::Sync(format!("decode {kind} event hex: {e}")))
@@ -332,11 +372,13 @@ fn event_bytes(msg: &LedgerEventMessage, kind: &str) -> Result<Vec<u8>, WalletEr
 
 /// Replay `stream` from `start_id` for a wallet in the generation `ledger`.
 ///
-/// The replay hands each new event to `apply` with its id, its bytes and its
-/// generation, which is `ledger` or an earlier one, and consumes the event
-/// when `apply` returns `Ok`. An error from `apply` ends the replay with that
-/// error. The replay stops before the first event of a later generation and
-/// reports it in [`LedgerReplay::later_ledger`].
+/// The replay reads the new events in id order and hands them to `apply` in
+/// batches of 1 to [`REPLAY_BATCH`] events, each of `ledger` or an earlier
+/// generation. It hands an event to `apply` before it reports progress on
+/// that event, before it reports completion, and before it returns `Ok`. An
+/// error from `apply` ends the replay with that error. The replay stops
+/// before the first event of a later generation and reports it in
+/// [`LedgerReplay::later_ledger`].
 pub(crate) async fn replay_ledger_events(
     sub_client: &SubscriptionClient,
     stream: LedgerStream,
@@ -344,15 +386,17 @@ pub(crate) async fn replay_ledger_events(
     start_id: i64,
     resuming: bool,
     progress: Option<mpsc::Sender<SyncProgress>>,
-    mut apply: impl FnMut(i64, &[u8], Generation) -> Result<(), WalletError>,
+    mut apply: impl FnMut(&[EncodedEvent]) -> Result<(), WalletError>,
 ) -> Result<LedgerReplay, WalletError> {
     let kind = stream.kind();
     let mut last_id: i64 = last_applied_before(start_id);
     let mut count: u64 = 0;
     let mut retries: u32 = 0;
-    let mut later_ledger = None;
+    // Outside the reconnect loop: a reconnect resumes after `last_id`, which
+    // can name an event that waits here.
+    let mut batch: Vec<EncodedEvent> = Vec::with_capacity(REPLAY_BATCH);
 
-    'reconnect: loop {
+    let stop = 'reconnect: loop {
         let resume_id = resume_id(count, last_id);
         let variables = serde_json::json!({ "id": resume_id });
         let mut subscription = match sub_client
@@ -389,27 +433,28 @@ pub(crate) async fn replay_ledger_events(
 
                     if msg.max_id == 0 {
                         debug!("no {kind} events on this chain");
-                        break 'reconnect;
+                        break 'reconnect Stop::NoEvents;
                     }
 
                     if already_read(msg.id, last_id, start_id, count > 0) {
                         debug!(id = msg.id, last_id, "skipping re-delivered {kind} event");
                         if msg.id >= msg.max_id {
-                            info!(count, last_id, "{kind} replay complete");
-                            send_progress(&progress, stream.complete(count));
-                            break 'reconnect;
+                            break 'reconnect Stop::Tip;
                         }
                         continue;
                     }
 
-                    let raw = event_bytes(msg, kind)?;
-                    let event_ledger = Generation::of_event(&raw)?;
+                    let bytes = event_bytes(msg, kind)?;
+                    let event_ledger = Generation::of_event(&bytes)?;
                     if event_ledger > ledger {
                         info!(id = msg.id, ledger = ?event_ledger, "{kind} events move to a later ledger");
-                        later_ledger = Some((msg.id, event_ledger));
-                        break 'reconnect;
+                        break 'reconnect Stop::LaterLedger(msg.id, event_ledger);
                     }
-                    apply(msg.id, &raw, event_ledger)?;
+                    batch.push(EncodedEvent {
+                        id: msg.id,
+                        bytes,
+                        ledger: event_ledger,
+                    });
 
                     // Only a new event counts as progress for the reconnect
                     // bound; deduped re-deliveries must not reset it.
@@ -417,23 +462,30 @@ pub(crate) async fn replay_ledger_events(
                     last_id = msg.id;
                     count += 1;
 
-                    if count.is_multiple_of(PROGRESS_INTERVAL) {
-                        info!(
-                            count,
-                            id = msg.id,
-                            max_id = msg.max_id,
-                            "{kind} replay progress"
-                        );
-                        let alive = send_progress(&progress, stream.events(msg.id, msg.max_id));
-                        if !alive {
-                            return Err(progress_cancelled(kind));
+                    let report = count.is_multiple_of(PROGRESS_INTERVAL);
+                    if report || batch.len() == REPLAY_BATCH {
+                        apply(&batch)?;
+                        batch.clear();
+                        if report {
+                            info!(
+                                count,
+                                id = msg.id,
+                                max_id = msg.max_id,
+                                "{kind} replay progress"
+                            );
+                            let alive = send_progress(&progress, stream.events(msg.id, msg.max_id));
+                            if !alive {
+                                return Err(progress_cancelled(kind));
+                            }
                         }
+                        // Outside a tokio task no budget forces a yield, so a
+                        // replay that always finds its next event ready would
+                        // never yield.
+                        tokio::task::yield_now().await;
                     }
 
                     if msg.id >= msg.max_id {
-                        info!(count, last_id, "{kind} replay complete");
-                        send_progress(&progress, stream.complete(count));
-                        break 'reconnect;
+                        break 'reconnect Stop::Tip;
                     }
                 }
                 Ok(Some(Err(e))) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
@@ -446,8 +498,7 @@ pub(crate) async fn replay_ledger_events(
                 Ok(None) => {
                     if resuming && count == 0 {
                         info!(last_id, "{kind} already at tip");
-                        send_progress(&progress, stream.complete(0));
-                        break 'reconnect;
+                        break 'reconnect Stop::Tip;
                     }
                     // A server `complete` mid-replay: treat as a dropped
                     // connection and resume from the cursor.
@@ -468,8 +519,7 @@ pub(crate) async fn replay_ledger_events(
                 Err(_) => {
                     if resuming && count == 0 {
                         info!(last_id, "{kind} already at tip");
-                        send_progress(&progress, stream.complete(0));
-                        break 'reconnect;
+                        break 'reconnect Stop::Tip;
                     }
                     return Err(gave_up(
                         kind,
@@ -478,8 +528,20 @@ pub(crate) async fn replay_ledger_events(
                 }
             }
         }
-    }
+    };
 
+    if !batch.is_empty() {
+        apply(&batch)?;
+    }
+    let later_ledger = match stop {
+        Stop::Tip => {
+            info!(count, last_id, "{kind} replay complete");
+            send_progress(&progress, stream.complete(count));
+            None
+        }
+        Stop::NoEvents => None,
+        Stop::LaterLedger(id, found) => Some((id, found)),
+    };
     Ok(LedgerReplay {
         last_id,
         later_ledger,
@@ -583,12 +645,7 @@ pub(crate) async fn replay_unshielded_events(
                                     });
                                 }
                                 conn_high = Some(id);
-                                if already_read(
-                                    id,
-                                    last_seen_tx_id,
-                                    start_tx_id,
-                                    applied_txs > 0,
-                                ) {
+                                if already_read(id, last_seen_tx_id, start_tx_id, applied_txs > 0) {
                                     debug!(
                                         tx_id = id,
                                         last_seen_tx_id, "skipping re-delivered unshielded tx"
@@ -1099,8 +1156,8 @@ mod tests {
                 5,
                 true,
                 None,
-                |id, _, _| {
-                    applied.push(id);
+                |events| {
+                    applied.extend(events.iter().map(|e| e.id));
                     Ok(())
                 },
             )
@@ -1113,6 +1170,89 @@ mod tests {
             );
 
             server.await.unwrap();
+        }
+
+        /// What a ledger-event replay passes to `apply`, and the progress
+        /// that it sent before each call.
+        #[derive(Debug)]
+        enum Seen {
+            Applied(Vec<i64>),
+            Progress(SyncProgress),
+        }
+
+        /// A reconnect resumes after the last event read, which can still
+        /// wait in the batch. A batch per connection loses the events of a
+        /// dropped one while the cursor moves past them.
+        #[tokio::test]
+        async fn a_replay_applies_each_event_once_before_it_completes() {
+            let last = REPLAY_BATCH as i64 + 2;
+            let (listener, url) = bind().await;
+            let raw = hex::encode(b"midnight:event[v14]:");
+            let server = tokio::spawn(async move {
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                for id in 1..=3 {
+                    let message = ledger_event("zswapLedgerEvents", id, &raw, last);
+                    send_next(&mut ws, &sub, message).await;
+                }
+                drop(ws);
+
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                assert_eq!(subscription_variable(&sub, "id"), 4);
+                for id in 3..=last {
+                    let message = ledger_event("zswapLedgerEvents", id, &raw, last);
+                    send_next(&mut ws, &sub, message).await;
+                }
+                while next_json(&mut ws).await.is_some() {}
+            });
+
+            let (tx, mut rx) = mpsc::channel(64);
+            let mut seen = Vec::new();
+            replay_ledger_events(
+                &SubscriptionClient::new(&url),
+                LedgerStream::Zswap,
+                Generation::V9,
+                0,
+                false,
+                Some(tx),
+                |events| {
+                    while let Ok(update) = rx.try_recv() {
+                        seen.push(Seen::Progress(update));
+                    }
+                    seen.push(Seen::Applied(events.iter().map(|e| e.id).collect()));
+                    Ok(())
+                },
+            )
+            .await
+            .expect("the replay survives the drop");
+            server.await.unwrap();
+            while let Ok(update) = rx.try_recv() {
+                seen.push(Seen::Progress(update));
+            }
+
+            let applies: Vec<&Vec<i64>> = seen
+                .iter()
+                .filter_map(|s| match s {
+                    Seen::Applied(ids) => Some(ids),
+                    Seen::Progress(_) => None,
+                })
+                .collect();
+            let applied: Vec<i64> = applies.iter().flat_map(|ids| ids.iter().copied()).collect();
+            assert_eq!(applied, (1..=last).collect::<Vec<_>>());
+            let sizes: Vec<usize> = applies.iter().map(|ids| ids.len()).collect();
+            // A few calls, with room for the calls that a report cuts short.
+            assert!(
+                sizes.len() < 8 && sizes.iter().all(|n| (1..=REPLAY_BATCH).contains(n)),
+                "the ledger must get the events in batches, got calls of {sizes:?}"
+            );
+            assert!(
+                matches!(
+                    seen.last(),
+                    Some(Seen::Progress(SyncProgress::ZswapComplete { events }))
+                        if *events == last as u64
+                ),
+                "the replay must complete after its last apply, ends with {:?}",
+                seen.last()
+            );
         }
 
         /// A resume with no new transaction for the address must keep the

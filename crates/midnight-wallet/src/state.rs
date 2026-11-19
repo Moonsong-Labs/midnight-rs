@@ -19,7 +19,7 @@ use super::pending::{PendingBook, PendingFile, PendingReservations, lock, within
 use crate::chain_pin::ChainPin;
 use crate::generation::Generation;
 use crate::replay::{
-    LedgerStream, UnshieldedReplay, replay_ledger_events, replay_unshielded_events,
+    LedgerStream, UnshieldedReplay, id_range, replay_ledger_events, replay_unshielded_events,
 };
 use crate::storage::wallet_storage_id;
 use crate::wallet::ChainSync;
@@ -105,6 +105,14 @@ const DUST_CHECKPOINT_INTERVAL: u64 = 50_000;
 
 type DustCheckpointFn = dyn Fn(&DustWallet<DefaultDB>, i64) + Send;
 
+/// A save of the Dust wallet that a replay makes as it reads the stream.
+pub(crate) struct DustCheckpoint {
+    /// The number of consumed events between two saves.
+    every: u64,
+    /// Saves the wallet with the id of the last event that it holds.
+    save: Box<DustCheckpointFn>,
+}
+
 /// What a mid-sync checkpoint writes beside the dust wallet it is handed.
 ///
 /// Owned, because the checkpoint closure outlives the frame that builds it,
@@ -123,7 +131,7 @@ fn make_dust_checkpoint(
     storage_dir: Option<&Path>,
     network_id: &str,
     state: CheckpointState,
-) -> Option<Box<DustCheckpointFn>> {
+) -> Option<DustCheckpoint> {
     let CheckpointState {
         wallet_id,
         zswap_state,
@@ -136,7 +144,7 @@ fn make_dust_checkpoint(
     storage_dir.map(|dir| {
         let dir = dir.to_path_buf();
         let net = network_id.to_string();
-        Box::new(move |dw: &DustWallet<DefaultDB>, dust_eid: i64| {
+        let save = Box::new(move |dw: &DustWallet<DefaultDB>, dust_eid: i64| {
             if let Err(err) = super::snapshot::save(
                 &dir,
                 &net,
@@ -154,7 +162,11 @@ fn make_dust_checkpoint(
             ) {
                 warn!(error = %err, "failed to checkpoint dust state");
             }
-        }) as Box<DustCheckpointFn>
+        });
+        DustCheckpoint {
+            every: DUST_CHECKPOINT_INTERVAL,
+            save,
+        }
     })
 }
 
@@ -316,7 +328,7 @@ impl ResyncPlan {
                 dust_wallet,
                 dust_event_id + 1,
                 true,
-                None::<fn(&DustWallet<DefaultDB>, i64)>,
+                None,
                 None,
             ),
             replay_zswap_events(
@@ -1169,16 +1181,25 @@ pub(crate) async fn replay_zswap_events(
         start_id,
         resuming,
         progress,
-        |id, raw, ledger| {
-            if ledger != Generation::V9 {
-                return Err(WalletError::Sync(format!(
-                    "zswap event id={id} is ledger 8 data after the fork"
-                )));
-            }
-            let ev = decode_event(raw, "zswap")?;
-            state = state
-                .replay_events(secret_keys, [&ev])
-                .map_err(|e| WalletError::Sync(format!("replay zswap event id={id}: {e}")))?;
+        |events| {
+            let decoded = events
+                .iter()
+                .map(|event| {
+                    if event.ledger != Generation::V9 {
+                        return Err(WalletError::Sync(format!(
+                            "zswap event id={} is ledger 8 data after the fork",
+                            event.id
+                        )));
+                    }
+                    decode_event(&event.bytes, "zswap")
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            state = state.replay_events(secret_keys, &decoded).map_err(|e| {
+                WalletError::Sync(format!(
+                    "replay zswap events id={:?}: {e}",
+                    id_range(events)
+                ))
+            })?;
             Ok(())
         },
     )
@@ -1206,12 +1227,16 @@ pub(crate) struct DustReplay {
 /// The replay consumes the ledger 8 events without applying them. The hard
 /// fork to ledger 9 replaced the chain's Dust state with an empty one, so
 /// these events describe Dust that no longer exists.
+///
+/// When the count of consumed events passes a multiple of the `every` of
+/// `checkpoint`, the replay applies those events and then hands the wallet to
+/// the checkpoint's `save`, with the id of the last event that it consumed.
 pub(crate) async fn replay_dust_events(
     sub_client: &SubscriptionClient,
     mut dust_wallet: DustWallet<DefaultDB>,
     start_id: i64,
     resuming: bool,
-    checkpoint: Option<impl Fn(&DustWallet<DefaultDB>, i64)>,
+    checkpoint: Option<DustCheckpoint>,
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<DustReplay, WalletError> {
     let mut last_block_time: Option<Timestamp> = None;
@@ -1234,24 +1259,31 @@ pub(crate) async fn replay_dust_events(
         start_id,
         resuming,
         progress,
-        move |id, raw, ledger| {
-            if ledger == Generation::V9 {
-                let ev = decode_event(raw, "dust")?;
-                wallet
-                    .replay_events([&ev])
-                    .map_err(|e| WalletError::Sync(format!("apply dust event id={id}: {e}")))?;
-                if let Some(t) = event_block_time(&ev) {
+        move |events| {
+            let decoded = events
+                .iter()
+                .filter(|event| event.ledger == Generation::V9)
+                .map(|event| decode_event(&event.bytes, "dust"))
+                .collect::<Result<Vec<_>, _>>()?;
+            if !decoded.is_empty() {
+                wallet.replay_events(&decoded).map_err(|e| {
+                    WalletError::Sync(format!("apply dust events id={:?}: {e}", id_range(events)))
+                })?;
+            }
+            for ev in &decoded {
+                if let Some(t) = event_block_time(ev) {
                     *last_time = Some(t);
                 }
-                if let Some(n) = event_spend_nullifier(&ev) {
+                if let Some(n) = event_spend_nullifier(ev) {
                     nullifiers.push(n);
                 }
             }
-            consumed += 1;
-            if consumed.is_multiple_of(DUST_CHECKPOINT_INTERVAL)
-                && let Some(save) = &checkpoint
+            let before = consumed;
+            consumed += events.len() as u64;
+            if let Some(DustCheckpoint { every, save }) = &checkpoint
+                && before / every != consumed / every
             {
-                save(wallet, id);
+                save(wallet, *id_range(events).end());
             }
             Ok(())
         },
@@ -2156,6 +2188,92 @@ mod tests {
         wallet.commit_resync(commit).unwrap();
 
         assert!(wallet.registered_coins().is_empty());
+    }
+
+    /// Mock-WebSocket-server test for the checkpoint of a Dust replay.
+    mod dust_checkpoint_ws {
+        use midnight_helpers::mn_ledger::dust::{
+            DustGenerationInfo, DustPublicKey, InitialNonce, QualifiedDustOutput,
+        };
+        use midnight_indexer_client::testutil::{
+            accept_subscriber, bind, ledger_event, next_json, send_next,
+        };
+
+        use super::*;
+
+        /// The hex of a Dust output of another wallet at `index` of both
+        /// Dust trees.
+        fn foreign_dust_output(index: u64) -> String {
+            let owner = DustPublicKey(Fr::from(index + 1));
+            let night = InitialNonce(HashOutput([index as u8; 32]));
+            let event = zero_source_event(EventDetails::DustInitialUtxo {
+                output: QualifiedDustOutput {
+                    initial_value: 1_000,
+                    owner,
+                    nonce: Fr::from(index + 7),
+                    seq: 0,
+                    ctime: Timestamp::from_secs(100),
+                    backing_night: night,
+                    mt_index: index,
+                },
+                generation: DustGenerationInfo {
+                    value: 5_000,
+                    owner,
+                    nonce: night,
+                    dtime: Timestamp::MAX,
+                },
+                generation_index: index,
+                block_time: Timestamp::from_secs(100 + index),
+            });
+            let mut raw = Vec::new();
+            tagged_serialize(&event, &mut raw).unwrap();
+            hex::encode(raw)
+        }
+
+        /// A resume starts after the cursor of the checkpoint it loads, so
+        /// the wallet that a checkpoint saves must hold every event up to
+        /// that cursor. Six events reach the ledger in one call, which passes
+        /// a multiple of the interval without ending on one.
+        #[tokio::test]
+        async fn a_dust_checkpoint_holds_every_event_up_to_its_cursor() {
+            let (listener, url) = bind().await;
+            let server = tokio::spawn(async move {
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                for id in 1..=6 {
+                    let raw = foreign_dust_output(id as u64 - 1);
+                    send_next(&mut ws, &sub, ledger_event("dustLedgerEvents", id, &raw, 6)).await;
+                }
+                while next_json(&mut ws).await.is_some() {}
+            });
+            let saved = Arc::new(Mutex::new(Vec::new()));
+            let record = Arc::clone(&saved);
+            let checkpoint = DustCheckpoint {
+                every: 4,
+                save: Box::new(move |wallet: &DustWallet<DefaultDB>, cursor: i64| {
+                    let state = wallet.dust_local_state.as_ref().expect("a Dust state");
+                    let held = state.commitment_tree_first_free;
+                    record.lock().unwrap().push((cursor, held));
+                }),
+            };
+
+            replay_dust_events(
+                &SubscriptionClient::new(&url),
+                DustWallet::default(test_seed().into_ledger(), Some(&INITIAL_PARAMETERS)),
+                0,
+                false,
+                Some(checkpoint),
+                None,
+            )
+            .await
+            .expect("the replay completes");
+            server.await.unwrap();
+
+            assert_eq!(
+                *saved.lock().unwrap(),
+                [(6, 6)],
+                "(cursor, events the saved wallet holds) of each save"
+            );
+        }
     }
 
     /// Mock-WebSocket-server test for a replay's resume, driven through the

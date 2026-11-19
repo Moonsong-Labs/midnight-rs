@@ -168,7 +168,7 @@ A `WalletBuilder` holds no connection and does no work until a sync step runs. `
 | `unshieldedTransactions` | UTXO set for the wallet's unshielded address |
 | `dustLedgerEvents` | Dust UTXOs derived from NIGHT holdings |
 
-Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress is checkpointed to disk after each batch when `with_storage(...)` is set, so subsequent runs resume from the last cursor.
+Dust sync from genesis can take 30+ minutes on a mainnet-sized history. When `with_storage(...)` is set, the Dust sync saves a checkpoint to disk every 50,000 Dust events, so a later run resumes from the last checkpoint.
 
 The SDK reads the data of a chain that runs ledger 9. On a chain that forked from ledger 8 to ledger 9, such as mainnet, the zswap stream starts with the ledger 8 events from before the fork. A sync or a rescan from event zero reads them, so the wallet keeps the shielded coins that it received before the fork. The Dust replay skips the ledger 8 Dust events, because the fork emptied the chain's Dust state (see [`dust-and-fees.md`](dust-and-fees.md#dust-after-the-fork-to-ledger-9)). A chain that runs ledger 8 fails the sync with `WalletError::UnknownLedger`, which names the tag of the data.
 
@@ -182,7 +182,7 @@ The pin is the chain-reset guard, and every sync takes one. A snapshot's cursors
 
 A node that cannot answer for the pin does not fail the sync. The sync continues without a fresh pin, and keeps a stored snapshot's pin. When the node is down, each query waits ten seconds at most.
 
-Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. A non-retryable error fails the sync at once, and a retryable one fails it after the last retry. An indexer that keeps the socket alive but sends no event in time also fails the sync, unless a resync reads the silence as the tip. When the sync gives up on the indexer, it returns `WalletError::Indexer`, whose `retryable` field tells whether a later sync can succeed.
+Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes after the last event that it read, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. A non-retryable error fails the sync at once, and a retryable one fails it after the last retry. An indexer that keeps the socket alive but sends no event in time also fails the sync, unless a resync reads the silence as the tip. When the sync gives up on the indexer, it returns `WalletError::Indexer`, whose `retryable` field tells whether a later sync can succeed.
 
 For a long sync with UI updates, end the builder with `.sync_with_progress(&provider, indexer_url)` in place of `.sync(&provider, indexer_url)`:
 

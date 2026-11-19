@@ -14,7 +14,7 @@ use midnight_indexer_client::SubscriptionClient;
 use tokio::sync::mpsc;
 
 use crate::generation::Generation;
-use crate::replay::{LedgerStream, replay_ledger_events};
+use crate::replay::{LedgerStream, id_range, replay_ledger_events};
 use crate::{CoinInfo, SyncProgress, WalletError};
 
 /// The shielded state that the events before the fork leave, in ledger 9.
@@ -55,12 +55,25 @@ pub(crate) async fn replay(
         0,
         false,
         progress,
-        |id, raw, _| {
-            let event: ledger_8::Event<DefaultDB> = tagged_deserialize(raw).map_err(|e| {
-                WalletError::Sync(format!("deserialize ledger 8 zswap event id={id}: {e}"))
-            })?;
-            state = state.replay_events(secret_keys, [&event]).map_err(|e| {
-                WalletError::Sync(format!("replay ledger 8 zswap event id={id}: {e}"))
+        |events| {
+            let decoded = events
+                .iter()
+                .map(|event| {
+                    tagged_deserialize::<ledger_8::Event<DefaultDB>>(&event.bytes[..]).map_err(
+                        |e| {
+                            WalletError::Sync(format!(
+                                "deserialize ledger 8 zswap event id={}: {e}",
+                                event.id
+                            ))
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            state = state.replay_events(secret_keys, &decoded).map_err(|e| {
+                WalletError::Sync(format!(
+                    "replay ledger 8 zswap events id={:?}: {e}",
+                    id_range(events)
+                ))
             })?;
             Ok(())
         },

@@ -581,7 +581,7 @@ mod tests {
             wallet,
             0,
             false,
-            None::<fn(&midnight_helpers::DustWallet<DefaultDB>, i64)>,
+            None,
             None,
         )
         .await
