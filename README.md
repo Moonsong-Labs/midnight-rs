@@ -87,7 +87,7 @@ use midnight_core::provider::Prover;
 let provider = provider.with_prover(Prover::remote(&proof_url));
 ```
 
-The local prover downloads the public parameters on its first proofs (see `Prover::local`).
+The local prover downloads its keys and public parameters on its first proofs (see `Prover::local`). To download them ahead of the first proof, for example before an app goes offline, call `fetch_proving_data`.
 
 ## Swaps and sponsored fees
 

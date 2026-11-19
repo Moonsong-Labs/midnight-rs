@@ -31,8 +31,9 @@ impl Prover {
     /// Zswap or Dust key downloads that key in the same way. The source is
     /// `MIDNIGHT_PARAM_SOURCE` (default `https://srs.midnight.network/`). The
     /// cache is the directory that upstream `MidnightDataProvider` picks,
-    /// `MIDNIGHT_PP` first. For offline or container use, fill that cache once
-    /// with network access. Then point `MIDNIGHT_PP` at it.
+    /// `MIDNIGHT_PP` first. To prove with no network, such as offline or in a
+    /// container, fill that cache ahead with
+    /// [`fetch_proving_data`](crate::fetch_proving_data).
     pub fn local() -> Self {
         Self(Backend::Local)
     }

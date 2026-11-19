@@ -35,6 +35,8 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── pipeline.rs          send_transaction, fill: fill from node queries, then fund, prove
   │     │                        and sign; merge_transactions
   │     ├── prover.rs            Prover: local, remote, or custom (test-util)
+  │     ├── proving_data.rs      fetch_proving_data: the keys and parameters of the local prover,
+  │     │                        downloaded ahead of a proof
   │     ├── remote_prover.rs     the HTTP proof server client of Prover::remote
   │     ├── proving.rs           its ProofProvider impl
   │     ├── submit.rs            PendingTx, PreparedTx, TransactionReceipt, NotApplied
@@ -118,7 +120,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `PendingCall<T>` | contract | A submitted circuit call and its decoded result. `get_receipt()` waits with no SDK deadline and settles the private-state snapshot by the verdict. A drop leaves the snapshot `Pending`. |
 | `Constructor` | contract | A contract's constructor as an `ir::Circuit`, the declarations it calls and the state it starts from. The generated `Contract::deploy` sets it, and the deploy runs it before any proof. |
 | `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no `get_receipt` ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. `get_receipt` settles the deploy's private-state snapshot as a call's wait does, and the best-block wait of `into_contract` leaves it `Pending`. |
-| `Prover` | provider | Where the provider proves: `Prover::local()` (the default) or `Prover::remote(url)`, an HTTP proof server (`/check` + `/prove`). Set with `with_prover`. `Prover::custom` takes any `midnight_helpers::ProofProvider` behind the `test-util` feature. |
+| `Prover` | provider | Where the provider proves: `Prover::local()` (the default) or `Prover::remote(url)`, an HTTP proof server (`/check` + `/prove`). Set with `with_prover`. `Prover::custom` takes any `midnight_helpers::ProofProvider` behind the `test-util` feature. The free function `fetch_proving_data` downloads the keys and parameters of `Prover::local` ahead of a proof. |
 
 ## Provider ↔ Wallet model
 
@@ -148,6 +150,7 @@ provider
   .send_tx_envelope(envelope).await → PendingTx that carries the reservation of the envelope
 
 merge_transactions(&[..])          → one transaction from several proven ones (a free function)
+fetch_proving_data(max_k).await    → the keys and parameters of Prover::local in its cache, ahead of a proof (a free function)
 
 wallet                                              // the wallet itself, or a handle on it
   .balance() / .spendable_shielded_coins()          // the state of the last sync

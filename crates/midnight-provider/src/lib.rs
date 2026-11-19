@@ -8,6 +8,7 @@ mod pipeline;
 mod prover;
 mod provider;
 mod proving;
+mod proving_data;
 mod remote_prover;
 mod submit;
 mod types;
@@ -17,6 +18,7 @@ pub use node_api::{NodeApi, NodeHeader};
 pub use pipeline::merge_transactions;
 pub use prover::Prover;
 pub use provider::MidnightProvider;
+pub use proving_data::fetch_proving_data;
 pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TransactionReceipt};
 pub use types::TransactionHash;
 
