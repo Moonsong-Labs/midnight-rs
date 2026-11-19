@@ -3545,7 +3545,6 @@ dependencies = [
  "midnight-wallet",
  "midnight-zkir 3.2.1",
  "reqwest 0.12.28",
- "scale-info",
  "serde_json",
  "sha2 0.10.9",
  "subxt",

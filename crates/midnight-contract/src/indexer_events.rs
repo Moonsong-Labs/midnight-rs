@@ -8,14 +8,14 @@ use midnight_helpers::mn_ledger::events::EventDetails;
 use midnight_helpers::{DefaultDB, Event};
 use midnight_indexer_client::{BlockOffset, IndexerClient, IndexerError, SubscriptionClient};
 use midnight_provider::TransactionHash;
-use midnight_typed_state::tagged_deserialize;
+use midnight_typed_state::{InMemoryDB, tagged_deserialize};
 use midnight_types::convert::IntoSdk;
 use midnight_types::{BlockHash, ContractAddress};
 use serde::Deserialize;
 
 use crate::contract::Contract;
 use crate::error::ContractError;
-use crate::events::ContractEvent;
+use crate::runtime::VersionedLogItem;
 use crate::{format_contract_address, parse_contract_address};
 
 /// The `contractEvents` subscription. It selects `raw`, the tagged ledger
@@ -34,12 +34,27 @@ const CONTRACT_EVENTS: &str = r#"
 /// only a bound on the rows ends a wait for a block that it lacks.
 const ROW_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// An event that a contract emitted, with the transaction that emitted it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractEvent {
+    /// The ledger's hash of the transaction that holds the call.
+    pub transaction_hash: TransactionHash,
+    /// The ledger's entry point bytes of the call: the circuit name for
+    /// compactc output.
+    pub entry_point: Vec<u8>,
+    /// The event, of the item type of
+    /// [`CallOutcome::events`](crate::CallOutcome::events).
+    /// [`Misc::decode_event`](crate::runtime::Misc::decode_event)
+    /// decodes a `Misc` event.
+    pub item: VersionedLogItem<InMemoryDB>,
+}
+
 /// The events that a contract emitted in one block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockEvents {
     /// The height of the block.
     pub height: u64,
-    /// The hash of the block, the input of [`Contract::events_at`].
+    /// The hash of the block.
     pub hash: BlockHash,
     /// The events, in the order in which the indexer stored them.
     pub events: Vec<ContractEvent>,
@@ -74,10 +89,9 @@ impl<P> Contract<P> {
     /// The node does not check that run. The indexer leaves out a transaction
     /// that Council, TechnicalCommittee, FederatedAuthority or the Scheduler
     /// dispatches. So the events of such a transaction are missing with no
-    /// error. [`Self::events_at`] reads a block from the node and gives them
-    /// when the block body holds a copy of the transaction. When the block
-    /// ran the transaction from storage, as for a Scheduler call, `events_at`
-    /// fails with [`ContractError::UnknownEvents`].
+    /// error. The SDK has no second source for them: the node publishes no
+    /// contract events, and its outcome event of a partly successful
+    /// transaction does not say which segments applied.
     ///
     /// The read covers every block from `from` to the indexer's latest block
     /// at the start of the read, and holds all their events in memory. To
@@ -138,8 +152,7 @@ impl<P> Contract<P> {
     /// The indexer keeps the events of its own run of the ledger, which the
     /// node does not check. It leaves out a transaction that governance or
     /// the Scheduler dispatches, with no error. [`Self::latest_events`] names
-    /// these transactions, and [`Self::events_at`] reads the block from the
-    /// node.
+    /// these transactions.
     ///
     /// It decodes each [`ContractEvent`] as [`Self::latest_events`] does, from
     /// the same `contractEvents` subscription, so it needs an indexer of the

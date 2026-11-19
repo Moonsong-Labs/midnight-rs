@@ -152,8 +152,8 @@ pub enum ContractError {
     /// [`TransactionReceipt`]. A partial success of a call that the SDK split
     /// at a `kernel.checkpoint()` applied the part before the split, with its
     /// state writes and events.
-    /// [`Contract::events_at`](crate::Contract::events_at) with the block
-    /// hash of the receipt gives those events. Unlike [`SubmissionWait`], the
+    /// [`Contract::indexer_events_at`](crate::Contract::indexer_events_at)
+    /// with the block hash of the receipt gives those events. Unlike [`SubmissionWait`], the
     /// chain gave a verdict. `PendingCall::get_receipt` drops the orphan
     /// `Pending` snapshot, when the call recorded one, with `mark_failed`
     /// before it returns this error.
@@ -265,26 +265,6 @@ pub enum ContractError {
 
     #[error("maintenance error: {0}")]
     Maintenance(String),
-
-    /// [`Contract::events_at`](crate::Contract::events_at) cannot tell which
-    /// events of the contract transaction `transaction_hash` kept.
-    ///
-    /// The block ran the transaction from storage, so its body holds no copy
-    /// ([`BlockTransaction::bytes`](midnight_provider::BlockTransaction::bytes)
-    /// is `None`). Or a call of the contract in the transaction emits events,
-    /// and its status is [`CallStatus::Undecided`](crate::CallStatus::Undecided)
-    /// or one of its events is an [`UnreadableEvent`](crate::UnreadableEvent).
-    /// The read returns no event of the block. The low-level read
-    /// ([`NodeApi::get_block_transactions`](midnight_provider::NodeApi::get_block_transactions),
-    /// [`call_transcripts`](crate::call_transcripts)) shows which case
-    /// applies.
-    #[error(
-        "the node read cannot tell which events of the contract transaction {transaction_hash} kept"
-    )]
-    UnknownEvents {
-        /// The ledger's hash of the transaction.
-        transaction_hash: TransactionHash,
-    },
 
     /// A read from the indexer failed. Only
     /// [`Contract::latest_events`](crate::Contract::latest_events) and
