@@ -24,7 +24,9 @@ pub enum SyncProgress {
         /// The id of the last Dust event that the snapshot read.
         dust_event_id: i64,
     },
-    /// The zswap replay applied another 10,000 events.
+    /// The zswap replay applied more events. A replay sends it on its first
+    /// new event, then on the first new event one second or more after its
+    /// last report.
     ZswapEvents {
         /// The id of the last zswap event that the replay applied.
         current: i64,
@@ -39,7 +41,9 @@ pub enum SyncProgress {
         /// is 0 when the wallet was at the tip.
         events: u64,
     },
-    /// The Dust replay read another 10,000 new events.
+    /// The Dust replay read more new events. A replay sends it on its first
+    /// new event, then on the first new event one second or more after its
+    /// last report.
     DustEvents {
         /// The id of the last Dust event that the replay read.
         current: i64,

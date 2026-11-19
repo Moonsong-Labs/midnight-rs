@@ -313,8 +313,32 @@ impl LedgerStream {
     }
 }
 
-/// Events between two progress reports of a ledger-event replay.
-const PROGRESS_INTERVAL: u64 = 10_000;
+/// Events between two "replay progress" log lines of a ledger-event replay.
+const LOG_INTERVAL: u64 = 10_000;
+
+/// The time after which a ledger-event replay reports progress again.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// When a ledger-event replay reports progress: on its first event, then on
+/// the first event at least [`PROGRESS_INTERVAL`] after its last report.
+#[derive(Default)]
+struct ProgressPacer {
+    last: Option<std::time::Instant>,
+}
+
+impl ProgressPacer {
+    /// Whether a report is due at `now`. A due report starts a new interval.
+    fn due(&mut self, now: std::time::Instant) -> bool {
+        if self
+            .last
+            .is_some_and(|last| now.duration_since(last) < PROGRESS_INTERVAL)
+        {
+            return false;
+        }
+        self.last = Some(now);
+        true
+    }
+}
 
 /// The most events that a ledger-event replay hands to one `apply` call.
 ///
@@ -392,6 +416,7 @@ pub(crate) async fn replay_ledger_events(
     let mut last_id: i64 = last_applied_before(start_id);
     let mut count: u64 = 0;
     let mut retries: u32 = 0;
+    let mut pacer = ProgressPacer::default();
     // Outside the reconnect loop: a reconnect resumes after `last_id`, which
     // can name an event that waits here.
     let mut batch: Vec<EncodedEvent> = Vec::with_capacity(REPLAY_BATCH);
@@ -462,21 +487,20 @@ pub(crate) async fn replay_ledger_events(
                     last_id = msg.id;
                     count += 1;
 
-                    let report = count.is_multiple_of(PROGRESS_INTERVAL);
+                    if count.is_multiple_of(LOG_INTERVAL) {
+                        info!(
+                            count,
+                            id = msg.id,
+                            max_id = msg.max_id,
+                            "{kind} replay progress"
+                        );
+                    }
+                    let report = progress.is_some() && pacer.due(std::time::Instant::now());
                     if report || batch.len() == REPLAY_BATCH {
                         apply(&batch)?;
                         batch.clear();
-                        if report {
-                            info!(
-                                count,
-                                id = msg.id,
-                                max_id = msg.max_id,
-                                "{kind} replay progress"
-                            );
-                            let alive = send_progress(&progress, stream.events(msg.id, msg.max_id));
-                            if !alive {
-                                return Err(progress_cancelled(kind));
-                            }
+                        if report && !send_progress(&progress, stream.events(msg.id, msg.max_id)) {
+                            return Err(progress_cancelled(kind));
                         }
                         // Outside a tokio task no budget forces a yield, so a
                         // replay that always finds its next event ready would
@@ -990,6 +1014,25 @@ mod tests {
         ));
     }
 
+    /// A pacer that restarts its interval on every event, not only on a
+    /// report, never reports again while events come faster than the
+    /// interval.
+    #[test]
+    fn progress_is_reported_on_the_first_event_then_once_per_interval() {
+        let start = std::time::Instant::now();
+        let mut pacer = ProgressPacer::default();
+
+        assert!(pacer.due(start), "the first event must report at once");
+        assert!(
+            !pacer.due(start + PROGRESS_INTERVAL / 2),
+            "a report inside the interval"
+        );
+        assert!(
+            pacer.due(start + PROGRESS_INTERVAL),
+            "a full interval passed without a report"
+        );
+    }
+
     #[test]
     fn reconnect_delay_doubles_from_base() {
         assert_eq!(reconnect_delay(1).as_millis(), 250);
@@ -1182,7 +1225,8 @@ mod tests {
 
         /// A reconnect resumes after the last event read, which can still
         /// wait in the batch. A batch per connection loses the events of a
-        /// dropped one while the cursor moves past them.
+        /// dropped one while the cursor moves past them. A report must name
+        /// an event that the ledger holds.
         #[tokio::test]
         async fn a_replay_applies_each_event_once_before_it_completes() {
             let last = REPLAY_BATCH as i64 + 2;
@@ -1243,6 +1287,26 @@ mod tests {
             assert!(
                 sizes.len() < 8 && sizes.iter().all(|n| (1..=REPLAY_BATCH).contains(n)),
                 "the ledger must get the events in batches, got calls of {sizes:?}"
+            );
+            let mut applied_through = 0;
+            let mut reported = Vec::new();
+            for entry in &seen {
+                match entry {
+                    Seen::Applied(ids) => applied_through = ids.last().copied().unwrap_or(0),
+                    Seen::Progress(SyncProgress::ZswapEvents { current, .. }) => {
+                        assert!(
+                            *current <= applied_through,
+                            "a report named event {current} before its apply"
+                        );
+                        reported.push(*current);
+                    }
+                    Seen::Progress(_) => {}
+                }
+            }
+            assert_eq!(
+                reported.first(),
+                Some(&1),
+                "the first event must report at once"
             );
             assert!(
                 matches!(
