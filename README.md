@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The crates in [`examples/`](examples) run against the same devnet. Run one from the root of the clone with `make run-<name>`, for example `make run-shielded-transfer`.
 
-To sync a wallet against another network that runs ledger 9, give [`examples/wallet-sync`](examples/wallet-sync) the URLs of its node and indexer. Its README lists the environment variables.
+To sync a wallet against another network that runs ledger 9, give [`examples/wallet-sync`](examples/wallet-sync) the URLs of its node and indexer. On PreProd and mainnet, Blockfrost hosts both and needs a project token. The example's README lists the environment variables.
 
 ## Proof backends
 

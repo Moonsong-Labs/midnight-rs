@@ -60,6 +60,13 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! On PreProd and mainnet, Blockfrost hosts the indexer and the node, and
+//! each request needs a project token. Pass the indexer as an
+//! [`IndexerEndpoint`] with [`IndexerEndpoint::with_credential`], and give
+//! the provider the token with `MidnightProvider::with_node_credential`.
+//! [`docs/wallet.md`](https://github.com/Moonsong-Labs/midnight-rs/blob/main/docs/wallet.md#indexer-endpoint-and-credential)
+//! lists the URLs.
 
 mod background;
 mod balance;

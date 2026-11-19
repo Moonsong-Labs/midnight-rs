@@ -122,7 +122,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 ## Provider ↔ Wallet model
 
-The wallet owns the keys of each role, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set. It exposes accessors. A provider reaches it only through `MidnightWallet`: the wallet funds a filled transaction and reserves its inputs, and it signs a proven one. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every funding resyncs the wallet first, and when asked, `Wallet::sync_in_background` syncs it in a background task. A sync derives the keys from the seed, and the seed then drops. It replays from the indexer at the `indexer_url` it gets. It asks its `SyncSource`, such as the provider, for the network and the chain pin. The wallet keeps that indexer URL for later replays, and the provider answers a resync's pin queries.
+The wallet owns the keys of each role, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set. It exposes accessors. A provider reaches it only through `MidnightWallet`: the wallet funds a filled transaction and reserves its inputs, and it signs a proven one. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin queries to a node. Every funding resyncs the wallet first, and when asked, `Wallet::sync_in_background` syncs it in a background task. A sync derives the keys from the seed, and the seed then drops. It replays from the indexer that it gets: a URL, or an `IndexerEndpoint` with the credential that the indexer requires. It asks its `SyncSource`, such as the provider, for the network and the chain pin. The wallet keeps that endpoint for later replays, and the provider answers a resync's pin queries.
 
 Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `Wallet` composes the three under a mutex of its own, which serializes its syncs and coin watches. Under one hold of that mutex, a coin watch registers and then rescans. Outside a provider, `wallet.sync(&provider)` syncs it.
 
@@ -377,7 +377,7 @@ CallOutcome<T> → caller
 The node publishes no contract events, and its outcome event of a partly successful transaction does not say which segments applied. So the SDK reads contract events from the indexer, which runs each transaction on its own copy of the ledger. `Contract::latest_events` reads the indexer's `contractEvents` subscription, from a start block to the indexer's latest block:
 
 ```
-Contract::latest_events(indexer_url, from)    → LatestEvents { blocks, next_height }
+Contract::latest_events(indexer, from)        → LatestEvents { blocks, next_height }
   ├─ IndexerClient::get_block(None)           // the indexer's latest block T, or None
   ├─ covered(from, T)                         → the range, and next_height
   │    Latest, T              → T..=T, T + 1
@@ -402,7 +402,7 @@ The read holds every event of its range in memory. To follow the contract, read 
 `Contract::indexer_events_at` reads the same subscription for one block, which the caller names by its hash. It reads no other block, so a caller that passes a finalized block hash gets no event above that block:
 
 ```
-Contract::indexer_events_at(indexer_url, block_hash)   → Option<Vec<ContractEvent>>
+Contract::indexer_events_at(indexer, block_hash)       → Option<Vec<ContractEvent>>
   ├─ IndexerClient::get_block(hash)           // the block, or None
   │    None: return None, with no subscription
   │    a block with another hash, or a negative height: refuse

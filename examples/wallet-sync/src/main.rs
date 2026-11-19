@@ -7,13 +7,16 @@ use std::env;
 use anyhow::Context;
 use midnight_core::provider::TransactionRequest;
 use midnight_core::{
-    MidnightProvider, NIGHT, Network, SPECKS_PER_DUST, Seed, SyncProgress, Wallet,
+    IndexerEndpoint, MidnightProvider, NIGHT, Network, SPECKS_PER_DUST, Seed, SyncProgress, Wallet,
 };
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded at genesis on the local devnet. Do NOT use in
 /// production.
 const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+
+/// The request header that Blockfrost reads its project token from.
+const BLOCKFROST_HEADER: &str = "project_id";
 
 fn env_or(name: &str, default: &str) -> String {
     env::var(name).unwrap_or_else(|_| default.to_string())
@@ -49,12 +52,17 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Syncing wallet state from indexer (zswap and unshielded, then dust)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
-    let provider = MidnightProvider::new(&node_url);
+    let mut provider = MidnightProvider::new(&node_url);
+    let mut indexer = IndexerEndpoint::new(&indexer_url);
+    if let Ok(token) = env::var("BLOCKFROST_PROJECT_ID") {
+        provider = provider.with_node_credential(BLOCKFROST_HEADER, &token)?;
+        indexer = indexer.with_credential(BLOCKFROST_HEADER, &token)?;
+    }
     let mut builder = Wallet::from_seed(seed.clone()).with_network(&network);
     if let Some(dir) = storage_dir.as_ref() {
         builder = builder.with_storage(dir);
     }
-    let (mut rx, handle) = builder.sync_with_progress(&provider, &indexer_url).await?;
+    let (mut rx, handle) = builder.sync_with_progress(&provider, indexer).await?;
 
     while let Some(progress) = rx.recv().await {
         match progress {

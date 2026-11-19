@@ -18,6 +18,23 @@ The example connects to the local devnet. To sync against another network that r
 - `MIDNIGHT_INDEXER_URL`: the indexer, by default `http://127.0.0.1:8088`
 - `MIDNIGHT_NETWORK`: the network, by default `undeployed`
 - `MIDNIGHT_WALLET_SEED`: the seed, by default the dev seed
+- `BLOCKFROST_PROJECT_ID`: a Blockfrost project token, by default none. The example sends it in the `project_id` header to the node and to the indexer.
+
+### PreProd and mainnet
+
+Blockfrost hosts the node and the indexer of PreProd and mainnet. Each request needs the token of a Blockfrost project for that network. For PreProd:
+
+```bash
+export MIDNIGHT_NETWORK=preprod
+export MIDNIGHT_NODE_URL=wss://rpc.midnight-preprod.blockfrost.io
+export MIDNIGHT_INDEXER_URL=https://midnight-preprod.blockfrost.io/api/v0
+export BLOCKFROST_PROJECT_ID=<your PreProd project token>
+export MIDNIGHT_WALLET_SEED=<your seed>
+```
+
+For mainnet, write `mainnet` in place of `preprod`. Do not put the token in a URL (`?project_id=`): the SDK logs the URLs, and the indexer client refuses a URL with a query.
+
+### The seed
 
 `MIDNIGHT_WALLET_SEED` takes any format that `Seed`'s `FromStr` accepts:
 
@@ -40,7 +57,8 @@ TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 
 ## What it covers
 
-- `Wallet::from_seed(seed.clone()).with_network(&network).sync_with_progress(&provider, &indexer_url)`: `SyncProgress` events from a `SyncProgressReceiver`, then `with_wallet(&wallet)` to attach a borrow. The sync checks a persisted snapshot's chain pin.
+- `MidnightProvider::with_node_credential` and `IndexerEndpoint::with_credential`: the Blockfrost token, when `BLOCKFROST_PROJECT_ID` is set.
+- `Wallet::from_seed(seed.clone()).with_network(&network).sync_with_progress(&provider, indexer)`: `SyncProgress` events from a `SyncProgressReceiver`, then `with_wallet(&wallet)` to attach a borrow. The sync checks a persisted snapshot's chain pin.
 - `wallet.balance()`: the three asset legs (shielded coins, unshielded UTXOs, Dust)
 - `provider.send_transaction(TransactionRequest::register_dust())`: registers one tNIGHT UTXO for Dust generation
 - `provider.send_transaction(TransactionRequest::unshielded(NIGHT, amount, seed.unshielded_recipient()))`: an unshielded self-transfer
@@ -51,3 +69,5 @@ For the API reference, see [`docs/wallet.md`](../../docs/wallet.md).
 ## Note
 
 Dust sync from genesis can take 30+ minutes on a mainnet-scale history. Progress is checkpointed to disk under `~/.midnight/wallets/<network>/<sha256 of the unshielded address>/`, so reruns resume from the last cursor.
+
+The cursors in that directory count the events of one indexer, and each indexer numbers its events in its own way. Before the first sync against another indexer, such as Blockfrost in place of the retired Midnight-hosted indexer, remove the directory. The sync does not detect a snapshot from another indexer.

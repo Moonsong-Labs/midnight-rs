@@ -172,7 +172,7 @@ Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress
 
 The SDK reads the data of a chain that runs ledger 9. On a chain that forked from ledger 8 to ledger 9, such as mainnet, the zswap stream starts with the ledger 8 events from before the fork. A sync or a rescan from event zero reads them, so the wallet keeps the shielded coins that it received before the fork. The Dust replay skips the ledger 8 Dust events, because the fork emptied the chain's Dust state (see [`dust-and-fees.md`](dust-and-fees.md#dust-after-the-fork-to-ledger-9)). A chain that runs ledger 8 fails the sync with `WalletError::UnknownLedger`, which names the tag of the data.
 
-The wallet keeps `indexer_url` for its later resyncs. The provider is the sync's source: its node reports the network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the node's network to the two-query `ChainView`.
+`indexer_url` is a URL, or an `IndexerEndpoint` with the credential that the indexer requires (see [Indexer endpoint and credential](#indexer-endpoint-and-credential)). The wallet keeps the endpoint for its later resyncs. The provider is the sync's source: its node reports the network and pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the node's network to the two-query `ChainView`.
 
 Before the replay, the sync asks the node which network it runs. Without `.with_network(..)`, the wallet takes that network. The sync then fails with `WalletError::NetworkUnknown` when the node cannot answer, reports no network, or reports an id that the parse of a `Network` refuses (see [Address derivation](#address-derivation)).
 
@@ -214,6 +214,46 @@ let provider = provider.with_wallet(&wallet);
 The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally. For a sync without progress events, use `.sync(&provider, indexer_url)`.
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `wallet.sync(&provider).await`. Every funding resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync. To keep the reads fresh, run a [background sync](#background-sync). For one fresh read, call `wallet.sync(&provider)` before it. A sync takes the wallet's read/write lock only briefly, at its start (to snapshot replay inputs) and at its end (to commit). So reads like `balance()` keep completing while one is in flight. The wallet serializes concurrent syncs.
+
+### Indexer endpoint and credential
+
+The sync takes the indexer as an `IndexerEndpoint`. A URL string converts into one with no credential. The URL gives the GraphQL endpoint of the queries:
+
+- A URL with no path, such as `http://127.0.0.1:8088`, is a self-hosted indexer. The client adds `/api/v3/graphql`.
+- A URL whose path ends in `/graphql/ws` loses the `/ws`.
+- The client uses any other URL as given, such as `https://midnight-preprod.blockfrost.io/api/v0`.
+
+The subscriptions use the GraphQL endpoint followed by `/ws`, over `ws` or `wss`.
+
+Blockfrost hosts the indexer and the node of PreProd and mainnet. Each request needs the token of a Blockfrost project for that network, in the `project_id` header:
+
+| Network | Indexer | Node |
+|---|---|---|
+| PreProd | `https://midnight-preprod.blockfrost.io/api/v0` | `wss://rpc.midnight-preprod.blockfrost.io` |
+| Mainnet | `https://midnight-mainnet.blockfrost.io/api/v0` | `wss://rpc.midnight-mainnet.blockfrost.io` |
+
+```rust
+use midnight_core::{IndexerEndpoint, MidnightProvider, Network, Seed, Wallet};
+
+let token = std::env::var("BLOCKFROST_PROJECT_ID")?;
+let provider = MidnightProvider::new("wss://rpc.midnight-preprod.blockfrost.io")
+    .with_node_credential("project_id", &token)?;
+let indexer = IndexerEndpoint::new("https://midnight-preprod.blockfrost.io/api/v0")
+    .with_credential("project_id", &token)?;
+let wallet = Wallet::from_seed(Seed::from_mnemonic(phrase)?)
+    .with_network(Network::Preprod)
+    .with_storage(storage_dir)
+    .sync(&provider, indexer)
+    .await?;
+```
+
+The SDK sends the token in a request header: on each indexer query, on the WebSocket upgrade of each subscription, and on the WebSocket upgrade of each node connect. Blockfrost reads the header on each of them. An indexer error with HTTP 403 means that the token is wrong or missing. Do not put the token in a URL (`?project_id=`). The SDK and its dependencies write the URLs to logs and error messages, and `IndexerEndpoint` refuses a URL with a query. The `Debug` output of an `IndexerEndpoint` and of a `MidnightProvider` shows `Sensitive` in place of the token. `tungstenite` logs each WebSocket handshake, headers included, at the `trace` level of the `log` crate, so keep that level off for it.
+
+The wallet keeps the endpoint for its whole life. To use a new token, sync a new wallet. With `with_storage(..)`, the new wallet resumes from the snapshot.
+
+A node that refuses the token looks like a node that cannot answer: each node query gets no answer within its ten-second bound. A sync with `.with_network(..)` then continues with no network check and no fresh pin. Without `.with_network(..)`, it fails with `WalletError::NetworkUnknown`.
+
+`Contract::latest_events` and `Contract::indexer_events_at` take an `IndexerEndpoint` too.
 
 ### Background sync
 
@@ -285,6 +325,8 @@ With `.with_storage(dir)`, the sync writes to:
 The directory holds the Dust secret key, so protect it as key material. On Unix, the SDK creates the wallet's directory with mode 0700 and its files with mode 0600.
 
 Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the old generation is cleaned up. A crash mid-write leaves the previous generation intact. The SDK syncs each file to disk before its rename and, on Unix, the directory after it, so a power loss mid-write also leaves it intact.
+
+The cursors in `metadata.json` count the events of one indexer, and event ids differ between indexers. The sync does not detect a snapshot from another indexer. So before the first sync against another indexer, for example Blockfrost in place of the retired Midnight-hosted indexer, delete the directory.
 
 The sync refuses a snapshot that holds ledger 8 state. When the `ledger_version` field of `metadata.json` is `V8`, or the file has no such field, the sync fails with `WalletError::Ledger8Snapshot`, which names the directory. Delete the directory and sync again from genesis.
 
