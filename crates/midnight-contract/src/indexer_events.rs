@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use midnight_helpers::mn_ledger::events::EventDetails;
 use midnight_helpers::{DefaultDB, Event};
-use midnight_indexer_client::{BlockOffset, IndexerClient, IndexerError, SubscriptionClient};
+use midnight_indexer_client::{
+    BlockOffset, IndexerClient, IndexerEndpoint, IndexerError, SubscriptionClient,
+};
 use midnight_provider::TransactionHash;
 use midnight_typed_state::{InMemoryDB, tagged_deserialize};
 use midnight_types::convert::IntoSdk;
@@ -82,7 +84,7 @@ pub enum FromBlock {
 
 impl<P> Contract<P> {
     /// Get the events that this contract emitted from the block at `from`
-    /// to the latest block of the indexer at `indexer_url`.
+    /// to the latest block of the indexer at `indexer`.
     ///
     /// The indexer runs each finalized transaction on its own copy of the
     /// ledger, and keeps the events of the segments that applied in that run.
@@ -103,8 +105,9 @@ impl<P> Contract<P> {
     /// It decodes each [`ContractEvent`] from the ledger event that the
     /// indexer stores, not from the indexer's decoded fields. It uses the
     /// indexer's `contractEvents` subscription, which the indexer marks
-    /// `@beta`, so it needs an indexer of the 4.4 line. `indexer_url` takes
-    /// the forms that `WalletBuilder::sync` takes.
+    /// `@beta`, so it needs an indexer of the 4.4 line. `indexer` is a URL,
+    /// or an [`IndexerEndpoint`] with the credential that the indexer
+    /// requires.
     ///
     /// # Errors
     ///
@@ -127,15 +130,15 @@ impl<P> Contract<P> {
     ///   does not parse.
     pub async fn latest_events(
         &self,
-        indexer_url: &str,
+        indexer: impl Into<IndexerEndpoint>,
         from: FromBlock,
     ) -> Result<LatestEvents, ContractError> {
         let address = parse_contract_address(self.address())?;
-        read_latest(indexer_url, &address, from).await
+        read_latest(&indexer.into(), &address, from).await
     }
 
     /// Get the events that this contract emitted in the block with
-    /// `block_hash`, from the indexer at `indexer_url`.
+    /// `block_hash`, from the indexer at `indexer`.
     ///
     /// The read asks the indexer for the height of `block_hash`, then reads
     /// the events at that height only. So it gives no event of another block,
@@ -156,8 +159,8 @@ impl<P> Contract<P> {
     ///
     /// It decodes each [`ContractEvent`] as [`Self::latest_events`] does, from
     /// the same `contractEvents` subscription, so it needs an indexer of the
-    /// 4.4 line. `indexer_url` takes the forms that `WalletBuilder::sync`
-    /// takes.
+    /// 4.4 line. `indexer` is a URL, or an [`IndexerEndpoint`] with the
+    /// credential that the indexer requires.
     ///
     /// # Errors
     ///
@@ -180,20 +183,20 @@ impl<P> Contract<P> {
     ///   does not parse.
     pub async fn indexer_events_at(
         &self,
-        indexer_url: &str,
+        indexer: impl Into<IndexerEndpoint>,
         block_hash: BlockHash,
     ) -> Result<Option<Vec<ContractEvent>>, ContractError> {
         let address = parse_contract_address(self.address())?;
-        read_at(indexer_url, &address, block_hash).await
+        read_at(&indexer.into(), &address, block_hash).await
     }
 }
 
 async fn read_latest(
-    indexer_url: &str,
+    indexer: &IndexerEndpoint,
     address: &ContractAddress,
     from: FromBlock,
 ) -> Result<LatestEvents, ContractError> {
-    let latest = IndexerClient::new(indexer_url)
+    let latest = IndexerClient::new(indexer)
         .map_err(indexer_error)?
         .get_block(None)
         .await
@@ -211,17 +214,17 @@ async fn read_latest(
         });
     };
     Ok(LatestEvents {
-        blocks: read_blocks(indexer_url, address, range).await?,
+        blocks: read_blocks(indexer, address, range).await?,
         next_height,
     })
 }
 
 async fn read_at(
-    indexer_url: &str,
+    indexer: &IndexerEndpoint,
     address: &ContractAddress,
     block_hash: BlockHash,
 ) -> Result<Option<Vec<ContractEvent>>, ContractError> {
-    let Some(block) = IndexerClient::new(indexer_url)
+    let Some(block) = IndexerClient::new(indexer)
         .map_err(indexer_error)?
         .get_block(Some(BlockOffset::hash(format!("{block_hash:x}"))))
         .await
@@ -241,7 +244,7 @@ async fn read_at(
             block.height
         ))
     })?;
-    let mut blocks = read_blocks(indexer_url, address, height..=height).await?;
+    let mut blocks = read_blocks(indexer, address, height..=height).await?;
     match blocks.pop() {
         None => Ok(Some(Vec::new())),
         Some(block) if block.hash == block_hash => Ok(Some(block.events)),
@@ -255,7 +258,7 @@ async fn read_at(
 /// The events of `address` in the blocks of `range`, by height. Every row
 /// must lie in `range`.
 async fn read_blocks(
-    indexer_url: &str,
+    indexer: &IndexerEndpoint,
     address: &ContractAddress,
     range: RangeInclusive<u64>,
 ) -> Result<Vec<BlockEvents>, ContractError> {
@@ -264,7 +267,7 @@ async fn read_blocks(
         "fromBlock": range.start(),
         "toBlock": range.end(),
     });
-    let mut rows = SubscriptionClient::new(indexer_url)
+    let mut rows = SubscriptionClient::new(indexer)
         .subscribe::<Rows>(CONTRACT_EVENTS, serde_json::json!({ "filter": filter }))
         .await
         .map_err(indexer_error)?;
@@ -640,7 +643,7 @@ mod tests {
     async fn read_one_row(complete: bool) -> Result<LatestEvents, ContractError> {
         let (url, server, filter) = mock_indexer(block_at(9), vec![row(1, 2, 2)], complete).await;
         let read = read_latest(
-            &url,
+            &url.into(),
             &ContractAddress(HashOutput([1; 32])),
             FromBlock::Height(0),
         )
@@ -692,7 +695,7 @@ mod tests {
     ) {
         let (url, server, filter) = mock_indexer(block, rows, true).await;
         let read = read_at(
-            &url,
+            &url.into(),
             &ContractAddress(HashOutput([1; 32])),
             BlockHash::from([9; 32]),
         )

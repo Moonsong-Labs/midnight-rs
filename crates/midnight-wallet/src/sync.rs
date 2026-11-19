@@ -1,7 +1,9 @@
 //! Build a synced [`Wallet`] from its seed, as a standalone step.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use midnight_indexer_client::IndexerEndpoint;
 use midnight_types::chain_pin::{
     ChainCheck, ChainPin, ChainView, SyncSource, current_pin, verify_pin,
 };
@@ -249,7 +251,7 @@ pub struct WalletBuilder {
 /// The owned inputs a sync runs on, once the chain work is done. Holding no
 /// borrow is what lets [`WalletBuilder::sync_with_progress`] spawn.
 pub(crate) struct SyncPlan {
-    pub(crate) indexer_url: String,
+    pub(crate) indexer: Arc<IndexerEndpoint>,
     pub(crate) keys: RoleKeys,
     pub(crate) address: String,
     pub(crate) network: Network,
@@ -290,14 +292,15 @@ impl WalletBuilder {
     }
 
     /// Sync the wallet in the current task: derive the keys of each role and
-    /// drop the seed, replay the indexer at `indexer_url`, and check the chain
+    /// drop the seed, replay the indexer at `indexer`, and check the chain
     /// through the node of `source`.
     ///
     /// The wallet keeps the keys for its whole life: the shielded and Dust
     /// spends prove with their secret keys, and the unshielded key signs. The
-    /// sync starts from genesis, or from a stored snapshot. The wallet
-    /// keeps `indexer_url` for its later resyncs. `MidnightProvider` is a
-    /// source.
+    /// sync starts from genesis, or from a stored snapshot. `indexer` is a
+    /// URL, or an [`IndexerEndpoint`] with the credential that the indexer
+    /// requires. The wallet keeps it for its later resyncs, so a new
+    /// credential needs a new sync. `MidnightProvider` is a source.
     ///
     /// Before the replay, the sync asks the source's node which network it
     /// runs. A wallet with no network takes that network. A wallet with a
@@ -329,9 +332,9 @@ impl WalletBuilder {
     pub async fn sync(
         self,
         source: &dyn SyncSource,
-        indexer_url: &str,
+        indexer: impl Into<IndexerEndpoint>,
     ) -> Result<Wallet, WalletError> {
-        Wallet::synced(self.prepare(source, indexer_url).await?, None).await
+        Wallet::synced(self.prepare(source, indexer.into()).await?, None).await
     }
 
     /// Run the sync in a background task and stream progress events.
@@ -362,9 +365,9 @@ impl WalletBuilder {
     pub async fn sync_with_progress(
         self,
         source: &dyn SyncSource,
-        indexer_url: &str,
+        indexer: impl Into<IndexerEndpoint>,
     ) -> Result<(SyncProgressReceiver, SyncHandle), WalletError> {
-        let plan = self.prepare(source, indexer_url).await?;
+        let plan = self.prepare(source, indexer.into()).await?;
         let (tx, rx) = mpsc::channel(64);
         let handle = tokio::spawn(async move {
             // A clone of the progress sender watches for receiver drop; the
@@ -395,7 +398,7 @@ impl WalletBuilder {
     async fn prepare(
         self,
         source: &dyn SyncSource,
-        indexer_url: &str,
+        indexer: IndexerEndpoint,
     ) -> Result<SyncPlan, WalletError> {
         let WalletBuilder {
             seed,
@@ -429,7 +432,7 @@ impl WalletBuilder {
         }
 
         Ok(SyncPlan {
-            indexer_url: indexer_url.to_string(),
+            indexer: Arc::new(indexer),
             keys,
             address,
             network,
@@ -573,7 +576,7 @@ mod tests {
         let result = Wallet::from_seed(seed())
             .with_network(Network::Undeployed)
             .with_storage(base.path())
-            .prepare(&node, INDEXER_URL)
+            .prepare(&node, INDEXER_URL.into())
             .await;
         let plan = match result {
             Ok(plan) => plan,
@@ -598,7 +601,7 @@ mod tests {
         let result = Wallet::from_seed(seed())
             .with_network(Network::Undeployed)
             .with_storage(base.path())
-            .prepare(&node, INDEXER_URL)
+            .prepare(&node, INDEXER_URL.into())
             .await;
         let path = match result {
             Err(WalletError::ChainMismatch { path, found, .. }) => {
@@ -634,7 +637,7 @@ mod tests {
             };
             let result = Wallet::from_seed(seed())
                 .with_network(Network::Undeployed)
-                .prepare(&node, INDEXER_URL)
+                .prepare(&node, INDEXER_URL.into())
                 .await;
             match (result, refused_as) {
                 (Err(WalletError::NetworkMismatch { wallet, chain }), Some(expected)) => {
@@ -663,7 +666,10 @@ mod tests {
             network: Some(Network::Preprod),
             ..Node::default()
         };
-        let plan = match Wallet::from_seed(seed()).prepare(&node, INDEXER_URL).await {
+        let plan = match Wallet::from_seed(seed())
+            .prepare(&node, INDEXER_URL.into())
+            .await
+        {
             Ok(plan) => plan,
             Err(err) => panic!("the node names a network, got {err:?}"),
         };
@@ -673,7 +679,7 @@ mod tests {
 
         let silent = Node::default();
         match Wallet::from_seed(seed())
-            .prepare(&silent, INDEXER_URL)
+            .prepare(&silent, INDEXER_URL.into())
             .await
         {
             Err(WalletError::NetworkUnknown) => {}

@@ -5,7 +5,7 @@
 //! every ledger generation.
 
 use hex::FromHex;
-use midnight_indexer_client::{IndexerError, SubscriptionClient};
+use midnight_indexer_client::{IndexerEndpoint, IndexerError, SubscriptionClient};
 use midnight_types::build::{SpentUtxoKey, TrackedUtxo};
 use midnight_types::{HashOutput, UnshieldedTokenType};
 use serde::Deserialize;
@@ -205,10 +205,10 @@ fn order_regression(msg_id: i64, conn_high: Option<i64>) -> Option<i64> {
 /// sync or a resync survives the same brief indexer outage as its event
 /// streams.
 pub(crate) async fn latest_block(
-    indexer_url: &str,
+    indexer: &IndexerEndpoint,
 ) -> Result<midnight_indexer_client::Block, WalletError> {
     info!("fetching latest block from indexer");
-    let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)
+    let indexer_client = midnight_indexer_client::IndexerClient::new(indexer)
         .map_err(|e| gave_up("latest block", e))?;
     let mut retries = 0;
     loop {
@@ -847,8 +847,9 @@ mod tests {
                     }
                 }
             });
+            let indexer = IndexerEndpoint::new(url);
             let fetch =
-                tokio::time::timeout(std::time::Duration::from_secs(30), latest_block(&url));
+                tokio::time::timeout(std::time::Duration::from_secs(30), latest_block(&indexer));
             let err = fetch
                 .await
                 .expect("the fetch gives up")

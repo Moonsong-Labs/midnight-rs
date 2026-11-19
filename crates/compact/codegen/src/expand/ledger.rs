@@ -225,29 +225,29 @@ pub(crate) fn emit_ledger_wrapper(
             }
 
             /// Get the events that this contract emitted from the block at
-            /// `from` to the latest block of the indexer at `indexer_url`. See
+            /// `from` to the latest block of the indexer at `indexer`. See
             /// `midnight_contract::Contract::latest_events`.
             pub async fn latest_events(
                 &self,
-                indexer_url: &str,
+                indexer: impl ::core::convert::Into<midnight_contract::IndexerEndpoint>,
                 from: midnight_contract::FromBlock,
             ) -> Result<midnight_contract::LatestEvents, midnight_contract::ContractError> {
-                self.0.latest_events(indexer_url, from).await
+                self.0.latest_events(indexer, from).await
             }
 
             /// Get the events that this contract emitted in the block with
-            /// `block_hash`, from the indexer at `indexer_url`. It reads no
+            /// `block_hash`, from the indexer at `indexer`. It reads no
             /// other block, and gives `None` when the indexer does not hold
             /// the block. See `midnight_contract::Contract::indexer_events_at`.
             pub async fn indexer_events_at(
                 &self,
-                indexer_url: &str,
+                indexer: impl ::core::convert::Into<midnight_contract::IndexerEndpoint>,
                 block_hash: midnight_contract::BlockHash,
             ) -> Result<
                 ::core::option::Option<::std::vec::Vec<midnight_contract::ContractEvent>>,
                 midnight_contract::ContractError,
             > {
-                self.0.indexer_events_at(indexer_url, block_hash).await
+                self.0.indexer_events_at(indexer, block_hash).await
             }
         }
 

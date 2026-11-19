@@ -85,8 +85,8 @@ pub use midnight_types::{NIGHT, SPECKS_PER_DUST, STARS_PER_NIGHT};
 // the common path needs no `midnight_core::wallet::` prefix.
 #[cfg(feature = "wallet")]
 pub use midnight_wallet::{
-    InvalidNetworkName, MidnightWallet, Network, NetworkName, Seed, SyncProgress, Wallet,
-    WalletBuilder,
+    IndexerEndpoint, InvalidNetworkName, MidnightWallet, Network, NetworkName, Seed, SyncProgress,
+    Wallet, WalletBuilder,
 };
 
 // Re-export contract types (gated behind "contract" feature).

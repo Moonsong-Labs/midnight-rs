@@ -78,6 +78,7 @@ mod wallet;
 
 // The vocabulary this crate's own signatures name, so a consumer of the
 // implementation needs no second dependency for it.
+pub use midnight_indexer_client::{IndexerEndpoint, IndexerError};
 pub use midnight_types::address::{
     parse_dust_address, parse_shielded_recipient, parse_unshielded_recipient,
 };

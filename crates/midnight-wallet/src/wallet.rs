@@ -1,8 +1,9 @@
 //! The synced state of a wallet, and the sync that builds it.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use midnight_indexer_client::SubscriptionClient;
+use midnight_indexer_client::{IndexerEndpoint, SubscriptionClient};
 use midnight_types::chain_pin::ChainPin;
 use midnight_types::{
     CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, WalletBalance, WalletError,
@@ -89,14 +90,14 @@ impl WalletState {
         progress: Option<mpsc::Sender<SyncProgress>>,
     ) -> Result<Self, WalletError> {
         let sync = ChainSync {
-            indexer_url: &plan.indexer_url,
+            indexer: &plan.indexer,
             keys: &plan.keys,
             address: &plan.address,
             network: &plan.network,
             storage_dir: plan.storage_dir.as_deref(),
             chain_pin: plan.chain_pin,
         };
-        let block = latest_block(sync.indexer_url).await?;
+        let block = latest_block(sync.indexer).await?;
         require_ledger_9(&block)?;
 
         info!("loading cached state from disk");
@@ -199,7 +200,7 @@ impl WalletState {
     /// Snapshot the inputs of a resync's replay phase. See [`ResyncPlan`].
     pub(crate) fn resync_plan(&self) -> ResyncPlan {
         ResyncPlan {
-            indexer_url: self.state.indexer_url().to_string(),
+            indexer: Arc::clone(self.state.indexer()),
             plan: self.state.resync_plan(),
         }
     }
@@ -242,7 +243,7 @@ impl WalletState {
     /// [`ShieldedRescanPlan`] for the intended plan → run → commit flow.
     pub(crate) fn shielded_rescan_plan(&self) -> ShieldedRescanPlan {
         ShieldedRescanPlan {
-            indexer_url: self.state.indexer_url().to_string(),
+            indexer: Arc::clone(self.state.indexer()),
             plan: self.state.shielded_rescan_plan(),
         }
     }
@@ -281,7 +282,7 @@ impl WalletState {
 /// plan does not mutate or lock anything beyond the `&self` borrow.
 #[must_use = "run the plan with ResyncPlan::run, then apply it with WalletState::commit_resync"]
 pub(crate) struct ResyncPlan {
-    indexer_url: String,
+    indexer: Arc<IndexerEndpoint>,
     plan: state::ResyncPlan,
 }
 
@@ -301,7 +302,7 @@ impl ResyncPlan {
     /// [`Wallet`](crate::Wallet) holds a mutex across plan → run → commit
     /// for this.
     pub(crate) async fn run(self) -> Result<state::ResyncCommit, WalletError> {
-        self.plan.run(&self.indexer_url).await
+        self.plan.run(&self.indexer).await
     }
 }
 
@@ -322,7 +323,7 @@ impl ResyncPlan {
 /// applies the result under a brief write lock.
 #[must_use = "run the plan with ShieldedRescanPlan::run, then apply it with WalletState::commit_shielded_rescan"]
 pub(crate) struct ShieldedRescanPlan {
-    indexer_url: String,
+    indexer: Arc<IndexerEndpoint>,
     plan: state::ShieldedRescanPlan,
 }
 
@@ -344,13 +345,13 @@ impl ShieldedRescanPlan {
     /// The replay reads the events before the chain's hard fork to ledger 9
     /// in ledger 8, and carries the state across the fork.
     pub(crate) async fn run(self) -> Result<state::ShieldedRescanCommit, WalletError> {
-        self.plan.run(&self.indexer_url).await
+        self.plan.run(&self.indexer).await
     }
 }
 
 /// Who a sync is for, and where it keeps what it learns.
 pub(crate) struct ChainSync<'a> {
-    pub(crate) indexer_url: &'a str,
+    pub(crate) indexer: &'a Arc<IndexerEndpoint>,
     pub(crate) keys: &'a RoleKeys,
     pub(crate) address: &'a str,
     pub(crate) network: &'a Network,
@@ -389,7 +390,7 @@ async fn sync_on_chain(
     };
     let resuming = zswap_resume.is_some();
 
-    let sub_client = SubscriptionClient::new(sync.indexer_url);
+    let sub_client = SubscriptionClient::new(sync.indexer.as_ref());
     info!(
         start_zswap_id = zswap_resume.as_ref().map_or(0, |(_, id)| *id),
         start_tx_id, "starting subscriptions"

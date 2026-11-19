@@ -30,8 +30,10 @@ pub use contract::{
     PendingDeploy, Simulated,
 };
 pub use error::{ContractError, KeyMismatch};
-// The events that a contract emitted, from the indexer.
+// The events that a contract emitted, from the indexer, and the indexer
+// endpoint that the reads take.
 pub use indexer_events::{BlockEvents, ContractEvent, FromBlock, LatestEvents};
+pub use midnight_indexer_client::IndexerEndpoint;
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };
