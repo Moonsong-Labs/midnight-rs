@@ -22,7 +22,8 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── events.rs            Contract::events_at and ContractEvent: the events of a contract
   │     │                        in a block, from the node
   │     ├── indexer_events.rs    Contract::latest_events, LatestEvents, BlockEvents, FromBlock:
-  │     │                        the events of a contract up to the indexer's latest block
+  │     │                        the events of a contract up to the indexer's latest block;
+  │     │                        Contract::indexer_events_at: its events in one block
   │     ├── ledger/              (private) the ledger 9 build of a call, deploy and
   │     │     │                  maintenance update
   │     │     ├── call.rs        a circuit call's transaction: transcripts, offers, proof, the wallet's cover
@@ -84,8 +85,8 @@ midnight-core                    meta-crate; re-exports the public API
   ├── midnight-private-state     per-contract private state + maintenance signing keys,
   │                              with password-encrypted export/import
   │
-  ├── midnight-indexer-client    GraphQL client + subscriptions for the wallet sync and
-  │                              Contract::latest_events
+  ├── midnight-indexer-client    GraphQL client + subscriptions for the wallet sync,
+  │                              Contract::latest_events, and Contract::indexer_events_at
   │
   ├── compact-bindgen           `contract!` macro entry point
   │     ├── compact-bindgen-macro      proc-macro → compact-codegen
@@ -448,6 +449,23 @@ Contract::latest_events(indexer_url, from)    → LatestEvents { blocks, next_he
 ```
 
 The read holds every event of its range in memory. To follow the contract, read again from `FromBlock::Height(next_height)`. The indexer leaves out a transaction that governance dispatches, and the node does not check the indexer's run of the ledger. So `Contract::events_at` is the authority for a block that the node holds. A failure gives `ContractError::Indexer`. Its `retryable` keeps the rule of `IndexerError::is_retryable`. A silent indexer is retryable, and a row that fails a check is not.
+
+### Read the events of a block from the indexer
+
+`Contract::indexer_events_at` reads the same subscription for one block, which the caller names by its hash. It reads no other block, so a caller that passes a finalized block hash gets no event above that block:
+
+```
+Contract::indexer_events_at(indexer_url, block_hash)   → Option<Vec<ContractEvent>>
+  ├─ IndexerClient::get_block(hash)           // the block, or None
+  │    None: return None, with no subscription
+  │    a block with another hash, or a negative height: refuse
+  ├─ contractEvents { contractAddress, fromBlock: h, toBlock: h }
+  │    // h: the height of the block; the rows and the end as for latest_events
+  ├─ each row: the checks of latest_events, at height h
+  └─ the rows of block_hash, in row order; a row of another hash: refuse
+```
+
+`None` means that the indexer does not hold the block. The indexer holds finalized blocks only and trails the node, so a later read can give the events. A read that the indexer refuses or fails gives `ContractError::Indexer`, with the `retryable` rule of `latest_events`.
 
 ### Transfer (shielded / unshielded / swap / register dust / sponsor)
 

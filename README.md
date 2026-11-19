@@ -9,7 +9,7 @@
 
 - **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token). A wallet can register its NIGHT to generate Dust for another wallet's Dust address.
 - **Swaps and sponsored fees**: two-party shielded swaps, and one party paying the Dust fees of another party's transactions.
-- **Node and indexer clients**: node RPC over subxt for contract state and submission, and a GraphQL client for the indexer that the wallet sync and `Contract::latest_events` read.
+- **Node and indexer clients**: node RPC over subxt for contract state and submission, and a GraphQL client for the indexer that the wallet sync, `Contract::latest_events`, and `Contract::indexer_events_at` read.
 - **Ledger 9**: the SDK runs on chains that run ledger 9. On a chain that forked from ledger 8 to ledger 9, a sync from genesis also finds the shielded coins that the wallet received before the fork.
 - **Deploy and call Compact smart contracts**: typed Rust bindings generated from the compiled contract. A circuit call takes typed arguments, and returns a typed value and the events that the circuit emits. A node read of a block gives the events of the contract calls in it, and `Contract::events_at` gives the events of one contract.
 - **Per-contract private state**: a pluggable `PrivateStateProvider` store with password-encrypted export and import. Witnesses read and update the state during circuit calls (see [`docs/private-state.md`](docs/private-state.md)).

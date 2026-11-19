@@ -287,11 +287,12 @@ pub enum ContractError {
     },
 
     /// A read from the indexer failed. Only
-    /// [`Contract::latest_events`](crate::Contract::latest_events) returns it.
+    /// [`Contract::latest_events`](crate::Contract::latest_events) and
+    /// [`Contract::indexer_events_at`](crate::Contract::indexer_events_at)
+    /// return it.
     #[error("indexer read failed")]
     Indexer {
-        /// True when a retry is likely to clear the failure.
-        /// [`Contract::latest_events`](crate::Contract::latest_events) lists
+        /// True when a retry is likely to clear the failure. Each read lists
         /// the failures of each kind. A read that failed with false can still
         /// succeed later, for example after an internal error of the indexer.
         retryable: bool,

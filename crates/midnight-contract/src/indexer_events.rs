@@ -1,4 +1,4 @@
-//! The events that a contract emitted up to the latest block of the indexer.
+//! The events that a contract emitted, from the indexer.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use midnight_helpers::mn_ledger::events::EventDetails;
 use midnight_helpers::{DefaultDB, Event};
-use midnight_indexer_client::{IndexerClient, IndexerError, SubscriptionClient};
+use midnight_indexer_client::{BlockOffset, IndexerClient, IndexerError, SubscriptionClient};
 use midnight_provider::TransactionHash;
 use midnight_typed_state::tagged_deserialize;
 use midnight_types::convert::IntoSdk;
@@ -117,11 +117,63 @@ impl<P> Contract<P> {
         from: FromBlock,
     ) -> Result<LatestEvents, ContractError> {
         let address = parse_contract_address(self.address())?;
-        read(indexer_url, &address, from).await
+        read_latest(indexer_url, &address, from).await
+    }
+
+    /// Get the events that this contract emitted in the block with
+    /// `block_hash`, from the indexer at `indexer_url`.
+    ///
+    /// The read asks the indexer for the height of `block_hash`, then reads
+    /// the events at that height only. So it gives no event of another block,
+    /// unlike [`Self::latest_events`], which reads up to the indexer's latest
+    /// block. The events keep the order in which the indexer stored them.
+    ///
+    /// It returns `None` when the indexer does not hold the block. The
+    /// indexer holds finalized blocks only, and trails the node, so `None`
+    /// can clear on a later read. It does not clear when the indexer follows
+    /// another chain.
+    ///
+    /// The indexer keeps the events of its own run of the ledger, which the
+    /// node does not check. It leaves out a transaction that governance or
+    /// the Scheduler dispatches, with no error. [`Self::latest_events`] names
+    /// these transactions, and [`Self::events_at`] reads the block from the
+    /// node.
+    ///
+    /// It decodes each [`ContractEvent`] as [`Self::latest_events`] does, from
+    /// the same `contractEvents` subscription, so it needs an indexer of the
+    /// 4.4 line. `indexer_url` takes the forms that `WalletBuilder::sync`
+    /// takes.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::Indexer`] when the read fails. `retryable` is true
+    ///   in these cases:
+    ///   - the block query fails before a response, or gets a 5xx status;
+    ///   - the WebSocket connection fails;
+    ///   - the connection closes before the indexer completes the read;
+    ///   - the indexer sends no row for 60 s.
+    ///
+    ///   `retryable` is false in these cases:
+    ///   - the indexer answers with a GraphQL error, for example a refusal
+    ///     from an indexer with no `contractEvents`, or its own
+    ///     `Internal Server Error`;
+    ///   - the block query times out, or gets another status;
+    ///   - the block that the indexer gives has another hash, or a negative
+    ///     height;
+    ///   - a row is not a ledger 9 event of this contract in that block.
+    /// - [`ContractError::InvalidContractAddress`] when the handle's address
+    ///   does not parse.
+    pub async fn indexer_events_at(
+        &self,
+        indexer_url: &str,
+        block_hash: BlockHash,
+    ) -> Result<Option<Vec<ContractEvent>>, ContractError> {
+        let address = parse_contract_address(self.address())?;
+        read_at(indexer_url, &address, block_hash).await
     }
 }
 
-async fn read(
+async fn read_latest(
     indexer_url: &str,
     address: &ContractAddress,
     from: FromBlock,
@@ -143,6 +195,55 @@ async fn read(
             next_height,
         });
     };
+    Ok(LatestEvents {
+        blocks: read_blocks(indexer_url, address, range).await?,
+        next_height,
+    })
+}
+
+async fn read_at(
+    indexer_url: &str,
+    address: &ContractAddress,
+    block_hash: BlockHash,
+) -> Result<Option<Vec<ContractEvent>>, ContractError> {
+    let Some(block) = IndexerClient::new(indexer_url)
+        .map_err(indexer_error)?
+        .get_block(Some(BlockOffset::hash(format!("{block_hash:x}"))))
+        .await
+        .map_err(indexer_error)?
+    else {
+        return Ok(None);
+    };
+    if parse_block_hash(&block.hash)? != block_hash {
+        return Err(disagrees(format!(
+            "the query of block {block_hash:x} gave block {}",
+            block.hash
+        )));
+    }
+    let height = u64::try_from(block.height).map_err(|_| {
+        disagrees(format!(
+            "a negative height {} for block {block_hash:x}",
+            block.height
+        ))
+    })?;
+    let mut blocks = read_blocks(indexer_url, address, height..=height).await?;
+    match blocks.pop() {
+        None => Ok(Some(Vec::new())),
+        Some(block) if block.hash == block_hash => Ok(Some(block.events)),
+        Some(block) => Err(disagrees(format!(
+            "a row of block {:x} at height {height}, the height of block {block_hash:x}",
+            block.hash
+        ))),
+    }
+}
+
+/// The events of `address` in the blocks of `range`, by height. Every row
+/// must lie in `range`.
+async fn read_blocks(
+    indexer_url: &str,
+    address: &ContractAddress,
+    range: RangeInclusive<u64>,
+) -> Result<Vec<BlockEvents>, ContractError> {
     let filter = serde_json::json!({
         "contractAddress": format_contract_address(address),
         "fromBlock": range.start(),
@@ -166,10 +267,7 @@ async fn read(
         };
         events.push(decode_row(row, address)?);
     }
-    Ok(LatestEvents {
-        blocks: group_by_block(events, &range)?,
-        next_height,
-    })
+    group_by_block(events, &range)
 }
 
 /// The heights that a read from `from` covers when the indexer's latest
@@ -285,25 +383,23 @@ fn decode_row(
             row.transaction.hash
         )));
     }
-    let block_hash = hex::decode(&row.transaction.block.hash)
-        .ok()
-        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
-        .map(BlockHash::from)
-        .ok_or_else(|| {
-            disagrees(format!(
-                "a block hash that is not 32 bytes of hex: {}",
-                row.transaction.block.hash
-            ))
-        })?;
     Ok((
         row.transaction.block.height,
-        block_hash,
+        parse_block_hash(&row.transaction.block.hash)?,
         ContractEvent {
             transaction_hash,
             entry_point: entry_point.0,
             item: logged_item,
         },
     ))
+}
+
+fn parse_block_hash(hash: &str) -> Result<BlockHash, ContractError> {
+    hex::decode(hash)
+        .ok()
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .map(BlockHash::from)
+        .ok_or_else(|| disagrees(format!("a block hash that is not 32 bytes of hex: {hash}")))
 }
 
 #[cfg(test)]
@@ -464,37 +560,46 @@ mod tests {
         }
     }
 
-    /// A read from a mock indexer that holds one event, and ends the
-    /// subscription with `complete` when `complete` is true, else with a
-    /// close frame.
-    async fn read_one_row(complete: bool) -> Result<LatestEvents, ContractError> {
+    /// A mock indexer at the returned URL. Its block query answers `block`.
+    /// Its subscription sends `rows`, then ends with `complete` when
+    /// `complete` is true, else with a close frame. The receiver gets the
+    /// filter of the subscription.
+    async fn mock_indexer(
+        block: serde_json::Value,
+        rows: Vec<Rows>,
+        complete: bool,
+    ) -> (
+        String,
+        tokio::task::JoinHandle<()>,
+        std::sync::mpsc::Receiver<serde_json::Value>,
+    ) {
         use midnight_indexer_client::testutil::{
             accept_subscriber, bind, next_json, read_http_request, send_json, send_next,
             write_json_response,
         };
 
         let (listener, url) = bind().await;
+        let (filters, filter) = std::sync::mpsc::channel();
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             assert!(read_http_request(&mut stream).await);
-            let latest = serde_json::json!({ "data": { "block": { "hash": "09".repeat(32), "height": 9 } } });
-            write_json_response(&mut stream, "200 OK", &latest.to_string()).await;
+            let answer = serde_json::json!({ "data": { "block": block } });
+            write_json_response(&mut stream, "200 OK", &answer.to_string()).await;
 
             let (mut ws, sub) = accept_subscriber(&listener).await;
-            let filter = &sub["payload"]["variables"]["filter"];
-            assert_eq!(
-                (&filter["fromBlock"], &filter["toBlock"]),
-                (&serde_json::json!(0), &serde_json::json!(9))
-            );
-            let Rows { row } = row(1, 2, 2);
-            let data = serde_json::json!({ "contractEvents": {
-                "raw": row.raw,
-                "transaction": {
-                    "hash": row.transaction.hash,
-                    "block": { "hash": row.transaction.block.hash, "height": row.transaction.block.height },
-                },
-            }});
-            send_next(&mut ws, &sub, data).await;
+            filters
+                .send(sub["payload"]["variables"]["filter"].clone())
+                .unwrap();
+            for Rows { row } in rows {
+                let data = serde_json::json!({ "contractEvents": {
+                    "raw": row.raw,
+                    "transaction": {
+                        "hash": row.transaction.hash,
+                        "block": { "hash": row.transaction.block.hash, "height": row.transaction.block.height },
+                    },
+                }});
+                send_next(&mut ws, &sub, data).await;
+            }
             if complete {
                 send_json(
                     &mut ws,
@@ -506,13 +611,31 @@ mod tests {
             }
             while next_json(&mut ws).await.is_some() {}
         });
-        let read = read(
+        (url, server, filter)
+    }
+
+    /// The indexer's answer for a block at `height` with the hash of the
+    /// block of [`row`].
+    fn block_at(height: u64) -> serde_json::Value {
+        serde_json::json!({ "hash": "09".repeat(32), "height": height })
+    }
+
+    /// A read from a mock indexer whose latest block is at height 9, and that
+    /// holds one event.
+    async fn read_one_row(complete: bool) -> Result<LatestEvents, ContractError> {
+        let (url, server, filter) = mock_indexer(block_at(9), vec![row(1, 2, 2)], complete).await;
+        let read = read_latest(
             &url,
             &ContractAddress(HashOutput([1; 32])),
             FromBlock::Height(0),
         )
         .await;
         server.abort();
+        let filter = filter.try_recv().expect("a subscription");
+        assert_eq!(
+            (&filter["fromBlock"], &filter["toBlock"]),
+            (&serde_json::json!(0), &serde_json::json!(9))
+        );
         read
     }
 
@@ -539,5 +662,90 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// A read at the block of [`row`] from a mock indexer whose block query
+    /// answers `block`, and whose subscription sends `rows` and completes.
+    /// It gives the filter of the subscription, or `None` when the read did
+    /// not subscribe.
+    async fn read_at_block(
+        block: serde_json::Value,
+        rows: Vec<Rows>,
+    ) -> (
+        Result<Option<Vec<ContractEvent>>, ContractError>,
+        Option<serde_json::Value>,
+    ) {
+        let (url, server, filter) = mock_indexer(block, rows, true).await;
+        let read = read_at(
+            &url,
+            &ContractAddress(HashOutput([1; 32])),
+            BlockHash::from([9; 32]),
+        )
+        .await;
+        server.abort();
+        (read, filter.try_recv().ok())
+    }
+
+    /// It catches a read that subscribes from the block to the indexer's
+    /// latest block, which gives the events of the blocks above it.
+    #[tokio::test]
+    async fn a_read_at_a_block_subscribes_to_its_height_alone() {
+        let (read, filter) = read_at_block(block_at(7), vec![row(1, 2, 2)]).await;
+        let filter = filter.expect("a subscription");
+        assert_eq!(
+            (&filter["fromBlock"], &filter["toBlock"]),
+            (&serde_json::json!(7), &serde_json::json!(7))
+        );
+        let events = read
+            .expect("a read of the block")
+            .expect("a block that the indexer holds");
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.transaction_hash)
+                .collect::<Vec<_>>(),
+            [TransactionHash::from([2; 32])]
+        );
+    }
+
+    /// It catches a read that gives no events for a block that the indexer
+    /// lacks, which the caller takes as a block with no event of the
+    /// contract.
+    #[tokio::test]
+    async fn a_block_that_the_indexer_lacks_gives_none() {
+        let (read, filter) = read_at_block(serde_json::Value::Null, Vec::new()).await;
+        assert!(matches!(read, Ok(None)), "{read:?}");
+        assert_eq!(filter, None, "a read with no subscription");
+    }
+
+    /// It catches a read that trusts the indexer's answer to the block query,
+    /// or its filter by height, and so gives the events of another block.
+    #[tokio::test]
+    async fn a_read_at_a_block_refuses_another_block() {
+        let mut other_hash = row(1, 2, 2);
+        other_hash.row.transaction.block.hash = hex::encode([8; 32]);
+        let mut other_height = row(1, 2, 2);
+        other_height.row.transaction.block.height = 8;
+        for (name, block, rows) in [
+            (
+                "a block answer with another hash",
+                serde_json::json!({ "hash": "08".repeat(32), "height": 7 }),
+                Vec::new(),
+            ),
+            ("a row with another hash", block_at(7), vec![other_hash]),
+            ("a row at another height", block_at(7), vec![other_height]),
+        ] {
+            let (read, _) = read_at_block(block, rows).await;
+            assert!(
+                matches!(
+                    read,
+                    Err(ContractError::Indexer {
+                        retryable: false,
+                        ..
+                    })
+                ),
+                "{name}: {read:?}"
+            );
+        }
     }
 }

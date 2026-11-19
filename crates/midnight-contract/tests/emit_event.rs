@@ -8,8 +8,8 @@
 //! the call returns is the one that the chain emits. A read of the call's block
 //! from the node gives the same event, from the transcript that the chain
 //! applied. `Contract::events_at` gives it as the event of the call's
-//! transaction, and `Contract::latest_events` gives the same event from the
-//! indexer.
+//! transaction. `Contract::latest_events` and `Contract::indexer_events_at`
+//! give the same event from the indexer.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
@@ -184,7 +184,16 @@ async fn a_call_that_emits_an_event_applies_on_chain_and_returns_it() {
     };
     assert_eq!(
         (block.hash, block.events),
-        (outcome.block_hash, node_events),
+        (outcome.block_hash, node_events.clone()),
         "the indexer gives the events of the call's block that the node gives"
+    );
+    let at_block = contract
+        .indexer_events_at(&indexer_url, outcome.block_hash)
+        .await
+        .unwrap_or_else(|e| panic!("the indexer read of the call's block must succeed: {e:?}"));
+    assert_eq!(
+        at_block,
+        Some(node_events),
+        "the indexer read of the call's block gives the events that the node gives"
     );
 }
