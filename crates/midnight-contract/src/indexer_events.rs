@@ -132,8 +132,8 @@ impl<P> Contract<P> {
     ///
     /// It returns `None` when the indexer does not hold the block. The
     /// indexer holds finalized blocks only, and trails the node, so `None`
-    /// can clear on a later read. It does not clear when the indexer follows
-    /// another chain.
+    /// can clear on a later read. It does not clear for a block that the
+    /// chain does not finalize, or when the indexer follows another chain.
     ///
     /// The indexer keeps the events of its own run of the ledger, which the
     /// node does not check. It leaves out a transaction that governance or

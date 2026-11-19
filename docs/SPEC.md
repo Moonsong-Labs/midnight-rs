@@ -465,7 +465,7 @@ Contract::indexer_events_at(indexer_url, block_hash)   → Option<Vec<ContractEv
   └─ the rows of block_hash, in row order; a row of another hash: refuse
 ```
 
-`None` means that the indexer does not hold the block. The indexer holds finalized blocks only and trails the node, so a later read can give the events. A read that the indexer refuses or fails gives `ContractError::Indexer`, with the `retryable` rule of `latest_events`.
+`None` means that the indexer does not hold the block. The indexer holds finalized blocks only and trails the node, so a later read can give the events. For a block that the chain does not finalize, `None` stays. A read that the indexer refuses or fails gives `ContractError::Indexer`, with the `retryable` rule of `latest_events`.
 
 ### Transfer (shielded / unshielded / swap / register dust / sponsor)
 

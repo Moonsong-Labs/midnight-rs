@@ -246,7 +246,7 @@ The differences:
 
 ### The events of a block, from the indexer
 
-`Contract::indexer_events_at(indexer_url, block_hash)` reads the events of one block from the indexer. It queries the indexer for the block with `block_hash`, then reads the `contractEvents` subscription at the height of that block only. So a caller that reads the contract state at a finalized block can read the events of that block, and of no block above it. It returns `None` when the indexer does not hold the block: the indexer holds finalized blocks only, and trails the node. It refuses a block answer or a row with another hash. Each other difference of `latest_events` applies to it too.
+`Contract::indexer_events_at(indexer_url, block_hash)` reads the events of one block from the indexer. It queries the indexer for the block with `block_hash`, then reads the `contractEvents` subscription at the height of that block only. So a caller that reads the contract state at a finalized block can read the events of that block, and of no block above it. It returns `None` when the indexer does not hold the block: the indexer holds finalized blocks only, and trails the node. It refuses a block answer or a row with another hash. Each other difference of `latest_events` applies to it too, and `events_at` with the same `block_hash` confirms its events.
 
 ## ZK artifacts
 
