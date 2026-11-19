@@ -10,3 +10,9 @@ export circuit mintToSelf(domainSep: Bytes<32>, amount: Uint<64>): Bytes<32> {
 export circuit payUser(color: Bytes<32>, amount: Uint<128>, address: UserAddress): [] {
   sendUnshielded(disclose(color), disclose(amount), right<ContractAddress, UserAddress>(disclose(address)));
 }
+
+// Take an unshielded token from the caller. The SDK has to cover it with UTXOs
+// of the caller's wallet, in an unshielded offer of its own.
+export circuit deposit(color: Bytes<32>, amount: Uint<128>): [] {
+  receiveUnshielded(disclose(color), disclose(amount));
+}
