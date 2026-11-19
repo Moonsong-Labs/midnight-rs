@@ -60,6 +60,10 @@ pub(crate) fn prepare_update(
                 committee,
                 threshold,
             } => single_replace_authority(committee.clone(), *threshold, counter),
+            OpSpec::Freeze => {
+                let frozen = midnight_helpers::ContractMaintenanceAuthority::new();
+                single_replace_authority(frozen.committee, frozen.threshold, counter)
+            }
         });
     }
     Ok(MaintenanceUpdate::new(
@@ -199,5 +203,63 @@ mod tests {
 
         assert!(check(&signed_by(&key), &state).is_ok());
         assert!(check(&signed_by(&outsider), &state).is_err());
+    }
+
+    /// A freeze at threshold 0 lets an update with no signature apply, and a
+    /// freeze with no counter bump is not well-formed. Only the ledger's
+    /// check shows either one.
+    #[test]
+    fn after_a_freeze_the_ledger_refuses_every_update() {
+        let key = ecdsa::SigningKey::sample(rand::thread_rng());
+        let member = ContractMaintenanceVerifyingKey::ECDSA(key.verifying_key());
+        let key = ContractMaintenanceSigningKey::ECDSA(key);
+        let governed_at = |counter| {
+            ContractState::new(
+                StateValue::Array(vec![].into()),
+                StorageHashMap::new(),
+                ContractMaintenanceAuthority {
+                    committee: vec![member.clone()],
+                    threshold: 1,
+                    counter,
+                },
+            )
+        };
+        let address = crate::address::parse_contract_address(&"aa".repeat(32)).unwrap();
+        let signed = |update: MaintenanceUpdate<DefaultDB>| {
+            let signature = key.sign(&mut rand::thread_rng(), &update.data_to_sign());
+            update.add_signature(0, signature)
+        };
+
+        let governed = governed_at(0);
+        let freeze = prepare_update(&governed, address, &[OpSpec::Freeze], 0).unwrap();
+        check(&signed(freeze.clone()), &governed).unwrap();
+        let installed = match Vec::from(&freeze.updates).as_slice() {
+            [SingleUpdate::ReplaceAuthority(authority)] => authority.clone(),
+            _ => panic!("a freeze is one ReplaceAuthority step"),
+        };
+        assert_eq!(
+            installed,
+            ContractMaintenanceAuthority {
+                committee: Vec::new(),
+                threshold: 1,
+                counter: 1,
+            }
+        );
+        let frozen = ContractState {
+            maintenance_authority: installed,
+            ..governed
+        };
+
+        let later = |state: &ContractState<InMemoryDB>| {
+            let replace = OpSpec::Replace {
+                committee: vec![member.clone()],
+                threshold: 1,
+            };
+            prepare_update(state, address, &[replace], 1).unwrap()
+        };
+        let governed = governed_at(1);
+        check(&signed(later(&governed)), &governed).unwrap();
+        assert!(check(&signed(later(&frozen)), &frozen).is_err());
+        assert!(check(&later(&frozen), &frozen).is_err());
     }
 }

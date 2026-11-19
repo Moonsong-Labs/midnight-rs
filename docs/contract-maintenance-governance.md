@@ -1,13 +1,14 @@
 # Contract maintenance and governance
 
-A deployed contract is not frozen. Its on-chain entry points (the circuits it accepts calls for) and the party allowed to change them can both be updated after the fact. Midnight calls this **contract maintenance**, and the controlling party is the contract's **maintenance authority**.
+A deployed contract can change. Its on-chain entry points (the circuits it accepts calls for) and the party allowed to change them can both be updated after the deploy, until the contract is frozen. Midnight calls this **contract maintenance**, and the controlling party is the contract's **maintenance authority**.
 
 You reach for this when you:
 
 - **rotate a ZK setup** — recompile a circuit and swap its verifier key,
 - **add a circuit post-deploy** — insert a verifier key for an entry point that didn't exist at deploy time,
 - **retire a circuit** — remove a verifier key so calls to that entry point stop verifying,
-- **hand over control** — replace the authority that is allowed to do any of the above.
+- **hand over control** — replace the authority that is allowed to do any of the above,
+- **freeze a contract**: make sure that no update changes the contract again.
 
 This document describes the on-chain mechanics (independent of any SDK) and how this SDK exposes them — including why a contract is ungovernable unless you opt in at deploy.
 
@@ -223,11 +224,30 @@ let pending = prepared
 
 `prepare()` fetches the current authority `counter` (the update must carry it) and runs the precondition check (`insert` fails if the circuit already exists; `remove` fails if it doesn't). The returned [`PreparedMaintenance`] exposes `data_to_sign()` (the exact bytes a member signs, in the form above: the prefix, then the serialized contract address, the ordered update list, and the replay `counter` last; the `signatures` are not part of it), `add_signature(index, signature)` (attach an externally-produced `ContractMaintenanceSignature` at the signer's committee position), and `sign(index, &key)` (the local convenience). `.send().await` fills, funds, proves, signs and submits the update, and returns a `PendingTx`. The signed update rides the same dust-balancing path as a deploy. `.send()` submits with `send_tx_envelope`, so the fee Dust goes back to the wallet when the node never gets the update or rejects it as `Invalid`.
 
-Before building, `.send()` runs the ledger's own check of the signed update (`MaintenanceUpdate::well_formed`, through `Intent::well_formed`) against the contract's state captured at `prepare()`, the check a node runs before it takes the update. A duplicate index, an out-of-range index, a signature that does not verify against its member, or too few signatures fail here with the ledger's error in a `ContractError::Maintenance`, rather than after the SDK builds and funds a transaction the chain would reject. At most one `replace_authority` is allowed per update (a second would silently overwrite the first on apply).
+Before building, `.send()` runs the ledger's own check of the signed update (`MaintenanceUpdate::well_formed`, through `Intent::well_formed`) against the contract's state captured at `prepare()`, the check a node runs before it takes the update. A duplicate index, an out-of-range index, a signature that does not verify against its member, or too few signatures fail here with the ledger's error in a `ContractError::Maintenance`, rather than after the SDK builds and funds a transaction the chain would reject. At most one `replace_authority` or `freeze` is allowed per update (a second would silently overwrite the first on apply).
 
 **Confirming success.** Like any contract action, a maintenance update runs in the fallible phase: a *well-formed* update (valid signatures, threshold met, correct counter) is included even if its effect can't apply. For example, an insert of a key for a circuit that was concurrently defined lands as a *partial success* (fees paid, no change). So `.send()` returning a `PendingTx` that reaches a block does not by itself prove the rotation applied. Wait for it: [`PendingTx::get_receipt`](../crates/midnight-provider/src/submit.rs) fails with `ProviderError::NotApplied` when the update did not apply.
 
 Replacing the authority does **not** touch any local state — the SDK has none. The new committee's members keep their new keys; pass their verifying keys to `replace_authority`.
+
+### Freeze a contract
+
+`freeze()` adds a step that installs the authority with no committee, an empty committee at threshold 1. A default deploy has the same committee and threshold, so the ledger refuses every later update. Nothing can undo a freeze. Calls of the contract's circuits still run.
+
+```rust
+contract.maintenance()
+    .freeze()
+    .prepare().await?
+    .sign(0, &authority)
+    .send()
+    .await?
+    .get_receipt()
+    .await?;
+```
+
+The current committee signs the freeze. The freeze is the update's one authority step, so an update holds at most one `replace_authority` or `freeze`. The same update can insert and remove verifier keys. The ledger applies all the steps of an update or none of them. After the freeze, `Contract::maintenance_authority()` shows the empty committee to anyone.
+
+`replace_authority` refuses an empty committee, so only `freeze` installs it on purpose.
 
 ### Read the current committee
 

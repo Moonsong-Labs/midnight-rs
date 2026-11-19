@@ -280,6 +280,26 @@ impl<'a, P> ContractMaintenance<'a, P> {
         self
     }
 
+    /// Add a step that freezes the contract. After the update, no maintenance
+    /// update can apply to the contract, so its verifier keys and its
+    /// authority stay as they are. Nothing can undo a freeze.
+    ///
+    /// The step installs the ledger's authority with no committee: an empty
+    /// committee at threshold 1, which no set of signatures meets. A contract
+    /// deployed without
+    /// [`DeployBuilder::with_maintenance_authority`](crate::DeployBuilder::with_maintenance_authority)
+    /// has the same committee and threshold. Calls of the contract's circuits
+    /// still run.
+    ///
+    /// The current committee signs the update. The step is the update's one
+    /// authority step, as [`Self::replace_authority`] is. The ledger applies
+    /// all the steps of an update or none of them, so a freeze in the update
+    /// that inserts the last verifier keys applies only with those keys.
+    pub fn freeze(mut self) -> Self {
+        self.specs.push(OpSpec::Freeze);
+        self
+    }
+
     /// Fetch the current authority state, validate the batch (simulating each
     /// step in order), and build the unsigned maintenance update. The returned
     /// [`PreparedMaintenance`] exposes the bytes each committee member signs.
@@ -319,30 +339,11 @@ impl<'a, P> ContractMaintenance<'a, P> {
             .filter_map(|s| match s {
                 OpSpec::Insert { circuit, .. } => Some((circuit.as_str(), true)),
                 OpSpec::Remove { circuit } => Some((circuit.as_str(), false)),
-                OpSpec::Replace { .. } => None,
+                OpSpec::Replace { .. } | OpSpec::Freeze => None,
             })
             .collect();
         validate_vk_sequence(&state, &vk_ops)?;
-
-        // At most one ReplaceAuthority per update (a later one would silently
-        // overwrite an earlier one on apply), and each new committee must be
-        // satisfiable.
-        let mut replaces = 0usize;
-        for spec in &self.specs {
-            if let OpSpec::Replace {
-                committee,
-                threshold,
-            } = spec
-            {
-                replaces += 1;
-                validate_committee(committee, *threshold)?;
-            }
-        }
-        if replaces > 1 {
-            return Err(ContractError::Maintenance(
-                "a maintenance update may contain at most one replace_authority".into(),
-            ));
-        }
+        validate_authority_steps(&self.specs)?;
 
         let update =
             crate::ledger::maintenance::prepare_update(&state, address, &self.specs, counter)?;
@@ -367,6 +368,34 @@ pub(crate) enum OpSpec {
         committee: Vec<ContractMaintenanceVerifyingKey>,
         threshold: u32,
     },
+    /// See [`ContractMaintenance::freeze`].
+    Freeze,
+}
+
+/// Refuse more than one authority step in `specs`, because the ledger applies
+/// the steps in order and a later one overwrites an earlier one. Also refuse a
+/// new committee that [`validate_committee`] refuses.
+fn validate_authority_steps(specs: &[OpSpec]) -> Result<(), ContractError> {
+    let mut authority_steps = 0usize;
+    for spec in specs {
+        match spec {
+            OpSpec::Replace {
+                committee,
+                threshold,
+            } => {
+                authority_steps += 1;
+                validate_committee(committee, *threshold)?;
+            }
+            OpSpec::Freeze => authority_steps += 1,
+            OpSpec::Insert { .. } | OpSpec::Remove { .. } => {}
+        }
+    }
+    if authority_steps > 1 {
+        return Err(ContractError::Maintenance(
+            "a maintenance update may contain at most one replace_authority or freeze".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// An unsigned (or partially-signed) maintenance update. Collect the committee
@@ -527,6 +556,28 @@ mod tests {
             validate_committee(&one_secret, 2).is_err(),
             "one secret as a Schnorr and an ECDSA member collapses k-of-n to 1 signer"
         );
+    }
+
+    /// A freeze followed by a new committee leaves the contract governed. The
+    /// last verifier key inserts and the freeze go in one update.
+    #[test]
+    fn a_freeze_is_the_one_authority_step_of_its_update() {
+        let insert = OpSpec::Insert {
+            circuit: "increment_by".into(),
+            verifier_key: Vec::new(),
+        };
+        assert!(validate_authority_steps(&[insert, OpSpec::Freeze]).is_ok());
+
+        let replace = OpSpec::Replace {
+            committee: vec![schnorr_member()],
+            threshold: 1,
+        };
+        match validate_authority_steps(&[OpSpec::Freeze, replace]) {
+            Err(ContractError::Maintenance(message)) => {
+                assert!(message.contains("at most one"), "{message}");
+            }
+            other => panic!("expected a refusal of the second authority step, got {other:?}"),
+        }
     }
 
     #[test]
