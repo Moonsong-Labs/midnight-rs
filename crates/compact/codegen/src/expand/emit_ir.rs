@@ -10,8 +10,8 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::ir::{
-    Argument, ContractCircuit, Curve, Expr, FieldType, Fun, Ident, Instruction, Literal, MapArg,
-    Operand, PathElement, StateValue, TupleArg, Type,
+    AdtArg, Argument, ContractCircuit, Curve, Expr, FieldType, Fun, Ident, Instruction, Literal,
+    MapArg, Operand, PathElement, StateValue, TupleArg, Type,
 };
 
 fn s(v: &str) -> TokenStream {
@@ -162,8 +162,25 @@ pub(crate) fn type_ref(t: &Type) -> TokenStream {
             quote! { __ir::Type::Contract { name: #name, circuits: #circuits } }
         }
         Type::Unknown => quote! { __ir::Type::Unknown },
+        // The interpreter pushes an inner `Map` only for the default of a
+        // `Map` type, so the embedding keeps the ADT whole.
+        Type::Adt { name, args } => {
+            let name = s(name);
+            let args = vec_of(args.iter().map(adt_arg));
+            quote! { __ir::Type::Adt { name: #name, args: #args } }
+        }
         // Rejected at load by `artifact::check_type`; unreachable here.
-        Type::Adt { .. } | Type::TypeVar(_) => quote! { __ir::Type::Unknown },
+        Type::TypeVar(_) => quote! { __ir::Type::Unknown },
+    }
+}
+
+fn adt_arg(arg: &AdtArg) -> TokenStream {
+    match arg {
+        AdtArg::Nat(n) => quote! { __ir::AdtArg::Nat(#n) },
+        AdtArg::Type(t) => {
+            let t = type_ref(t);
+            quote! { __ir::AdtArg::Type(#t) }
+        }
     }
 }
 

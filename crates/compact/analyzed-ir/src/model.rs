@@ -438,6 +438,18 @@ pub enum Operand {
     List(Vec<Operand>),
 }
 
+impl Operand {
+    /// Whether the operand is the default value of `t`, in either form the
+    /// compiler prints: `(default t)` from `default<T>`, or `(null t)`.
+    pub fn is_default_of(&self, t: &Type) -> bool {
+        match self {
+            Operand::Expr(e) => matches!(e.as_ref(), Expr::Default(d) if d == t),
+            Operand::Null(d) => d == t,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StateValue {
     Null,
