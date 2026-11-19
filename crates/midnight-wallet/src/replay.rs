@@ -841,7 +841,7 @@ mod tests {
                     let (mut stream, _) = listener.accept().await.unwrap();
                     server_connections.fetch_add(1, Ordering::SeqCst);
                     if let Some(body) = answer
-                        && read_http_request(&mut stream).await
+                        && read_http_request(&mut stream).await.is_some()
                     {
                         write_json_response(&mut stream, "200 OK", body).await;
                     }

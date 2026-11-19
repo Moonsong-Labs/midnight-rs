@@ -18,7 +18,7 @@ async fn a_query_is_retryable_after_a_dropped_connection_or_a_server_error() {
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             if let Some(status) = status
-                && read_http_request(&mut stream).await
+                && read_http_request(&mut stream).await.is_some()
             {
                 write_json_response(&mut stream, status, "").await;
             }
@@ -60,7 +60,7 @@ async fn a_body_that_does_not_decode_gives_a_deserialization_error() {
     let (listener, url) = bind().await;
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        if read_http_request(&mut stream).await {
+        if read_http_request(&mut stream).await.is_some() {
             write_json_response(&mut stream, "200 OK", &body).await;
         }
     });

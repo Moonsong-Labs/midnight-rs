@@ -141,7 +141,7 @@ async fn drain(ws: &mut ServerWs) {
 /// `get_block(None)`, so the response is the same post-genesis block carrying
 /// valid ledger parameters, or a GraphQL error when `fail_block` is set.
 async fn handle_http(mut stream: TcpStream, state: &MockState) {
-    if !read_http_request(&mut stream).await {
+    if read_http_request(&mut stream).await.is_none() {
         return;
     }
     let body = if state.fail_block.load(Ordering::SeqCst) {

@@ -597,7 +597,7 @@ mod tests {
         let (filters, filter) = std::sync::mpsc::channel();
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            assert!(read_http_request(&mut stream).await);
+            assert!(read_http_request(&mut stream).await.is_some());
             let answer = serde_json::json!({ "data": { "block": block } });
             write_json_response(&mut stream, "200 OK", &answer.to_string()).await;
 

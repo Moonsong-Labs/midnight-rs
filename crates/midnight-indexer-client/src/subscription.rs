@@ -37,11 +37,12 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Message};
 use tracing::{debug, warn};
 
-use crate::client::graphql_url;
+use crate::endpoint::IndexerEndpoint;
 use crate::error::IndexerError;
 use crate::types::GraphQLResponse;
 
@@ -139,31 +140,19 @@ impl<T> Subscription<T> {
 ///
 /// Supports the `graphql-transport-ws` protocol (used by modern GraphQL servers).
 pub struct SubscriptionClient {
-    ws_url: String,
+    endpoint: IndexerEndpoint,
     connect_timeout: Duration,
     ping_after: Duration,
     idle_timeout: Duration,
 }
 
 impl SubscriptionClient {
-    /// Create a new subscription client.
-    ///
-    /// `ws_url` is the base indexer URL (e.g. `http://127.0.0.1:8088`), or a
-    /// URL whose path ends in `/graphql` or `/graphql/ws`. The client
-    /// subscribes at that path with `/ws` after `/graphql`, or at
-    /// `/api/v3/graphql/ws` under a base URL. An `http` or `https` scheme
-    /// becomes `ws` or `wss`.
-    pub fn new(ws_url: impl Into<String>) -> Self {
-        let raw: String = ws_url.into();
-        let mut url = format!("{}/ws", graphql_url(&raw));
-        // Ensure ws:// or wss:// scheme
-        if url.starts_with("http://") {
-            url = format!("ws://{}", &url[7..]);
-        } else if url.starts_with("https://") {
-            url = format!("wss://{}", &url[8..]);
-        }
+    /// Create a client that subscribes at `endpoint`. [`IndexerEndpoint`]
+    /// states the subscription URL, and the client sends the endpoint's
+    /// credential on the WebSocket upgrade of each subscription.
+    pub fn new(endpoint: impl Into<IndexerEndpoint>) -> Self {
         Self {
-            ws_url: url,
+            endpoint: endpoint.into(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             ping_after: DEFAULT_KEEPALIVE_PING_AFTER,
             idle_timeout: DEFAULT_KEEPALIVE_IDLE_TIMEOUT,
@@ -188,14 +177,15 @@ impl SubscriptionClient {
         self
     }
 
-    pub fn url(&self) -> &str {
-        &self.ws_url
-    }
-
     /// Subscribe to a GraphQL subscription query.
     ///
     /// Returns a [`Subscription`] handle that yields deserialized events.
     /// The subscription is cancelled when the handle is dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexerError::Config`] when the endpoint URL has a query or does not
+    /// parse. The connect and the handshake fail as the module doc states.
     pub async fn subscribe<T: DeserializeOwned + Send + 'static>(
         &self,
         query: &str,
@@ -203,11 +193,19 @@ impl SubscriptionClient {
     ) -> Result<Subscription<T>, IndexerError> {
         ensure_crypto_provider();
 
-        let uri: Uri = self
-            .ws_url
+        let ws_url = self.endpoint.ws_url()?;
+        let uri: Uri = ws_url
             .parse()
             .map_err(|e| IndexerError::Config(format!("parse WS URL: {e}")))?;
-        let request = ClientRequestBuilder::new(uri).with_sub_protocol("graphql-transport-ws");
+        // The headers go into the built request: the builder's own headers
+        // are plain strings that its `Debug` prints.
+        let mut request = ClientRequestBuilder::new(uri)
+            .with_sub_protocol("graphql-transport-ws")
+            .into_client_request()
+            .map_err(|e| IndexerError::Config(format!("build WS request: {e}")))?;
+        request
+            .headers_mut()
+            .extend(self.endpoint.headers().clone());
 
         // One deadline covers TCP/TLS connect plus the init/ack handshake
         // (timeout 1 in the module doc), so a caller-side wrapper timeout is
@@ -219,8 +217,8 @@ impl SubscriptionClient {
             tokio_tungstenite::connect_async(request),
         )
         .await
-        .map_err(|_| IndexerError::Transport(format!("timeout connecting to {}", self.ws_url)))?
-        .map_err(|e| IndexerError::Transport(format!("WS connect to {}: {e}", self.ws_url)))?;
+        .map_err(|_| IndexerError::Transport(format!("timeout connecting to {ws_url}")))?
+        .map_err(|e| IndexerError::Transport(format!("WS connect to {ws_url}: {e}")))?;
 
         let (mut sink, mut stream) = ws_stream.split();
 
