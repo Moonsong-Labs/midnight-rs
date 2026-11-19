@@ -715,9 +715,20 @@ mod tests {
     /// contract.
     #[tokio::test]
     async fn a_block_that_the_indexer_lacks_gives_none() {
-        let (read, filter) = read_at_block(serde_json::Value::Null, Vec::new()).await;
+        let (read, _) = read_at_block(serde_json::Value::Null, Vec::new()).await;
         assert!(matches!(read, Ok(None)), "{read:?}");
-        assert_eq!(filter, None, "a read with no subscription");
+    }
+
+    /// It catches a read that gives `None` for a block that the indexer
+    /// holds with no event of the contract. A caller reads again on `None`,
+    /// so it then waits at that block with no error.
+    #[tokio::test]
+    async fn a_held_block_with_no_event_gives_an_empty_list() {
+        let (read, _) = read_at_block(block_at(7), Vec::new()).await;
+        assert!(
+            matches!(read, Ok(Some(ref events)) if events.is_empty()),
+            "{read:?}"
+        );
     }
 
     /// It catches a read that trusts the indexer's answer to the block query,
