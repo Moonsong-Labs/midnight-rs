@@ -3,7 +3,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use midnight_types::BlockHash;
 
-use crate::{BlockTransaction, ProviderError};
+use crate::ProviderError;
 
 /// The node's block-header type under the chain's Substrate config; `number`
 /// is the block height.
@@ -26,9 +26,8 @@ pub type NodeHeader = <subxt::SubstrateConfig as subxt::Config>::Header;
 /// ```
 ///
 /// Each read of `MidnightProvider` ends within a bound that includes its
-/// connect: 60 s for [`get_contract_state`](Self::get_contract_state) and
-/// [`get_block_transactions`](Self::get_block_transactions), and 10 s for
-/// every other read. A read that the node does not answer in that
+/// connect: 60 s for [`get_contract_state`](Self::get_contract_state), and
+/// 10 s for every other read. A read that the node does not answer in that
 /// time returns [`ProviderError::Rpc`].
 ///
 /// An archive node is a node whose state pruning and block pruning are both in
@@ -103,49 +102,4 @@ pub trait NodeApi: Send + Sync {
         address: &str,
         at_block_hash: Option<BlockHash>,
     ) -> Result<Option<String>, ProviderError>;
-
-    /// Get the Midnight transactions that the block with `block_hash` ran
-    /// (`chain_getBlock` and `System.Events`), in the order the chain ran
-    /// them: Scheduler calls first, then the extrinsics.
-    ///
-    /// It returns one item for each `Midnight.TxApplied` or
-    /// `Midnight.TxPartialSuccess` event of the block. A copy of a
-    /// transaction in the body that has no such event is left out, because
-    /// the chain did not run it in this block. It finds
-    /// `Midnight.send_mn_transaction` at any depth of a call, so it finds a
-    /// transaction that Council, TechnicalCommittee or FederatedAuthority
-    /// wraps. It matches a copy to its event by the ledger's
-    /// `transaction_hash()`. For block 0, which has no events, it returns
-    /// every Midnight transaction of the body with
-    /// [`TxOutcome::Genesis`](crate::TxOutcome::Genesis).
-    ///
-    /// It decodes the body and the events with the metadata of the runtime
-    /// that ran the block, which is the runtime in the parent's state (block
-    /// 0 has no parent and uses its own). So it needs the state at the block
-    /// and at its parent. A node with default pruning keeps the state of the
-    /// last 256 finalized blocks, so the read reaches the last 255. This read
-    /// needs no archive node, but
-    /// [`get_block_hashes_by_height`](Self::get_block_hashes_by_height), the
-    /// read that gives a finalized hash for a height, does. Pass a finalized
-    /// hash, because a best block can reorg. It ends within 60 s, its connect
-    /// included, because it makes several node queries and a body can hold
-    /// 1 MiB.
-    ///
-    /// # Errors
-    ///
-    /// [`ProviderError::Rpc`] when the node does not know the block, no
-    /// longer holds a state that the read needs, or the body or the events
-    /// do not decode with that metadata. Metadata with no
-    /// `Midnight.send_mn_transaction` call, or no `TxApplied` or
-    /// `TxPartialSuccess` event, is also an error, so a rename cannot hide
-    /// the transactions of a block.
-    ///
-    /// A copy in the body that does not decode as a ledger 9 transaction is
-    /// an error in block 0. In another block, it is an error when an outcome
-    /// event of the block has no copy. So the transactions of a block from
-    /// before a ledger fork cannot read as runs from storage.
-    async fn get_block_transactions(
-        &self,
-        block_hash: BlockHash,
-    ) -> Result<Vec<BlockTransaction>, ProviderError>;
 }

@@ -4,7 +4,6 @@ mod constructor;
 mod contract;
 pub mod deploy;
 mod error;
-mod events;
 mod indexer_events;
 mod ledger;
 // The Compact IR interpreter now lives in the `compact-interpreter` crate;
@@ -15,7 +14,6 @@ pub mod maintenance;
 mod offer;
 mod resolver;
 pub mod state;
-mod transcript;
 pub mod zk_config;
 
 // Re-exports referenced by the bindgen `contract!` macro's generated code.
@@ -32,11 +30,8 @@ pub use contract::{
     PendingDeploy, Simulated,
 };
 pub use error::{ContractError, KeyMismatch};
-// The events that a contract emitted, from the node and from the indexer.
-pub use events::ContractEvent;
-pub use indexer_events::{BlockEvents, FromBlock, LatestEvents};
-// The contract calls of a transaction that a block ran.
-pub use transcript::{CallStatus, CallTranscript, UnreadableEvent, call_transcripts};
+// The events that a contract emitted, from the indexer.
+pub use indexer_events::{BlockEvents, ContractEvent, FromBlock, LatestEvents};
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };

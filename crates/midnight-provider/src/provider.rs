@@ -13,10 +13,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::{
-    BlockTransaction, NodeApi, NodeHeader, PendingTx, Prover, ProviderError, block_transactions,
-    submit,
-};
+use crate::{NodeApi, NodeHeader, PendingTx, Prover, ProviderError, submit};
 use midnight_helpers::LedgerParameters;
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_private_state::PrivateStateProvider;
@@ -43,12 +40,6 @@ pub(crate) const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 /// client's own request timeout and not the shorter bound of the other
 /// queries.
 const STATE_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// The bound of a query of the transactions of a block, its connect
-/// included. See [`QUERY_TIMEOUT`] for why a query needs a bound.
-///
-/// The read makes several node queries, and a block body can hold 1 MiB.
-const BLOCK_TRANSACTIONS_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Cached node connection over a single auto-reconnecting websocket: the
 /// subxt `RpcClient` carries every raw RPC (standard Substrate and custom
@@ -588,55 +579,6 @@ impl<W: Send + Sync> NodeApi for MidnightProvider<W> {
         })
         .await
     }
-
-    async fn get_block_transactions(
-        &self,
-        block_hash: BlockHash,
-    ) -> Result<Vec<BlockTransaction>, ProviderError> {
-        query_within(BLOCK_TRANSACTIONS_QUERY_TIMEOUT, async {
-            let conn = self.get_or_connect().await?;
-            let legacy = legacy_rpc(&conn);
-
-            let block = legacy
-                .chain_get_block(Some(block_hash))
-                .await
-                .map_err(rpc_error("chain_getBlock"))?
-                .ok_or_else(|| {
-                    ProviderError::Rpc(format!("the node does not know block {block_hash:#x}"))
-                })?
-                .block;
-            let (runtime_hash, runtime_number) = match block.header.number.checked_sub(1) {
-                Some(parent_number) => (block.header.parent_hash, parent_number),
-                None => (block_hash, 0),
-            };
-            let runtime = conn
-                .client
-                .at_block_hash_and_number(runtime_hash, runtime_number)
-                .await
-                .map_err(|e| {
-                    ProviderError::Rpc(format!("reading the runtime at {runtime_hash:#x}: {e}"))
-                })?;
-            block_transactions::check_names(runtime.metadata_ref())?;
-
-            let body = block.extrinsics.into_iter().map(|bytes| bytes.0).collect();
-            let copies =
-                block_transactions::body_copies(&runtime.extrinsics().from_bytes(body).await)?;
-            if block.header.number == 0 {
-                return block_transactions::pair_with_outcomes(copies, None);
-            }
-            let events = legacy
-                .state_get_storage(&block_transactions::system_events_key(), Some(block_hash))
-                .await
-                .map_err(rpc_error("state_getStorage"))?
-                .ok_or_else(|| {
-                    ProviderError::Rpc(format!("block {block_hash:#x} has no System.Events"))
-                })?;
-            let outcomes =
-                block_transactions::outcome_events(&runtime.events().from_bytes(events))?;
-            block_transactions::pair_with_outcomes(copies, Some(outcomes))
-        })
-        .await
-    }
 }
 
 impl<W> MidnightProvider<W> {
@@ -865,9 +807,8 @@ mod tests {
     }
 
     /// Every node read ends during a node outage (see `QUERY_TIMEOUT`). It
-    /// catches a read left outside its bound. The contract state read and the
-    /// block transactions read have a 60 s bound, so the test leaves them
-    /// out. It takes about ten seconds:
+    /// catches a read left outside its bound. The contract state read has a
+    /// 60 s bound, so the test leaves it out. It takes about ten seconds:
     /// paused time does not work with real sockets.
     #[tokio::test]
     async fn every_node_read_ends_during_a_node_outage() {

@@ -196,40 +196,15 @@ The differences:
 
 ### The events of other calls
 
-midnight-js reads the events of other calls from the indexer. `PublicDataProvider.queryContractEvents` reads a page of the events of one contract, and `contractEventsObservable` replays them from a cursor, then follows the chain. The contract handle of midnight-rs has these reads, for different purposes. `Contract::latest_events` reads the indexer, as `queryContractEvents` and `contractEventsObservable` do. `Contract::events_at` reads one block from the node, and `Contract::indexer_events_at` reads one block from the indexer.
+midnight-js reads the events of other calls from the indexer. `PublicDataProvider.queryContractEvents` reads a page of the events of one contract, and `contractEventsObservable` replays them from a cursor, then follows the chain. midnight-rs also reads them from the indexer, with two reads on the contract handle. `Contract::latest_events` reads the indexer, as `queryContractEvents` and `contractEventsObservable` do. `Contract::indexer_events_at` reads one block. The node publishes no contract events, and its outcome event of a partly successful transaction does not say which segments applied, so midnight-rs has no node read of events.
 
-| | `contract.events_at(block_hash)` | `contract.latest_events(indexer_url, from)` | `contract.indexer_events_at(indexer_url, block_hash)` |
-|---|---|---|---|
-| Purpose | the events of this contract at a given block | the latest events of this contract | the events of this contract at a given block, with no event above it |
-| Source | the node: `get_block_transactions`, `call_transcripts`, `CallTranscript::events` | the indexer: a `contractEvents` subscription bounded by `toBlock` | the indexer: a `contractEvents` subscription from the block's height to the same height |
-| Selection | one block, by hash | from a start block to the indexer's latest block | one block, by hash. `None` when the indexer does not hold it |
-| Guarantee | every event that the chain kept in the block, or `UnknownEvents` | the indexer's own ledger run. Transactions that governance dispatches are missing, with no error | the same as `latest_events` |
-| Reach | the node's state window: the last 255 finalized blocks on a default node | all indexed history, on preview, devnets and self-hosted 4.4.x indexers | the same as `latest_events` |
-| Needs | a node | an indexer URL. No archive node | an indexer URL. No archive node |
+| | `contract.latest_events(indexer_url, from)` | `contract.indexer_events_at(indexer_url, block_hash)` |
+|---|---|---|
+| Purpose | the latest events of this contract | the events of this contract at a given block, with no event above it |
+| Source | the indexer: a `contractEvents` subscription bounded by `toBlock` | the indexer: a `contractEvents` subscription from the block's height to the same height |
+| Selection | from a start block to the indexer's latest block | one block, by hash. `None` when the indexer does not hold it |
 
-Each read gives `ContractEvent` records. `CallOutcome.events` stays the way to get the events of your own call.
-
-The node read takes one block at a time:
-
-1. `NodeApi::get_block_transactions(block_hash)` gives the Midnight transactions that the block ran, in the order that the chain ran them. Each `BlockTransaction` holds the transaction hash, the `TxOutcome` from the block's `System.Events`, and the transaction bytes.
-2. `midnight_contract::call_transcripts(bytes, outcome)` gives the contract-call transcripts of a transaction, in the order that the ledger runs them. Each `CallTranscript` holds the contract address, the entry point, a `CallStatus` and the ops.
-3. `CallTranscript::events` gives the events of a transcript as the ledger 9 VM decodes them. `Misc::decode_event` decodes a `Misc` event.
-
-`Contract::events_at(block_hash)` is the handle form of steps 1 to 3. It keeps the transcripts whose `address` is the address of the handle. It gives one `ContractEvent` for each event of an `Applied` transcript, with the transaction hash and the entry point of the call. It leaves out a `Failed` transcript, and an `Undecided` transcript that emits no event. It returns `ContractError::UnknownEvents`, and no event of the block, when it cannot tell which events a transaction kept. These are the causes:
-
-- A transaction of the block has `bytes` of `None`. The read then cannot tell whether that transaction calls the contract, so this cause applies to every contract.
-- A transcript of the contract that emits an event is `Undecided`.
-- An event of a transcript of the contract that is not `Failed` is an `UnreadableEvent`.
-
-Steps 1 to 3 then show which cause applies. A caller can use them with its own policy.
-
-The differences:
-
-- The node reads have no page or cursor. The caller chooses the blocks. With steps 1 to 3, it keeps the transcripts whose `address` it follows, and `Contract::events_at` keeps those of its own contract. Pass a finalized block hash, because a reorg can replace a best block.
-- The node does not store contract events. The read takes each logged value from the transaction bytes in the block body, and the outcome from the block's `System.Events`. So it needs the state at the block and at its parent. A node with default pruning keeps that state for the last 256 finalized blocks, so the read reaches the last 255. An archive node keeps it for every block.
-- `BlockTransaction.bytes` is `None` for a transaction that the block ran from storage (a collective `close`, a federated `motion_close` or the Scheduler) when the block body holds no copy of it. The content of that transaction is then unknown. The indexer leaves such a transaction out, and also a transaction that a governance call wraps in the body. The node read finds the wrapped transaction.
-- `CallStatus` tells whether the chain applied a transcript. The outcome event of a partial success does not say which fallible segment failed. So a fallible transcript of a partial success with two or more fallible segments that can fail is `CallStatus::Undecided`. A segment with no fallible coins, no fallible unshielded offer and no action cannot fail. The Dust fee intent of a wallet-paid call is such a segment, so the fallible transcript of a call that midnight-rs builds is `Applied` or `Failed`. Every transcript of block 0 is `Undecided`, because block 0 has no events.
-- `CallTranscript::events` takes each logged value from the `push` right before the `log`. It refuses a `log` that does not directly follow a `push`, or whose `push` a `branch` or `jmp` can skip, with `UnreadableEvent`. Only a run of the VM against the contract state gives the value of such a `log`. compactc output has none.
+Each read gives `ContractEvent` records. `Misc::decode_event` decodes a `Misc` event. `CallOutcome.events` stays the way to get the events of your own call.
 
 ### The latest events, from the indexer
 
@@ -238,15 +213,15 @@ The differences:
 The differences:
 
 - The read reaches preview, the devnets and a self-hosted indexer of the 4.4 line. It does not reach Blockfrost, or an indexer of the 4.3 line, which has no `contractEvents`. The indexer marks `contractEvents` `@beta`.
-- The indexer leaves out a transaction that Council, TechnicalCommittee, FederatedAuthority or the Scheduler dispatches. The events of such a transaction are missing, with no error. `events_at` gives them when the block body holds a copy of the transaction. When the block ran the transaction from storage, as for a Scheduler call, `events_at` fails with `UnknownEvents`.
-- The indexer runs each finalized transaction on its own copy of the ledger. The node does not check that run, so the node read is the authority. While the node holds the state of a block, `events_at` with the `hash` of a `BlockEvents` confirms its events, or returns `UnknownEvents` for one of the causes in [The events of other calls](#the-events-of-other-calls).
+- The indexer leaves out a transaction that Council, TechnicalCommittee, FederatedAuthority or the Scheduler dispatches. The events of such a transaction are missing, with no error.
+- The indexer runs each finalized transaction on its own copy of the ledger. The node does not check that run, and midnight-rs has no second source for the events.
 - The SDK decodes each `ContractEvent` from `raw`, the ledger event that the indexer stores, and not from the fields that the indexer decodes. It checks that the ledger event is a `ContractLog` of the contract, from the transaction of its row, in the range of the read.
 - The read has no page. It holds every event of its range in memory.
 - Each row, and the end of the read, must come within 60 s of the one before. If not, the read fails with `ContractError::Indexer`, with `retryable` true.
 
 ### The events of a block, from the indexer
 
-`Contract::indexer_events_at(indexer_url, block_hash)` reads the events of one block from the indexer. It queries the indexer for the block with `block_hash`, then reads the `contractEvents` subscription at the height of that block only. So a caller that reads the contract state at a finalized block can read the events of that block, and of no block above it. It returns `None` when the indexer does not hold the block: the indexer holds finalized blocks only, and trails the node. It refuses a block answer or a row with another hash. Each other difference of `latest_events` applies to it too, and `events_at` with the same `block_hash` confirms its events.
+`Contract::indexer_events_at(indexer_url, block_hash)` reads the events of one block from the indexer. It queries the indexer for the block with `block_hash`, then reads the `contractEvents` subscription at the height of that block only. So a caller that reads the contract state at a finalized block can read the events of that block, and of no block above it. It returns `None` when the indexer does not hold the block: the indexer holds finalized blocks only, and trails the node. It refuses a block answer or a row with another hash. Each other difference of `latest_events` applies to it too.
 
 ## ZK artifacts
 

@@ -36,6 +36,4 @@ midnight-wallet = { workspace = true }
 # `test-util`: the shared mock indexer server (`testutil`).
 midnight-indexer-client = { workspace = true, features = ["test-util"] }
 serde_json = { workspace = true }
-# Type registries for SCALE decode tests that run without node metadata.
-scale-info = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }
