@@ -7,6 +7,9 @@ use midnight_types::WalletError;
 pub enum ProviderError {
     /// A node query or the connect failed, or the node gave no answer in time.
     ///
+    /// [`MidnightProvider::with_node_credential`](crate::MidnightProvider::with_node_credential)
+    /// also returns it for a credential that the connect cannot send.
+    ///
     /// [`MidnightProvider::prepare`](crate::MidnightProvider::prepare) also
     /// returns it when the node's metadata has no matching call. On a send,
     /// it means that the transaction never left this process.

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use subxt::OnlineClient;
 use subxt::backend::CombinedBackend;
 use subxt::config::RpcConfigFor;
@@ -104,6 +105,9 @@ impl Drop for CachedConnection {
 /// submit call or on the wait for a sent transaction (see [`PendingTx`]).
 pub struct MidnightProvider<W = ()> {
     node_url: String,
+    /// The headers of the WebSocket upgrade of each node connect. Each value
+    /// is sensitive, so `Debug` prints `Sensitive` for it.
+    node_headers: HeaderMap,
     wallet: W,
     pub(crate) prover: Prover,
     /// Optional store for per-contract private state and maintenance signing
@@ -117,6 +121,7 @@ impl<W: std::fmt::Debug> std::fmt::Debug for MidnightProvider<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MidnightProvider")
             .field("node_url", &self.node_url)
+            .field("node_headers", &self.node_headers)
             .field("wallet", &self.wallet)
             .field("prover", &self.prover)
             .field("private_state_attached", &self.private_state.is_some())
@@ -150,6 +155,7 @@ impl MidnightProvider {
     pub fn new(node_url: &str) -> Self {
         Self {
             node_url: node_url.to_string(),
+            node_headers: HeaderMap::new(),
             wallet: (),
             prover: Prover::local(),
             private_state: None,
@@ -185,6 +191,7 @@ impl MidnightProvider {
     pub fn with_wallet<W: MidnightWallet>(self, wallet: W) -> MidnightProvider<W> {
         let MidnightProvider {
             node_url,
+            node_headers,
             wallet: (),
             prover,
             private_state,
@@ -192,6 +199,7 @@ impl MidnightProvider {
         } = self;
         MidnightProvider {
             node_url,
+            node_headers,
             wallet,
             prover,
             private_state,
@@ -201,6 +209,35 @@ impl MidnightProvider {
 }
 
 impl<W> MidnightProvider<W> {
+    /// Send `value` in the request header `header` on the WebSocket upgrade
+    /// of the node connection, and of each reconnect. Blockfrost reads its
+    /// project token from the header `project_id`. A second call with the
+    /// same header replaces the value. A connection that a query opened
+    /// before this call keeps its headers.
+    ///
+    /// Put a token here, not in the node URL: the provider and its RPC client
+    /// log the URL. `Debug` prints `Sensitive` in place of the value.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Rpc`] when `header` is not a valid header name, or
+    /// when `value` is not a valid header value, such as one with a line
+    /// break. The message holds neither argument.
+    pub fn with_node_credential(
+        mut self,
+        header: &str,
+        value: &str,
+    ) -> Result<Self, ProviderError> {
+        let name = HeaderName::try_from(header).map_err(|e| {
+            ProviderError::Rpc(format!("the node credential header name is not valid: {e}"))
+        })?;
+        let mut value = HeaderValue::from_str(value)
+            .map_err(|e| ProviderError::Rpc(format!("the node credential of {name}: {e}")))?;
+        value.set_sensitive(true);
+        self.node_headers.insert(name, value);
+        Ok(self)
+    }
+
     /// Prove every transaction of this provider with `prover`: each
     /// [`TransactionRequest`](midnight_types::TransactionRequest), and the
     /// deploys, calls and maintenance updates of a `Contract` on it. The
@@ -346,6 +383,7 @@ impl<W> MidnightProvider<W> {
 
         info!(url = %self.node_url, "Connecting to Midnight node");
         let reconnecting = ReconnectingRpcClient::builder()
+            .set_headers(self.node_headers.clone())
             .build(&self.node_url)
             .await
             .map_err(|e| ProviderError::Rpc(e.to_string()))?;
@@ -932,6 +970,47 @@ mod tests {
             "the client build never asked for the genesis hash, so a failed dial can explain the answer"
         );
         assert_eq!(answer, Ok(None));
+    }
+
+    /// It catches a provider that keeps the credential but does not send it
+    /// on the node connect, which Blockfrost refuses, and a `Debug` that
+    /// prints the value.
+    #[tokio::test]
+    async fn the_node_connect_sends_the_credential_header() {
+        const SECRET: &str = "preprodSECRET";
+        let (listener, node_url) = bind_node().await;
+        let provider = MidnightProvider::new(&node_url)
+            .with_node_credential("project_id", SECRET)
+            .unwrap();
+        let debug = format!("{provider:?}");
+        assert!(!debug.contains(SECRET), "{debug}");
+
+        let upgrade = async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            testutil::read_http_request(&mut stream)
+                .await
+                .expect("an upgrade")
+        };
+        // The client dials again after the server closes, so the connect
+        // never ends here.
+        let head = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::select! {
+                head = upgrade => head,
+                connect = provider.get_or_connect() => {
+                    panic!("the connect ended: {:?}", connect.err())
+                }
+            }
+        })
+        .await
+        .expect("the client dials the node");
+
+        let credential = head.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("project_id")
+                .then(|| value.trim())
+        });
+        assert_eq!(credential, Some(SECRET), "{head}");
     }
 
     /// A connect that its caller drops in the middle of the runtime-client
