@@ -103,12 +103,12 @@ pub(crate) struct UnshieldedTxProgress {
 ///
 /// The first attempt asks for the last event already applied, not the next
 /// one. The indexer answers at once with that event and its `max_id`, which
-/// says whether anything newer exists, and [`already_applied`] drops the
-/// event itself. Asking for the next one leaves the stream silent at the tip,
-/// and the only way to read that silence is to wait out the idle timeout. A
+/// says whether anything newer exists, and [`already_read`] drops the event
+/// itself. Asking for the next one leaves the stream silent at the tip, and
+/// the only way to read that silence is to wait out the idle timeout. A
 /// reconnect mid-replay has events waiting, so it resumes from the next one.
-fn resume_id(applied_this_replay: u64, last_id: i64) -> i64 {
-    if applied_this_replay > 0 {
+fn resume_id(read_this_replay: u64, last_id: i64) -> i64 {
+    if read_this_replay > 0 {
         last_id + 1
     } else {
         last_id
@@ -125,15 +125,14 @@ fn last_applied_before(start_id: i64) -> i64 {
 // The indexer client bounds transport liveness (connect/handshake timeout,
 // keepalive ping, idle timeout — see `midnight_indexer_client::subscription`)
 // and surfaces connection failures as retryable errors. The replay loops own
-// the recovery: on a retryable failure they re-subscribe from the next
-// unapplied event id with bounded exponential backoff. The retry counter
-// resets only on applied progress — an applied event, or (in the unshielded
-// loop) any progress update, which signals server liveness — so the bound applies
-// to *consecutive failures without applied progress*, not the whole
-// (potentially hours-long) initial sync. Deduped re-deliveries of
-// already-applied events do not reset it: a non-compliant server that
-// re-delivers one duplicate per reconnect and then drops cannot defeat
-// the bound.
+// the recovery: on a retryable failure they re-subscribe from the event after
+// the last one they read, with bounded exponential backoff. The retry counter
+// resets only on progress: a new event, or (in the unshielded loop) any
+// progress update, which signals server liveness. So the bound applies to
+// *consecutive failures without progress*, not the whole (potentially
+// hours-long) initial sync. Deduped re-deliveries of events already read do
+// not reset it: a non-compliant server that re-delivers one duplicate per
+// reconnect and then drops cannot defeat the bound.
 // ---------------------------------------------------------------------------
 
 /// Maximum consecutive retryable failures before a replay loop gives up.
@@ -164,18 +163,18 @@ fn event_timeout(resuming: bool) -> std::time::Duration {
     }
 }
 
-/// Whether an incoming event id was already applied and must be skipped.
+/// Whether an incoming event id was already read and must be skipped.
 ///
 /// Guards resumption: after a mid-replay reconnect (or when resuming from a
 /// persisted cursor) the server may re-deliver events at or below our
-/// cursor; re-applying them would corrupt state (double-counted UTXOs,
-/// re-applied ledger events). `last_id` is only meaningful as an *applied*
-/// cursor once we applied something this session (`applied_any`) or the
-/// caller asked to start past the beginning (`start_id > 0`, where
-/// `last_id` was initialized to `start_id - 1`). The remaining case —
-/// fresh sync from id 0 — must not skip a genuine first event with id 0.
-fn already_applied(msg_id: i64, last_id: i64, start_id: i64, applied_any: bool) -> bool {
-    (applied_any || start_id > 0) && msg_id <= last_id
+/// cursor; applying them again would corrupt state (double-counted UTXOs,
+/// re-applied ledger events). `last_id` is only meaningful as a cursor once
+/// we read something this session (`read_any`) or the caller asked to start
+/// past the beginning (`start_id > 0`, where `last_id` was initialized to
+/// `start_id - 1`). The remaining case, a fresh sync from id 0, must not skip
+/// a genuine first event with id 0.
+fn already_read(msg_id: i64, last_id: i64, start_id: i64, read_any: bool) -> bool {
+    (read_any || start_id > 0) && msg_id <= last_id
 }
 
 /// Per-connection event order check for the replay loops.
@@ -185,7 +184,7 @@ fn already_applied(msg_id: i64, last_id: i64, start_id: i64, applied_any: bool) 
 /// loops reset it on every (re)connect. The indexer delivers events in
 /// ascending id order within one subscription, so a fresh connection may
 /// legally start at the cursor + 1 or re-deliver ids at or below the
-/// cross-connection applied cursor (which [`already_applied`] then skips),
+/// cross-connection read cursor (which [`already_read`] then skips),
 /// but once a connection has delivered an id, anything lower from the same
 /// connection means the stream is corrupt or hostile, including an id at
 /// or below the cursor arriving after the connection already advanced past
@@ -393,7 +392,7 @@ pub(crate) async fn replay_ledger_events(
                         break 'reconnect;
                     }
 
-                    if already_applied(msg.id, last_id, start_id, count > 0) {
+                    if already_read(msg.id, last_id, start_id, count > 0) {
                         debug!(id = msg.id, last_id, "skipping re-delivered {kind} event");
                         if msg.id >= msg.max_id {
                             info!(count, last_id, "{kind} replay complete");
@@ -584,7 +583,7 @@ pub(crate) async fn replay_unshielded_events(
                                     });
                                 }
                                 conn_high = Some(id);
-                                if already_applied(
+                                if already_read(
                                     id,
                                     last_seen_tx_id,
                                     start_tx_id,
