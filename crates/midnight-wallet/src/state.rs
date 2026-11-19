@@ -1036,44 +1036,6 @@ impl Wallet {
         self.persist(registered)
     }
 
-    fn registered_coins(&self) -> Vec<midnight_helpers::CoinInfo> {
-        self.zswap_state
-            .pending_outputs
-            .iter()
-            .map(|(_commitment, coin)| *coin)
-            .collect()
-    }
-
-    /// Every coin a state rebuilt from scratch must be told about before the
-    /// replay: the registrations no replay has claimed yet, and the coins the
-    /// wallet already holds.
-    ///
-    /// The held coins are the part that is easy to miss. A coin whose output
-    /// carries no ciphertext this wallet can read is only ever claimed from a
-    /// registration, and the ledger consumes that registration the moment a
-    /// replay claims it. A replay seeded from the pending registrations alone
-    /// would therefore meet that coin's output with nothing to claim it by,
-    /// collapse its Merkle leaf, and lose a coin the wallet already had.
-    /// Re-registering a coin that is discoverable through its ciphertext is
-    /// harmless: both paths insert the same qualified coin under the same
-    /// nullifier.
-    ///
-    /// A rebuilt state carries no `pending_spends`, and needs none: this
-    /// crate never spends from `zswap_state` itself (a build spends from the
-    /// [`LedgerContext`] copy) and records in-flight shielded spends in the
-    /// pending reservation set instead.
-    fn coins_to_register(&self) -> Vec<midnight_helpers::CoinInfo> {
-        self.registered_coins()
-            .into_iter()
-            .chain(
-                self.zswap_state
-                    .coins
-                    .iter()
-                    .map(|(_nullifier, qualified)| (&*qualified).into()),
-            )
-            .collect()
-    }
-
     /// Where this wallet persists its state, when it persists one.
     fn storage_dir(&self) -> Option<&Path> {
         self.storage_dir.as_deref()
@@ -1085,11 +1047,7 @@ impl Wallet {
         ShieldedRescanPlan {
             secret_keys: self.secret_keys.clone(),
             pre_fork_keys: self.pre_fork_keys.clone(),
-            coins: self
-                .coins_to_register()
-                .into_iter()
-                .map(IntoSdk::into_sdk)
-                .collect(),
+            coins: coins_to_register(&self.zswap_state),
         }
     }
 
@@ -1111,6 +1069,36 @@ impl Wallet {
 // ---------------------------------------------------------------------------
 // Replay helpers
 // ---------------------------------------------------------------------------
+
+/// Every coin a state rebuilt from scratch must be told about before the
+/// replay: the registrations no replay has claimed yet, and the coins `zswap`
+/// holds.
+///
+/// The held coins are the part that is easy to miss. A coin whose output
+/// carries no ciphertext this wallet can read is only ever claimed from a
+/// registration, and the ledger consumes that registration the moment a
+/// replay claims it. A replay seeded from the pending registrations alone
+/// would therefore meet that coin's output with nothing to claim it by,
+/// collapse its Merkle leaf, and lose a coin the wallet already had.
+/// Re-registering a coin that is discoverable through its ciphertext is
+/// harmless: both paths insert the same qualified coin under the same
+/// nullifier.
+///
+/// A rebuilt state carries no `pending_spends`, and needs none: this crate
+/// never spends from `zswap_state` itself (a build spends from the
+/// [`LedgerContext`] copy) and records in-flight shielded spends in the
+/// pending reservation set instead.
+pub(crate) fn coins_to_register(zswap: &ZswapLocalState<DefaultDB>) -> Vec<crate::CoinInfo> {
+    let registered = zswap
+        .pending_outputs
+        .iter()
+        .map(|(_commitment, coin)| *coin);
+    let held = zswap
+        .coins
+        .iter()
+        .map(|(_nullifier, qualified)| (&*qualified).into());
+    registered.chain(held).map(IntoSdk::into_sdk).collect()
+}
 
 /// The shielded state a zswap replay reached.
 pub(crate) struct ZswapReplay {
@@ -1681,6 +1669,16 @@ mod tests {
             .commitment(&Recipient::User(wallet.secret_keys.coin_public_key()))
     }
 
+    /// The registrations of `wallet` that no replay has claimed yet.
+    fn registered_coins(wallet: &Wallet) -> Vec<midnight_helpers::CoinInfo> {
+        wallet
+            .zswap_state
+            .pending_outputs
+            .iter()
+            .map(|(_commitment, coin)| *coin)
+            .collect()
+    }
+
     /// A coin registered before it lands on chain has to survive a restart,
     /// so the registration is part of the persisted wallet state.
     #[test]
@@ -1738,7 +1736,7 @@ mod tests {
             .unwrap();
 
         assert!(wallet.spendable_shielded_coins().is_empty());
-        assert!(wallet.registered_coins().is_empty());
+        assert!(registered_coins(&wallet).is_empty());
         assert_eq!(wallet.zswap_event_id, 9);
         assert_eq!(wallet.dust_event_id, 11, "a rescan is shielded-only");
         assert_eq!(stored_generations(dir.path()), vec![2]);
@@ -2091,7 +2089,7 @@ mod tests {
             assert_eq!(claimed[0].value, 42);
             assert_eq!(claimed[0].nonce, [9u8; 32]);
             assert!(
-                wallet.registered_coins().is_empty(),
+                registered_coins(&wallet).is_empty(),
                 "a claimed registration is consumed"
             );
 
@@ -2155,7 +2153,7 @@ mod tests {
         commit.zswap_state = ZswapLocalState::new();
         wallet.commit_resync(commit).unwrap();
 
-        assert!(wallet.registered_coins().is_empty());
+        assert!(registered_coins(&wallet).is_empty());
     }
 
     /// Mock-WebSocket-server test for a replay's resume, driven through the

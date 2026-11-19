@@ -313,6 +313,14 @@ impl WalletBuilder {
     /// against the node before the replay starts. A pin that the chain no
     /// longer holds fails the sync with [`WalletError::ChainMismatch`].
     ///
+    /// A snapshot has no pin when no sync of the wallet could take one, and
+    /// such a snapshot shows no chain. So a sync that takes a fresh pin does
+    /// not resume it. It replays each stream from genesis, and registers the
+    /// shielded coins that the snapshot holds or watches for, so it keeps
+    /// each one that the chain holds. The snapshot that it saves carries the
+    /// pin, so this replay occurs once. A sync with no fresh pin resumes the
+    /// snapshot.
+    ///
     /// A node that cannot answer does not fail the pin check, because a
     /// pruned archive must not condemn a healthy wallet. The synced wallet
     /// also carries a fresh pin, which every resync checks again. Thus the
@@ -502,6 +510,14 @@ mod tests {
         }
     }
 
+    /// The pin that a `Node` gives a sync: its finalized block.
+    fn fresh_pin() -> ChainPin {
+        ChainPin {
+            height: 100,
+            hash: format!("{:#x}", BlockHash::repeat_byte(0xbb)),
+        }
+    }
+
     /// Store a snapshot of `seed()` under `base` that carries `stored_pin()`.
     /// `prepare` reads only the metadata, so the snapshot has no state files.
     fn store_pinned_snapshot(base: &Path) {
@@ -579,11 +595,7 @@ mod tests {
             Ok(plan) => plan,
             Err(err) => panic!("a snapshot on its own chain must resume, got {err:?}"),
         };
-        let fresh = ChainPin {
-            height: 100,
-            hash: format!("{:#x}", BlockHash::repeat_byte(0xbb)),
-        };
-        assert_eq!(plan.chain_pin, Some(fresh));
+        assert_eq!(plan.chain_pin, Some(fresh_pin()));
     }
 
     #[tokio::test]
@@ -697,5 +709,174 @@ mod tests {
             matches!(err, WalletError::SyncTaskJoin(_)),
             "expected SyncTaskJoin, got {err:?}"
         );
+    }
+
+    /// Mock-indexer test for a whole sync from a stored snapshot. The mock
+    /// server helpers live in `midnight_indexer_client::testutil`.
+    mod snapshot_sync_ws {
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+        use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
+        use midnight_helpers::{
+            DefaultDB, DustLocalState, Event, INITIAL_PARAMETERS, Sp,
+            WalletState as ZswapLocalState,
+        };
+        use midnight_indexer_client::testutil::{
+            bind, ledger_event, next_json, read_http_request, send_next, subscriber_handshake,
+            subscription_variable, unshielded_progress, write_json_response,
+        };
+        use midnight_types::CoinInfo;
+        use midnight_types::convert::IntoLedger;
+        use serde_json::json;
+        use tokio::net::TcpStream;
+
+        use super::*;
+        use crate::snapshot::Snapshot;
+        use crate::state::test_support::ciphertextless_output;
+        use crate::wallet::test_support::unreachable_coin;
+
+        /// The zswap event ids that the subscriptions asked to start from.
+        type Asked = Arc<Mutex<Vec<i64>>>;
+
+        /// An indexer whose chain holds one zswap event, the ledger 9 output
+        /// `raw` at id 1, and no Dust event or unshielded transaction.
+        async fn indexer(raw: String) -> (String, Asked) {
+            let (listener, url) = bind().await;
+            let asked = Asked::default();
+            let recorded = Arc::clone(&asked);
+            tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    tokio::spawn(serve(stream, raw.clone(), Arc::clone(&recorded)));
+                }
+            });
+            (url, asked)
+        }
+
+        async fn serve(mut stream: TcpStream, raw: String, asked: Asked) {
+            // A WebSocket upgrade starts with GET, and a GraphQL query with
+            // POST.
+            let mut method = [0u8; 4];
+            loop {
+                match stream.peek(&mut method).await {
+                    Ok(n) if n >= method.len() => break,
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                }
+            }
+            if &method != b"GET " {
+                if read_http_request(&mut stream).await {
+                    write_json_response(&mut stream, "200 OK", &latest_block()).await;
+                }
+                return;
+            }
+            let (mut ws, sub) = subscriber_handshake(stream).await;
+            let query = sub["payload"]["query"].as_str().unwrap_or_default();
+            let data = if query.contains("zswapLedgerEvents") {
+                let from = subscription_variable(&sub, "id");
+                asked.lock().unwrap().push(from);
+                // The indexer sends nothing past its last event.
+                (from <= 1).then(|| ledger_event("zswapLedgerEvents", 1, &raw, 1))
+            } else if query.contains("dustLedgerEvents") {
+                Some(ledger_event("dustLedgerEvents", 0, "", 0))
+            } else {
+                Some(unshielded_progress(0))
+            };
+            if let Some(data) = data {
+                send_next(&mut ws, &sub, data).await;
+            }
+            while next_json(&mut ws).await.is_some() {}
+        }
+
+        /// The latest block of a ledger 9 chain.
+        fn latest_block() -> String {
+            let mut parameters = Vec::new();
+            tagged_serialize(&INITIAL_PARAMETERS, &mut parameters).unwrap();
+            json!({"data": {"block": {
+                "hash": "00".repeat(32),
+                "height": 1,
+                "protocolVersion": 1,
+                "timestamp": 1_000_000_i64,
+                "author": null,
+                "ledgerParameters": hex::encode(parameters),
+            }}})
+            .to_string()
+        }
+
+        /// Store a snapshot of `seed()` under `base` with no chain pin, as a
+        /// sync whose node could not answer saves it. Its cursors are past
+        /// the chain's only event, as on a chain that was reset since. It
+        /// holds `coin`, which a registration claimed from the output `raw`,
+        /// so no registration for `coin` is left.
+        fn store_unpinned_snapshot(base: &Path, coin: &CoinInfo, raw: &str) {
+            let keys = RoleKeys::derive(&seed());
+            let event: Event<DefaultDB> =
+                tagged_deserialize(&mut &hex::decode(raw).unwrap()[..]).unwrap();
+            let zswap = ZswapLocalState::new()
+                .watch_for(&keys.zswap.coin_public_key(), &coin.into_ledger())
+                .replay_events(&keys.zswap, [&event])
+                .unwrap();
+            let mut dust = keys.dust.clone();
+            dust.dust_local_state = Some(Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)));
+            let address = seed().unshielded_address(Network::Undeployed);
+            crate::snapshot::save(
+                base,
+                Network::Undeployed.as_str(),
+                &wallet_storage_id(&address),
+                Snapshot {
+                    zswap_state: &zswap,
+                    dust_wallet: &dust,
+                    zswap_event_id: 351,
+                    dust_event_id: 352,
+                    last_block_height: 0,
+                    last_tx_id: None,
+                    chain_pin: None,
+                    unshielded_utxos: &[],
+                },
+            )
+            .unwrap();
+        }
+
+        /// A resume of the snapshot asks for events past the chain's last
+        /// one, reads the silence as the tip, and puts the fresh pin on the
+        /// old cursors. The replay must also register the snapshot's coin
+        /// again: the output carries no ciphertext, so a replay with no
+        /// registration loses the coin.
+        #[tokio::test]
+        async fn a_sync_with_a_fresh_pin_replays_a_snapshot_with_no_pin_from_genesis() {
+            let base = tempfile::TempDir::new().unwrap();
+            let coin = unreachable_coin(5, 42);
+            let raw = ciphertextless_output(&seed(), &coin, 0);
+            store_unpinned_snapshot(base.path(), &coin, &raw);
+            let (url, asked) = indexer(raw).await;
+
+            let wallet = Wallet::from_seed(seed())
+                .with_network(Network::Undeployed)
+                .with_storage(base.path())
+                .sync(&Node::default(), &url)
+                .await
+                .expect("the sync replays the chain");
+
+            assert_eq!(
+                asked.lock().unwrap().first(),
+                Some(&0),
+                "the sync must replay from the first event"
+            );
+            let values: Vec<u128> = wallet
+                .spendable_shielded_coins()
+                .await
+                .iter()
+                .map(|held| held.value)
+                .collect();
+            assert_eq!(values, [42], "the replay must keep the snapshot's coin");
+            let address = seed().unshielded_address(Network::Undeployed);
+            let saved = WalletState::stored_chain_pin(base.path(), Network::Undeployed, &address);
+            assert_eq!(
+                saved.unwrap(),
+                Some(fresh_pin()),
+                "the snapshot that the sync saves carries the fresh pin"
+            );
+        }
     }
 }

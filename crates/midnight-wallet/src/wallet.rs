@@ -8,7 +8,7 @@ use midnight_types::{
     CoinInfo, Network, ShieldedRecipient, SpendableShieldedCoin, WalletBalance, WalletError,
 };
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::keys::RoleKeys;
 use crate::replay::{
@@ -46,7 +46,7 @@ impl WalletState {
     }
 
     /// The chain pin a snapshot on disk carries, or `None` when there is no
-    /// snapshot or it predates the pin.
+    /// snapshot or the sync that saved it took no pin.
     ///
     /// Read this before a resume and judge it with
     /// [`crate::chain_pin::verify_pin`], against what the node reports for
@@ -80,58 +80,67 @@ impl WalletState {
     /// The sync that [`crate::WalletBuilder::sync`] and
     /// [`crate::WalletBuilder::sync_with_progress`] run.
     ///
-    /// Refuses a chain that does not run ledger 9, resumes from a snapshot
-    /// under `storage_dir` when there is one, and replays the three event
-    /// streams. Checkpoints Dust progress to disk periodically, so an
-    /// interrupted sync resumes where it left off.
+    /// Refuses a chain that does not run ledger 9, starts from a snapshot
+    /// under `storage_dir` as [`snapshot_start`] decides, and replays the
+    /// three event streams. Checkpoints Dust progress to disk periodically,
+    /// so an interrupted sync resumes where it left off.
     pub(crate) async fn sync_inner(
         plan: SyncPlan,
         progress: Option<mpsc::Sender<SyncProgress>>,
     ) -> Result<Self, WalletError> {
+        let block = latest_block(&plan.indexer_url).await?;
+        require_ledger_9(&block)?;
+
+        info!("loading cached state from disk");
+        let snapshot = match plan.storage_dir.as_deref() {
+            Some(dir) => crate::snapshot::load(
+                dir,
+                plan.network.as_str(),
+                &wallet_storage_id(&plan.address),
+            )?,
+            None => None,
+        };
+        let (start, chain_pin) = match snapshot {
+            Some(mut snapshot) => match snapshot_start(snapshot.chain_pin.take(), plan.chain_pin) {
+                SnapshotStart::Resume(pin) => (Start::Resume(Box::new(snapshot)), pin),
+                SnapshotStart::Replay(pin) => {
+                    warn!(
+                        zswap_event_id = snapshot.zswap_event_id,
+                        dust_event_id = snapshot.dust_event_id,
+                        "the cached state carries no chain pin; replaying from genesis"
+                    );
+                    let coins = state::coins_to_register(&snapshot.zswap_state);
+                    (Start::Genesis(coins), Some(pin))
+                }
+            },
+            None => (Start::Genesis(Vec::new()), plan.chain_pin),
+        };
+        if let Start::Resume(snapshot) = &start {
+            info!(
+                zswap_event_id = snapshot.zswap_event_id,
+                dust_event_id = snapshot.dust_event_id,
+                "resuming from cached state"
+            );
+            let alive = send_progress(
+                &progress,
+                SyncProgress::Resuming {
+                    zswap_event_id: snapshot.zswap_event_id,
+                    dust_event_id: snapshot.dust_event_id,
+                },
+            );
+            if !alive {
+                return Err(progress_cancelled("resume"));
+            }
+        }
         let sync = ChainSync {
             indexer_url: &plan.indexer_url,
             keys: &plan.keys,
             address: &plan.address,
             network: &plan.network,
             storage_dir: plan.storage_dir.as_deref(),
-            chain_pin: plan.chain_pin,
+            chain_pin,
         };
-        let block = latest_block(sync.indexer_url).await?;
-        require_ledger_9(&block)?;
-
-        info!("loading cached state from disk");
-        let snapshot = match sync.storage_dir {
-            Some(dir) => {
-                crate::snapshot::load(dir, sync.network.as_str(), &wallet_storage_id(sync.address))?
-            }
-            None => None,
-        };
-        let sync = match &snapshot {
-            Some(snapshot) => {
-                info!(
-                    zswap_event_id = snapshot.zswap_event_id,
-                    dust_event_id = snapshot.dust_event_id,
-                    "resuming from cached state"
-                );
-                let alive = send_progress(
-                    &progress,
-                    SyncProgress::Resuming {
-                        zswap_event_id: snapshot.zswap_event_id,
-                        dust_event_id: snapshot.dust_event_id,
-                    },
-                );
-                if !alive {
-                    return Err(progress_cancelled("resume"));
-                }
-                // Keep the snapshot's own pin when this sync has no fresher
-                // one. A node that could not answer must not cost the wallet
-                // the mark that lets the next resume check itself.
-                let chain_pin = sync.chain_pin.or_else(|| snapshot.chain_pin.clone());
-                ChainSync { chain_pin, ..sync }
-            }
-            None => sync,
-        };
-        let state = sync_on_chain(sync, &block, snapshot, progress).await?;
+        let state = sync_on_chain(sync, &block, start, progress).await?;
         Ok(Self { state })
     }
 
@@ -362,21 +371,61 @@ pub(crate) struct ChainSync<'a> {
     pub(crate) chain_pin: Option<ChainPin>,
 }
 
-/// Sync on a chain whose latest block is `block`, from `snapshot` or from
-/// genesis. Replay the shielded and unshielded streams, then finish with the
-/// Dust stream.
+/// How a sync starts from a stored snapshot, and the pin of the state that it
+/// makes.
+#[derive(Debug, PartialEq, Eq)]
+enum SnapshotStart {
+    /// Resume at the snapshot's cursors.
+    Resume(Option<ChainPin>),
+    /// Replay each stream from its first event, with the snapshot's shielded
+    /// coins registered.
+    Replay(ChainPin),
+}
+
+/// How a sync that took the pin `fresh` starts from a snapshot that carries
+/// the pin `stored`.
+///
+/// A snapshot with no pin shows no chain, and its cursors can come from a
+/// chain that was replaced since. A fresh pin marks only state that this
+/// chain made (see `require_same_chain`), so a sync with a fresh pin replays
+/// such a snapshot from genesis. A sync with no fresh pin resumes it: it has
+/// nothing better, and an offline wallet must not replay from genesis at
+/// every launch.
+///
+/// A resume keeps the stored pin when this sync has no fresher one. A node
+/// that could not answer must not cost the wallet the mark that lets the next
+/// resume check itself.
+fn snapshot_start(stored: Option<ChainPin>, fresh: Option<ChainPin>) -> SnapshotStart {
+    match (stored, fresh) {
+        (None, Some(fresh)) => SnapshotStart::Replay(fresh),
+        (stored, fresh) => SnapshotStart::Resume(fresh.or(stored)),
+    }
+}
+
+/// Where a sync's replay starts.
+enum Start {
+    /// At the event after each cursor of a stored snapshot.
+    Resume(Box<LoadedState>),
+    /// At the first event of each stream, with these shielded coins
+    /// registered.
+    Genesis(Vec<CoinInfo>),
+}
+
+/// Sync on a chain whose latest block is `block`, from `start`. Replay the
+/// shielded and unshielded streams, then finish with the Dust stream.
 async fn sync_on_chain(
     sync: ChainSync<'_>,
     block: &midnight_indexer_client::Block,
-    snapshot: Option<LoadedState>,
+    start: Start,
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<state::Wallet, WalletError> {
     // Where each stream starts. When resuming, start from the next event
     // after the last one applied; the subscription is inclusive, so the
     // last one itself would be delivered again.
-    let (zswap_resume, dust, utxos, start_tx_id, height) = match snapshot {
-        Some(s) => (
+    let (zswap_resume, coins, dust, utxos, start_tx_id, height) = match start {
+        Start::Resume(s) => (
             Some((s.zswap_state, s.zswap_event_id + 1)),
+            Vec::new(),
             state::DustStart::Resume {
                 wallet: Box::new(s.dust_wallet),
                 next_id: s.dust_event_id + 1,
@@ -385,7 +434,7 @@ async fn sync_on_chain(
             s.last_tx_id.map(|id| id + 1).unwrap_or(0),
             s.last_block_height,
         ),
-        None => (None, state::DustStart::Fresh, Vec::new(), 0, 0),
+        Start::Genesis(coins) => (None, coins, state::DustStart::Fresh, Vec::new(), 0, 0),
     };
     let resuming = zswap_resume.is_some();
 
@@ -412,7 +461,7 @@ async fn sync_on_chain(
                     &sub_client,
                     &sync.keys.zswap,
                     &sync.keys.zswap_pre_fork,
-                    &[],
+                    &coins,
                     progress.clone(),
                 )
                 .await
@@ -485,6 +534,40 @@ mod tests {
 
     use super::test_support::{test_seed, unreachable_coin};
     use super::*;
+
+    /// Only a snapshot with no pin, under a sync with a fresh pin, replays
+    /// from genesis. A resume keeps the newest pin that it has.
+    #[test]
+    fn snapshot_start_resumes_unless_only_the_sync_has_a_pin() {
+        let pin = |height| ChainPin {
+            height,
+            hash: format!("{:#x}", midnight_types::BlockHash::repeat_byte(0xaa)),
+        };
+        let (stored, fresh) = (42, 100);
+        let cases = [
+            (
+                Some(pin(stored)),
+                Some(pin(fresh)),
+                SnapshotStart::Resume(Some(pin(fresh))),
+            ),
+            // The node could not answer. Without the stored pin, no later
+            // resume checks the chain.
+            (
+                Some(pin(stored)),
+                None,
+                SnapshotStart::Resume(Some(pin(stored))),
+            ),
+            // A resume puts the fresh pin on cursors from a chain that can be
+            // gone.
+            (None, Some(pin(fresh)), SnapshotStart::Replay(pin(fresh))),
+            // A replay here replays an offline wallet at every launch.
+            (None, None, SnapshotStart::Resume(None)),
+        ];
+        for (stored, fresh, expected) in cases {
+            let case = format!("stored {stored:?}, fresh {fresh:?}");
+            assert_eq!(snapshot_start(stored, fresh), expected, "{case}");
+        }
+    }
 
     /// A chain that crossed the fork serves ledger 8 events, then ledger 9
     /// ones, in one stream. A replay that stopped at the boundary, or lost the

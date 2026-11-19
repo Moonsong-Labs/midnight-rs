@@ -182,6 +182,8 @@ The pin is the chain-reset guard, and every sync takes one. A snapshot's cursors
 
 A node that cannot answer for the pin does not fail the sync. The sync continues without a fresh pin, and keeps a stored snapshot's pin. When the node is down, each query waits ten seconds at most.
 
+A snapshot has no pin when no sync of the wallet could take one, and such a snapshot shows no chain. So the next sync that takes a fresh pin does not resume it. It replays each stream from genesis, and registers the shielded coins that the snapshot holds or watches for, so it keeps each one that the chain holds. This replay takes as long as a first sync. The snapshot that it saves carries the pin, so the replay occurs once. A sync that takes no pin resumes the snapshot.
+
 Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. A non-retryable error fails the sync at once, and a retryable one fails it after the last retry. An indexer that keeps the socket alive but sends no event in time also fails the sync, unless a resync reads the silence as the tip. When the sync gives up on the indexer, it returns `WalletError::Indexer`, whose `retryable` field tells whether a later sync can succeed.
 
 For a long sync with UI updates, end the builder with `.sync_with_progress(&provider, indexer_url)` in place of `.sync(&provider, indexer_url)`:
