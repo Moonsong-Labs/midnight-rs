@@ -1611,8 +1611,7 @@ fn compute_missing_dust(
 ) -> Result<(u128, Option<u128>), WalletError> {
     let fees = tx_info
         .context
-        .with_ledger_state(|s| tx.fees_with_margin(&s.parameters, 3))
-        .map_err(transfer_err("fees_with_margin"))?;
+        .with_ledger_state(|s| fees_with_margin(tx, &s.parameters))?;
     let imbalances = tx.balance(Some(fees)).map_err(transfer_err("balance"))?;
     let dust_imbalance = imbalances
         .get(&(TokenType::Dust, Segment::Guaranteed.into()))
@@ -1623,6 +1622,22 @@ fn compute_missing_dust(
     } else {
         Ok((fees, None))
     }
+}
+
+/// The fee of `tx` with the ledger's margin.
+///
+/// The ledger's error for a transaction over the block limits names no limit
+/// and no remedy, so this error says what to do.
+fn fees_with_margin(tx: &FinalizedTx, params: &LedgerParameters) -> Result<u128, WalletError> {
+    tx.fees_with_margin(params, 3).map_err(|e| match e {
+        midnight_helpers::FeeCalculationError::BlockLimitExceeded => WalletError::Transfer(
+            "the transaction exceeds the block limits of the ledger parameters, so no block can \
+             include it; split its work over smaller transactions, such as a contract deploy of \
+             fewer circuits and maintenance updates that insert the others"
+                .into(),
+        ),
+        e => transfer_err("fees_with_margin")(e),
+    })
 }
 
 /// Put `spends` and `registration` in the Dust actions of the intent at the
@@ -2263,5 +2278,21 @@ mod tests {
         assert!(after_proof.signature_requests().is_empty());
 
         assert_eq!(fee(&after_proof.tx), fee(&sealed(at_assembly)));
+    }
+
+    /// The ledger refuses a transaction over the block limits with an error
+    /// that names no remedy. The caller reads only this message to learn that
+    /// it must split the work.
+    #[test]
+    fn a_transaction_over_the_block_limits_is_refused_with_the_remedy() {
+        let mut params = midnight_helpers::INITIAL_PARAMETERS;
+        params.limits.block_limits.compute_time =
+            midnight_helpers::CostDuration::from_picoseconds(1);
+        match fees_with_margin(&intent_at(1), &params) {
+            Err(WalletError::Transfer(message)) => {
+                assert!(message.contains("smaller transactions"), "{message}");
+            }
+            other => panic!("expected a refusal over the block limits, got {other:?}"),
+        }
     }
 }
