@@ -91,7 +91,8 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
         Type::Point(Curve::Curve25519) => quote! { midnight_contract::runtime::Curve25519Point },
         Type::Opaque(name) => opaque_tokens(name),
         Type::Contract { .. } => type_to_tokens(&Type::contract_address()),
-        // Rejected at load by `artifact::check_type`; unreachable here.
+        // `artifact::check_type` refuses each in a value position, and the
+        // accessor of a map of maps names the inner map's types instead.
         Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
             quote! { Vec<u8> }
         }

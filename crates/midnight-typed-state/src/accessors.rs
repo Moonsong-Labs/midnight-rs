@@ -3,6 +3,7 @@ use midnight_onchain_state::state::StateValue;
 use midnight_storage::db::InMemoryDB;
 use midnight_storage::storage::HashMap;
 use midnight_transient_crypto::merkle_tree::{MerkleTree, MerkleTreeDigest};
+use std::borrow::Cow;
 use std::marker::PhantomData;
 
 use crate::StateError;
@@ -12,8 +13,11 @@ use crate::StateError;
 /// Maps are stored as `HashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>`.
 /// The accessor provides typed lookup and iteration by converting keys and values
 /// through `Into<AlignedValue>` / `TryFrom<&ValueSlice>`.
+///
+/// For a map whose values are maps, `V` is the `MapAccessor` of the inner map,
+/// and `get` returns that accessor for the map that a key holds.
 pub struct MapAccessor<'a, K, V> {
-    map: &'a HashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>,
+    map: Cow<'a, HashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>>,
     _phantom: PhantomData<(K, V)>,
 }
 
@@ -25,7 +29,7 @@ impl<'a, K, V> MapAccessor<'a, K, V> {
     /// Returns an error if `sv` is not a `Map`.
     pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
         crate::nav::map_value(sv).map(|map| Self {
-            map,
+            map: Cow::Borrowed(map),
             _phantom: PhantomData,
         })
     }
@@ -77,6 +81,24 @@ where
             let v = crate::nav::cell_as(val_sp)?;
             Ok((k, v))
         })
+    }
+}
+
+impl<'a, K, K2, V2> MapAccessor<'a, K, MapAccessor<'a, K2, V2>>
+where
+    K: Into<AlignedValue>,
+{
+    /// Looks up a key in a map whose values are maps, and wraps the map that
+    /// the key holds.
+    ///
+    /// Returns `None` if the key is not present. Returns `Some(Err(..))` if the
+    /// key holds a value that is not a `Map`.
+    pub fn get(&self, key: K) -> Option<Result<MapAccessor<'a, K2, V2>, StateError>> {
+        let value = self.map.get(&key.into())?;
+        Some(crate::nav::map_value(&value).map(|map| MapAccessor {
+            map: Cow::Owned(map.clone()),
+            _phantom: PhantomData,
+        }))
     }
 }
 

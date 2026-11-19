@@ -132,7 +132,8 @@ pub struct LedgerField {
     pub element_type: Option<crate::ir::Type>,
     /// Key type for `Map` storage. Absent otherwise.
     pub key: Option<crate::ir::Type>,
-    /// Value type for `Map` storage. Absent otherwise.
+    /// Value type for `Map` storage: a value type, or the `Map` ADT of an
+    /// inner map. Absent otherwise.
     pub value: Option<crate::ir::Type>,
     /// Depth of a `MerkleTree` / `HistoricMerkleTree`. Absent otherwise.
     pub depth: Option<u64>,

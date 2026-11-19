@@ -226,6 +226,18 @@ impl Type {
     pub fn is_unit(&self) -> bool {
         matches!(self.resolved(), Type::Tuple(types) if types.is_empty())
     }
+
+    /// The key and value types of a ledger `Map` ADT, or `None` for any other
+    /// type.
+    pub fn as_map(&self) -> Option<(&Type, &Type)> {
+        match self {
+            Type::Adt { name, args } if name == "Map" => match args.as_slice() {
+                [AdtArg::Type(key), AdtArg::Type(value)] => Some((key, value)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 /// The byte width that the compiler gives a `Uint` whose largest value is

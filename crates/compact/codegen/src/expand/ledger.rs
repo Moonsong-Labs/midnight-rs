@@ -552,7 +552,7 @@ fn emit_field_accessor(field: &LedgerField, const_name: &Ident) -> TokenStream {
         StorageKind::Counter => emit_typed_cell_accessor(&method_name, &doc, &nav, &quote! { u64 }),
         StorageKind::Map => {
             let key_ty = storage_arg_tokens(field.key.as_ref());
-            let val_ty = storage_arg_tokens(field.value.as_ref());
+            let val_ty = map_value_tokens(field.value.as_ref());
             let accessor = quote! { MapAccessor<'_, #key_ty, #val_ty> };
             emit_from_state_accessor(&method_name, &doc, &nav, &accessor)
         }
@@ -620,6 +620,19 @@ fn emit_from_state_accessor(
 /// The Rust type of a storage type argument, or `Vec<u8>` for an absent one.
 fn storage_arg_tokens(ty: Option<&Type>) -> TokenStream {
     ty.map_or_else(|| quote! { Vec<u8> }, type_to_tokens)
+}
+
+/// The `V` of the `MapAccessor` of a map whose values have type `ty`: the
+/// accessor of an inner `Map`, or the Rust type of any other value.
+fn map_value_tokens(ty: Option<&Type>) -> TokenStream {
+    match ty.and_then(Type::as_map) {
+        Some((key, value)) => {
+            let key = type_to_tokens(key);
+            let value = map_value_tokens(Some(value));
+            quote! { MapAccessor<'_, #key, #value> }
+        }
+        None => storage_arg_tokens(ty),
+    }
 }
 
 // ---------------------------------------------------------------------------
