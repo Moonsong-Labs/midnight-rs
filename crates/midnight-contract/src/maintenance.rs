@@ -42,6 +42,12 @@ pub(crate) fn set_maintenance_authority(
     state
 }
 
+/// Whether no set of signatures meets `authority`. The ledger counts each
+/// committee index at most once, and needs `threshold` of them.
+pub(crate) fn is_frozen(authority: &ContractMaintenanceAuthority) -> bool {
+    authority.committee.len() < authority.threshold as usize
+}
+
 fn encoded(value: &impl Serializable) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(value.serialized_size());
     value

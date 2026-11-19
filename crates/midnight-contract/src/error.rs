@@ -287,7 +287,10 @@ pub enum ContractError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyMismatch {
     /// The contract has no operation for the circuit. The contract does not
-    /// define the circuit, or a maintenance update removed it.
+    /// define the circuit, a maintenance update removed it, or the deploy left
+    /// it out
+    /// ([`DeployBuilder::with_registered_circuits`](crate::DeployBuilder::with_registered_circuits))
+    /// and no update inserted it yet.
     Missing,
     /// The contract's operation for the circuit holds no verifier key, so no
     /// call of the circuit verifies until a maintenance update inserts one.

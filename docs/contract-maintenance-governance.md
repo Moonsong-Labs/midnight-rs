@@ -8,7 +8,8 @@ You reach for this when you:
 - **add a circuit post-deploy** — insert a verifier key for an entry point that didn't exist at deploy time,
 - **retire a circuit** — remove a verifier key so calls to that entry point stop verifying,
 - **hand over control** — replace the authority that is allowed to do any of the above,
-- **freeze a contract**: make sure that no update changes the contract again.
+- **freeze a contract**: make sure that no update changes the contract again,
+- **deploy in waves**: register some circuits at deploy and insert the others with later updates, for a contract whose verifier keys do not fit one transaction.
 
 This document describes the on-chain mechanics (independent of any SDK) and how this SDK exposes them — including why a contract is ungovernable unless you opt in at deploy.
 
@@ -248,6 +249,43 @@ contract.maintenance()
 The current committee signs the freeze. The freeze is the update's one authority step, so an update holds at most one `replace_authority` or `freeze`. The same update can insert and remove verifier keys. The ledger applies all the steps of an update or none of them. After the freeze, `Contract::maintenance_authority()` shows the empty committee to anyone.
 
 `replace_authority` refuses an empty committee, so only `freeze` installs it on purpose.
+
+### Deploy in waves
+
+A deploy writes its whole initial state, with the verifier key of each circuit, in one transaction. A transaction must fit the `block_limits` of the ledger parameters, and the node gives one transaction only a part of a block. A contract with many circuits can exceed that. Such a contract deploys in waves: the deploy registers some circuits, and maintenance updates insert the others.
+
+```rust
+use midnight_contract::{FsZkConfigProvider, ZkConfigProvider};
+
+// The first wave, under a committee that can insert the others.
+let contract = my_contract::Contract::deploy(&provider)
+    .with_zk_config(my_contract::ZK_CONFIG_DIR)
+    .with_maintenance_authority(vec![member], 1)
+    .with_registered_circuits(["open", "deposit"])
+    .send()
+    .await?
+    .into_contract()
+    .await?;
+
+// Each later wave is one update. The last wave also freezes the contract.
+let keys = FsZkConfigProvider::new(my_contract::ZK_CONFIG_DIR);
+contract.maintenance()
+    .insert_verifier_key("withdraw", keys.verifier_key("withdraw")?)
+    .insert_verifier_key("close", keys.verifier_key("close")?)
+    .freeze()
+    .prepare().await?
+    .sign(0, &authority)
+    .send()
+    .await?
+    .get_receipt()
+    .await?;
+```
+
+`with_registered_circuits` names the circuits that the deploy registers. The deploy still reads and checks the verifier key of each circuit of the contract, because the later waves need them. The deploy refuses a name that is not a circuit of the contract. It also refuses to leave a circuit out under an authority that no set of signatures meets, such as the default one, because no update could then insert that circuit.
+
+Send one wave at a time. Wait for its receipt before you prepare the next wave, because each update signs the counter that the update before it set. A deploy or a wave that exceeds the block limits fails in the build, before the submit, so no fee is paid: move circuits to a later wave. A transaction under the block limits can still exceed the part of a block that the node gives it, and the node then refuses it at the submit. Until an update inserts a circuit, a call of that circuit fails with `KeyMismatch::Missing`.
+
+Put `freeze()` in the last wave when the verifier keys must not change again (see [Freeze a contract](#freeze-a-contract)). The ledger applies the inserts and the freeze of one update together or not at all.
 
 ### Read the current committee
 

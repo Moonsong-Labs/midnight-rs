@@ -508,6 +508,7 @@ pub struct DeployBuilder<'a, P> {
     shielded_offer: Option<crate::ShieldedOffer>,
     maintenance_authority: Option<(Vec<ContractMaintenanceVerifyingKey>, u32)>,
     declared_circuits: Option<Vec<String>>,
+    registered_circuits: Option<Vec<String>>,
     declares_witnesses: bool,
 }
 
@@ -525,6 +526,7 @@ impl<'a, P> DeployBuilder<'a, P> {
             shielded_offer: None,
             maintenance_authority: None,
             declared_circuits: None,
+            registered_circuits: None,
             declares_witnesses: false,
         }
     }
@@ -549,6 +551,30 @@ impl<'a, P> DeployBuilder<'a, P> {
         circuits: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         self.declared_circuits = Some(circuits.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Register the verifier keys of `circuits` only, and leave the
+    /// contract's other circuits for maintenance updates to insert.
+    ///
+    /// A deploy writes its whole initial state, with the verifier key of each
+    /// registered circuit, in one transaction. A contract whose keys do not
+    /// fit the block limits of the ledger parameters deploys in waves: a first
+    /// set of circuits here, under a committee from
+    /// [`Self::with_maintenance_authority`], then the others with
+    /// [`ContractMaintenance::insert_verifier_key`](crate::ContractMaintenance::insert_verifier_key).
+    /// Put [`ContractMaintenance::freeze`](crate::ContractMaintenance::freeze)
+    /// in the last update when the keys must not change again.
+    ///
+    /// The deploy still reads and checks the key of each circuit of the
+    /// contract, because the later updates need them. Until an update inserts
+    /// a circuit, a call of it fails with
+    /// [`KeyMismatch::Missing`](crate::KeyMismatch::Missing).
+    pub fn with_registered_circuits(
+        mut self,
+        circuits: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.registered_circuits = Some(circuits.into_iter().map(Into::into).collect());
         self
     }
 
@@ -702,12 +728,17 @@ where
     ///   has no zk config, no state and no constructor, or a missing
     ///   constructor argument. Also when the constructor has an effect that the
     ///   deploy does not carry, or when a private state to record has no
-    ///   private-state store.
+    ///   private-state store. Also when a
+    ///   [registered](Self::with_registered_circuits) circuit is not a circuit
+    ///   of the contract, or when the deploy leaves out a circuit under a
+    ///   maintenance authority that no set of signatures meets.
     /// - [`ContractError::Interpreter`], before any proof, when the
     ///   constructor or a witness fails, or when the constructor reads
     ///   `kernel.self()`.
     /// - [`ContractError::Provider`] when a wallet query, the build or the
-    ///   proof fails.
+    ///   proof fails. A deploy that exceeds the block limits of the ledger
+    ///   parameters fails in the build. Register fewer circuits with
+    ///   [`Self::with_registered_circuits`].
     /// - [`ContractError::PendingSnapshotFailed`] when the store cannot record
     ///   the snapshot. The deploy submits nothing.
     /// - [`ContractError::SubmissionWait`] when the submit fails.
@@ -743,14 +774,24 @@ where
         let store = provider.private_state();
         require_store_for_private_state(&private_state, store.is_some())?;
 
-        let mut state = populate_verifier_keys(state, &zk_config, self.declared_circuits).await?;
-
         // Stamp the maintenance authority committee into the deployed state, if
         // requested. No signing key is stored — members sign ops externally.
-        if let Some((committee, threshold)) = self.maintenance_authority {
-            crate::maintenance::validate_committee(&committee, threshold)?;
-            state = crate::maintenance::set_maintenance_authority(state, committee, threshold);
-        }
+        // The stamp comes first: the check of the registered circuits reads the
+        // authority that the deploy sends.
+        let state = match self.maintenance_authority {
+            Some((committee, threshold)) => {
+                crate::maintenance::validate_committee(&committee, threshold)?;
+                crate::maintenance::set_maintenance_authority(state, committee, threshold)
+            }
+            None => state,
+        };
+        let state = populate_verifier_keys(
+            state,
+            &zk_config,
+            self.declared_circuits,
+            self.registered_circuits,
+        )
+        .await?;
 
         let result = deploy_funded(&state, provider, self.shielded_offer).await?;
         let address = result.address_hex();

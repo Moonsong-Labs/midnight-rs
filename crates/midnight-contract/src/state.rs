@@ -11,7 +11,9 @@ use std::sync::Arc;
 use midnight_base_crypto::time::Timestamp;
 use midnight_onchain_runtime::state::EntryPointBuf;
 use midnight_provider::{MidnightProvider, NodeApi};
-use midnight_typed_state::{ContractState, InMemoryDB, tagged_deserialize};
+use midnight_typed_state::{
+    ContractMaintenanceAuthority, ContractState, InMemoryDB, tagged_deserialize,
+};
 use midnight_types::BlockHash;
 
 use crate::error::{ContractError, KeyMismatch};
@@ -74,24 +76,66 @@ pub(crate) async fn state_at_block<W: Send + Sync>(
 /// contract state's operations map, keyed by circuit id. See
 /// [`verifier_keys`].
 ///
+/// With `registered`, only those circuits get an operation. The keys of the
+/// other circuits are still read and checked, because later maintenance
+/// updates insert them. See [`check_registered`] for the refusals.
+///
 /// [`ZkConfigProvider`]: crate::zk_config::ZkConfigProvider
 pub(crate) async fn populate_verifier_keys(
     mut state: ContractState<InMemoryDB>,
     zk_config: &Arc<dyn crate::zk_config::ZkConfigProvider>,
     declared: Option<Vec<String>>,
+    registered: Option<Vec<String>>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
     let keys = crate::zk_config::read_blocking(zk_config, move |zk_config| {
         verifier_keys(zk_config, declared.as_deref())
     })
     .await?;
+    if let Some(registered) = &registered {
+        check_registered(&keys, registered, &state.maintenance_authority)?;
+    }
     for (circuit, key) in keys {
         let op = crate::ledger::state::operation(&circuit, &key)?;
-        state.operations = state.operations.insert(circuit.as_bytes().into(), op);
+        if registered.as_ref().is_none_or(|r| r.contains(&circuit)) {
+            state.operations = state.operations.insert(circuit.as_bytes().into(), op);
+        }
     }
     Ok(state)
 }
 
-/// The verifier key of each circuit a deploy registers, as the bytes of its
+/// Refuse a `registered` circuit that `keys` does not hold. Also refuse a
+/// circuit of `keys` left out of `registered` under an `authority` that no set
+/// of signatures meets, because no update could then insert that circuit.
+fn check_registered(
+    keys: &[(String, Vec<u8>)],
+    registered: &[String],
+    authority: &ContractMaintenanceAuthority,
+) -> Result<(), ContractError> {
+    if let Some(unknown) = registered
+        .iter()
+        .find(|r| !keys.iter().any(|(circuit, _)| circuit == *r))
+    {
+        return Err(ContractError::Construction(format!(
+            "the deploy registers `{unknown}`, which is not a circuit of the contract"
+        )));
+    }
+    let left_out: Vec<&str> = keys
+        .iter()
+        .map(|(circuit, _)| circuit.as_str())
+        .filter(|circuit| !registered.iter().any(|r| r == circuit))
+        .collect();
+    if !left_out.is_empty() && crate::maintenance::is_frozen(authority) {
+        return Err(ContractError::Construction(format!(
+            "the deploy leaves out {}, but no set of signatures meets its maintenance \
+             authority, so no update could insert them; set a committee with \
+             with_maintenance_authority",
+            left_out.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// The verifier key of each circuit of the contract, as the bytes of its
 /// compiled `*.verifier` artifact, keyed by circuit id (e.g. the `increment`
 /// circuit → entry point `"increment"`).
 ///
@@ -238,7 +282,7 @@ mod tests {
         let zk_config: Arc<dyn crate::zk_config::ZkConfigProvider> = Arc::new(
             crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir()),
         );
-        let mut state = populate_verifier_keys(ContractState::default(), &zk_config, None)
+        let mut state = populate_verifier_keys(ContractState::default(), &zk_config, None, None)
             .await
             .unwrap();
         let increment = verifier_key_file("counter", "increment");
@@ -343,5 +387,105 @@ mod tests {
             msg.contains("increment_by"),
             "error should name the stale artifact, got: {msg}"
         );
+    }
+
+    fn with_authority(threshold: u32) -> ContractState<InMemoryDB> {
+        let member = midnight_typed_state::ContractMaintenanceVerifyingKey::Schnorr(
+            crate::schnorr::SigningKey::sample(rand::thread_rng()).verifying_key(),
+        );
+        ContractState {
+            maintenance_authority: ContractMaintenanceAuthority {
+                committee: vec![member],
+                threshold,
+                counter: 0,
+            },
+            ..ContractState::default()
+        }
+    }
+
+    /// A deploy of the counter that registers `registered` of its circuits.
+    async fn deploy_counter(
+        state: ContractState<InMemoryDB>,
+        declared: &[&str],
+        registered: &[&str],
+    ) -> Result<ContractState<InMemoryDB>, ContractError> {
+        let zk_config: Arc<dyn crate::zk_config::ZkConfigProvider> = Arc::new(
+            crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir()),
+        );
+        let names = |names: &[&str]| names.iter().map(|n| n.to_string()).collect();
+        populate_verifier_keys(
+            state,
+            &zk_config,
+            Some(names(declared)),
+            Some(names(registered)),
+        )
+        .await
+    }
+
+    fn construction_error(result: Result<ContractState<InMemoryDB>, ContractError>) -> String {
+        match result {
+            Err(ContractError::Construction(message)) => message,
+            Err(other) => panic!("expected a Construction error, got {other:?}"),
+            Ok(_) => panic!("expected a Construction error, got a state"),
+        }
+    }
+
+    /// A deploy that registers every circuit does not fit one transaction for
+    /// a large contract. A circuit left out of the first wave still needs its
+    /// key at deploy, because a later update inserts it.
+    #[tokio::test]
+    async fn a_registered_subset_deploys_only_its_keys() {
+        let state = deploy_counter(
+            with_authority(1),
+            &["increment", "increment_by"],
+            &["increment"],
+        )
+        .await
+        .unwrap();
+        assert!(state.operations.contains_key(&b"increment"[..].into()));
+        assert!(!state.operations.contains_key(&b"increment_by"[..].into()));
+
+        let missing = construction_error(
+            deploy_counter(
+                with_authority(1),
+                &["increment", "increment_by", "decrement"],
+                &["increment"],
+            )
+            .await,
+        );
+        assert!(missing.contains("decrement"), "{missing}");
+    }
+
+    /// A misspelt name would leave the circuit out with no error, and the
+    /// caller would find out only when a call of it fails.
+    #[tokio::test]
+    async fn a_registered_name_outside_the_contract_is_refused() {
+        let message = construction_error(
+            deploy_counter(
+                with_authority(1),
+                &["increment", "increment_by"],
+                &["increment", "incremnt_by"],
+            )
+            .await,
+        );
+        assert!(message.contains("incremnt_by"), "{message}");
+    }
+
+    /// A circuit left out under an authority that no update can satisfy never
+    /// gets its key, and the deploy fee is paid for nothing.
+    #[tokio::test]
+    async fn a_left_out_circuit_needs_an_authority_that_can_insert_it() {
+        let circuits = ["increment", "increment_by"];
+        for (state, why) in [
+            (ContractState::default(), "an empty committee"),
+            (with_authority(2), "one member at threshold 2"),
+        ] {
+            let message =
+                construction_error(deploy_counter(state, &circuits, &["increment"]).await);
+            assert!(message.contains("increment_by"), "{why}: {message}");
+        }
+        deploy_counter(ContractState::default(), &circuits, &circuits)
+            .await
+            .expect("a deploy that leaves nothing out needs no authority");
     }
 }

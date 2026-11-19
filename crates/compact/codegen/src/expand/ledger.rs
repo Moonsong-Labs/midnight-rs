@@ -475,6 +475,18 @@ fn emit_deploy(
                 Self { inner: self.inner.with_maintenance_authority(committee, threshold), ..self }
             }
 
+            /// Register the verifier keys of `circuits` only, and leave the
+            /// contract's other circuits for maintenance updates to insert. See
+            /// [`midnight_contract::DeployBuilder::with_registered_circuits`].
+            pub fn with_registered_circuits(
+                self,
+                circuits: impl ::core::iter::IntoIterator<
+                    Item = impl ::core::convert::Into<::std::string::String>,
+                >,
+            ) -> Self {
+                Self { inner: self.inner.with_registered_circuits(circuits), ..self }
+            }
+
             /// Set the source of the contract's compiled ZK artifacts (a directory
             /// path or a custom `ZkConfigProvider`); see `midnight_contract::IntoZkConfig`.
             pub fn with_zk_config(self, zk_config: impl midnight_contract::IntoZkConfig) -> Self {
