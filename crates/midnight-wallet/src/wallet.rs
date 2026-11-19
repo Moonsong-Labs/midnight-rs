@@ -560,7 +560,7 @@ mod tests {
             // A resume puts the fresh pin on cursors from a chain that can be
             // gone.
             (None, Some(pin(fresh)), SnapshotStart::Replay(pin(fresh))),
-            // A replay here replays an offline wallet at every launch.
+            // An offline wallet, which has no pin to replay under.
             (None, None, SnapshotStart::Resume(None)),
         ];
         for (stored, fresh, expected) in cases {
