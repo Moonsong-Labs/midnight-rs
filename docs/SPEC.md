@@ -288,7 +288,7 @@ Contract<P>   // stateless handle, no cached state
 ```
 Contract::at(&provider, address)              // ConnectBuilder<P>
   .with_zk_config("compiled")
-  [.at_block(node_block_hash)]                // pin the state reads and calls (events_at takes its own block)
+  [.at_block(node_block_hash)]                // pin the state reads and calls (events_at and indexer_events_at take their own block)
   .build()                                    // synchronous, no network calls
   → Contract<P>
 ```

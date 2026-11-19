@@ -207,7 +207,7 @@ midnight-js reads the events of other calls from the indexer. `PublicDataProvide
 | Reach | the node's state window: the last 255 finalized blocks on a default node | all indexed history, on preview, devnets and self-hosted 4.4.x indexers | the same as `latest_events` |
 | Needs | a node | an indexer URL. No archive node | an indexer URL. No archive node |
 
-Both reads give `ContractEvent` records. `CallOutcome.events` stays the way to get the events of your own call.
+Each read gives `ContractEvent` records. `CallOutcome.events` stays the way to get the events of your own call.
 
 The node read takes one block at a time:
 

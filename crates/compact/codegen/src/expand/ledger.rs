@@ -190,7 +190,8 @@ pub(crate) fn emit_ledger_wrapper(
 
             /// Pin the state reads and the circuit calls to the block `hash`.
             /// Default is the node's best block. A circuit call runs at the time
-            /// of that block. `events_at` takes its own block and ignores the pin.
+            /// of that block. `events_at` and `indexer_events_at` take their own
+            /// block and ignore the pin.
             pub fn at_block(self, hash: midnight_contract::BlockHash) -> Self {
                 Self(self.0.at_block(hash))
             }

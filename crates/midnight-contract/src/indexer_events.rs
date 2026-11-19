@@ -126,7 +126,9 @@ impl<P> Contract<P> {
     /// The read asks the indexer for the height of `block_hash`, then reads
     /// the events at that height only. So it gives no event of another block,
     /// unlike [`Self::latest_events`], which reads up to the indexer's latest
-    /// block. The events keep the order in which the indexer stored them.
+    /// block. It reads the block that `block_hash` names, not the
+    /// [`at_block`](Self::at_block) pin. The events keep the order in which
+    /// the indexer stored them.
     ///
     /// It returns `None` when the indexer does not hold the block. The
     /// indexer holds finalized blocks only, and trails the node, so `None`
