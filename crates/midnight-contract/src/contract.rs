@@ -1023,10 +1023,11 @@ impl<P> ConnectBuilder<P> {
 
     /// Pin the state reads and the circuit calls to the block `hash`.
     /// Default is the node's best block. A circuit call runs at the time of
-    /// that block. [`Contract::events_at`] takes its own block and ignores the
-    /// pin. A circuit call or a full state read pinned to a block before the
-    /// chain's hard fork to ledger 9 fails with [`ContractError::StateFetch`],
-    /// which names the ledger 8 tag `contract-state[v6]`.
+    /// that block. [`Contract::events_at`] and [`Contract::indexer_events_at`]
+    /// take their own block and ignore the pin. A circuit call or a full state
+    /// read pinned to a block before the chain's hard fork to ledger 9 fails
+    /// with [`ContractError::StateFetch`], which names the ledger 8 tag
+    /// `contract-state[v6]`.
     pub fn at_block(mut self, hash: BlockHash) -> Self {
         self.at_block = Some(hash);
         self

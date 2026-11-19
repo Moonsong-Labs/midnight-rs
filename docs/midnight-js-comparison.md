@@ -20,7 +20,7 @@ ContractProviders = {
 }
 ```
 
-**midnight-rs** bundles most of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider: our `MidnightProvider<W>` owns the node WebSocket connection, a `Prover`, an optional private-state store, and the submission path, and it holds the wallet `W` that it gets. It calls the wallet only through the `MidnightWallet` trait, which funds and signs. The wallet keeps the indexer URL that it synced from. `Contract::latest_events` also takes an indexer URL.
+**midnight-rs** bundles most of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider: our `MidnightProvider<W>` owns the node WebSocket connection, a `Prover`, an optional private-state store, and the submission path, and it holds the wallet `W` that it gets. It calls the wallet only through the `MidnightWallet` trait, which funds and signs. The wallet keeps the indexer URL that it synced from. `Contract::latest_events` and `Contract::indexer_events_at` also take an indexer URL.
 
 | midnight-js abstraction       | midnight-rs equivalent                                                                              |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
@@ -196,18 +196,18 @@ The differences:
 
 ### The events of other calls
 
-midnight-js reads the events of other calls from the indexer. `PublicDataProvider.queryContractEvents` reads a page of the events of one contract, and `contractEventsObservable` replays them from a cursor, then follows the chain. midnight-rs has two reads on the contract handle, for different purposes. `Contract::latest_events` reads the indexer, as `queryContractEvents` and `contractEventsObservable` do. `Contract::events_at` reads one block from the node.
+midnight-js reads the events of other calls from the indexer. `PublicDataProvider.queryContractEvents` reads a page of the events of one contract, and `contractEventsObservable` replays them from a cursor, then follows the chain. The contract handle of midnight-rs has these reads, for different purposes. `Contract::latest_events` reads the indexer, as `queryContractEvents` and `contractEventsObservable` do. `Contract::events_at` reads one block from the node, and `Contract::indexer_events_at` reads one block from the indexer.
 
-| | `contract.events_at(block_hash)` | `contract.latest_events(indexer_url, from)` |
-|---|---|---|
-| Purpose | the events of this contract at a given block | the latest events of this contract |
-| Source | the node: `get_block_transactions`, `call_transcripts`, `CallTranscript::events` | the indexer: a `contractEvents` subscription bounded by `toBlock` |
-| Selection | one block, by hash | from a start block to the indexer's latest block |
-| Guarantee | every event that the chain kept in the block, or `UnknownEvents` | the indexer's own ledger run. Transactions that governance dispatches are missing, with no error |
-| Reach | the node's state window: the last 255 finalized blocks on a default node | all indexed history, on preview, devnets and self-hosted 4.4.x indexers |
-| Needs | a node | an indexer URL. No archive node |
+| | `contract.events_at(block_hash)` | `contract.latest_events(indexer_url, from)` | `contract.indexer_events_at(indexer_url, block_hash)` |
+|---|---|---|---|
+| Purpose | the events of this contract at a given block | the latest events of this contract | the events of this contract at a given block, with no event above it |
+| Source | the node: `get_block_transactions`, `call_transcripts`, `CallTranscript::events` | the indexer: a `contractEvents` subscription bounded by `toBlock` | the indexer: a `contractEvents` subscription from the block's height to the same height |
+| Selection | one block, by hash | from a start block to the indexer's latest block | one block, by hash. `None` when the indexer does not hold it |
+| Guarantee | every event that the chain kept in the block, or `UnknownEvents` | the indexer's own ledger run. Transactions that governance dispatches are missing, with no error | the same as `latest_events` |
+| Reach | the node's state window: the last 255 finalized blocks on a default node | all indexed history, on preview, devnets and self-hosted 4.4.x indexers | the same as `latest_events` |
+| Needs | a node | an indexer URL. No archive node | an indexer URL. No archive node |
 
-Both reads give `ContractEvent` records. `CallOutcome.events` stays the way to get the events of your own call.
+Each read gives `ContractEvent` records. `CallOutcome.events` stays the way to get the events of your own call.
 
 The node read takes one block at a time:
 
@@ -243,6 +243,10 @@ The differences:
 - The SDK decodes each `ContractEvent` from `raw`, the ledger event that the indexer stores, and not from the fields that the indexer decodes. It checks that the ledger event is a `ContractLog` of the contract, from the transaction of its row, in the range of the read.
 - The read has no page. It holds every event of its range in memory.
 - Each row, and the end of the read, must come within 60 s of the one before. If not, the read fails with `ContractError::Indexer`, with `retryable` true.
+
+### The events of a block, from the indexer
+
+`Contract::indexer_events_at(indexer_url, block_hash)` reads the events of one block from the indexer. It queries the indexer for the block with `block_hash`, then reads the `contractEvents` subscription at the height of that block only. So a caller that reads the contract state at a finalized block can read the events of that block, and of no block above it. It returns `None` when the indexer does not hold the block: the indexer holds finalized blocks only, and trails the node. It refuses a block answer or a row with another hash. Each other difference of `latest_events` applies to it too, and `events_at` with the same `block_hash` confirms its events.
 
 ## ZK artifacts
 
