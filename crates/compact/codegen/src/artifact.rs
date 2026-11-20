@@ -258,7 +258,8 @@ fn check_type(t: &ir::Type) -> Result<(), ArtifactError> {
 /// through vectors, aliases, tuples and struct fields, and the description
 /// names the first such construct that it finds.
 ///
-/// [`load`] refuses an artifact that holds such a type.
+/// [`load`] refuses an artifact that holds such a type, except an inner `Map`
+/// as the value of a ledger `Map`.
 pub fn unsupported_type(t: &ir::Type) -> Option<String> {
     match t {
         ir::Type::Adt { name, .. } => Some(format!("ADT type {name} in a value position")),
