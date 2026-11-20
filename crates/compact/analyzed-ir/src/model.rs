@@ -226,6 +226,18 @@ impl Type {
     pub fn is_unit(&self) -> bool {
         matches!(self.resolved(), Type::Tuple(types) if types.is_empty())
     }
+
+    /// The key and value types of a ledger `Map` ADT, or `None` for any other
+    /// type.
+    pub fn as_map(&self) -> Option<(&Type, &Type)> {
+        match self {
+            Type::Adt { name, args } if name == "Map" => match args.as_slice() {
+                [AdtArg::Type(key), AdtArg::Type(value)] => Some((key, value)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 /// The byte width that the compiler gives a `Uint` whose largest value is
@@ -424,6 +436,18 @@ pub enum Operand {
     Expr(Box<Expr>),
     /// A plain list of operands, for example an `idx` path.
     List(Vec<Operand>),
+}
+
+impl Operand {
+    /// Whether the operand is the default value of `t`, in either form the
+    /// compiler prints: `(default t)` from `default<T>`, or `(null t)`.
+    pub fn is_default_of(&self, t: &Type) -> bool {
+        match self {
+            Operand::Expr(e) => matches!(e.as_ref(), Expr::Default(d) if d == t),
+            Operand::Null(d) => d == t,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

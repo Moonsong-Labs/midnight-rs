@@ -69,6 +69,10 @@ compact_bindgen::contract!(
     Loops,
     "../conformance/fixtures/loops/compiler/analyzed-ir.sexp"
 );
+compact_bindgen::contract!(
+    Nested,
+    "../conformance/fixtures/nested/compiler/analyzed-ir.sexp"
+);
 compact_bindgen::contract!(Ops, "../conformance/fixtures/ops/compiler/analyzed-ir.sexp");
 compact_bindgen::contract!(
     Peers,
@@ -519,6 +523,34 @@ mod set_and_map {
 
         let initial = ledger_at("/constructor/state/data");
         assert!(initial.tags().expect("tags").is_empty());
+    }
+}
+
+/// A ledger `Map` whose values are `Map`s, run through the IR that the
+/// bindings embed and read through the generated accessor.
+#[cfg(test)]
+mod map_of_maps {
+    use std::time::UNIX_EPOCH;
+
+    use compact_bindgen::Bytes;
+
+    use crate::nested;
+
+    #[test]
+    fn the_bindings_build_and_read_inner_maps() {
+        let mut simulator =
+            nested::Simulator::new(nested::NestedInitialState::default(), UNIX_EPOCH);
+        simulator.approve(7, Bytes([0x11; 32])).unwrap();
+        simulator.approve(7, Bytes([0x22; 32])).unwrap();
+        simulator.open(9).unwrap();
+
+        let ledger = simulator.ledger();
+        let approvals = ledger.approvals().unwrap();
+        let seven = approvals.get(7).expect("proposal 7").unwrap();
+        assert_eq!(seven.size(), 2);
+        assert!(seven.get(Bytes([0x22; 32])).expect("an approval").unwrap());
+        assert!(approvals.get(9).expect("proposal 9").unwrap().is_empty());
+        assert!(approvals.get(8).is_none());
     }
 }
 

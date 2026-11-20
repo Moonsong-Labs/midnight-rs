@@ -2091,6 +2091,17 @@ fn push_value(
                 })?;
                 return Ok(StateValue::BoundedMerkleTree(MerkleTree::blank(height)));
             }
+            // An inner map that a ledger `Map` holds, from `insert(k,
+            // default<Map<K, V>>)` or `insertDefault(k)`.
+            ir::StateValue::Adt(inner, ty @ ir::Type::Adt { name, .. }) => {
+                return if ty.as_map().is_some() && inner.is_default_of(ty) {
+                    Ok(StateValue::Map(StorageHashMap::new()))
+                } else {
+                    Err(InterpreterError::Unsupported(format!(
+                        "push of an ADT {name} other than the default Map"
+                    )))
+                };
+            }
             // Scalar shapes: `reduce_operand` below unwraps them.
             ir::StateValue::Null | ir::StateValue::Cell(_) | ir::StateValue::Adt(..) => {}
         }

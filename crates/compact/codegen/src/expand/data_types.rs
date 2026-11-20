@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::ir::{Type, Witness};
+use crate::ir::{AdtArg, Type, Witness};
 use crate::types::{Circuit, LedgerField, StorageKind};
 
 use super::helpers::{make_ident, to_pascal_case};
@@ -152,8 +152,17 @@ fn collect_types(
         | Type::Point(_)
         | Type::Bytes(_)
         | Type::Opaque(_) => {}
+        // The accessor of a map of maps names the inner map's key and value
+        // types.
+        Type::Adt { args, .. } => {
+            for arg in args {
+                if let AdtArg::Type(t) = arg {
+                    collect_types(t, emitted, tokens, refuse_collisions);
+                }
+            }
+        }
         // Rejected at load by `artifact::check_type`; unreachable here.
-        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {}
+        Type::TypeVar(_) | Type::Unknown => {}
     }
 }
 

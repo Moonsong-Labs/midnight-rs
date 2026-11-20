@@ -1,0 +1,37 @@
+// Conformance corpus contract: a Map whose values are Maps, as a multisig keeps
+// one approval set per proposal. An inner map comes from an inserted
+// `default<Map<K, V>>` or from `insertDefault`, and the inner operations index
+// two levels deep.
+
+import CompactStandardLibrary;
+
+export ledger approvals: Map<Uint<64>, Map<Bytes<32>, Boolean>>;
+export ledger counts: Map<Uint<64>, Uint<8>>;
+
+// Creates the approval set of a proposal on its first approval, then records
+// the approver: a two-level `member`, `ins` and `size`.
+export circuit approve(id: Uint<64>, who: Bytes<32>): [] {
+  if (!approvals.member(disclose(id))) {
+    approvals.insert(disclose(id), default<Map<Bytes<32>, Boolean>>);
+  }
+  assert(!approvals.lookup(disclose(id)).member(disclose(who)), "already approved");
+  approvals.lookup(disclose(id)).insert(disclose(who), true);
+  counts.insert(disclose(id), disclose(approvals.lookup(disclose(id)).size() as Uint<8>));
+}
+
+// insertDefault pushes `(null t)` where an insert of `default<T>` pushes
+// `(default t)`. It empties the approval set of an existing proposal.
+export circuit open(id: Uint<64>): [] {
+  approvals.insertDefault(disclose(id));
+}
+
+// A two-level `rem`.
+export circuit revoke(id: Uint<64>, who: Bytes<32>): [] {
+  approvals.lookup(disclose(id)).remove(disclose(who));
+  counts.insert(disclose(id), disclose(approvals.lookup(disclose(id)).size() as Uint<8>));
+}
+
+// Two-level reads.
+export circuit approved(id: Uint<64>, who: Bytes<32>): Boolean {
+  return approvals.member(disclose(id)) && approvals.lookup(disclose(id)).member(disclose(who));
+}

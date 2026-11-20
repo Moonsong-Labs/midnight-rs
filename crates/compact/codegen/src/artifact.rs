@@ -171,16 +171,6 @@ impl<'a> Context<'a> {
         }
     }
 
-    // -- types ----------------------------------------------------------
-
-    /// Types pass through unchanged; this only refuses the ones no
-    /// consumer can handle, so a bad artifact fails at load with a named
-    /// error instead of mid-execution.
-    fn ty(&self, t: &ir::Type) -> Result<ir::Type, ArtifactError> {
-        check_type(t)?;
-        Ok(t.clone())
-    }
-
     fn ledger_field(&self, f: &ir::LedgerBinding) -> Result<LedgerField, ArtifactError> {
         let index = if f.path.len() == 1 {
             FieldIndex::Single(as_usize(f.path[0], "a ledger index")?)
@@ -204,12 +194,12 @@ impl<'a> Context<'a> {
             ));
         }
         let kind = name.strip_prefix("__compact_").unwrap_or(name);
-        let arg_ty = |i: usize| -> Result<ir::Type, ArtifactError> {
-            match &args[i] {
-                ir::AdtArg::Type(t) => self.ty(t),
+        let checked_arg =
+            |i: usize, check: fn(&ir::Type) -> Result<(), ArtifactError>| match &args[i] {
+                ir::AdtArg::Type(t) => check(t).map(|()| t.clone()),
                 ir::AdtArg::Nat(n) => unsupported(&format!("a numeric type argument {n}")),
-            }
-        };
+            };
+        let arg_ty = |i: usize| checked_arg(i, check_type);
         let arg_nat = |i: usize| -> Result<u64, ArtifactError> {
             match &args[i] {
                 ir::AdtArg::Nat(n) => Ok(*n),
@@ -242,7 +232,7 @@ impl<'a> Context<'a> {
             StorageKind::Counter => {}
             StorageKind::Map => {
                 field.key = Some(arg_ty(0)?);
-                field.value = Some(arg_ty(1)?);
+                field.value = Some(checked_arg(1, check_map_value)?);
             }
             StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => {
                 field.depth = Some(arg_nat(0)?);
@@ -268,7 +258,8 @@ fn check_type(t: &ir::Type) -> Result<(), ArtifactError> {
 /// through vectors, aliases, tuples and struct fields, and the description
 /// names the first such construct that it finds.
 ///
-/// [`load`] refuses an artifact that holds such a type.
+/// [`load`] refuses an artifact that holds such a type, except an inner `Map`
+/// as the value of a ledger `Map`.
 pub fn unsupported_type(t: &ir::Type) -> Option<String> {
     match t {
         ir::Type::Adt { name, .. } => Some(format!("ADT type {name} in a value position")),
@@ -277,6 +268,38 @@ pub fn unsupported_type(t: &ir::Type) -> Option<String> {
         ir::Type::Tuple(types) => types.iter().find_map(unsupported_type),
         ir::Type::Struct { fields, .. } => fields.iter().find_map(|(_, t)| unsupported_type(t)),
         _ => None,
+    }
+}
+
+/// Refuse a type that the interpreter cannot run as the value of a ledger
+/// `Map`. A value type passes, and so does an inner `Map` whose key is a value
+/// type and whose value passes in turn.
+fn check_map_value(t: &ir::Type) -> Result<(), ArtifactError> {
+    match (t, t.as_map()) {
+        (_, Some((key, value))) => {
+            check_type(key)?;
+            check_map_value(value)
+        }
+        (ir::Type::Adt { name, .. }, None) => {
+            unsupported(&format!("a ledger Map whose values are ADT {name}"))
+        }
+        _ => check_type(t),
+    }
+}
+
+/// Refuse a pushed `(state-value ADT x t)` that the interpreter cannot build.
+/// When `t` is a value type, `x` is a value of it. When `t` is an ADT, the
+/// push puts a container in a ledger `Map`, and only the default, an empty
+/// inner `Map`, passes.
+fn check_state_value_adt(x: &ir::Operand, t: &ir::Type) -> Result<(), ArtifactError> {
+    let ir::Type::Adt { name, .. } = t else {
+        return check_operand(x).and_then(|()| check_type(t));
+    };
+    check_map_value(t)?;
+    if x.is_default_of(t) {
+        Ok(())
+    } else {
+        unsupported(&format!("a pushed ADT {name} other than its default"))
     }
 }
 
@@ -484,7 +507,12 @@ fn check_expr(e: &ir::Expr) -> Result<(), ArtifactError> {
                     check_expr(expr)
                 }
             })?;
-            each(a)?;
+            // The interpreter runs only the instructions, so an argument such
+            // as the `default<Map<K, V>>` of an insert only types the operation.
+            a.iter().try_for_each(|arg| match arg {
+                ir::Expr::Default(t @ ir::Type::Adt { .. }) => check_map_value(t),
+                _ => check_expr(arg),
+            })?;
             check_instructions(instructions)
         }
     }
@@ -509,7 +537,7 @@ fn check_operand(o: &ir::Operand) -> Result<(), ArtifactError> {
         AlignedConcat(xs) | List(xs) => xs.iter().try_for_each(check_operand),
         StateValue(sv) => match sv {
             ir::StateValue::Cell(x) => check_operand(x),
-            ir::StateValue::Adt(x, t) => check_operand(x).and_then(|()| check_type(t)),
+            ir::StateValue::Adt(x, t) => check_state_value_adt(x, t),
             ir::StateValue::Array(xs) => xs.iter().try_for_each(check_operand),
             ir::StateValue::Map(entries) | ir::StateValue::MerkleTree { entries, .. } => entries
                 .iter()
@@ -542,6 +570,26 @@ mod tests {
             e.to_string()
                 .contains("ledger field `slot` of an unknown type"),
             "the error names the field: {e}"
+        );
+    }
+
+    /// Only an inner `Map` passes as the value of a ledger `Map`. The bindings
+    /// would read the state of any other ADT as a value of a value type.
+    #[test]
+    fn refuses_a_ledger_map_whose_values_are_another_adt() {
+        let family = crate::types::SUPPORTED_COMPILER_FAMILY;
+        let src = &format!(
+            r#"(analyzed-ir (compiler-version "{family}.0") (language-version "0.25.107")
+          (runtime-version "0.18.107") (exports (table . %table.0)) (contract-types)
+          (public-ledger-declaration
+            (public-ledger-array
+              (%table.0 (0) (exported #t) (Map (tunsigned 255) (Counter))))
+            (constructor () (tuple))))"#
+        );
+        let e = load_str(src).expect_err("a map of counters is refused");
+        assert!(
+            e.to_string().contains("ADT Counter"),
+            "the error names the ADT: {e}"
         );
     }
 

@@ -80,7 +80,7 @@ StateValue::Map({
 
 Operations: `has`, `lookup`, `insert`, `update`, `remove`, `isEmpty`, `size`, `resetToDefault`.
 
-The value type `V` can itself be an ADT (the `ADT/Type` parameter kind), allowing nested structures like `Map<Field, Set<Field>>`.
+The value type `V` can itself be an ADT (the `ADT/Type` parameter kind), allowing nested structures like `Map<Field, Set<Field>>`. Each entry then holds the `StateValue` of that ADT in place of a `Cell`. The SDK runs and reads a `Map` whose values are `Map`s, where `default<V>` and `insertDefault` insert an empty `Map({})`. It refuses any other ADT as a map value at load.
 
 ### List\<T\>
 
