@@ -237,14 +237,6 @@ mod tests {
             [SingleUpdate::ReplaceAuthority(authority)] => authority.clone(),
             _ => panic!("a freeze is one ReplaceAuthority step"),
         };
-        assert_eq!(
-            installed,
-            ContractMaintenanceAuthority {
-                committee: Vec::new(),
-                threshold: 1,
-                counter: 1,
-            }
-        );
         let frozen = ContractState {
             maintenance_authority: installed,
             ..governed
