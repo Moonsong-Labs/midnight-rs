@@ -49,8 +49,10 @@ pub struct IndexerEndpoint {
 impl IndexerEndpoint {
     /// An endpoint at `url` with no credential.
     ///
-    /// A URL with a query fails the first query or subscription with
-    /// [`IndexerError::Config`]. Send a token with [`Self::with_credential`].
+    /// A URL with a query fails
+    /// [`IndexerClient::new`](crate::IndexerClient::new) and each subscription
+    /// with [`IndexerError::Config`]. Send a token with
+    /// [`Self::with_credential`].
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),

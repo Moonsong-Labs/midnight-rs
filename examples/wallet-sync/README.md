@@ -70,4 +70,4 @@ For the API reference, see [`docs/wallet.md`](../../docs/wallet.md).
 
 Dust sync from genesis can take 30+ minutes on a mainnet-scale history. Progress is checkpointed to disk under `~/.midnight/wallets/<network>/<sha256 of the unshielded address>/`, so reruns resume from the last cursor.
 
-The cursors in that directory count the events of one indexer, and each indexer numbers its events in its own way. Before the first sync against another indexer, such as Blockfrost in place of the retired Midnight-hosted indexer, remove the directory. The sync does not detect a snapshot from another indexer.
+The cursors in that directory count the events of one indexer, and each indexer numbers its events in its own way. Before the first sync against another indexer, remove the directory. The sync does not detect a snapshot from another indexer.

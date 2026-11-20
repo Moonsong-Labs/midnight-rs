@@ -247,7 +247,7 @@ let wallet = Wallet::from_seed(Seed::from_mnemonic(phrase)?)
     .await?;
 ```
 
-The SDK sends the token in a request header: on each indexer query, on the WebSocket upgrade of each subscription, and on the WebSocket upgrade of each node connect. Blockfrost reads the header on each of them. An indexer error with HTTP 403 means that the token is wrong or missing. Do not put the token in a URL (`?project_id=`). The SDK and its dependencies write the URLs to logs and error messages, and `IndexerEndpoint` refuses a URL with a query. The `Debug` output of an `IndexerEndpoint` and of a `MidnightProvider` shows `Sensitive` in place of the token. `tungstenite` logs each WebSocket handshake, headers included, at the `trace` level of the `log` crate, so keep that level off for it.
+The SDK sends the token in a request header: on each indexer query, on the WebSocket upgrade of each subscription, and on the WebSocket upgrade of each node connect. Blockfrost reads the header on each of them. An indexer error with HTTP 403 means that the token is wrong or missing. Do not put the token in a URL (`?project_id=`). The SDK and its dependencies write the URLs to logs and error messages, and the indexer clients refuse a URL with a query. The `Debug` output of an `IndexerEndpoint` and of a `MidnightProvider` shows `Sensitive` in place of the token. `tungstenite` logs each WebSocket handshake, headers included, at the `trace` level of the `log` crate, so keep that level off for it.
 
 The wallet keeps the endpoint for its whole life. To use a new token, sync a new wallet. With `with_storage(..)`, the new wallet resumes from the snapshot.
 
@@ -326,7 +326,7 @@ The directory holds the Dust secret key, so protect it as key material. On Unix,
 
 Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the old generation is cleaned up. A crash mid-write leaves the previous generation intact. The SDK syncs each file to disk before its rename and, on Unix, the directory after it, so a power loss mid-write also leaves it intact.
 
-The cursors in `metadata.json` count the events of one indexer, and event ids differ between indexers. The sync does not detect a snapshot from another indexer. So before the first sync against another indexer, for example Blockfrost in place of the retired Midnight-hosted indexer, delete the directory.
+The cursors in `metadata.json` count the events of one indexer, and event ids differ between indexers. The sync does not detect a snapshot from another indexer. So before the first sync against another indexer, delete the directory.
 
 The sync refuses a snapshot that holds ledger 8 state. When the `ledger_version` field of `metadata.json` is `V8`, or the file has no such field, the sync fails with `WalletError::Ledger8Snapshot`, which names the directory. Delete the directory and sync again from genesis.
 
