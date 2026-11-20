@@ -558,9 +558,11 @@ impl<'a, P> DeployBuilder<'a, P> {
     /// contract's other circuits for maintenance updates to insert.
     ///
     /// A deploy writes its whole initial state, with the verifier key of each
-    /// registered circuit, in one transaction. A contract whose keys do not
-    /// fit the block limits of the ledger parameters deploys in waves: a first
-    /// set of circuits here, under a committee from
+    /// registered circuit, in one transaction. The transaction must fit the
+    /// block limits of the ledger parameters, and also the part of a block
+    /// that the node gives one transaction, which is smaller. A contract whose
+    /// keys do not fit deploys in waves: a first set of circuits here, under a
+    /// committee from
     /// [`Self::with_maintenance_authority`], then the others with
     /// [`ContractMaintenance::insert_verifier_key`](crate::ContractMaintenance::insert_verifier_key).
     /// Put [`ContractMaintenance::freeze`](crate::ContractMaintenance::freeze)
@@ -738,7 +740,10 @@ where
     /// - [`ContractError::Provider`] when a wallet query, the build or the
     ///   proof fails. A deploy that exceeds the block limits of the ledger
     ///   parameters fails in the build. Register fewer circuits with
-    ///   [`Self::with_registered_circuits`].
+    ///   [`Self::with_registered_circuits`]. A deploy under the block limits
+    ///   can still exceed the part of a block that the node gives one
+    ///   transaction. The node then refuses it at the submit. Register fewer
+    ///   circuits for that one too.
     /// - [`ContractError::PendingSnapshotFailed`] when the store cannot record
     ///   the snapshot. The deploy submits nothing.
     /// - [`ContractError::SubmissionWait`] when the submit fails.
