@@ -740,13 +740,15 @@ where
     /// - [`ContractError::Provider`] when a wallet query, the build or the
     ///   proof fails. A deploy that exceeds the block limits of the ledger
     ///   parameters fails in the build. Register fewer circuits with
-    ///   [`Self::with_registered_circuits`]. A deploy under the block limits
-    ///   can still exceed the part of a block that the node gives one
-    ///   transaction. The node then refuses it at the submit. Register fewer
-    ///   circuits for that one too.
+    ///   [`Self::with_registered_circuits`].
     /// - [`ContractError::PendingSnapshotFailed`] when the store cannot record
     ///   the snapshot. The deploy submits nothing.
-    /// - [`ContractError::SubmissionWait`] when the submit fails.
+    /// - [`ContractError::SubmissionWait`] when the submit fails. The node
+    ///   refuses a deploy under the block limits that exceeds the part of a
+    ///   block that it gives one transaction. That refusal comes here, or
+    ///   from a wait on the [`PendingDeploy`] as
+    ///   [`SubmitError::Invalid`](midnight_provider::SubmitError::Invalid).
+    ///   Register fewer circuits for that one too.
     pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
         // Boxed; see the frame-size note on `MidnightProvider::fund_prove_sign`.
         Box::pin(self.send_inner()).await
