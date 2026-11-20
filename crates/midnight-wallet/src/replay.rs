@@ -502,9 +502,9 @@ pub(crate) async fn replay_ledger_events(
                         if report && !send_progress(&progress, stream.events(msg.id, msg.max_id)) {
                             return Err(progress_cancelled(kind));
                         }
-                        // Outside a tokio task no budget forces a yield, so a
-                        // replay that always finds its next event ready would
-                        // never yield.
+                        // Under an executor other than tokio's, no coop budget
+                        // forces a yield, so a replay that always finds its
+                        // next event ready would never yield.
                         tokio::task::yield_now().await;
                     }
 
