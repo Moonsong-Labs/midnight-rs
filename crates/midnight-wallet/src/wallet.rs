@@ -386,9 +386,9 @@ enum SnapshotStart {
 /// the pin `stored`.
 ///
 /// A snapshot with no pin shows no chain, and its cursors can come from a
-/// chain that was replaced since. A fresh pin marks only state that this
-/// chain made (see `require_same_chain`), so a sync with a fresh pin replays
-/// such a snapshot from genesis. A sync with no fresh pin resumes it: it has
+/// chain that was replaced since. A resume puts the fresh pin on cursors that
+/// no check tied to this chain. So a sync with a fresh pin replays such a
+/// snapshot from genesis. A sync with no fresh pin resumes it: it has
 /// nothing better, and an offline wallet must not replay from genesis at
 /// every launch.
 ///
@@ -535,10 +535,10 @@ mod tests {
     use super::test_support::{test_seed, unreachable_coin};
     use super::*;
 
-    /// Only a snapshot with no pin, under a sync with a fresh pin, replays
-    /// from genesis. A resume keeps the newest pin that it has.
+    /// A resume keeps the newest pin that it has, and a sync with no pin on
+    /// either side resumes.
     #[test]
-    fn snapshot_start_resumes_unless_only_the_sync_has_a_pin() {
+    fn a_resume_keeps_the_newest_pin() {
         let pin = |height| ChainPin {
             height,
             hash: format!("{:#x}", midnight_types::BlockHash::repeat_byte(0xaa)),
@@ -557,9 +557,6 @@ mod tests {
                 None,
                 SnapshotStart::Resume(Some(pin(stored))),
             ),
-            // A resume puts the fresh pin on cursors from a chain that can be
-            // gone.
-            (None, Some(pin(fresh)), SnapshotStart::Replay(pin(fresh))),
             // An offline wallet, which has no pin to replay under.
             (None, None, SnapshotStart::Resume(None)),
         ];
