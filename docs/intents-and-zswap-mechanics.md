@@ -69,7 +69,7 @@ When a contract executes (via a `ContractAction::Call`), it produces a transcrip
 
 | Effect | Direction | What it means |
 |--------|-----------|---------------|
-| `unshielded_inputs` | User -> Contract | Unshielded tokens consumed by the contract. Despite the name "input", this is an *output* from the transaction's perspective (value leaves the user). Must be matched by an unshielded offer output or another contract's unshielded output in the same segment. |
+| `unshielded_inputs` | User -> Contract | Unshielded tokens consumed by the contract. Compact: `receiveUnshielded`. Despite the name "input", this is an *output* from the transaction's perspective (value leaves the user). Must be balanced by an unshielded offer input, a contract's unshielded output or a mint of the token, in the same segment. |
 | `unshielded_outputs` | Contract -> User | Unshielded tokens produced by the contract. Despite the name "output", this is an *input* to the transaction (value enters the user). |
 | `unshielded_mints` | Contract -> Ledger | Contract mints new unshielded tokens. The token type is derived from `hash(contract_address, pre_token)`. |
 
@@ -94,7 +94,7 @@ The ledger enforces strict 1-to-1 existence constraints between effects and the 
 The transaction must balance per token type, per segment:
 
 - Shielded balances come from ZswapOffer deltas + contract shielded mints.
-- Unshielded balances come from unshielded offer inputs/outputs + contract unshielded inputs/outputs/mints.
+- Unshielded balances come from unshielded offer inputs/outputs + contract unshielded inputs/outputs/mints. The ledger counts the guaranteed unshielded offer of every intent at segment 0, with the guaranteed transcripts. It counts a fallible unshielded offer at the segment of its own intent, with the fallible transcripts of that intent. So any intent can balance an unshielded deficit at segment 0, but only the intent at segment N can balance one at segment N.
 - Fees (denominated in DUST) are accumulated across all segments and checked in segment 0.
 
 Pedersen commitments enforce that the declared shielded balances match the actual ZswapOffer value commitments, without revealing amounts.

@@ -170,7 +170,9 @@ A transfer request made `without_fee`, and a generated contract call's `.without
 
 `PendingReservations` records the spends of builds that the chain has not yet confirmed. Every funding reserves its dust spends, unshielded UTXOs and shielded nullifiers before the proof, under the same hold of the wallet that selected them. Thus a second build in this process cannot pick the same input. A reservation reaches `pending.json` only when `sign_transaction` marks it proven, so a process that stops during the proof leaves the next process no reservation for those inputs. The set sits in a book behind a std mutex, apart from the wallet's state lock, and the `Reservation` that a funding makes holds the book weakly, so a drop of an unsent stage hands the inputs back with no async runtime.
 
-A `transfer_*` build fills a transfer, which the wallet selects and assembles. A deploy with no shielded offer and a maintenance update fill an assembled transaction, whose fee the wallet pays in its intent. A sponsor fills a sealed transaction with `Cover::Fee`, and the wallet pays only its fee. A call, or a deploy with a shielded offer, proves first. It then fills a sealed transaction with `Cover::Shortfalls`, and the wallet covers its shielded deficits and its fee in a part of its own, in one reservation.
+A `transfer_*` build fills a transfer, which the wallet selects and assembles. A deploy with no shielded offer and a maintenance update fill an assembled transaction, whose fee the wallet pays in its intent. A sponsor fills a sealed transaction with `Cover::Fee`, and the wallet pays only its fee. A call, or a deploy with a shielded offer, proves first. It then fills a sealed transaction with `Cover::Shortfalls`, and the wallet covers its shielded deficits, its unshielded deficits at the guaranteed segment and its fee in a part of its own, in one reservation.
+
+A call that receives an unshielded token with `receiveUnshielded` in its guaranteed transcript lacks the token at the guaranteed segment. The part pays it from the wallet's UTXOs in the guaranteed unshielded offer of its own intent, which the ledger counts at that segment. A call that receives an unshielded token in its fallible transcript, such as after a `kernel.checkpoint()`, lacks it at the segment of the call's intent, and only that intent can carry the offer that pays it. So the wallet refuses that call with `WalletError::Transfer`.
 
 Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, which every funded build runs through the wallet's `funding`) remains as a backstop for transactions that never confirm. Each reservation expires at the earliest TTL of the intents that its build made, which `TransactionRequest::with_ttl` makes shorter than the chain's `global_ttl`, and the wallet compares it with the time of the chain's latest block.
 
@@ -343,12 +345,15 @@ a sealed fill with Cover::Shortfalls { pins, pay_fees }
   └─ fund_transaction resyncs, then under one write lock: for each negative
      shielded (token, segment) entry of the call's balance, the wallet spends
      the pinned coins first, then selects coins, adds the change at that
-     segment, and with pay_fees the Dust fee in an intent of its own, and
-     reserves what it spends. The provider proves the part on its own and
-     merges it in, so the circuit proof is not redone. sign_transaction then
-     keeps the reservation across a restart.
+     segment. For each negative unshielded (token, 0) entry, it selects UTXOs
+     and adds the change in the guaranteed unshielded offer of an intent of
+     its own, with placeholder signatures. With pay_fees it adds the Dust fee
+     in that intent. It reserves what it spends. The provider proves the
+     part on its own and merges it in, so the circuit proof is not redone.
+     sign_transaction then signs the part's UTXOs and keeps the reservation
+     across a restart.
   ↓
-TxEnvelope: the merged bytes, and the reservation of the part's coins and Dust
+TxEnvelope: the merged bytes, and the reservation of the part's coins, UTXOs and Dust
   ↓
 provider.prepare(envelope) → PreparedTx                   // the extrinsic hash, before the submit
   ↓

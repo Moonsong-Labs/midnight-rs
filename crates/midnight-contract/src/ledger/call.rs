@@ -92,7 +92,9 @@ pub(crate) fn partition(
 /// The provider proves the call with no fee, against a context from node
 /// queries. The wallet then covers each shielded deficit of the call in a part
 /// of its own: the coins of `shielded` first, then coins that it selects, and
-/// the change. When `pay_fees` is true, the part also pays the Dust fee.
+/// the change. The part also pays from the wallet's UTXOs what the guaranteed
+/// transcript takes from the caller with `receiveUnshielded`, with the change.
+/// When `pay_fees` is true, the part also pays the Dust fee.
 /// Otherwise the transaction is left fee-less, for another wallet to sponsor.
 /// The provider proves the part and merges it, and the wallet signs. The
 /// result carries the reservation of what the part spends.

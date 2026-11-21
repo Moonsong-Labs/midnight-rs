@@ -13,7 +13,7 @@ This directory holds only contract assets. It is not a Rust crate. It sits outsi
 | [`receive-shielded`](receive-shielded) | the `receive_selected_coin` devnet test of `midnight-contract`: a `deposit` circuit that receives a shielded coin from the caller |
 | [`secret-counter`](secret-counter) | [`example-private-state`](../../examples/private-state), and the `Simulator` tests of `tests/integration`: a stateful `witness next_secret()` that keeps its value in per-contract private state |
 | [`shielded-mint`](shielded-mint) | [`example-shielded-mint`](../../examples/shielded-mint), [`example-shielded-swap`](../../examples/shielded-swap), and the `mint_external_recipient`, `recover_unencrypted_mint` and `receive_selected_coin` devnet tests of `midnight-contract` |
-| [`unshielded-payout`](unshielded-payout) | the `unshielded_payout_to_user` devnet test of `midnight-contract`: a contract that mints an unshielded token to itself and pays it to a user |
+| [`unshielded-payout`](unshielded-payout) | the `unshielded_payout_to_user` and `unshielded_deposit` devnet tests of `midnight-contract`: a contract that mints an unshielded token to itself, pays it to a user, and takes it back from its caller |
 
 ## Layout
 

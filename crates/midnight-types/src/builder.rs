@@ -78,7 +78,38 @@ impl Funding {
             output_no: utxo.output_index,
         }
     }
+
+    /// The UTXOs of `token_type`, taken in the order of `selection` until
+    /// they cover `amount`, and the change.
+    ///
+    /// # Errors
+    ///
+    /// [`WalletError::InsufficientUnshielded`] when the UTXOs of `token_type`
+    /// hold less than `amount`.
+    fn select_utxos(
+        &self,
+        token_type: UnshieldedTokenType,
+        amount: u128,
+        selection: CoinSelection,
+    ) -> Result<(Vec<&TrackedUtxo>, u128), WalletError> {
+        let utxos: Vec<(&TrackedUtxo, u128)> = self
+            .utxos
+            .iter()
+            .filter(|utxo| utxo.token_type.into_ledger() == token_type)
+            .map(|utxo| (utxo, utxo.value))
+            .collect();
+        let available = held(utxos.iter().map(|(_, value)| *value));
+        select_inputs(utxos, amount, selection).ok_or_else(|| WalletError::InsufficientUnshielded {
+            token_type: token_type.into_sdk(),
+            required: amount,
+            available,
+        })
+    }
 }
+
+/// An unshielded offer whose signature slots hold placeholders until the
+/// wallet signs.
+type PlaceholderOffer = UnshieldedOffer<Signature, DefaultDB>;
 
 /// An unshielded offer of `inputs` and `outputs`, in the order that the ledger
 /// requires, with a placeholder signature for each input.
@@ -86,10 +117,7 @@ impl Funding {
 /// A placeholder has the size of a signature, so the fee that a build prices
 /// counts the slot. The wallet replaces it after the proof, with
 /// [`ProvenTx::add_signature`](crate::ProvenTx::add_signature).
-fn placeholder_offer(
-    mut inputs: Vec<UtxoSpend>,
-    mut outputs: Vec<UtxoOutput>,
-) -> UnshieldedOffer<Signature, DefaultDB> {
+fn placeholder_offer(mut inputs: Vec<UtxoSpend>, mut outputs: Vec<UtxoOutput>) -> PlaceholderOffer {
     inputs.sort();
     outputs.sort();
     UnshieldedOffer {
@@ -579,21 +607,7 @@ impl TransferBuilder {
         pay_fees: bool,
     ) -> Result<PreparedTransfer, WalletError> {
         let funding = &self.funding;
-        let utxos: Vec<(&TrackedUtxo, u128)> = funding
-            .utxos
-            .iter()
-            .filter(|utxo| utxo.token_type.into_ledger() == token_type)
-            .map(|utxo| (utxo, utxo.value))
-            .collect();
-        let available = held(utxos.iter().map(|(_, value)| *value));
-        let (selected, change) =
-            select_inputs(utxos, amount, self.coin_selection).ok_or_else(|| {
-                WalletError::InsufficientUnshielded {
-                    token_type: token_type.into_sdk(),
-                    required: amount,
-                    available,
-                }
-            })?;
+        let (selected, change) = funding.select_utxos(token_type, amount, self.coin_selection)?;
 
         let mut outputs = vec![UtxoOutput {
             value: amount,
@@ -1089,11 +1103,13 @@ pub enum Cover {
     /// The Dust fee alone, as a sponsor pays it. A deficit of any other token
     /// is refused.
     Fee,
-    /// Each shielded deficit, with the change back to the wallet, and the Dust
-    /// fee when `pay_fees` is true.
+    /// Each shielded deficit and each unshielded deficit at the guaranteed
+    /// segment, with the change back to the wallet, and the Dust fee when
+    /// `pay_fees` is true.
     ///
     /// The part spends the coins of `pins` first. It then selects coins of the
-    /// wallet for each deficit that the pins leave.
+    /// wallet for each shielded deficit that the pins leave, and UTXOs of the
+    /// wallet for each unshielded deficit.
     Shortfalls {
         /// Coins of the wallet that the part spends whole, by nullifier.
         pins: Vec<crate::Nullifier>,
@@ -1106,30 +1122,34 @@ pub enum Cover {
 /// wallet did not build, and stop before proving.
 ///
 /// The cover rides a part of its own. Its shielded inputs and change ride an
-/// offer at the segment of each deficit that they cover, and its Dust rides an
-/// intent at a segment `external` does not use. [`PreparedTransfer::prove`]
+/// offer at the segment of each deficit that they cover. Its Dust, and its
+/// unshielded inputs and change, ride an intent at a segment `external` does
+/// not use. The unshielded ones ride the guaranteed offer of that intent,
+/// which the ledger counts at the guaranteed segment, the segment of each
+/// unshielded deficit that the cover takes. [`PreparedTransfer::prove`]
 /// merges the part in after proving, so `external` and its proofs stay as they
 /// are. Each round prices the merge with a mock proof, which is exact here
 /// because the part carries only built-in proofs.
 ///
-/// The shielded inputs and the Dust come from `funding`. The reservation of
-/// the part, and its fee intent, take the earliest TTL of the intents of
-/// `external`, kept between the chain time of the build (see [`chain_time`])
-/// and the chain's `global_ttl` after it. So what the part reserves expires
-/// when the merged transaction can no longer land. When `external` has no
-/// intent, they get `global_ttl` after the chain time.
+/// The shielded inputs, the UTXOs and the Dust come from `funding`. Each UTXO
+/// holds a placeholder signature, which the wallet replaces after the proof.
+/// The reservation of the part, and its intent, take the earliest TTL of the
+/// intents of `external`, kept between the chain time of the build (see
+/// [`chain_time`]) and the chain's `global_ttl` after it. So what the part
+/// reserves expires when the merged transaction can no longer land. When
+/// `external` has no intent, they get `global_ttl` after the chain time.
 ///
-/// `None` when the part has nothing to add: no shielded deficit to cover, no
-/// pin, and no Dust to draw. An intent with no spends is one the ledger
-/// rejects.
+/// `None` when the part has nothing to add: no deficit to cover, no pin, and
+/// no Dust to draw. An intent with no spends is one the ledger rejects.
 ///
 /// # Errors
 ///
 /// [`WalletError::Transfer`] for a deficit that `cover` does not take,
 /// [`WalletError::DuplicateInput`] when `cover` pins a coin twice,
 /// [`WalletError::InsufficientShielded`] when the coins of the wallet do not
-/// cover a deficit, and [`WalletError::InsufficientDust`] when its Dust does
-/// not cover the fee.
+/// cover a deficit, [`WalletError::InsufficientUnshielded`] when its UTXOs do
+/// not cover one, and [`WalletError::InsufficientDust`] when its Dust does not
+/// cover the fee.
 pub fn balance_external(
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     mut funding: Funding,
@@ -1144,7 +1164,7 @@ pub fn balance_external(
     let segment = fee_segment(external)?;
 
     let balance = external.balance(None).map_err(transfer_err("balance"))?;
-    let deficits = deficits_to_cover(&balance, cover)?;
+    let (deficits, unshielded_deficits) = deficits_to_cover(&balance, cover)?;
     let (pins, pay_fees) = match cover {
         Cover::Fee => (Vec::new(), true),
         Cover::Shortfalls { pins, pay_fees } => {
@@ -1153,6 +1173,7 @@ pub fn balance_external(
     };
     let plan = plan_cover(&deficits, &pins, &free_coins(&funding.shielded))?;
     let offers = build_cover_offers(&mut tx_info, &mut funding, &plan)?;
+    let (unshielded_offer, spent_utxos) = unshielded_cover(&unshielded_deficits, &funding)?;
 
     let mut tracker = FeeBalanceTracker::default();
     for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
@@ -1168,14 +1189,19 @@ pub fn balance_external(
             Vec::new()
         };
         let mut intents = HashMapStorage::new();
-        if !spends.is_empty() {
+        if !spends.is_empty() || unshielded_offer.is_some() {
             let mut intent: midnight_helpers::UnprovenIntent<DefaultDB> =
                 Intent::empty(&mut tx_info.rng, ttl);
-            intent.dust_actions = Some(Sp::new(DustActions {
-                spends: spends.clone().into(),
-                registrations: Vec::new().into(),
-                ctime: now,
-            }));
+            intent.guaranteed_unshielded_offer = unshielded_offer.clone().map(Sp::new);
+            // An empty `DustActions` is not canonical, and the ledger refuses
+            // it as `NotNormalized`.
+            if !spends.is_empty() {
+                intent.dust_actions = Some(Sp::new(DustActions {
+                    spends: spends.clone().into(),
+                    registrations: Vec::new().into(),
+                    ctime: now,
+                }));
+            }
             intents = intents.insert(segment, intent);
         }
         let part = (!offers.is_empty() || !intents.is_empty())
@@ -1201,6 +1227,7 @@ pub fn balance_external(
         };
         let mut prepared = PreparedTransfer::new(tx_info, part, spends);
         prepared.set_spent_shielded_inputs(plan.inputs.iter().map(|(n, _)| *n).collect());
+        prepared.set_spent_unshielded_inputs(spent_utxos);
         prepared.expires_at = ttl;
         prepared.external = Some(external.clone());
         return Ok(Some(prepared));
@@ -1208,52 +1235,65 @@ pub fn balance_external(
     Err(tracker.into_error())
 }
 
-/// The shielded deficits of a transaction whose balance is `balance` that
-/// `cover` takes, by token and segment.
+/// The shielded deficits that a cover pays, by token and segment.
+type ShieldedDeficits = BTreeMap<(ShieldedTokenType, u16), u128>;
+
+/// The unshielded deficits that a cover pays, by token. Each one is at the
+/// guaranteed segment.
+type UnshieldedDeficits = BTreeMap<UnshieldedTokenType, u128>;
+
+/// The deficits of a transaction whose balance is `balance` that `cover`
+/// takes.
 ///
 /// A Dust deficit is the fee, which the fee loop covers.
 ///
 /// # Errors
 ///
 /// [`WalletError::Transfer`] for a deficit that `cover` does not take: any
-/// shielded deficit for [`Cover::Fee`], and any unshielded deficit. A part of
-/// its own cannot cover an unshielded deficit: the ledger counts a fallible one
-/// at the segment of its intent, and a merge refuses a second intent there.
+/// shielded or unshielded deficit for [`Cover::Fee`], and an unshielded
+/// deficit at a fallible segment. A part of its own cannot cover that one: the
+/// ledger counts a fallible unshielded offer at the segment of its own intent,
+/// and a merge refuses a second intent there.
 fn deficits_to_cover(
     balance: &BTreeMap<(TokenType, u16), i128>,
     cover: &Cover,
-) -> Result<BTreeMap<(ShieldedTokenType, u16), u128>, WalletError> {
-    let mut deficits = BTreeMap::new();
+) -> Result<(ShieldedDeficits, UnshieldedDeficits), WalletError> {
+    let guaranteed: u16 = Segment::Guaranteed.into();
+    let mut shielded = BTreeMap::new();
+    let mut unshielded = BTreeMap::new();
     for (&(token, segment), &value) in balance {
         if value >= 0 {
             continue;
         }
         let lack = value.unsigned_abs();
-        let refused = |what: String, reason: &str| {
+        let refused = |reason: &str| {
+            let what = match token {
+                TokenType::Shielded(token) => format!("shielded token {}", token.into_sdk()),
+                TokenType::Unshielded(token) => format!("unshielded token {}", token.into_sdk()),
+                TokenType::Dust => "Dust".into(),
+            };
             WalletError::Transfer(format!(
                 "the transaction lacks {lack} of {what} at segment {segment}, and {reason}"
             ))
         };
         match (token, cover) {
             (TokenType::Dust, _) => {}
+            (_, Cover::Fee) => return Err(refused("a sponsor pays the Dust fee alone")),
             (TokenType::Shielded(token), Cover::Shortfalls { .. }) => {
-                deficits.insert((token, segment), lack);
+                shielded.insert((token, segment), lack);
             }
-            (TokenType::Shielded(token), Cover::Fee) => {
-                return Err(refused(
-                    format!("shielded token {}", token.into_sdk()),
-                    "a sponsor pays the Dust fee alone",
-                ));
+            (TokenType::Unshielded(token), Cover::Shortfalls { .. }) if segment == guaranteed => {
+                unshielded.insert(token, lack);
             }
-            (TokenType::Unshielded(token), _) => {
+            (TokenType::Unshielded(_), Cover::Shortfalls { .. }) => {
                 return Err(refused(
-                    format!("unshielded token {}", token.into_sdk()),
-                    "a part of its own cannot cover an unshielded deficit",
+                    "the wallet covers an unshielded deficit only at the guaranteed segment, \
+                     so a call cannot receive an unshielded token in its fallible part",
                 ));
             }
         }
     }
-    Ok(deficits)
+    Ok((shielded, unshielded))
 }
 
 /// A coin in the funding view of a wallet: its nullifier, token and value.
@@ -1472,6 +1512,43 @@ fn build_cover_offers(
         }
     }
     Ok(offers)
+}
+
+/// The unshielded offer that pays `deficits` from the UTXOs of `funding`, and
+/// the UTXOs that it spends. `None` and no UTXOs when `deficits` is empty.
+///
+/// Each deficit takes UTXOs of its token in the order of
+/// [`CoinSelection::LargestFirst`], as [`plan_cover`] takes coins. What they
+/// hold beyond the deficit comes back to the wallet as change.
+///
+/// # Errors
+///
+/// [`WalletError::InsufficientUnshielded`] when the UTXOs of a token do not
+/// cover its deficit.
+fn unshielded_cover(
+    deficits: &UnshieldedDeficits,
+    funding: &Funding,
+) -> Result<(Option<PlaceholderOffer>, Vec<SpentUtxoKey>), WalletError> {
+    if deficits.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    let mut spent = Vec::new();
+    for (&token_type, &deficit) in deficits {
+        let (selected, change) =
+            funding.select_utxos(token_type, deficit, CoinSelection::LargestFirst)?;
+        inputs.extend(selected.iter().map(|utxo| funding.spend(utxo)));
+        spent.extend(selected.iter().map(|utxo| utxo.spent_key()));
+        if change > 0 {
+            outputs.push(UtxoOutput {
+                value: change,
+                owner: funding.own_address(),
+                type_: token_type,
+            });
+        }
+    }
+    Ok((Some(placeholder_offer(inputs, outputs)), spent))
 }
 
 /// Upper bound on the rounds of a fee-balancing loop. Each round requests the
@@ -2001,6 +2078,10 @@ mod tests {
         ShieldedTokenType(midnight_helpers::HashOutput([byte; 32]))
     }
 
+    fn unshielded_token(byte: u8) -> UnshieldedTokenType {
+        UnshieldedTokenType(midnight_helpers::HashOutput([byte; 32]))
+    }
+
     fn coin(byte: u8) -> Nullifier {
         Nullifier(midnight_helpers::HashOutput([byte; 32]))
     }
@@ -2012,28 +2093,30 @@ mod tests {
         }
     }
 
-    /// A sponsor that took a swap side would pay it from its own coins.
+    /// A sponsor that took a swap side or a deposit to a contract would pay
+    /// it from its own coins or UTXOs.
     #[test]
     fn a_sponsor_pays_the_fee_alone() {
         let fee_only = BTreeMap::from([
             ((TokenType::Dust, 0), -500),
             ((TokenType::Shielded(token(1)), 0), 10),
         ]);
-        assert!(
-            deficits_to_cover(&fee_only, &Cover::Fee)
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            deficits_to_cover(&fee_only, &Cover::Fee).unwrap(),
+            (BTreeMap::new(), BTreeMap::new())
         );
 
         let swap_side = BTreeMap::from([((TokenType::Shielded(token(1)), 1), -10)]);
-        assert!(matches!(
-            deficits_to_cover(&swap_side, &Cover::Fee),
-            Err(WalletError::Transfer(_))
-        ));
-        assert_eq!(
-            deficits_to_cover(&swap_side, &shortfalls()).unwrap(),
-            BTreeMap::from([((token(1), 1), 10)])
-        );
+        let deposit = BTreeMap::from([((TokenType::Unshielded(unshielded_token(1)), 0), -10)]);
+        for balance in [&swap_side, &deposit] {
+            assert!(
+                matches!(
+                    deficits_to_cover(balance, &Cover::Fee),
+                    Err(WalletError::Transfer(_))
+                ),
+                "{balance:?}"
+            );
+        }
     }
 
     /// The ledger balances each token at each segment, so a cover that sums
@@ -2048,26 +2131,34 @@ mod tests {
         ]);
         assert_eq!(
             deficits_to_cover(&balance, &shortfalls()).unwrap(),
-            BTreeMap::from([((token(1), 0), 5), ((token(1), 1), 7)])
+            (
+                BTreeMap::from([((token(1), 0), 5), ((token(1), 1), 7)]),
+                BTreeMap::new()
+            )
         );
     }
 
-    /// A part of its own cannot pay an unshielded deficit, so a cover that
-    /// skips one proves a transaction that the node refuses.
+    /// The ledger counts the guaranteed unshielded offer of every intent at
+    /// the guaranteed segment, and a fallible one only at the segment of its
+    /// own intent. A part that took a fallible deficit would pay it at the
+    /// guaranteed segment and leave the call's segment short, so the node
+    /// would refuse the transaction.
     #[test]
-    fn no_cover_takes_an_unshielded_deficit() {
-        let unshielded =
-            midnight_helpers::UnshieldedTokenType(midnight_helpers::HashOutput([3; 32]));
-        let balance = BTreeMap::from([((TokenType::Unshielded(unshielded), 0), -1)]);
-        for cover in [Cover::Fee, shortfalls()] {
-            assert!(
-                matches!(
-                    deficits_to_cover(&balance, &cover),
-                    Err(WalletError::Transfer(_))
-                ),
-                "{cover:?}"
-            );
-        }
+    fn the_cover_takes_an_unshielded_deficit_only_at_the_guaranteed_segment() {
+        let guaranteed = BTreeMap::from([
+            ((TokenType::Unshielded(unshielded_token(1)), 0), -40),
+            ((TokenType::Unshielded(unshielded_token(2)), 0), 3),
+        ]);
+        assert_eq!(
+            deficits_to_cover(&guaranteed, &shortfalls()).unwrap(),
+            (BTreeMap::new(), BTreeMap::from([(unshielded_token(1), 40)]))
+        );
+
+        let fallible = BTreeMap::from([((TokenType::Unshielded(unshielded_token(1)), 1), -40)]);
+        assert!(matches!(
+            deficits_to_cover(&fallible, &shortfalls()),
+            Err(WalletError::Transfer(_))
+        ));
     }
 
     /// A pin in the guaranteed offer leaves a fallible receive unbalanced. A
@@ -2133,14 +2224,99 @@ mod tests {
         );
     }
 
+    /// The funding view of the wallet of seed `[5; 32]`, with `utxos` and no
+    /// coin or Dust.
+    fn funding_with(utxos: Vec<TrackedUtxo>) -> Funding {
+        use midnight_helpers::UnshieldedWallet;
+
+        let root = crate::hd::Seed::from_bytes(&[5; 32]).unwrap().into_ledger();
+        Funding {
+            shielded_keys: ShieldedWallet::<DefaultDB>::default(root.clone())
+                .secret_keys()
+                .clone(),
+            shielded: WalletState::new(),
+            night_key: UnshieldedWallet::default(root.clone()).verifying_key(),
+            utxos,
+            dust: DustWallet::default(root, None),
+        }
+    }
+
+    /// A call that receives an unshielded token from its caller lacks it at
+    /// the guaranteed segment. The ledger refuses only a negative balance, so
+    /// a cover that left out the change would land and lose it. A cover with
+    /// no intent when it pays no fee would leave the deficit. A cover that did
+    /// not reserve its UTXOs, or that held no placeholder for each, could not
+    /// be signed.
+    #[tokio::test]
+    async fn the_cover_pays_an_unshielded_deficit_and_takes_back_the_change() {
+        use midnight_helpers::SeedableRng;
+
+        let deposit = unshielded_token(1);
+        let mut intent: UnprovenIntent<DefaultDB> =
+            Intent::empty(&mut StdRng::seed_from_u64(7), Timestamp::from_secs(1));
+        intent.guaranteed_unshielded_offer = Some(Sp::new(placeholder_offer(
+            Vec::new(),
+            vec![UtxoOutput {
+                value: 50,
+                owner: UserAddress(midnight_helpers::HashOutput([9; 32])),
+                type_: deposit,
+            }],
+        )));
+        let external: UnprovenTx =
+            Transaction::from_intents("undeployed", HashMapStorage::new().insert(1, intent));
+        let external = external.mock_prove().expect("mock prove");
+
+        let utxo = TrackedUtxo {
+            token_type: deposit.into_sdk(),
+            intent_hash: crate::HashOutput([1; 32]),
+            ..night_utxo(80, None, false)
+        };
+        let funding = funding_with(vec![utxo.clone(), night_utxo(1_000, None, false)]);
+        let signer = UserAddress::from(funding.night_key.clone()).into_sdk();
+        let tx_info = StandardTransactionInfo::new_from_context(
+            context_at(1_000, 1_000),
+            Arc::new(midnight_helpers::LocalProofServer::default()),
+            None,
+        );
+        let cover = Cover::Shortfalls {
+            pins: Vec::new(),
+            pay_fees: false,
+        };
+
+        let prepared = balance_external(tx_info, funding, &external, &cover)
+            .unwrap()
+            .expect("the part pays the deficit");
+        assert_eq!(prepared.spent_unshielded_inputs(), [utxo.spent_key()]);
+
+        let merged = prepared.prove().await.unwrap();
+        let unshielded: BTreeMap<_, _> = merged
+            .balance(None)
+            .unwrap()
+            .into_iter()
+            .filter(|((token, _), _)| matches!(token, TokenType::Unshielded(_)))
+            .collect();
+        assert_eq!(
+            unshielded,
+            BTreeMap::from([((TokenType::Unshielded(deposit), 0), 0)])
+        );
+
+        let proven = crate::ProvenTx {
+            tx: merged,
+            reservation: crate::build::Reservation::new(SpentInputs::default(), |_| {}),
+        };
+        let requests: Vec<_> = proven
+            .signature_requests()
+            .into_iter()
+            .map(|request| (request.segment, request.signer))
+            .collect();
+        assert_eq!(requests, [(DUST_FEE_SEGMENT, signer)]);
+    }
+
     /// A transfer that drew its UTXOs in the default order whatever the
     /// request names would spend the large UTXOs of a consolidation and leave
     /// the small ones. Nothing fails: the transfer lands with other inputs.
     #[tokio::test]
     async fn a_transfer_draws_its_utxos_in_the_order_of_its_request() {
-        use midnight_helpers::UnshieldedWallet;
-
-        let root = crate::hd::Seed::from_bytes(&[5; 32]).unwrap().into_ledger();
         let utxo = |byte: u8, value: u128| TrackedUtxo {
             intent_hash: crate::HashOutput([byte; 32]),
             ..night_utxo(value, None, false)
@@ -2151,15 +2327,7 @@ mod tests {
             (CoinSelection::LargestFirst, [2, 3].as_slice()),
             (CoinSelection::SmallestFirst, &[1, 3, 2]),
         ] {
-            let funding = Funding {
-                shielded_keys: ShieldedWallet::<DefaultDB>::default(root.clone())
-                    .secret_keys()
-                    .clone(),
-                shielded: WalletState::new(),
-                night_key: UnshieldedWallet::default(root.clone()).verifying_key(),
-                utxos: utxos.clone(),
-                dust: DustWallet::default(root.clone(), None),
-            };
+            let funding = funding_with(utxos.clone());
             let request = TransactionRequest::unshielded(
                 crate::NIGHT,
                 12,

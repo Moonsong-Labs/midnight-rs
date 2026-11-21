@@ -149,16 +149,17 @@ pub enum WalletError {
         available: u128,
     },
 
-    /// The wallet holds too little of an unshielded token for the transfer.
+    /// The wallet holds too little of an unshielded token for the transfer,
+    /// or for what a contract call takes from it with `receiveUnshielded`.
     ///
     /// When a pending build spends UTXOs of this token, wait for its
     /// transaction to finalize, then build again. Otherwise the wallet must
     /// receive more of the token.
     #[error("insufficient unshielded token {token_type}: need {required}, {available} spendable")]
     InsufficientUnshielded {
-        /// The token the transfer spends.
+        /// The token that the build spends.
         token_type: UnshieldedTokenType,
-        /// The amount the transfer spends.
+        /// The amount that the build spends.
         required: u128,
         /// The amount the wallet can spend now, less the UTXOs that pending
         /// builds reserve.
