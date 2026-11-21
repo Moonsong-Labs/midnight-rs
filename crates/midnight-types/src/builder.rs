@@ -127,12 +127,16 @@ fn placeholder_offer(mut inputs: Vec<UtxoSpend>, mut outputs: Vec<UtxoOutput>) -
     }
 }
 
-/// An intent that carries one guaranteed unshielded offer.
+/// An intent that carries one unshielded offer, as its guaranteed or its
+/// fallible unshielded offer.
 ///
 /// The helpers' `IntentInfo` signs its offers with keys from the build
 /// context. This intent signs nothing: its offer holds placeholders, which the
 /// wallet replaces after the proof.
-struct UnshieldedIntent(UnshieldedOffer<Signature, DefaultDB>);
+enum UnshieldedIntent {
+    Guaranteed(PlaceholderOffer),
+    Fallible(PlaceholderOffer),
+}
 
 #[async_trait]
 impl BuildIntent<DefaultDB, BuildContext> for UnshieldedIntent {
@@ -144,7 +148,14 @@ impl BuildIntent<DefaultDB, BuildContext> for UnshieldedIntent {
         _segment_id: u16,
     ) -> UnprovenIntent<DefaultDB> {
         let mut intent: UnprovenIntent<DefaultDB> = Intent::empty(rng, ttl);
-        intent.guaranteed_unshielded_offer = Some(Sp::new(self.0.clone()));
+        match self {
+            Self::Guaranteed(offer) => {
+                intent.guaranteed_unshielded_offer = Some(Sp::new(offer.clone()));
+            }
+            Self::Fallible(offer) => {
+                intent.fallible_unshielded_offer = Some(Sp::new(offer.clone()));
+            }
+        }
         intent
     }
 }
@@ -595,6 +606,10 @@ impl TransferBuilder {
     /// Each input holds a placeholder signature, which the wallet replaces
     /// after the proof.
     ///
+    /// A NIGHT transfer goes in the fallible unshielded offer, and a transfer
+    /// of any other token in the guaranteed one. See
+    /// [`TransactionRequest::unshielded`](crate::TransactionRequest::unshielded).
+    ///
     /// When `pay_fees` is false the build skips Dust entirely, yielding a
     /// fee-unbalanced transaction for another wallet to sponsor
     /// (`TransactionRequest::without_fee`); see [`Self::prepare_shielded`] for
@@ -633,7 +648,14 @@ impl TransferBuilder {
             self.proof_provider.clone(),
             None,
         );
-        tx_info.add_intent(1, Box::new(UnshieldedIntent(offer)));
+        // The time to dismiss counts the guaranteed offer's application, where
+        // each NIGHT input and output updates the Dust generation tree.
+        let intent = if token_type == NIGHT {
+            UnshieldedIntent::Fallible(offer)
+        } else {
+            UnshieldedIntent::Guaranteed(offer)
+        };
+        tx_info.add_intent(1, Box::new(intent));
         tx_info.set_guaranteed_offer(OfferInfo {
             inputs: vec![],
             outputs: vec![],
@@ -773,7 +795,10 @@ impl TransferBuilder {
             self.proof_provider.clone(),
             None,
         );
-        tx_info.add_intent(Segment::Fallible.into(), Box::new(UnshieldedIntent(offer)));
+        tx_info.add_intent(
+            Segment::Fallible.into(),
+            Box::new(UnshieldedIntent::Guaranteed(offer)),
+        );
         tx_info.use_mock_proofs_for_fees(true);
 
         let spent_unshielded_inputs = vec![chosen.spent_key()];
@@ -2354,6 +2379,39 @@ mod tests {
                 expected,
                 "{selection:?}"
             );
+        }
+    }
+
+    /// A NIGHT transfer that put its UTXOs in the guaranteed unshielded offer
+    /// is proven, then refused with `OutsideTimeToDismiss`.
+    #[tokio::test]
+    async fn a_night_transfer_of_many_utxos_is_within_its_time_to_dismiss() {
+        let utxos: Vec<TrackedUtxo> = (1..=10)
+            .map(|byte| TrackedUtxo {
+                intent_hash: crate::HashOutput([byte; 32]),
+                ..night_utxo(1, None, false)
+            })
+            .collect();
+        let request = TransactionRequest::unshielded(
+            crate::NIGHT,
+            10,
+            UnshieldedRecipient(crate::HashOutput([9; 32])),
+        )
+        .without_fee();
+        let tx = TransferBuilder::new(
+            funding_with(utxos),
+            context_at(1_000, 1_000),
+            Arc::new(midnight_helpers::LocalProofServer::default()),
+        )
+        .prepare(request)
+        .await
+        .unwrap()
+        .prove()
+        .await
+        .unwrap();
+
+        if let Err(e) = tx.cost(&midnight_helpers::INITIAL_PARAMETERS, true) {
+            panic!("the node refuses a NIGHT transfer of many UTXOs: {e:?}");
         }
     }
 

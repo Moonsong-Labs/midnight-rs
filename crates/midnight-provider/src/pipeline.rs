@@ -178,6 +178,10 @@ impl<W: MidnightWallet> MidnightProvider<W> {
 /// their bytes and sends the result with [`TransactionRequest::sponsor`],
 /// whose fee intent takes a segment that the merge leaves free.
 ///
+/// A NIGHT transfer goes in the fallible unshielded offer (see
+/// [`TransactionRequest::unshielded`]). So it can fail while the guaranteed
+/// phase of the merged transaction applies.
+///
 /// ```rust,no_run
 /// # use midnight_provider::{MidnightProvider, TransactionRequest, merge_transactions};
 /// # use midnight_types::ShieldedTokenType;

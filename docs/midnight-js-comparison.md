@@ -148,6 +148,8 @@ A Midnight transaction has **two phases** that execute in order. midnight-js's g
 
 **Fallible phase.** Runs second. Covers contract calls, verifier-key updates, and other state mutations that the chain wants to record even on failure. If the fallible phase fails, the transaction **is included in a block** but its `TransactionResult` is `PartialSuccess` (or `Failure`) rather than `SucceedEntirely`. Fees are still paid; the partial mutation is **not** applied.
 
+midnight-rs and the wallet SDK that midnight-js uses both put a NIGHT transfer in the fallible unshielded offer. The time to dismiss counts the application of the guaranteed unshielded offer, and there each NIGHT input and output updates the Dust generation tree. So a guaranteed transfer of a few NIGHT UTXOs is refused. When the fallible offer of a NIGHT transfer fails, the transaction still pays the fee and drops the payment. A transfer of any other token stays in the guaranteed unshielded offer.
+
 Practical consequences for SDK callers:
 
 - `pending.get_receipt().await` returning successfully means the extrinsic carrying the transaction is in a finalized block, and the chain applied the transaction there. A transaction that landed but did not apply fails the wait with `ProviderError::NotApplied`.

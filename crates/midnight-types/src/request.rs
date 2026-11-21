@@ -105,6 +105,15 @@ impl TransactionRequest {
 
     /// Send `amount` of `token` to `to`. Change returns to this wallet.
     ///
+    /// A NIGHT transfer goes in the fallible unshielded offer, as the
+    /// TypeScript wallet SDK sends it. So one transfer can spend many NIGHT
+    /// UTXOs. The fallible offer fails, for example, when another transaction
+    /// spent one of its UTXOs first. The transaction then still pays the fee
+    /// and drops the payment. The wait on the sent transaction returns
+    /// `NotApplied::PartialSuccess`. The transfer's other UTXOs stay reserved
+    /// until its TTL passes (see [`Self::with_ttl`]). A transfer of any other
+    /// token applies whole or not at all.
+    ///
     /// Read `to` from an unshielded address with
     /// [`parse_unshielded_recipient`](crate::address::parse_unshielded_recipient),
     /// or derive it from a seed with
